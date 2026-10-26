@@ -88,7 +88,9 @@ The whitelist for a device is an ordinary Syncthing ignore file that lives **ins
 #include patterns-deck.stignore
 ```
 
-To change what a device gets, edit `patterns-deck.stignore` on the hub (over SMB, SSH, wherever). The device picks the change up by itself, a minute or so later. No file is ever edited by hand on a device.
+To change what a device gets, edit `patterns-deck.stignore` on the hub (over SMB, SSH, wherever). No file is ever edited by hand on a device.
+
+The edit syncs to the device within seconds, but Syncthing only applies a changed whitelist on a full scan of the folder, and a freshly synced ignore file does not reliably trigger one (whether it does depends on the OS and the filesystem watcher). So `warpzone` sets a short rescan interval on whitelisted device folders: **a whitelist edit takes effect within 5 minutes**. Tune it per device with `rescan_seconds` in the config (minimum 5; a rescan only stats files, so it is cheap). To apply an edit immediately, press Rescan on the folder in the device's Syncthing GUI.
 
 A whitelist starts with `#include patterns-common.stignore`, lists what the device wants, and ends with `*`:
 
@@ -116,7 +118,7 @@ Some save folders sit inside `~/Emulation`, which is the library root. That is f
 
 - **Receive-only devices.** The library, songs and tools are receive-only on devices, so a delete or an edit on a console can never propagate to the hub.
 - **Path changes are refused.** If a `wz-*` folder already exists in Syncthing with a different path than the config says, `warpzone` stops: changing a folder's path makes Syncthing see a mass delete. Remove the folder in Syncthing first (files stay on disk), then provision again.
-- **Additive only.** Devices are only ever added, never removed. Folders that are not prefixed `wz-` are never touched. Existing `wz-*` folders are patched only for the keys `warpzone` owns (label, path, type, devices, versioning, file watcher); everything else you tuned is left alone.
+- **Additive only.** Devices are only ever added, never removed. Folders that are not prefixed `wz-` are never touched. Existing `wz-*` folders are patched only for the keys `warpzone` owns (label, path, type, devices, versioning, file watcher, and the rescan interval of whitelisted device folders); everything else you tuned is left alone.
 - **Dry run.** Every writing command supports `--dry-run`: it reads state, prints the calls it would make (method, path, JSON body) and sends none.
 - **Secrets.** API keys are never printed, logged or included in error messages, and are redacted from dry-run output.
 - **Where it runs.** `provision device` talks to the local Syncthing on loopback (self-signed HTTPS is accepted only there) and reads the hub's API only to check that the whitelists exist before it changes anything. If the hub is unreachable it warns and carries on, because the bootstrap ignores keep it safe.

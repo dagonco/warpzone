@@ -36,10 +36,13 @@ class FolderSpec:
     required_files: tuple[str, ...] = ()
     # Save folders whose directory is missing are skipped, not created.
     skip_if_missing: bool = False
+    # Only whitelisted device folders set it: it bounds how long a whitelist
+    # edited on the hub takes to apply. None leaves Syncthing's default.
+    rescan_interval_s: int | None = None
 
     def body(self) -> dict[str, Any]:
         """The folder keys warpzone owns, in Syncthing's REST shape."""
-        return {
+        body: dict[str, Any] = {
             "id": self.id,
             "label": self.label,
             "path": self.path,
@@ -48,6 +51,9 @@ class FolderSpec:
             "versioning": self.versioning,
             "fsWatcherEnabled": True,
         }
+        if self.rescan_interval_s is not None:
+            body["rescanIntervalS"] = self.rescan_interval_s
+        return body
 
 
 @dataclass(frozen=True)
@@ -145,6 +151,7 @@ def device_specs(cfg: Config, device_name: str, profile: Profile) -> list[Folder
                 bootstrap_ignores=bootstrap,
                 required_files=required,
                 skip_if_missing=item.skip_if_missing,
+                rescan_interval_s=device.rescan_seconds if item.whitelist else None,
             )
         )
     return specs

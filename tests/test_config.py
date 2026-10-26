@@ -70,6 +70,17 @@ class ConfigTests(unittest.TestCase):
             lambda d: d["devices"].update({"Bad Name": d["devices"]["deck"]}), "name must be"
         )
 
+    def test_rescan_seconds(self) -> None:
+        self.assertEqual(parse_config(config_data()).devices["deck"].rescan_seconds, 300)
+        data = copy.deepcopy(config_data())
+        data["devices"]["deck"]["rescan_seconds"] = 60
+        self.assertEqual(parse_config(data).devices["deck"].rescan_seconds, 60)
+        for bad in (0, 4, "60", 1.5, True):
+            self.assert_error(
+                lambda d, bad=bad: d["devices"]["deck"].update(rescan_seconds=bad),
+                "rescan_seconds: must be an integer >= 5",
+            )
+
     def test_all_errors_are_reported_together(self) -> None:
         data = copy.deepcopy(config_data())
         data["hub"]["device_id"] = "x"

@@ -9,6 +9,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+# Syncthing applies a changed whitelist only on a full scan of the folder, and a
+# freshly synced whitelist file does not trigger one reliably (see design.md).
+DEFAULT_RESCAN_SECONDS = 300
+MIN_RESCAN_SECONDS = 5
 FOLDER_GROUPS = ("library", "songs", "tools", "saves", "frontend")
 _DEVICE_ID_RE = re.compile(r"^[A-Z2-7]{7}(-[A-Z2-7]{7}){7}$")
 _NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
@@ -35,6 +39,7 @@ class Device:
     profile: str
     folders: tuple[str, ...]
     addresses: tuple[str, ...] = ("dynamic",)
+    rescan_seconds: int = DEFAULT_RESCAN_SECONDS
 
 
 @dataclass(frozen=True)
@@ -144,7 +149,12 @@ def parse_config(data: dict[str, Any], known_profiles: set[str] | None = None) -
         if not isinstance(entry, dict):
             errors.append(f"{where}: must be a table")
             continue
-        _check_keys(entry, {"device_id", "profile", "folders", "addresses"}, where, errors)
+        _check_keys(
+            entry,
+            {"device_id", "profile", "folders", "addresses", "rescan_seconds"},
+            where,
+            errors,
+        )
         device_id = _device_id(entry, where, errors)
         if device_id in seen_ids:
             errors.append(f"{where}.device_id: same ID as {seen_ids[device_id]}")
@@ -171,12 +181,17 @@ def parse_config(data: dict[str, Any], known_profiles: set[str] | None = None) -
                         f"{where}.folders: unknown folder {group!r} "
                         f"(expected {', '.join(FOLDER_GROUPS)})"
                     )
+        rescan = entry.get("rescan_seconds", DEFAULT_RESCAN_SECONDS)
+        if not isinstance(rescan, int) or isinstance(rescan, bool) or rescan < MIN_RESCAN_SECONDS:
+            errors.append(f"{where}.rescan_seconds: must be an integer >= {MIN_RESCAN_SECONDS}")
+            rescan = DEFAULT_RESCAN_SECONDS
         devices[dev_name] = Device(
             dev_name,
             device_id,
             profile,
             tuple(dict.fromkeys(folders)),
             _addresses(entry, where, errors),
+            rescan,
         )
 
     if errors:

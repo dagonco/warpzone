@@ -65,6 +65,10 @@ class ModelTests(unittest.TestCase):
             library.required_files, ("patterns-common.stignore", "patterns-deck.stignore")
         )
         self.assertEqual(library.versioning, {"type": ""})
+        self.assertEqual(library.rescan_interval_s, 300)
+        self.assertEqual(library.body()["rescanIntervalS"], 300)
+        self.assertIsNone(specs["wz-tools"].rescan_interval_s)
+        self.assertNotIn("rescanIntervalS", specs["wz-tools"].body())
         self.assertEqual(specs["wz-tools"].ignores, ignores.inline())
         self.assertIsNone(specs["wz-tools"].bootstrap_ignores)
         self.assertEqual(specs["wz-media"].type, "sendreceive")
@@ -98,6 +102,7 @@ class ModelTests(unittest.TestCase):
             save.versioning, {"type": "staggered", "params": {"maxAge": str(30 * 86400)}}
         )
         self.assertEqual(specs["wz-library"].versioning, {"type": ""})
+        self.assertIsNone(specs["wz-library"].rescan_interval_s)  # hub needs no bound
         self.assertEqual(specs["wz-media"].versioning, {"type": ""})
 
     def test_hub_root_slash(self) -> None:
