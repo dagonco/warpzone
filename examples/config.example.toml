@@ -1,0 +1,51 @@
+# warpzone private configuration.
+# Copy to $XDG_CONFIG_HOME/warpzone/config.toml (default ~/.config/warpzone/config.toml)
+# and never commit the real one. All IDs below are fake.
+
+[hub]
+# Display name of the hub in Syncthing on the devices.
+name = "nas"
+
+# The hub's Syncthing device ID (Actions > Show ID in the Syncthing GUI).
+device_id = "AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA"
+
+# Absolute path of the hub root on the HUB's filesystem (the folder that holds
+# library/, saves/, frontend/, songs/, tools/). Seen from the hub's Syncthing,
+# not from the machine running warpzone.
+root = "/volume1/games"
+
+# Base URL of the hub's Syncthing GUI/API. Enable the GUI on a LAN address of the hub.
+api_url = "http://nas.local:8384"
+
+# The hub's API key (Actions > Settings > GUI). Set exactly one of these two.
+# A key file is preferred: keep it chmod 600 and out of the repo.
+api_key_file = "~/.config/warpzone/hub.key"
+# api_key = "paste-the-key-here"
+
+# Optional. Where devices find the hub. Default ["dynamic"] (Syncthing discovery).
+# Set explicit addresses if discovery is off or the hub is only reachable by name.
+# addresses = ["tcp://nas.local:22000"]
+
+[devices.deck]
+# This device's Syncthing device ID. `provision device` refuses to run if the
+# local Syncthing is a different device.
+device_id = "BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB"
+
+# A profile shipped in warpzone/profiles/ (see `warpzone check` for the list).
+profile = "steamos-emudeck"
+
+# What this device subscribes to. Any of:
+#   library   ROMs, BIOS, extras (receive-only, per-device whitelist)
+#   songs     Clone Hero / YARG songs (receive-only, per-device whitelist)
+#   tools     scripts and docs (receive-only)
+#   saves     every save folder of the profile (two-way)
+#   frontend  ES-DE media, gamelists and collections (two-way)
+folders = ["library", "tools", "saves", "frontend"]
+
+# Optional. Where the hub finds this device. Default ["dynamic"].
+# addresses = ["tcp://deck.local:22000"]
+
+[devices.machine]
+device_id = "CCCCCCC-CCCCCCC-CCCCCCC-CCCCCCC-CCCCCCC-CCCCCCC-CCCCCCC-CCCCCCC"
+profile = "steamos-emudeck"
+folders = ["library", "tools", "saves", "frontend", "songs"]

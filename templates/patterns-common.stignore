@@ -1,0 +1,6 @@
+// Every device receives every whitelist; each one only applies its own.
+!/patterns-*.stignore
+(?d)@eaDir
+(?d).DS_Store
+(?d)._*
+(?d)Thumbs.db

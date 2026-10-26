@@ -1,0 +1,50 @@
+name = "steamos-emudeck"
+description = "SteamOS with EmuDeck (Steam Deck, Steam Machine)"
+
+[paths]
+library = "~/Emulation"
+songs = "~/Songs"
+tools = "~/.local/share/warpzone/tools"
+media = "~/Emulation/tools/downloaded_media"
+esde = "~/ES-DE"
+
+# One entry per save folder. `path` is the REAL directory: EmuDeck exposes
+# saves through symlinks under ~/Emulation/saves and Syncthing never follows
+# symlinks, so pointing Syncthing at the symlink would sync nothing.
+[saves.retroarch-saves]
+path = "~/.var/app/org.libretro.RetroArch/config/retroarch/saves"
+[saves.retroarch-states]
+path = "~/.var/app/org.libretro.RetroArch/config/retroarch/states"
+[saves.dolphin-gc]
+path = "~/.var/app/org.DolphinEmu.dolphin-emu/data/dolphin-emu/GC"
+[saves.dolphin-wii]
+path = "~/.var/app/org.DolphinEmu.dolphin-emu/data/dolphin-emu/Wii"
+[saves.dolphin-states]
+path = "~/.var/app/org.DolphinEmu.dolphin-emu/data/dolphin-emu/StateSaves"
+[saves.duckstation-saves]
+path = "~/Emulation/saves/duckstation/saves"
+[saves.duckstation-states]
+path = "~/Emulation/saves/duckstation/states"
+[saves.pcsx2-saves]
+path = "~/Emulation/saves/pcsx2/saves"
+[saves.pcsx2-states]
+path = "~/Emulation/saves/pcsx2/states"
+[saves.melonds-saves]
+path = "~/Emulation/saves/melonds/saves"
+[saves.melonds-states]
+path = "~/Emulation/saves/melonds/states"
+[saves.eden-saves]
+path = "~/Emulation/storage/eden/nand/user/save"
+[saves.ryujinx-user]
+path = "~/.config/Ryujinx/bis/user"
+ignore = ["!/save", "!/saveMeta", "*"]
+[saves.azahar-saves]
+path = "~/Emulation/storage/azahar/sdmc"
+[saves.azahar-states]
+path = "~/.local/share/azahar-emu/states"
+[saves.shadps4-saves]
+path = "~/.local/share/shadPS4/savedata"
+[saves.cemu-saves]
+path = "~/Emulation/roms/wiiu/mlc01/usr/save"
+[saves.xenia-content]
+path = "~/Emulation/roms/xbox360/content"
