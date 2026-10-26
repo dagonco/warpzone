@@ -14,7 +14,7 @@ from warpzone.config import Config, parse_config
 HUB_ID = "AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA"
 DECK_ID = "BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB"
 MACHINE_ID = "CCCCCCC-CCCCCCC-CCCCCCC-CCCCCCC-CCCCCCC-CCCCCCC-CCCCCCC-CCCCCCC"
-API_KEY = "test-api-key-0123456789"
+API_KEY = "fake-key"  # gitleaks:allow (test fixture, not a real key)
 
 
 def config_data(api_url: str = "http://127.0.0.1:1") -> dict[str, Any]:
