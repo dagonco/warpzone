@@ -126,6 +126,18 @@ arrived. Provisioning therefore does, for each whitelisted folder:
 3. Replace the ignores with `#include patterns-<device>.stignore` and trigger a
    rescan.
 
+**Applying later edits.** After provisioning, the user edits
+`patterns-<device>.stignore` on the hub only. It reaches the device through
+normal sync, but Syncthing v2.1.7 re-evaluates ignores (and pulls files that
+became un-ignored) only on a full scan of the folder. A scan of a single
+sub-path does not do it, and a file synced in by the puller does not reliably
+cause a full scan: it depends on the OS and the filesystem watcher, which made
+the e2e test flaky on Linux CI. Without a bound, a device could wait for the
+default `rescanIntervalS` (3600 s). Whitelisted device folders therefore get
+`rescanIntervalS = rescan_seconds` (per-device config key, default 300,
+minimum 5), so an edit applies within that time whatever the watcher does. A
+rescan only stats files and hashes what changed.
+
 If the device's whitelist does not exist on the hub, provisioning stops before
 step 1 with a clear error. It never creates a device folder that would pull the
 whole library. The check reads the hub's API (`GET /rest/db/browse`) with the
@@ -258,7 +270,8 @@ Idempotency rules for `provision`:
 
 - Existing `wz-*` folders are updated in place with `PATCH`, only for the keys
   warpzone owns (`label`, `path`, `type`, `devices`, `versioning`,
-  `fsWatcherEnabled`). Unknown keys are left alone. `devices` is merged: devices
+  `fsWatcherEnabled`, and `rescanIntervalS` on whitelisted device folders).
+  Unknown keys are left alone. `devices` is merged: devices
   already on the folder are kept, missing ones are added.
 - Folders not prefixed `wz-` are never touched.
 - Changing a folder's `path` on an existing folder is refused (it would make

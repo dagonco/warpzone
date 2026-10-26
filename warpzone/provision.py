@@ -68,10 +68,9 @@ def _subset(wanted: Any, actual: Any) -> bool:
 def _folder_patch(spec: FolderSpec, current: dict[str, Any]) -> dict[str, Any]:
     """The owned keys that differ. Devices are only ever added, never removed."""
     body = spec.body()
+    owned = ("label", "type", "fsWatcherEnabled", "rescanIntervalS")
     patch: dict[str, Any] = {
-        key: body[key]
-        for key in ("label", "type", "fsWatcherEnabled")
-        if current.get(key) != body[key]
+        key: body[key] for key in owned if key in body and current.get(key) != body[key]
     }
     if not _subset(spec.versioning, current.get("versioning") or {}):
         patch["versioning"] = spec.versioning

@@ -45,6 +45,11 @@ folders = ["library", "tools", "saves", "frontend"]
 # Optional. Where the hub finds this device. Default ["dynamic"].
 # addresses = ["tcp://deck.local:22000"]
 
+# Optional. A whitelist edited on the hub reaches the device within seconds but
+# is only applied on a full folder scan, so the whitelisted folders (library,
+# songs) are rescanned this often. Default 300 (5 minutes), minimum 5.
+# rescan_seconds = 300
+
 [devices.machine]
 device_id = "CCCCCCC-CCCCCCC-CCCCCCC-CCCCCCC-CCCCCCC-CCCCCCC-CCCCCCC-CCCCCCC"
 profile = "steamos-emudeck"

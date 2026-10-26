@@ -207,6 +207,7 @@ device_id = "{deck_id}"
 profile = "steamos-emudeck"
 folders = ["library", "saves"]
 addresses = ["{self.deck.address}"]
+rescan_seconds = 10
 """
         )
         cfg = ["--config", str(config)]
@@ -246,7 +247,13 @@ addresses = ["{self.deck.address}"]
         self.assertEqual((emulation / "roms/nes/mario.nes").read_text(), "nes rom")
 
         # Editing the whitelist on the hub changes what the device receives, with
-        # no command run on the device.
+        # no command run on the device. Syncthing applies a changed whitelist only
+        # on a full folder scan, and whether the filesystem watcher causes one
+        # differs per OS (that made this step flaky on Linux CI). Switching the
+        # watcher off makes the scheduled rescan the only trigger, so this pins
+        # the behaviour warpzone guarantees: the device applies the edit within
+        # rescan_seconds.
+        self.deck.client().patch_folder("wz-library", {"fsWatcherEnabled": False})
         whitelist = library_file(library, "deck")
         whitelist.write_text(whitelist.read_text().replace("*\n", "!/roms/n64\n*\n"))
         wait_for(

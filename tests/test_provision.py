@@ -373,6 +373,23 @@ class DeviceTests(unittest.TestCase):
             ]
             self.assertEqual(boot, [{"ignore": ["#include patterns-deck.stignore"]}])
 
+    def test_whitelisted_folder_gets_a_bounded_rescan_interval(self) -> None:
+        with FakeSyncthing(DECK_ID) as local, FakeSyncthing(HUB_ID) as hub:
+            self.hub_with_whitelists(hub)
+            for name in ("patterns-common.stignore", "patterns-deck.stignore"):
+                local.arrives_after[("wz-library", name)] = 0
+            self.run_device(local, hub)
+            self.assertEqual(local.folders["wz-library"]["rescanIntervalS"], 300)
+            self.assertNotIn("rescanIntervalS", local.folders["wz-tools"])
+
+            local.folders["wz-library"]["rescanIntervalS"] = 3600  # Syncthing's default
+            local.requests.clear()
+            self.run_device(local, hub)
+            patches = [(p, b) for m, p, b in local.writes() if m == "PATCH"]
+            self.assertEqual(
+                patches, [("/rest/config/folders/wz-library", {"rescanIntervalS": 300})]
+            )
+
     def test_device_id_mismatch(self) -> None:
         with FakeSyncthing(MACHINE_ID) as local:
             with self.assertRaises(ProvisionError) as ctx:
