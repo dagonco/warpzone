@@ -1,0 +1,116 @@
+# warpzone private configuration.
+# Copy to $XDG_CONFIG_HOME/warpzone/config.toml (default ~/.config/warpzone/config.toml)
+# and never commit the real one. All IDs below are fake.
+
+[hub]
+# Display name of the hub in Syncthing on the devices.
+name = "nas"
+
+# The hub's Syncthing device ID (Actions > Show ID in the Syncthing GUI).
+device_id = "AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA"
+
+# Absolute path of the hub root on the HUB's filesystem (the folder that holds
+# library/, saves/, frontend/, songs/, tools/). Seen from the hub's Syncthing,
+# not from the machine running warpzone.
+root = "/volume1/games"
+
+# Base URL of the hub's Syncthing GUI/API. Enable the GUI on a LAN address of the hub.
+api_url = "http://nas.local:8384"
+
+# The hub's API key (Actions > Settings > GUI). Set exactly one of these two.
+# A key file is preferred: keep it chmod 600 and out of the repo.
+api_key_file = "~/.config/warpzone/hub.key"
+# api_key = "paste-the-key-here"
+
+# Optional. Where devices find the hub. Default ["dynamic"] (Syncthing discovery).
+# Set explicit addresses if discovery is off or the hub is only reachable by name.
+# addresses = ["tcp://nas.local:22000"]
+
+[devices.deck]
+# This device's Syncthing device ID. `provision device` refuses to run if the
+# local Syncthing is a different device.
+device_id = "BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB"
+
+# A profile shipped in warpzone/data/profiles/ (see `warpzone check` for the list).
+profile = "steamos-emudeck"
+
+# What this device subscribes to. Any of:
+#   library   ROMs, BIOS, extras (receive-only, per-device whitelist)
+#   songs     Clone Hero / YARG songs (receive-only, per-device whitelist)
+#   tools     scripts and docs (receive-only)
+#   saves     every save folder of the profile (two-way)
+#   frontend  ES-DE media, gamelists and collections (two-way)
+#   bios      keys and firmware delivered into each emulator's own folder (receive-only);
+#             the library cannot deliver them because EmuDeck symlinks those folders
+folders = ["library", "tools", "saves", "frontend", "bios"]
+
+# Optional. Where the hub finds this device. Default ["dynamic"].
+# addresses = ["tcp://deck.local:22000"]
+
+# Optional. A whitelist edited on the hub reaches the device within seconds but
+# is only applied on a full folder scan, so the whitelisted folders (library,
+# songs) are rescanned this often. Default 300 (5 minutes), minimum 5.
+# rescan_seconds = 300
+
+[devices.machine]
+device_id = "CCCCCCC-CCCCCCC-CCCCCCC-CCCCCCC-CCCCCCC-CCCCCCC-CCCCCCC-CCCCCCC"
+profile = "steamos-emudeck"
+folders = ["library", "tools", "saves", "frontend", "songs", "bios"]
+
+# Optional. Only `warpzone inbox` reads this table, and it works with just this table
+# (no [hub] or [devices]) on a desktop machine that mounts the hub's games share.
+[inbox]
+# The hub root as mounted on THIS machine: the folder that holds inbox/ and library/.
+# (Not [hub].root, which is the path on the hub's own filesystem.)
+root = "/Volumes/hub"
+
+# Folder with the Redump and No-Intro DATs in clrmamepro format. Point it at
+# libretro-database's metadat/ folder (it holds redump/ and no-intro/), or at one flat
+# folder of .dat files. warpzone never downloads them.
+dats_dir = "~/dats/libretro-database/metadat"
+
+# Optional. Local folder for unpacked archives and conversions (they can take several
+# GiB). Default: the system temp folder.
+# work_dir = "~/tmp/warpzone"
+
+# Optional external tools. Each is looked up on PATH when not set (RAHasher only when set).
+# chdman       converts discs to CHD (PlayStation, PlayStation 2, Saturn, Dreamcast)
+# bsdtar       unpacks .7z and .rar
+# rahasher     RAHasher from RALibretro, built with CHD support: checks that a conversion
+#              keeps the RetroAchievements hash
+# dolphin_tool reads compressed GameCube images (.rvz) so they can be identified
+# nsz          reads the TitleID and version of Switch .nsp/.nsz files and decompresses
+#              .nsz (uv tool install nsz)
+# chdman = "/opt/homebrew/bin/chdman"
+# bsdtar = "/usr/bin/bsdtar"
+# rahasher = "~/tools/RAHasher"
+# dolphin_tool = "/Applications/Dolphin.app/Contents/MacOS/dolphin-tool"
+# nsz = "~/.local/bin/nsz"
+
+# Optional Switch support. A local clone of blawar/titledb names the games
+# (git clone --depth 1 https://github.com/blawar/titledb; git pull updates it). nsz needs
+# your console's keys file to read the CNMT inside a Switch file; warpzone only passes the
+# path to nsz and never reads or prints the file. Default: ~/.switch/prod.keys.
+# titledb_dir = "~/dats/titledb"
+# switch_keys = "~/.switch/prod.keys"
+
+# Optional arcade (MAME) support. Each file is an XML set database; set the ones you have
+# and warpzone checks a dropped arcade zip against them in this order, and uses the first
+# emulator whose database says the set is complete (the zip plus the BIOS and device zips
+# already in library/roms/mame/). The default emulator needs nothing in the gamelist; the
+# others are recorded as a per-game <altemulator> in the ES-DE gamelist. warpzone never
+# downloads these.
+# MAME's listxml, or the official mameXXXXlx.zip of a MAME release as it is (use the
+# version your frontend's MAME core runs):
+# mame_dat = "~/dats/mame0282lx.zip"
+# FinalBurn Neo, "ClrMame Pro XML, Arcade only" from the dats/ folder of libretro/FBNeo:
+# fbneo_dat = "~/dats/fbneo-arcade.dat"
+# MAME 2003-Plus, metadata/mame2003-plus.xml of libretro/mame2003-plus-libretro:
+# mame2003plus_dat = "~/dats/mame2003-plus.xml"
+# The ES-DE gamelist that holds the per-game emulator overrides. Default:
+# <root>/frontend/es-de/gamelists/mame/gamelist.xml
+# gamelist_mame = "/Volumes/hub/frontend/es-de/gamelists/mame/gamelist.xml"
+
+# PS3 games are placed with ES-DE's alternative emulator "RPCS3 ISO (Standalone)", recorded in
+# this gamelist. Default: <root>/frontend/es-de/gamelists/ps3/gamelist.xml
+# gamelist_ps3 = "/Volumes/hub/frontend/es-de/gamelists/ps3/gamelist.xml"
