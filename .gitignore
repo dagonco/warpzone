@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+.ruff_cache/
+.pytest_cache/
+
+# macOS
+.DS_Store
+._*
+
+# Private: never commit
+config.toml
+*.key
