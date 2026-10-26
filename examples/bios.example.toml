@@ -1,0 +1,13 @@
+# Local BIOS overrides for `warpzone bios`.
+# Copy to $XDG_CONFIG_HOME/warpzone/bios.toml (next to config.toml), or pass --overrides PATH.
+# Everything here is optional. The hashes below are fake.
+
+# Accept another md5 for a file of the manifest, for example a modified or
+# region-free BIOS you keep on purpose. The file must still have the expected size.
+# It is reported as "accepted (local)". The key is the path as `warpzone bios` prints it.
+[saturn.accept]
+"sega_101.bin" = ["00000000000000000000000000000000"]
+
+# Skip items you do not want to be told about. Names are the labels in the report.
+[nds]
+unwanted = ["firmware"]
