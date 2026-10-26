@@ -1,0 +1,28 @@
+// Whitelist for one device. Save as patterns-<device>.stignore in the root of
+// the synced folder ON THE HUB (library/ or songs/); it reaches the device by
+// itself. Never edit it on the device.
+//
+// The device name must match [devices.<name>] in config.toml.
+#include patterns-common.stignore
+
+// Patterns are matched top to bottom and the first match wins, so list what
+// you want ("!" = keep) and finish with "*" to drop everything else.
+
+// Whole systems. EmuDeck keeps emulator files in the xbox360 and model2 system
+// folders, so name xbox360/roms and model2/roms there, not the whole system.
+!/roms/nes
+!/roms/snes
+!/roms/gba
+
+// One game out of a big system.
+!/roms/psx/Some Game (USA)
+
+// Shared files every emulator needs.
+!/bios
+
+// Switch updates and DLC, but not the huge base games.
+!/extras/switch/updates
+!/extras/switch/dlc
+
+// Everything not listed above.
+*
