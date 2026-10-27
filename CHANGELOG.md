@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-27
+
 ### Added
 
 - `warpzone bios [--root PATH] [--system NAME ...] [--all] [--overrides PATH]`: read-only check of the BIOS and firmware files of a library against a manifest shipped in the package. It reports, per system, what is ok, missing (required or optional) or has a wrong hash, and counts the unknown files in `bios/`; exit 1 if a required item is missing or wrong. The manifest covers PlayStation, PlayStation 2, Saturn, Dreamcast, Sega CD, PC Engine CD, 3DO, Game Boy Advance, Nintendo DS, Lynx and the MAME sets (Neo Geo, Atomiswave, NAOMI and device sets), and holds only file names, sizes and hashes; warpzone never downloads a BIOS. Files are hashed only when their size matches, "one of" items accept any regional dump, systems whose ROM folders hold no games are shown as "no games, not checked" and never fail the run (`--system` forces a check), and an optional local `bios.toml` next to the config accepts extra hashes ("accepted (local)") or skips items.
@@ -42,6 +44,7 @@ First release.
 - Safety rule: API keys are never printed, logged or included in error messages.
 - Release process: tag-triggered GitHub Actions workflow, a maintainer checklist in `docs/releasing.md`, and this changelog.
 
-[Unreleased]: https://github.com/dagonco/warpzone/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/dagonco/warpzone/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/dagonco/warpzone/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/dagonco/warpzone/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/dagonco/warpzone/releases/tag/v0.1.0
