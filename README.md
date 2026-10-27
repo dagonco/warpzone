@@ -13,6 +13,7 @@ warpzone provision hub              # once: set up the hub's Syncthing (remote A
 warpzone provision device deck      # on each console: one command
 warpzone prune                      # on a console: report (or --apply delete) what it no longer whitelists
 warpzone bios                       # which BIOS and firmware files the library has, lacks or has wrong
+warpzone inbox                      # report (or --apply) how new games in inbox/ would be filed
 ```
 
 ## The problem
@@ -175,6 +176,65 @@ If you keep a modified or region-free BIOS on purpose, accept its hash in a loca
 
 The manifest only holds file names, sizes and hashes, taken from [libretro-database](https://github.com/libretro/libretro-database) and MAME. `warpzone` never downloads a BIOS and this repository contains none.
 
+## Adding new games: the inbox
+
+Drop new dumps (files, folders or archives) in `inbox/` on the hub's share and run `warpzone inbox` on a desktop machine that mounts it (the NAS is too weak for conversions). Without `--apply` it only reports:
+
+```
+$ warpzone inbox
+inbox: /Volumes/games/inbox (report only), 2 item(s)
+tools: chdman yes, bsdtar yes, rahasher yes, dolphin-tool no; DATs: dreamcast, gb, ...
+[1/2] some random name.zip
+  nes: Adventure Island (USA).zip: would place
+    path: library/roms/nes/Adventure Island (USA).zip
+    RA: supported (Adventure Island)
+    whitelist: !/roms/nes/Adventure Island (USA).zip
+  would move to inbox/_done/2026-10-27/
+[2/2] crash bash dump
+  psx: Crash Bash (Europe) (En,Fr,De,Es,It).chd: would place
+    path: library/roms/psx/Crash Bash (Europe) (En,Fr,De,Es,It).chd
+    RA: hash not linked
+    whitelist: !/roms/psx/Crash Bash (Europe) (En,Fr,De,Es,It).chd
+  would move to inbox/_done/2026-10-27/
+items: 2; games to place: 2, already in the library: 0; items for review: 0
+report only: run again with --apply to convert and place
+```
+
+What it does for each item:
+
+1. **Unpacks** `.zip` (and `.7z` / `.rar` with `bsdtar`) into a local work folder, never onto the share. Archive members are untrusted: absolute paths, `..` and symbolic links are refused.
+2. **Identifies by content**, whatever the files are called: size and CRC32 (and SHA1, when the DAT has it) against the Redump and No-Intro DATs of [libretro-database](https://github.com/libretro/libretro-database) (`metadat/redump`, `metadat/no-intro`). A game matches when all its DAT roms are present. DATs are parsed only when needed and cached in `$XDG_CACHE_HOME/warpzone/dats`.
+3. **Converts** to what the library already holds:
+
+   | System | Result |
+   |---|---|
+   | `psx`, `saturn`, `dreamcast` | `<game>.chd` (`chdman createcd` from cue/bin or gdi), then `chdman verify` |
+   | `ps2` | `<game>.chd` (`createdvd` for an `.iso`, `createcd` for cue/bin), then `verify` |
+   | `psp` | the plain `.iso`, its CRC32 checked against the DAT |
+   | `gc` | `.iso` stays `.iso` (the report shows the `dolphin-tool convert -f rvz ...` command); an `.rvz` is kept as it is |
+   | `nes`, `snes`, `n64`, `gb`, `gbc`, `gba`, `genesis`, `mastersystem`, `gamegear` | `<game>.zip` holding the ROM under its DAT name |
+
+   A multi-disc game of a CHD system goes in `<game without disc tag>.m3u/` with every disc and a `<game>.m3u` playlist, and only when all its discs are in the item; otherwise it goes to review.
+4. **RetroAchievements** (optional). With `rahasher` configured it hashes the source and the result and refuses to place a game whose hash changed. With `RA_API_KEY` in the environment it looks the hash up and reports `supported (<title>)` or `hash not linked`. The key is never printed.
+5. **Places** the result in `library/roms/<system>/` (copied to `<name>.part`, read back, then renamed). It never overwrites: the same content is reported as "already in the library", different content under the same name goes to review.
+6. **Files the original**: to `inbox/_done/<date>/` (on every `--apply`, `_done` folders named like a date and older than 7 days are deleted, nothing else), or to `inbox/_revisar/` with a `<item>.reason.txt` (no DAT match, incomplete multi-disc, conversion or verify failed, RA hash changed, conflict, missing tool).
+
+Items modified in the last 30 seconds are left alone (they may still be copying), and `_*` folders, hidden files, `@eaDir` and `.DS_Store` are never items. warpzone does not edit whitelists: add the printed lines to the device whitelists yourself. Exit code 1 when any item needs review.
+
+Switch, MAME/arcade, Vita, PS3 and Xbox are not supported by `inbox` yet; those items go to review ("not supported by inbox yet").
+
+Configure it in the `[inbox]` table of the config (see [`examples/config.example.toml`](examples/config.example.toml)); with `--root` and `--dats` it needs no config file:
+
+```toml
+[inbox]
+root = "/Volumes/games"                       # the hub root as mounted here (holds inbox/ and library/)
+dats_dir = "~/dats/libretro-database/metadat"  # redump/ and no-intro/ inside
+chdman = "/opt/homebrew/bin/chdman"           # optional: otherwise looked up on PATH
+rahasher = "~/tools/RAHasher"                 # optional: RetroAchievements hash check
+```
+
+`bsdtar` and `dolphin_tool` work the same way, and `work_dir` moves the temporary files (they can take several GiB). Details in [`docs/design.md`](docs/design.md#inbox).
+
 ## The EmuDeck symlink gotcha
 
 EmuDeck exposes saves through symlinks under `~/Emulation/saves`. Syncthing never follows symlinks, so a folder pointed at the symlink syncs nothing and gives no error. The `steamos-emudeck` profile therefore points at the real directory of each emulator (for example RetroArch's saves under `~/.var/app/org.libretro.RetroArch/`). If you add a profile for another setup, resolve the links first (`readlink -f`).
@@ -203,14 +263,13 @@ A profile says where things live on one kind of device: [`warpzone/profiles/`](w
 
 Not in v0.1:
 
-- `warpzone inbox`: verify, rename (No-Intro/Redump via igir) and file new content.
 - Home Assistant: Syncthing folder sensors and script notifications.
 - Switch save migration between emulators (one-shot, with backup).
 - More profiles (macOS, Windows, Batocera).
 
 ## Legal
 
-`warpzone` ships and locates no ROMs, BIOS files, keys or firmware, and never will. `warpzone bios` only compares what you already have with public file names, sizes and hashes. It only moves files you already have between machines you own. Use your own legally obtained dumps.
+`warpzone` ships and locates no ROMs, BIOS files, keys or firmware, and never will. `warpzone bios` and `warpzone inbox` only compare what you already have with public file names, sizes and hashes. It only moves files you already have between machines you own. Use your own legally obtained dumps.
 
 ## License
 

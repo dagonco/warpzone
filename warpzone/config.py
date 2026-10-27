@@ -42,10 +42,29 @@ class Device:
     rescan_seconds: int = DEFAULT_RESCAN_SECONDS
 
 
+INBOX_KEYS = ("root", "dats_dir", "work_dir", "chdman", "bsdtar", "rahasher", "dolphin_tool")
+
+
+@dataclass(frozen=True)
+class InboxSettings:
+    """The optional `[inbox]` table: where the hub is mounted on this machine, the DATs
+    and the external tools `warpzone inbox` uses. A tool left unset is looked up on PATH
+    (RAHasher only when set)."""
+
+    root: str | None = None
+    dats_dir: str | None = None
+    work_dir: str | None = None
+    chdman: str | None = None
+    bsdtar: str | None = None
+    rahasher: str | None = None
+    dolphin_tool: str | None = None
+
+
 @dataclass(frozen=True)
 class Config:
     hub: Hub
     devices: dict[str, Device]
+    inbox: InboxSettings = field(default_factory=InboxSettings)
 
 
 def default_config_path(env: dict[str, str] | None = None) -> Path:
@@ -108,10 +127,46 @@ def _read_api_key(hub: dict[str, Any], errors: list[str]) -> str:
     return key
 
 
+def parse_inbox(raw: object, errors: list[str]) -> InboxSettings:
+    if raw is None:
+        return InboxSettings()
+    if not isinstance(raw, dict):
+        errors.append("[inbox]: must be a table")
+        return InboxSettings()
+    _check_keys(raw, set(INBOX_KEYS), "inbox", errors)
+    values: dict[str, str] = {}
+    for key in INBOX_KEYS:
+        if key not in raw:
+            continue
+        value = raw[key]
+        if not isinstance(value, str) or not value.strip():
+            errors.append(f"inbox.{key}: must be a non-empty path string")
+        else:
+            values[key] = str(Path(value.strip()).expanduser())
+    return InboxSettings(**values)
+
+
+def load_inbox_settings(path: Path) -> InboxSettings:
+    """Only the `[inbox]` table of the config, so `inbox` works on a machine that has no
+    Syncthing devices configured. A missing file means all defaults."""
+    try:
+        data = tomllib.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return InboxSettings()
+    except (OSError, tomllib.TOMLDecodeError) as exc:
+        raise ConfigError(f"{path}: {exc}") from exc
+    errors: list[str] = []
+    settings = parse_inbox(data.get("inbox"), errors)
+    if errors:
+        raise ConfigError(f"{path}:\n" + "\n".join(errors))
+    return settings
+
+
 def parse_config(data: dict[str, Any], known_profiles: set[str] | None = None) -> Config:
     """Validate a decoded config. `known_profiles` enables the profile-name check."""
     errors: list[str] = []
-    _check_keys(data, {"hub", "devices"}, "config", errors)
+    _check_keys(data, {"hub", "devices", "inbox"}, "config", errors)
+    inbox = parse_inbox(data.get("inbox"), errors)
 
     raw_hub = data.get("hub")
     hub: Hub | None = None
@@ -197,7 +252,7 @@ def parse_config(data: dict[str, Any], known_profiles: set[str] | None = None) -
     if errors:
         raise ConfigError("\n".join(errors))
     assert hub is not None
-    return Config(hub, devices)
+    return Config(hub, devices, inbox)
 
 
 def load_config(path: Path, known_profiles: set[str] | None = None) -> Config:

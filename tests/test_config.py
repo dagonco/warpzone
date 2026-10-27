@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 
 from support import API_KEY, config_data
-from warpzone.config import ConfigError, load_config, parse_config
+from warpzone.config import ConfigError, load_config, load_inbox_settings, parse_config
 
 
 class ConfigTests(unittest.TestCase):
@@ -128,3 +128,41 @@ class ConfigTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class InboxSettingsTests(unittest.TestCase):
+    def test_table_is_optional_and_expands_the_home_folder(self) -> None:
+        self.assertIsNone(parse_config(config_data()).inbox.root)
+        data = config_data()
+        data["inbox"] = {"root": "~/hub", "rahasher": "/opt/RAHasher"}
+        inbox = parse_config(data).inbox
+        self.assertEqual(inbox.root, str(Path("~/hub").expanduser()))
+        self.assertEqual(inbox.rahasher, "/opt/RAHasher")
+        self.assertIsNone(inbox.chdman)
+
+    def test_mistakes_are_reported(self) -> None:
+        for table, needle in (
+            ({"roott": "/x"}, "inbox: unknown key 'roott'"),
+            ({"root": ""}, "inbox.root: must be a non-empty path string"),
+            ({"chdman": 5}, "inbox.chdman: must be a non-empty path string"),
+            ("nope", "[inbox]: must be a table"),
+        ):
+            data = config_data()
+            data["inbox"] = table
+            with self.assertRaises(ConfigError) as ctx:
+                parse_config(data)
+            self.assertIn(needle, str(ctx.exception))
+
+    def test_only_the_inbox_table_is_needed_to_run_inbox(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "config.toml"
+            self.assertIsNone(load_inbox_settings(path).root)  # no file: defaults
+            path.write_text('[inbox]\nroot = "/mnt/hub"\ndats_dir = "/mnt/dats"\n')
+            settings = load_inbox_settings(path)
+            self.assertEqual((settings.root, settings.dats_dir), ("/mnt/hub", "/mnt/dats"))
+            path.write_text("[inbox\n")
+            with self.assertRaises(ConfigError):
+                load_inbox_settings(path)
+            path.write_text("[inbox]\nbogus = 1\n")
+            with self.assertRaises(ConfigError):
+                load_inbox_settings(path)

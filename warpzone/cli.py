@@ -9,9 +9,16 @@ import urllib.parse
 from collections.abc import Sequence
 from pathlib import Path
 
-from warpzone import __version__, bios, ignores, localst, model, provision, prune
+from warpzone import __version__, bios, ignores, inbox, localst, model, provision, prune, ra
 from warpzone.bios import BiosError
-from warpzone.config import Config, ConfigError, default_config_path, load_config
+from warpzone.config import (
+    Config,
+    ConfigError,
+    default_config_path,
+    load_config,
+    load_inbox_settings,
+)
+from warpzone.inbox import InboxError
 from warpzone.model import ModelError
 from warpzone.profiles import Profile, ProfileError, available_profiles, load_profile
 from warpzone.provision import ProvisionError, Reporter
@@ -125,6 +132,34 @@ def _build_parser() -> argparse.ArgumentParser:
         help="local file with accepted hashes (default: bios.toml next to the config file)",
     )
 
+    inb = sub.add_parser(
+        "inbox",
+        parents=[common],
+        help="identify, convert and file new games dropped in inbox/ (report only unless --apply)",
+    )
+    inb.add_argument(
+        "--root",
+        type=Path,
+        help="the hub root as mounted on this machine, holding inbox/ and library/ "
+        "(default: [inbox] root in the config)",
+    )
+    inb.add_argument(
+        "--dats",
+        type=Path,
+        help="folder with the Redump and No-Intro DATs (default: [inbox] dats_dir)",
+    )
+    inb.add_argument(
+        "--apply",
+        action="store_true",
+        help="convert, place and move the originals (default: report)",
+    )
+    inb.add_argument(
+        "--work-dir",
+        type=Path,
+        help="local folder for unpacked archives and conversions (default: [inbox] work_dir, "
+        "else the system temp folder)",
+    )
+
     sub.add_parser("status", parents=[common], help="folder state on the hub and this machine")
     render = sub.add_parser(
         "render-ignores", parents=[common], help="print the ignore lines a device would get"
@@ -197,10 +232,37 @@ def _bios(args: argparse.Namespace, rep: Reporter) -> int:
     return EXIT_RUNTIME if report.problems else EXIT_OK
 
 
+def _inbox(args: argparse.Namespace, rep: Reporter) -> int:
+    settings = load_inbox_settings(_config_path(args))
+    root = args.root or (Path(settings.root) if settings.root else None)
+    dats = args.dats or (Path(settings.dats_dir) if settings.dats_dir else None)
+    if root is None:
+        raise InboxError(
+            "no hub root: pass --root or set `root` in the [inbox] table of the config"
+        )
+    if dats is None:
+        raise InboxError(
+            "no DATs: pass --dats or set `dats_dir` in the [inbox] table of the config"
+        )
+    work = args.work_dir or (Path(settings.work_dir) if settings.work_dir else None)
+    options = inbox.Options(
+        root=root,
+        dats_dir=dats,
+        tools=inbox.find_tools(settings),
+        apply=args.apply,
+        work_dir=work,
+        cache_dir=inbox.default_cache_dir(),
+        ra_key=os.environ.get(ra.KEY_ENV) or None,
+    )
+    return EXIT_RUNTIME if inbox.run_inbox(options, rep) else EXIT_OK
+
+
 def _run(args: argparse.Namespace) -> int:
     rep = Reporter(print, warn_sink=_eprint)
     if args.command == "bios":  # works without a config when --root is given
         return _bios(args, rep)
+    if args.command == "inbox":  # needs at most the [inbox] table
+        return _inbox(args, rep)
     cfg, profiles = _load(args)
 
     if args.command == "check":
@@ -278,7 +340,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     except (ConfigError, ProfileError, ModelError) as exc:
         _eprint(f"warpzone: config error: {exc}")
         return EXIT_USAGE
-    except BiosError as exc:
+    except (BiosError, InboxError) as exc:
         _eprint(f"warpzone: error: {exc}")
         return EXIT_USAGE
     except (SyncthingError, ProvisionError, PruneError, localst.LocalSyncthingError) as exc:

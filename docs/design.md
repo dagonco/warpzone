@@ -22,7 +22,7 @@ here is out of scope for v0.1.
 
 ## Non-goals (v0.1)
 
-- Moving, renaming, verifying or converting ROMs (that is igir's job, see the roadmap).
+- Moving, renaming or converting ROMs that are already in the library. New content goes through `warpzone inbox`, which only ever adds.
 - Shipping or locating any copyrighted content (ROMs, BIOS, keys, firmware).
   The BIOS checker compares what the user has with public names, sizes and hashes.
 - Running on the hub itself. Many NAS ship an old Python; the hub is driven
@@ -244,9 +244,20 @@ addresses = ["tcp://deck.local:22000"]       # optional, default ["dynamic"]
 device_id = "ZZZZZZZ-..."
 profile = "steamos-emudeck"
 folders = ["library", "tools", "saves", "frontend", "songs"]
+
+[inbox]                                      # optional, read only by `warpzone inbox`
+root = "/Volumes/games"                      # the hub root as mounted on this machine
+dats_dir = "~/dats/libretro-database/metadat"
+work_dir = "~/tmp/warpzone"                  # optional; default: the system temp folder
+chdman = "/opt/homebrew/bin/chdman"          # optional tools; PATH is searched when unset
+bsdtar = "/usr/bin/bsdtar"
+rahasher = "~/tools/RAHasher"                # only used when set
+dolphin_tool = "/usr/local/bin/dolphin-tool"
 ```
 
-API keys are never printed, logged or included in error messages.
+`warpzone inbox` reads only the `[inbox]` table, so a desktop that only files games
+needs no `[hub]` or `[devices]`. API keys are never printed, logged or included in
+error messages; the RetroAchievements key is read from `RA_API_KEY`, never from a file.
 
 ## Command line
 
@@ -259,6 +270,7 @@ API keys are never printed, logged or included in error messages.
 | `warpzone provision device <name>` | on the device | Reads the local Syncthing API key from the local `config.xml` (searching the default locations, including the SyncThingy flatpak; `--syncthing-config PATH` overrides), adds the hub device, creates the subscribed folders with the bootstrap above (`--timeout SECONDS`). Idempotent. |
 | `warpzone prune [device]` | on the device | Reports, and with `--apply` deletes, the files of the whitelisted folders that the device no longer whitelists (see [Pruning](#pruning)). Report only by default. |
 | `warpzone bios` | on a device or the hub | Reports which BIOS and firmware files a library has, lacks or has wrong (see [BIOS check](#bios-check)). Read-only. Exit 1 if a required item is missing or wrong. |
+| `warpzone inbox` | a desktop that mounts the hub's share | Identifies, converts and files new games dropped in `inbox/` (see [Inbox](#inbox)). Report only by default, `--apply` acts. Exit 1 if any item needs review. |
 | `warpzone status` | anywhere | Folder state, need counts, errors, receive-only local changes, for the hub (and the local device if any). |
 | `warpzone render-ignores <device>` | anywhere | Prints the ignore lines a device folder would get. For debugging. |
 
@@ -431,6 +443,100 @@ The decisions (`judge_file`, `judge_zip`, `settle`, `unknown_files`,
 `default_root`, `is_game_file`, `has_games`, `render`) are pure and unit-tested without a filesystem; `Library`
 and `check_library` are the only parts that touch the disk.
 
+## Inbox
+
+`warpzone inbox [--root PATH] [--dats PATH] [--work-dir PATH] [--apply]` files new
+games dropped in `inbox/` into `library/roms/<system>/`. It runs on a desktop that
+mounts the hub's share, because conversions are too heavy for a NAS, and it reads no
+Syncthing state. The contract:
+
+- **Layout.** `--root` (or `[inbox] root`) is the hub root as mounted on this machine:
+  it must hold `inbox/` and `library/roms/`. Items are the top-level files and folders
+  of `inbox/`. Hidden files, `@eaDir`, `#recycle`, `Thumbs.db` and any `_*` folder
+  (`_done`, `_revisar`) are never items. An item modified in the last 30 seconds is left
+  alone, since it may still be copying.
+- **Report only by default.** Without `--apply` it unpacks into a local work folder,
+  identifies, plans and prints, and writes nothing to the share. With `--apply` it
+  converts, places and files the originals.
+- **Untrusted content.** Archives are unpacked only into the local work folder (`.zip`
+  with `zipfile`, `.7z` and `.rar` with `bsdtar`; archives inside archives up to two
+  levels). A member with an absolute path, a `..` component or a NUL byte, or a symbolic
+  link, makes the whole item go to review, and nothing is extracted before every name is
+  checked. A cue or gdi is followed only if every file it names is a file of the item.
+  Symbolic links in the inbox are skipped.
+- **Identification by content.** Every file that is not a sidecar (`.cue`, `.gdi`,
+  `.txt`, images, ...) is read once for size, CRC32 and SHA1, and looked up in the
+  Redump and No-Intro DATs (clrmamepro format, libretro-database's `metadat/`). A rom
+  matches on size and CRC32, and also SHA1 when the DAT has one; a game matches when all
+  its roms are present, so a DAT that lists only the data track of a disc (as
+  libretro's do) still matches, and the other tracks are taken from the cue or gdi that
+  names it. File names never matter. Two games with exactly the same files cannot be
+  told apart and go to review. The DAT file name maps to the system folder with a small
+  table (`SYSTEMS` in `warpzone/dat.py`: PlayStation `psx`, PlayStation 2 `ps2`,
+  PlayStation Portable `psp`, Saturn `saturn`, Dreamcast `dreamcast`, GameCube `gc`,
+  NES `nes`, SNES `snes`, Nintendo 64 `n64`, Game Boy `gb`, Game Boy Color `gbc`, Game
+  Boy Advance `gba`, Mega Drive / Genesis `genesis`, Master System `mastersystem`, Game
+  Gear `gamegear`); a trailing No-Intro date stamp is ignored. DATs are parsed only when
+  a lookup needs them (the system the file extensions and sizes point at first, and the
+  search stops once every file is explained) and each parsed DAT is cached as JSON in
+  `$XDG_CACHE_HOME/warpzone/dats`, keyed by the DAT's size and modification time.
+- **Formats follow the library.** `psx`, `saturn`, `dreamcast`: `chdman createcd` from
+  the cue or gdi, then `chdman verify`. `ps2`: `createdvd` for an `.iso`, `createcd`
+  for cue/bin. A lone `.bin` without a cue gets a generated one (PlayStation only).
+  `psp`: the plain `.iso`, copied and its CRC32 checked against the DAT. `gc`: an
+  `.iso` stays an `.iso` (the report prints the `dolphin-tool convert -f rvz -c zstd
+  -l 5 -b 131072` command; warpzone never converts it); an `.rvz`, `.gcz` or `.wia` is
+  identified by expanding it with `dolphin-tool convert -f iso` into the work folder and
+  the compressed file itself is what gets placed, as `<game>.rvz`. Cartridge systems: a
+  `<game>.zip` with the rom under its DAT name, always the same bytes for the same game.
+  Names are the DAT's game names. A multi-disc game (`(Disc N)` in the DAT name) of a
+  CHD system goes in `<game without disc tag>.m3u/` with every disc and a
+  `<game>.m3u` playlist; GameCube discs stay loose files, as in the library. A game is
+  placed only when every disc the DAT lists is in the item (`incomplete multi-disc`
+  otherwise); a disc that is the only one its DAT lists is a plain game.
+- **RetroAchievements (optional).** With `[inbox] rahasher` set, the RA hash of the
+  source (the cue, gdi, iso or rom; a Redump cue of a Dreamcast disc is turned into a
+  temporary gdi, which RAHasher needs) is compared with the hash of the result (the
+  CHD or zip). If they differ, nothing is placed and the item goes to review. With
+  `RA_API_KEY` in the environment the hash is looked up in the console's game list (one
+  request per console per run, `User-Agent: warpzone/<version>`) and reported as
+  `supported (<title>)`, `hash not linked` or `linked, no achievements yet`. A lookup
+  failure is reported by kind only; the key is never printed or put in an error. RA
+  never decides whether a game is filed: only a changed hash does.
+- **Never overwrites.** The result is copied to `<name>.part`, read back and compared,
+  checked against the DAT where it is a plain file, and only then renamed. If the name
+  exists: the same content (equal chdman data SHA1, equal zip members, equal SHA1) is
+  reported as "already in the library" and the item counts as done; anything else goes
+  to review as a conflict. An existing `<game>.m3u/` folder is never merged into.
+- **Where the originals go.** Items fully handled go to `inbox/_done/<YYYY-MM-DD>/`.
+  Items with anything that could not be placed go to `inbox/_revisar/` with
+  `<item>.reason.txt` (no DAT match, ambiguous match, files not in any DAT, incomplete
+  multi-disc, conversion or verify failed, RA hash changed, conflict, missing tool,
+  unsafe archive, not supported yet). Games of such an item that could be placed are
+  placed; running the item again reports them as already in the library. Names that are
+  taken get ` (2)`, ` (3)`, ... On every `--apply` run, folders of `_done` whose name is a
+  date older than 7 days are deleted; nothing else in `_done` is touched, and a symbolic
+  link is not followed. Without `--apply` the run only says what it would delete.
+- **Whitelists are never edited.** The report prints, per placed game, the whitelist
+  line to add (`!/roms/psx/Silent Hill (Europe) (En,Fr,De,Es,It).chd`; Syncthing
+  wildcards in names are escaped) and a combined list at the end.
+- **Missing tools.** `chdman`, `bsdtar`, `RAHasher` and `dolphin-tool` are located with
+  `[inbox]` config keys or PATH (RAHasher only when configured). A tool that an item
+  needs and is missing sends that item to review with a clear reason; other items
+  continue. A configured path that does not exist is a configuration error.
+- **Out of scope.** Switch, MAME/arcade, Vita, PS3 and Xbox. Switch, Vita, PS3 and Xbox
+  files are recognised by extension or folder and go to review with "not supported by
+  inbox yet"; arcade sets simply have no DAT match. A disc image kept as a single `.bin`
+  for several tracks is not identified (the DATs list one file per track).
+- **Exit code.** `0` when every item is placed or already in the library; `1` when any
+  item went to review; `2` for a usage or configuration error.
+
+The decisions (`skip_name`, `unsafe_member`, `select_purge`, `plan_units`,
+`destination_verdict`, `whitelist_line`, `resolve_refs`, `unsupported_reason`,
+`match_dat`, `group_discs`, `parse_dat`) are pure and unit-tested; conversions are
+tested with stand-in `chdman` and `RAHasher` scripts, and one test runs the cartridge
+flow end to end with no external tool.
+
 ## Syncthing API surface used
 
 All calls send `X-API-Key`. Base URL from config (hub) or the local
@@ -471,6 +577,9 @@ warpzone/
   provision.py       hub and device provisioning (diff desired vs actual → calls)
   prune.py           leftover detection (pure `classify`), delete, webhook
   bios.py            BIOS manifest, local overrides, pure `judge_*`, disk checks
+  dat.py             Redump / No-Intro DAT parsing, cache, matching, disc grouping (pure)
+  inbox.py           unpack, identify, convert, place, file the originals
+  ra.py              RetroAchievements: RAHasher wrapper, game list lookup
   localst.py         find and parse the local Syncthing config.xml
   profiles/steamos-emudeck.toml
   data/bios.toml     BIOS manifest (names, sizes, hashes only)
@@ -510,6 +619,13 @@ logic is unit-tested without a network.
   hashing only files of the expected size, content matches, local acceptance,
   skipped folders, zip members, exit codes.
 
+- `inbox` tests: DAT parsing and the cache, matching (partial games, SHA1, ambiguous
+  names, duplicate files), disc grouping, destination decisions and `_done` purge
+  selection as pure functions; archive extraction against traversal, absolute paths and
+  links; whole runs on a temporary hub with tiny DATs and stand-in `chdman`,
+  `RAHasher`, `bsdtar` and `dolphin-tool` scripts, including one cartridge flow with no
+  external tool; the CLI, with the API key coming from the environment.
+
 ## CI (GitHub Actions)
 
 - `lint`: ruff check + ruff format --check.
@@ -522,7 +638,6 @@ logic is unit-tested without a network.
 
 ## Roadmap (not v0.1)
 
-- `warpzone inbox`: verify, rename (No-Intro/Redump via igir) and file new content.
 - Home Assistant: Syncthing folder sensors, script notifications.
 - Switch save migration between emulators (one-shot, with backup).
 - More profiles (macOS, Windows, Batocera).
