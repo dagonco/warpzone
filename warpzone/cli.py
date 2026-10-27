@@ -9,7 +9,8 @@ import urllib.parse
 from collections.abc import Sequence
 from pathlib import Path
 
-from warpzone import __version__, ignores, localst, model, provision, prune
+from warpzone import __version__, bios, ignores, localst, model, provision, prune
+from warpzone.bios import BiosError
 from warpzone.config import Config, ConfigError, default_config_path, load_config
 from warpzone.model import ModelError
 from warpzone.profiles import Profile, ProfileError, available_profiles, load_profile
@@ -100,6 +101,30 @@ def _build_parser() -> argparse.ArgumentParser:
         help="seconds to wait for the rescan (default: %(default)s)",
     )
 
+    chk = sub.add_parser(
+        "bios",
+        parents=[common],
+        help="report which BIOS and firmware files a library has, lacks or has wrong",
+    )
+    chk.add_argument(
+        "--root",
+        type=Path,
+        help="library folder holding bios/ and roms/ (default: this device's, else the hub's)",
+    )
+    chk.add_argument(
+        "--system",
+        nargs="+",
+        action="extend",
+        metavar="NAME",
+        help="check only these systems (default: all)",
+    )
+    chk.add_argument("--all", action="store_true", dest="list_all", help="list unknown files too")
+    chk.add_argument(
+        "--overrides",
+        type=Path,
+        help="local file with accepted hashes (default: bios.toml next to the config file)",
+    )
+
     sub.add_parser("status", parents=[common], help="folder state on the hub and this machine")
     render = sub.add_parser(
         "render-ignores", parents=[common], help="print the ignore lines a device would get"
@@ -109,7 +134,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def _load(args: argparse.Namespace) -> tuple[Config, dict[str, Profile]]:
-    path = args.config or Path(os.environ.get("WARPZONE_CONFIG") or default_config_path())
+    path = _config_path(args)
     cfg = load_config(path, set(available_profiles()))
     profiles = {
         name: load_profile(name) for name in sorted({d.profile for d in cfg.devices.values()})
@@ -142,8 +167,40 @@ def _hub_client(cfg: Config, *, dry_run: bool = False) -> Client:
     return Client(cfg.hub.api_url, cfg.hub.api_key, label="hub", dry_run=dry_run)
 
 
+def _config_path(args: argparse.Namespace) -> Path:
+    return args.config or Path(os.environ.get("WARPZONE_CONFIG") or default_config_path())
+
+
+def _bios(args: argparse.Namespace, rep: Reporter) -> int:
+    manifest = bios.load_manifest()
+    overrides = bios.load_overrides(
+        args.overrides or bios.default_overrides_path(_config_path(args)),
+        manifest,
+        must_exist=args.overrides is not None,
+    )
+    root = args.root
+    if root is None:
+        try:
+            cfg, profiles = _load(args)
+        except ConfigError as exc:
+            raise BiosError(f"no --root given and the config is not usable:\n{exc}") from exc
+        root = bios.default_root(cfg, profiles, Path.home(), Path.is_dir)
+        if root is None:
+            raise BiosError("no library folder found on this machine; pass --root")
+    lib = bios.Library(root, manifest.skip_dirs)
+    if not lib.has_content():
+        raise BiosError(f"{root} has no bios/ or roms/ folder; is --root the library folder?")
+    report = bios.check_library(manifest, overrides, lib, args.system)
+    rep.out(f"library: {root}")
+    for line in bios.render(report, show_all=args.list_all):
+        rep.out(line)
+    return EXIT_RUNTIME if report.problems else EXIT_OK
+
+
 def _run(args: argparse.Namespace) -> int:
     rep = Reporter(print, warn_sink=_eprint)
+    if args.command == "bios":  # works without a config when --root is given
+        return _bios(args, rep)
     cfg, profiles = _load(args)
 
     if args.command == "check":
@@ -220,6 +277,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _run(args)
     except (ConfigError, ProfileError, ModelError) as exc:
         _eprint(f"warpzone: config error: {exc}")
+        return EXIT_USAGE
+    except BiosError as exc:
+        _eprint(f"warpzone: error: {exc}")
         return EXIT_USAGE
     except (SyncthingError, ProvisionError, PruneError, localst.LocalSyncthingError) as exc:
         _eprint(f"warpzone: error: {exc}")
