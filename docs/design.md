@@ -408,6 +408,17 @@ has an unexpected hash. The contract:
   (`[saturn.accept]`) and items to skip (`[nds] unwanted = ["firmware"]`). A
   file accepted that way is reported "accepted (local)". Unknown systems, files
   or items in that file are errors, so a typo cannot silently accept nothing.
+- **Games decide what is judged.** Each system lists the `roms/` folders that
+  hold its games (`games` in the manifest, EmuDeck/ES-DE names, for example
+  `segacd = [segacd, megacd, megacdjp]`). A folder has games when it holds any
+  file other than the EmuDeck placeholders (`metadata.txt`, `systeminfo.txt`),
+  downloaded media, hidden or OS junk files and the BIOS zips of the manifest
+  (`is_game_file`, `has_games`; the walk stops at the first game). A system
+  with no games is reported as one line, "no games, not checked", and never
+  affects the exit code, so a missing BIOS for a console nobody plays is not a
+  false alarm. `--system NAME` forces the check. The MAME sets (Neo Geo, NAOMI,
+  Atomiswave, device sets) share `mame`, `arcade` and `fbneo` with their own
+  folder, so any arcade game makes them count.
 - **Exit code.** `0` when no required item is missing or wrong; `1` otherwise;
   `2` for a usage or override-file error. A wrong file that sits next to an ok
   alternative is reported but does not fail the run. Optional items never fail it.
@@ -417,7 +428,7 @@ has an unexpected hash. The contract:
   only computed when every system is checked.
 
 The decisions (`judge_file`, `judge_zip`, `settle`, `unknown_files`,
-`default_root`, `render`) are pure and unit-tested without a filesystem; `Library`
+`default_root`, `is_game_file`, `has_games`, `render`) are pure and unit-tested without a filesystem; `Library`
 and `check_library` are the only parts that touch the disk.
 
 ## Syncthing API surface used

@@ -15,9 +15,10 @@ import posixpath
 import re
 import tomllib
 import zipfile
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from importlib import resources
+from itertools import chain
 from pathlib import Path
 from typing import Any
 
@@ -29,6 +30,9 @@ CHUNK = 1024 * 1024
 BASES = ("bios", "roms")
 OVERRIDES_FILE = "bios.toml"
 SHOWN_NAMES = 4
+PLACEHOLDERS = ("metadata.txt", "systeminfo.txt")
+NON_GAME_DIRS = ("media", "@eaDir", "#recycle")
+JUNK_FILES = ("Thumbs.db", "desktop.ini")
 _MD5 = re.compile(r"^[0-9a-f]{32}$")
 _CRC32 = re.compile(r"^[0-9a-f]{8}$")
 _KEY = re.compile(r"^[a-z0-9][a-z0-9-]*$")
@@ -65,6 +69,7 @@ class System:
     key: str
     title: str
     items: tuple[Item, ...]
+    games: tuple[str, ...] = ()  # folders of roms/ that hold its games; empty: always judged
 
 
 @dataclass(frozen=True)
@@ -111,6 +116,8 @@ class SystemReport:
     key: str
     title: str
     results: tuple[ItemResult, ...]
+    judged: bool = True  # False: the library has no games for this system
+    games: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -120,7 +127,7 @@ class Report:
 
     @property
     def problems(self) -> list[ItemResult]:
-        return [r for s in self.systems for r in s.results if r.blocking]
+        return [r for s in self.systems if s.judged for r in s.results if r.blocking]
 
 
 # ---------------------------------------------------------------- manifest
@@ -234,12 +241,18 @@ def parse_manifest(data: dict[str, Any], source: str = "bios manifest") -> Manif
         if not _KEY.match(key) or not isinstance(table, dict):
             err(f"{key}: expected a system table with a lowercase name")
             continue
-        for extra in sorted(set(table) - {"title", "item"}):
+        for extra in sorted(set(table) - {"title", "item", "games"}):
             err(f"{key}: unknown key {extra!r}")
         title = table.get("title")
         if not isinstance(title, str) or not title:
             err(f"{key}.title: required, must be a non-empty string")
             title = key
+        games = table.get("games", [])
+        if not isinstance(games, list) or not all(
+            isinstance(g, str) and g and "/" not in g for g in games
+        ):
+            err(f"{key}.games: must be a list of folder names under roms/")
+            games = []
         raw_items = table.get("item")
         if not isinstance(raw_items, list) or not raw_items:
             err(f"{key}.item: required, at least one [[{key}.item]]")
@@ -252,7 +265,7 @@ def parse_manifest(data: dict[str, Any], source: str = "bios manifest") -> Manif
             if any(i.name == item.name for i in items):
                 err(f"{key}: two items are named {item.name!r}")
             items.append(item)
-        systems[key] = System(key, title, tuple(items))
+        systems[key] = System(key, title, tuple(items), tuple(games))
     if errors:
         raise BiosError("\n".join(errors))
     return Manifest(systems, tuple(skip))
@@ -389,6 +402,26 @@ def settle(checks: Sequence[FileCheck]) -> Status:
     return Status.MISSING
 
 
+def is_game_file(rel: str, bios_zips: Collection[str] = ()) -> bool:
+    """Whether a file under roms/<folder> counts as a game.
+
+    Not games: the placeholders EmuDeck leaves in every system folder, downloaded
+    media, hidden and OS junk files, and the BIOS zips this tool checks.
+    """
+    parts = rel.split("/")  # folder, [subfolders...], file
+    name = parts[-1]
+    if rel in bios_zips or any(p in NON_GAME_DIRS for p in parts[1:-1]):
+        return False
+    if len(parts) == 2 and name in PLACEHOLDERS:
+        return False
+    return not any(p.startswith(".") for p in parts[1:]) and name not in JUNK_FILES
+
+
+def has_games(rels: Iterable[str], bios_zips: Collection[str] = ()) -> bool:
+    """`rels` are paths under roms/, e.g. "psx/Game.chd". Stops at the first game."""
+    return any(is_game_file(rel, bios_zips) for rel in rels)
+
+
 def unknown_files(present: Sequence[str], known: set[str]) -> tuple[str, ...]:
     return tuple(sorted(p for p in present if p not in known))
 
@@ -437,6 +470,15 @@ class Library:
                         continue
             self._index = index
         return self._index
+
+    def rom_paths(self, folder: str) -> Iterator[str]:
+        """Files under roms/<folder>, as "folder/..." paths, without opening any."""
+        top = self.root / "roms" / folder
+        for dirpath, dirnames, filenames in os.walk(top):
+            dirnames[:] = [d for d in dirnames if d not in NON_GAME_DIRS]
+            here = Path(dirpath).relative_to(self.root / "roms").as_posix()
+            for name in filenames:
+                yield f"{here}/{name}"
 
     def size(self, base: str, rel: str) -> int | None:
         if base == "bios":
@@ -524,6 +566,10 @@ def check_item(
     return ItemResult(item, settle(checks), checks)
 
 
+def _has_games(system: System, lib: Library, bios_zips: Collection[str]) -> bool:
+    return has_games(chain.from_iterable(lib.rom_paths(f) for f in system.games), bios_zips)
+
+
 def check_library(
     manifest: Manifest, overrides: Overrides, lib: Library, systems: Sequence[str] | None = None
 ) -> Report:
@@ -532,17 +578,19 @@ def check_library(
         raise BiosError(
             f"unknown system {', '.join(unknown_system)} (known: {', '.join(manifest.systems)})"
         )
+    bios_zips = {i.zip_path for s in manifest.systems.values() for i in s.items if i.zip_path}
     reports: list[SystemReport] = []
     for key, system in manifest.systems.items():
         if systems and key not in systems:
             continue
+        judged = bool(systems) or not system.games or _has_games(system, lib, bios_zips)
         results = []
         for item in system.items:
             if (key, item.name) in overrides.unwanted:
                 results.append(ItemResult(item, Status.SKIPPED))
             else:
                 results.append(check_item(item, lib, overrides.accept))
-        reports.append(SystemReport(key, system.title, tuple(results)))
+        reports.append(SystemReport(key, system.title, tuple(results), judged, system.games))
 
     unknown = None
     if not systems:
@@ -611,6 +659,12 @@ def render(report: Report, *, show_all: bool = False) -> list[str]:
     lines: list[str] = []
     counts = dict.fromkeys(Status, 0)
     for system in report.systems:
+        if not system.judged:
+            lines.append(
+                f"{system.key}: {system.title}: no games in roms/{{{','.join(system.games)}}}, "
+                "not checked"
+            )
+            continue
         body = [line for r in system.results for line in render_item(r)]
         lines.append(f"{system.key}: {system.title}")
         lines.extend(body or ["  (all items marked unwanted)"])
@@ -632,7 +686,11 @@ def render(report: Report, *, show_all: bool = False) -> list[str]:
     if report.problems:
         lines.append(f"{len(report.problems)} required item(s) missing or wrong")
     if any(
-        c.detail.startswith("md5 ") for s in report.systems for r in s.results for c in r.checks
+        c.detail.startswith("md5 ")
+        for s in report.systems
+        if s.judged
+        for r in s.results
+        for c in r.checks
     ):
         lines.append(
             "to keep a modified file on purpose, list its md5 under "

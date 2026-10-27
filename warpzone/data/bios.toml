@@ -24,6 +24,8 @@
 #
 # Format:
 #   [<system>]              title = "..."
+#                           games = ["folder", ...]  ROM folders (under roms/) that hold this
+#                           system's games; a system whose folders hold no games is not judged
 #   [[<system>.item]]       one thing to have; it is satisfied when ANY of its files is ok
 #     name       label shown in the report, unique within the system
 #     base       "bios" (default) or "roms": the folder `path` is relative to
@@ -39,6 +41,7 @@ skip_dirs = ["eden", "azahar"]
 
 [psx]
 title = "Sony PlayStation"
+games = ["psx"]
 
 [[psx.item]]
 name = "bios"
@@ -71,6 +74,7 @@ files = [
 
 [ps2]
 title = "Sony PlayStation 2"
+games = ["ps2"]
 
 [[ps2.item]]
 name = "bios"
@@ -154,6 +158,7 @@ files = [
 
 [saturn]
 title = "Sega Saturn"
+games = ["saturn", "saturnjp"]
 
 [[saturn.item]]
 name = "bios"
@@ -172,6 +177,7 @@ files = [
 
 [dreamcast]
 title = "Sega Dreamcast"
+games = ["dreamcast"]
 
 [[dreamcast.item]]
 name = "boot"
@@ -189,6 +195,7 @@ files = [
 
 [segacd]
 title = "Sega CD / Mega CD"
+games = ["segacd", "megacd", "megacdjp"]
 
 [[segacd.item]]
 name = "bios"
@@ -201,6 +208,7 @@ files = [
 
 [pce-cd]
 title = "NEC PC Engine CD / TurboGrafx-CD"
+games = ["pcenginecd", "tg-cd"]
 
 [[pce-cd.item]]
 name = "system card"
@@ -223,6 +231,7 @@ files = [
 
 [3do]
 title = "Panasonic 3DO"
+games = ["3do"]
 
 [[3do.item]]
 name = "bios"
@@ -259,6 +268,7 @@ files = [
 
 [gba]
 title = "Nintendo Game Boy Advance"
+games = ["gba"]
 
 [[gba.item]]
 name = "bios"
@@ -270,6 +280,7 @@ files = [
 
 [nds]
 title = "Nintendo DS"
+games = ["nds"]
 
 [[nds.item]]
 name = "bios7"
@@ -295,6 +306,7 @@ files = [
 
 [lynx]
 title = "Atari Lynx"
+games = ["atarilynx"]
 
 [[lynx.item]]
 name = "boot rom"
@@ -305,6 +317,7 @@ files = [
 
 [neogeo]
 title = "SNK Neo Geo (MAME set)"
+games = ["neogeo", "mame", "arcade", "fbneo"]
 
 [[neogeo.item]]
 name = "neogeo.zip"
@@ -350,6 +363,7 @@ note = "Neo Geo arcade games in MAME and FBNeo-style romsets"
 
 [atomiswave]
 title = "Sammy Atomiswave (MAME set)"
+games = ["atomiswave", "mame", "arcade", "fbneo"]
 
 [[atomiswave.item]]
 name = "awbios.zip"
@@ -364,6 +378,7 @@ note = "Atomiswave arcade games (Flycast, MAME)"
 
 [naomi]
 title = "Sega NAOMI (MAME set)"
+games = ["naomi", "mame", "arcade", "fbneo"]
 
 [[naomi.item]]
 name = "naomi.zip"
@@ -407,6 +422,7 @@ note = "NAOMI arcade games (Flycast, MAME)"
 
 [arcade]
 title = "Arcade device sets (MAME)"
+games = ["mame", "arcade", "fbneo"]
 
 [[arcade.item]]
 name = "bubsys.zip"

@@ -157,16 +157,17 @@ psx: Sony PlayStation
   ok                  bios: SCPH1001.BIN (matches scph1001.bin)
 saturn: Sega Saturn
   wrong (required)    bios: sega_101.bin: md5 cb37ed68..., expected 85ec9ca4...
-segacd: Sega CD / Mega CD
-  missing (required)  bios: one of bios_CD_E.bin, bios_CD_J.bin, bios_CD_U.bin
-                      unlocks: Sega CD / Mega CD games; the dump must match the game region
+ps2: Sony PlayStation 2
+  missing (required)  bios: one of ps2-0100j-20000117.bin, ps2-0100jd-20000117.bin, ... (66 in all)
+                      unlocks: PlayStation 2 games; one dump of the console region you play is enough
+3do: Panasonic 3DO: no games in roms/{3do}, not checked
 unknown files in bios/: 3
   (list them with --all)
-items: 12 ok, 2 missing, 1 wrong
-3 required item(s) missing or wrong
+items: 12 ok, 1 missing, 1 wrong
+2 required item(s) missing or wrong
 ```
 
-It is read-only and exits 1 when a required item is missing or wrong, so it also works in a script. Without `--root` it uses this device's `~/Emulation` (from the profile) or, on the hub, `<hub root>/library`. `--system psx ps2` limits the check, `--all` lists the unknown files in `bios/`.
+It is read-only and exits 1 when a required item is missing or wrong, so it also works in a script. Only systems that have games are judged: if the ROM folders of a system (for example `roms/3do`) hold nothing but EmuDeck placeholders, media or the BIOS zips themselves, the system is shown as "no games, not checked" and never affects the exit code. Naming it with `--system` checks it anyway. Without `--root` it uses this device's `~/Emulation` (from the profile) or, on the hub, `<hub root>/library`. `--system psx ps2` limits the check, `--all` lists the unknown files in `bios/`.
 
 Some items are "one of": a PlayStation needs one BIOS dump, not all of them. Zip sets for MAME (`neogeo.zip`, `naomi.zip`, `awbios.zip`, ...) are checked in `roms/mame/` by member name and CRC32. Only files of the expected size are read.
 

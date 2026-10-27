@@ -23,6 +23,8 @@ from warpzone.bios import (
     SystemReport,
     check_library,
     default_root,
+    has_games,
+    is_game_file,
     judge_file,
     judge_zip,
     load_manifest,
@@ -60,6 +62,7 @@ def fake_manifest() -> dict[str, Any]:
         "skip_dirs": ["keys"],
         "con": {
             "title": "Console",
+            "games": ["con"],
             "item": [
                 {
                     "name": "bios",
@@ -83,6 +86,7 @@ def fake_manifest() -> dict[str, Any]:
         },
         "arc": {
             "title": "Arcade",
+            "games": ["mame"],
             "item": [
                 {
                     "name": "set.zip",
@@ -175,6 +179,57 @@ class SettleTests(unittest.TestCase):
         self.assertFalse(result(True, Status.SKIPPED).blocking)
         self.assertFalse(result(False, Status.MISSING).blocking)
         self.assertFalse(result(False, Status.WRONG).blocking)
+
+
+class GamesTests(unittest.TestCase):
+    def test_placeholders_media_and_junk_are_not_games(self) -> None:
+        for rel in (
+            "segacd/metadata.txt",
+            "segacd/systeminfo.txt",
+            "segacd/media/covers/a.png",
+            "segacd/@eaDir/x",
+            "segacd/.DS_Store",
+            "segacd/.stfolder",
+            "segacd/Thumbs.db",
+            "segacd/#recycle/old.chd",
+            "mame/neogeo.zip",
+        ):
+            with self.subTest(rel):
+                self.assertFalse(is_game_file(rel, {"mame/neogeo.zip"}))
+
+    def test_anything_else_is_a_game(self) -> None:
+        for rel in (
+            "psx/Game.chd",
+            "psx/Game.m3u/Disc 1.chd",
+            "mame/kof98.zip",
+            "gba/metadata.txt.bak",
+        ):
+            with self.subTest(rel):
+                self.assertTrue(is_game_file(rel))
+
+    def test_a_placeholder_name_deeper_in_the_tree_is_a_game_file(self) -> None:
+        self.assertTrue(is_game_file("psx/dir/metadata.txt"))
+
+    def test_has_games_over_a_listing(self) -> None:
+        self.assertFalse(has_games([]))
+        self.assertFalse(has_games(["3do/metadata.txt", "3do/media/a.png"]))
+        self.assertTrue(has_games(["3do/metadata.txt", "3do/Panzer.iso"]))
+        self.assertFalse(
+            has_games(
+                ["mame/neogeo.zip", "mame/awbios.zip"], {"mame/neogeo.zip", "mame/awbios.zip"}
+            )
+        )
+
+    def test_has_games_stops_at_the_first_game(self) -> None:
+        seen = []
+
+        def listing():  # type: ignore[no-untyped-def]
+            for rel in ("a/game.bin", "a/never.bin"):
+                seen.append(rel)
+                yield rel
+
+        self.assertTrue(has_games(listing()))
+        self.assertEqual(seen, ["a/game.bin"])
 
 
 class UnknownFilesTests(unittest.TestCase):
@@ -340,6 +395,8 @@ class FilesystemTests(unittest.TestCase):
         self.addCleanup(self._tmp.cleanup)
         self.root = Path(self._tmp.name)
         self.manifest = parse_manifest(fake_manifest())
+        self.put("roms/con/game.rom", b"x")
+        self.put("roms/mame/game.zip", b"x")
 
     def put(self, rel: str, data: bytes) -> None:
         path = self.root / rel
@@ -464,6 +521,40 @@ class FilesystemTests(unittest.TestCase):
         self.assertEqual(item.checks[0].status, Status.WRONG)
         self.assertIn("denied", item.checks[0].detail)
 
+    def test_a_system_without_games_is_not_judged_and_never_fails_the_run(self) -> None:
+        (self.root / "roms" / "con" / "game.rom").unlink()
+        (self.root / "roms" / "con" / "metadata.txt").write_bytes(b"placeholder")
+        self.put("roms/con/media/cover.png", b"x")
+        self.put("roms/mame/set.zip", b"a bios zip is not a game")
+        (self.root / "roms" / "mame" / "game.zip").unlink()
+        self.put("bios/a.bin", OTHER)  # wrong, but nobody plays this system
+        report, _ = self.check()
+        self.assertEqual([s.judged for s in report.systems], [False, False])
+        self.assertEqual(report.problems, [])
+        self.assertEqual(report.systems[0].games, ("con",))
+        text = "\n".join(render(report))
+        self.assertIn("con: Console: no games in roms/{con}, not checked", text)
+        self.assertNotIn("missing (required)", text)
+
+    def test_naming_a_system_forces_the_check(self) -> None:
+        (self.root / "roms" / "con" / "game.rom").unlink()
+        (self.root / "bios").mkdir()
+        report, _ = self.check(systems=["con"])
+        self.assertTrue(report.systems[0].judged)
+        self.assertTrue(report.problems)
+
+    def test_games_in_any_listed_folder_count(self) -> None:
+        (self.root / "roms" / "mame" / "game.zip").unlink()
+        self.put("roms/mame/real.zip", b"x")
+        report, _ = self.check()
+        self.assertEqual([s.key for s in report.systems if s.judged], ["con", "arc"])
+
+    def test_unjudged_systems_still_claim_their_files_as_known(self) -> None:
+        (self.root / "roms" / "con" / "game.rom").unlink()
+        self.put("bios/Whatever.BIN", OTHER)  # matches "named by content" of the unjudged system
+        report, _ = self.check()
+        self.assertNotIn("Whatever.BIN", report.unknown or ())
+
     def test_unknown_system_name(self) -> None:
         with self.assertRaises(BiosError):
             self.check(systems=["nope"])
@@ -478,10 +569,25 @@ class CliTests(unittest.TestCase):
 
     def test_exit_1_and_report_when_required_files_are_missing(self) -> None:
         (self.tmp / "lib" / "bios").mkdir(parents=True)
+        (self.tmp / "lib" / "roms" / "psx").mkdir(parents=True)
+        (self.tmp / "lib" / "roms" / "psx" / "Game.chd").write_bytes(b"x")
         code, out, _ = run("bios", "--root", str(self.tmp / "lib"), "--config", self.config)
         self.assertEqual(code, 1)
         self.assertIn("missing (required)", out)
         self.assertIn("psx: Sony PlayStation", out)
+        self.assertIn("segacd: Sega CD / Mega CD: no games in", out)  # not judged
+
+    def test_exit_0_when_the_library_has_no_games_for_the_missing_systems(self) -> None:
+        (self.tmp / "lib" / "bios").mkdir(parents=True)
+        (self.tmp / "lib" / "roms" / "segacd").mkdir(parents=True)
+        (self.tmp / "lib" / "roms" / "segacd" / "metadata.txt").write_bytes(b"x")
+        code, out, _ = run("bios", "--root", str(self.tmp / "lib"), "--config", self.config)
+        self.assertEqual(code, 0)
+        self.assertNotIn("missing (required)", out)
+        code, _, _ = run(
+            "bios", "--root", str(self.tmp / "lib"), "--system", "segacd", "--config", self.config
+        )
+        self.assertEqual(code, 1)
 
     def test_exit_0_when_nothing_required_is_missing(self) -> None:
         (self.tmp / "lib" / "bios").mkdir(parents=True)
