@@ -71,6 +71,9 @@ class FakeSyncthing:
         self.polls: dict[tuple[str, str], int] = {}
         # (folder, name) -> a full db/file answer, taking precedence over arrives_after.
         self.file_info: dict[tuple[str, str], dict[str, Any]] = {}
+        # (folder, sub) -> the db/file answer for `sub` once a scan of that sub ran.
+        # Syncthing on Linux only flags a newly ignored directory when it is scanned itself.
+        self.after_sub_scan: dict[tuple[str, str], dict[str, Any]] = {}
         self.ignores_error: str | None = None  # what db/ignores reports for a bad include
         self.scans = 0  # shows up as db/status stateChanged, like a finished scan
         self.requests: list[tuple[str, str, Any]] = []
@@ -183,5 +186,8 @@ class FakeSyncthing:
             return 200, {"global": info, "local": info}
         if (method, path) == ("POST", "/rest/db/scan"):
             self.scans += 1
+            key = (folder, query.get("sub", ""))
+            if key in self.after_sub_scan:
+                self.file_info[key] = self.after_sub_scan[key]
             return 200, None
         return 404, "not found"

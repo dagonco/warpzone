@@ -177,5 +177,7 @@ class Client:
         entries = self.get("/rest/db/browse", folder=folder_id, levels="0") or []
         return [e["name"] for e in entries]
 
-    def scan(self, folder_id: str) -> None:
-        self.request("POST", "/rest/db/scan", None, folder=folder_id)
+    def scan(self, folder_id: str, sub: str | None = None) -> None:
+        """Scan the folder, or only `sub` inside it. With `sub`, Syncthing answers when done."""
+        params = {"folder": folder_id} if sub is None else {"folder": folder_id, "sub": sub}
+        self.request("POST", "/rest/db/scan", None, **params)

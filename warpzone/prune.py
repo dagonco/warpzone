@@ -293,10 +293,13 @@ def apply_folder(
 
     # Deepest first, so a directory is looked at after its children. Only
     # directories Syncthing ignores are removed, and only when rmdir finds them empty.
+    # A full scan does not always flag a newly ignored directory (seen on Linux),
+    # so each one is scanned on its own before its record is trusted.
     for rel in sorted(parents, key=lambda p: p.count("/"), reverse=True):
         if _protected(rel, marker):
             continue
         try:
+            client.scan(report.folder_id, sub=rel)
             info = client.db_file(report.folder_id, rel)
             if (info or {}).get("local", {}).get("ignored"):
                 os.rmdir(os.path.join(report.root, rel))

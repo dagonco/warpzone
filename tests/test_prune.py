@@ -194,6 +194,18 @@ class PruneDeviceTests(unittest.TestCase):
         self.assertIn("roms/n64/patched.z64 (its size differs from the hub copy)", out)
         self.assertIn("1 file(s) not known to Syncthing", out)
 
+    def test_directory_flagged_ignored_only_by_its_own_scan_is_removed(self) -> None:
+        d = self.dev
+        deep = d.put("roms/n64/sub/b.z64")
+        stale = {"global": hub_copy(0, DIR), "local": {"ignored": False}}
+        d.fake.file_info[("wz-library", "roms/n64/sub")] = stale
+        d.fake.after_sub_scan[("wz-library", "roms/n64/sub")] = ignored_info(hub_copy(0, DIR))
+
+        self.assertEqual(d.prune(apply=True), 0)
+
+        self.assertFalse(deep.parent.exists())
+        self.assertIn("removed 1 empty folder(s)", "\n".join(d.lines))
+
     def test_non_ignored_directory_is_never_removed(self) -> None:
         d = self.dev
         d.put("roms/psx/a.cue")
