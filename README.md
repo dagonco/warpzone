@@ -55,9 +55,9 @@ Saves get their own folders so their two-way direction can never leak into the l
 From a release (see [CHANGELOG.md](CHANGELOG.md) for what each one contains):
 
 ```bash
-pipx install https://github.com/dagonco/warpzone/releases/download/v0.1.0/warpzone-0.1.0-py3-none-any.whl
+pipx install https://github.com/dagonco/warpzone/releases/download/v0.2.0/warpzone-0.2.0-py3-none-any.whl
 # or, without pipx:
-python3 -m pip install --user https://github.com/dagonco/warpzone/releases/download/v0.1.0/warpzone-0.1.0-py3-none-any.whl
+python3 -m pip install --user https://github.com/dagonco/warpzone/releases/download/v0.2.0/warpzone-0.2.0-py3-none-any.whl
 warpzone --version
 ```
 
