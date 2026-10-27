@@ -253,6 +253,10 @@ chdman = "/opt/homebrew/bin/chdman"          # optional tools; PATH is searched 
 bsdtar = "/usr/bin/bsdtar"
 rahasher = "~/tools/RAHasher"                # only used when set
 dolphin_tool = "/usr/local/bin/dolphin-tool"
+mame_dat = "~/dats/mame0282lx.zip"            # optional arcade databases (see Inbox)
+fbneo_dat = "~/dats/fbneo-arcade.dat"
+mame2003plus_dat = "~/dats/mame2003-plus.xml"
+gamelist_mame = "/Volumes/hub/frontend/es-de/gamelists/mame/gamelist.xml"  # optional
 ```
 
 `warpzone inbox` reads only the `[inbox]` table, so a desktop that only files games
@@ -525,10 +529,11 @@ Syncthing state. The contract:
   `[inbox]` config keys or PATH (RAHasher only when configured). A tool that an item
   needs and is missing sends that item to review with a clear reason; other items
   continue. A configured path that does not exist is a configuration error.
-- **Out of scope.** Switch, MAME/arcade, Vita, PS3 and Xbox. Switch, Vita, PS3 and Xbox
-  files are recognised by extension or folder and go to review with "not supported by
-  inbox yet"; arcade sets simply have no DAT match. A disc image kept as a single `.bin`
-  for several tracks is not identified (the DATs list one file per track).
+- **Arcade (MAME) sets.** See [Arcade sets](#arcade-sets) below; they do not go through
+  DAT matching or conversion.
+- **Out of scope.** Switch, Vita, PS3 and Xbox. Their files are recognised by extension
+  or folder and go to review with "not supported by inbox yet". A disc image kept as a
+  single `.bin` for several tracks is not identified (the DATs list one file per track).
 - **Exit code.** `0` when every item is placed or already in the library; `1` when any
   item went to review; `2` for a usage or configuration error.
 
@@ -537,6 +542,78 @@ The decisions (`skip_name`, `unsafe_member`, `select_purge`, `plan_units`,
 `match_dat`, `group_discs`, `parse_dat`) are pure and unit-tested; conversions are
 tested with stand-in `chdman` and `RAHasher` scripts, and one test runs the cartridge
 flow end to end with no external tool.
+
+### Arcade sets
+
+Arcade zips are not unpacked or converted: a MAME set is a zip whose name and members
+the emulator needs exactly as they are, so `inbox` only identifies, names and places it.
+The code is in `warpzone/inbox_mame.py`, which plugs into `inbox.py` through a small
+registry (`inbox.kind_handlers()`; a handler has `validate`, `claims` and `process`, and
+`_identify_and_place` offers every item to the handlers before the usual path).
+
+- **Which items.** A top-level `.zip`, or a folder with nothing but `.zip` files (and
+  sidecars), is taken as arcade when at least one member (size and CRC32, read from the
+  zip directory) is in a configured database. Anything else, and every item when no
+  database is configured, takes the usual path.
+- **Databases.** `[inbox] mame_dat` (MAME's `-listxml`, or the official `mameXXXXlx.zip`,
+  whose first `.xml` or `.dat` member is read), `fbneo_dat` (the FinalBurn Neo
+  "ClrMame Pro XML, Arcade only" DAT) and `mame2003plus_dat` (`mame2003-plus.xml`).
+  All three are XML with `machine` or `game` elements and are parsed the same way with a
+  streaming `iterparse` (a listxml is 300 MB): a set is its `name`, `cloneof`, `romof`,
+  `isbios` / `isdevice` (a not-runnable set is a BIOS, which is how 2003-Plus marks
+  them), its `rom` elements that have a CRC32 and are neither `nodump` nor `optional`
+  (with `merge` and `bios`), its `device_ref`s and its `disk` names. Sets with nothing to
+  check are dropped and each set's devices are flattened to the ones that have ROMs. The
+  index is cached as JSON in the DAT cache folder (`sets-*.json`), keyed by the file's
+  size and modification time. A configured path that is not a file is a configuration
+  error (exit 2), checked before anything runs.
+- **Fit.** A set fits a database when every required ROM is present, where a ROM is the
+  pair (size, CRC32) and present means in the dropped zip or in a zip of
+  `library/roms/mame/` named after a set the set depends on: its parent (`cloneof`), its
+  BIOS (`romof`), its devices and theirs. The set's own name is never read from the
+  library (the dropped zip stands in for it). A set that lists several alternative
+  `bios` ROMs needs one complete alternative. Members may be anywhere in the zip: recent
+  merged sets keep clones in sub-folders. The zip is read back member by member before it
+  is trusted (`testzip`).
+- **Which set.** For each database: the set named like the file when it shares at least
+  one member with the zip (judged as that set, fit or not, so a file called `galpanic.zip`
+  never silently becomes a different clone); otherwise the sets that fit, taking the top
+  parent among them (a merged zip fits its parent and each of its clones), then the one
+  that explains most members, games before BIOS and device sets; otherwise the set
+  lacking the fewest files.
+- **Decision.** The databases are tried in the order MAME, FinalBurn Neo, MAME
+  2003-Plus, only the configured ones. The first whose set fits decides: MAME means the
+  ES-DE default (no `<altemulator>`), the others their ES-DE name, `FinalBurn Neo` and
+  `MAME 2003-Plus`. When none fits the zip goes to review, and the reason has one line per
+  database with the missing files (name and CRC32) grouped by the zip they belong to:
+  `needs neogeo.zip`, `needs qsound_hle.zip or qsound.zip`, `<zip> in the library lacks`,
+  `<set>.zip lacks`. If only some databases are configured, the others are simply not
+  considered. BIOS and device sets (`neogeo`, `qsound_hle`) are filed with no emulator
+  entry. The notes of a placed set say why earlier emulators did not fit.
+- **Name and placement.** The result is `library/roms/mame/<set>.zip`, the set name of the
+  database that decided, whatever the file was called; the bytes are the original's. It is
+  copied to `<name>.part`, read back and compared member by member, then renamed. If the
+  name exists, equal members mean "already in the library" and different ones a review
+  (conflict, nothing replaced). `roms/arcade/` is never written. The whitelist line is
+  `!/roms/mame/<set>.zip`. Originals go to `_done` or `_revisar` as for other systems.
+- **ES-DE gamelist.** `[inbox] gamelist_mame` (default
+  `<root>/frontend/es-de/gamelists/mame/gamelist.xml`) holds per-game overrides:
+  `<game><path>./dino.zip</path><altemulator>FinalBurn Neo</altemulator></game>`. For
+  every game set or confirmed by a run, including one that was already in the library, the
+  entry of `<set>.zip` is brought in line: added when missing, its `<altemulator>` changed
+  when different, and removed when the default now fits (an entry that held nothing else
+  is removed whole). The file is edited as text so nothing else changes: ES-DE writes
+  several top-level elements, so it is not parsed and rewritten; entries are found by
+  their `<path>`, XML comments are skipped, indentation and the newline style are copied,
+  and the result is checked to be well-formed (when the original was) before it is
+  written. It is written to `gamelist.xml.part` and renamed, and `gamelist.xml.bak` holds
+  the file as it was before the run's first change. A missing file is created only when
+  an override is needed. Report mode prints each change as "would ...". If the gamelist
+  cannot be updated after the zip was placed, the item goes to review and a rerun
+  ("already in the library") retries it.
+- **Not covered.** CHD disks of a set are not in the zip: they are listed in a note, not
+  checked. `.7z` and `.rar` are not opened for arcade. Samples are not checked. warpzone
+  never downloads the databases.
 
 ## Doctor
 
@@ -556,7 +633,9 @@ for every problem, the exact fix for this platform.
   missing config file or a missing `[hub]`, `[devices]` or `[inbox]` table is `[--]`, and
   the line says what the table would enable. Once an `[inbox]` table exists, `chdman`,
   `bsdtar`, `dats_dir`, the hub root with `inbox/` and `library/roms/` become required.
-  `RAHasher`, `dolphin-tool` and `nsz` are always optional. A config that does not load,
+  `RAHasher`, `dolphin-tool` and `nsz` are always optional. The three arcade DAT paths
+  (`mame_dat`, `fbneo_dat`, `mame2003plus_dat`) are `[--]` when unset, `[!!]` when set to
+  something that is not a file (`inbox` refuses to start) and `[ok]` otherwise. A config that does not load,
   a configured tool path that is not executable, a tool that cannot run, a local
   Syncthing whose API does not answer, and Python older than 3.11 are always problems.
 - **Exit codes.** `0` when no check is a problem, `1` otherwise.
@@ -614,6 +693,7 @@ warpzone/
   bios.py            BIOS manifest, local overrides, pure `judge_*`, disk checks
   dat.py             Redump / No-Intro DAT parsing, cache, matching, disc grouping (pure)
   inbox.py           unpack, identify, convert, place, file the originals
+  inbox_mame.py      arcade sets: MAME / FBNeo / 2003-Plus fit, emulator choice, ES-DE gamelist
   doctor.py          machine checklist (`warpzone doctor`): checks, install hints, renderer
   ra.py              RetroAchievements: RAHasher wrapper, game list lookup
   localst.py         find and parse the local Syncthing config.xml
@@ -661,6 +741,13 @@ logic is unit-tested without a network.
   links; whole runs on a temporary hub with tiny DATs and stand-in `chdman`,
   `RAHasher`, `bsdtar` and `dolphin-tool` scripts, including one cartridge flow with no
   external tool; the CLI, with the API key coming from the environment.
+- Arcade tests (`test_inbox_mame.py`): set database parsing and its cache, fit,
+  set identification and the emulator decision as pure functions over tiny synthetic
+  XML databases (BIOS alternatives, merged and split clones, devices, optional and nodump
+  ROMs); the gamelist update as a pure text function (add, change, remove, comments,
+  other entries and unknown elements untouched, CRLF); whole runs on a temporary hub
+  (placement, rename, fallback to the other emulators, gamelist and `.bak`, conflict,
+  already in the library, review reasons, folders of zips, configuration errors).
 - `doctor` tests: the renderer and exit code as pure functions; every check with fake
   probes (tool present, missing per platform, unrunnable, unrecognizable version; config
   missing, partial or invalid; Syncthing absent, answering, refusing, not on loopback;

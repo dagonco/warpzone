@@ -42,7 +42,19 @@ class Device:
     rescan_seconds: int = DEFAULT_RESCAN_SECONDS
 
 
-INBOX_KEYS = ("root", "dats_dir", "work_dir", "chdman", "bsdtar", "rahasher", "dolphin_tool")
+INBOX_KEYS = (
+    "root",
+    "dats_dir",
+    "work_dir",
+    "chdman",
+    "bsdtar",
+    "rahasher",
+    "dolphin_tool",
+    "mame_dat",
+    "fbneo_dat",
+    "mame2003plus_dat",
+    "gamelist_mame",
+)
 
 
 @dataclass(frozen=True)
@@ -58,6 +70,10 @@ class InboxSettings:
     bsdtar: str | None = None
     rahasher: str | None = None
     dolphin_tool: str | None = None
+    mame_dat: str | None = None
+    fbneo_dat: str | None = None
+    mame2003plus_dat: str | None = None
+    gamelist_mame: str | None = None
 
 
 @dataclass(frozen=True)

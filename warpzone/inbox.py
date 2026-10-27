@@ -27,6 +27,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
+from typing import Protocol
 
 from warpzone import dat as datmod
 from warpzone import ra
@@ -272,6 +273,7 @@ class Options:
     cache_dir: Path | None = None
     ra_key: str | None = None
     ra_fetch: ra.Fetch | None = None
+    settings: InboxSettings = field(default_factory=InboxSettings)  # read by kind handlers
     now: Callable[[], float] = time.time
     today: Callable[[], date] = date.today
 
@@ -618,6 +620,29 @@ class Context:
         self.lookup = ra.Lookup(opts.ra_key, opts.ra_fetch or ra.http_fetch)
 
 
+# ------------------------------------------------------------------ kind handlers
+
+
+class KindHandler(Protocol):
+    """A kind of content that does not go through DAT matching and conversion (arcade
+    sets, see `inbox_mame.py`). `validate` rejects a bad configuration before anything
+    runs (raise `InboxError`); `claims` says whether the handler takes over an item;
+    `process` identifies and places it, filling `result` like `_identify_and_place`."""
+
+    def validate(self, opts: Options) -> None: ...
+
+    def claims(self, ctx: Context, item: Path) -> bool: ...
+
+    def process(self, ctx: Context, item: Path, work: Path, result: ItemResult) -> None: ...
+
+
+def kind_handlers() -> list[KindHandler]:
+    """The registry: one line per handler (imported late, they import this module)."""
+    from warpzone import inbox_mame
+
+    return [inbox_mame.HANDLER]
+
+
 def _link_tracks(directory: Path, tracks: Sequence[Path]) -> None:
     directory.mkdir(parents=True, exist_ok=True)
     for t in tracks:
@@ -908,6 +933,10 @@ def process_item(ctx: Context, item: Path, number: int) -> ItemResult:
 
 
 def _identify_and_place(ctx: Context, item: Path, work: Path, result: ItemResult) -> None:
+    for handler in kind_handlers():
+        if handler.claims(ctx, item):
+            handler.process(ctx, item, work, result)
+            return
     early = unsupported_reason([item.name])
     if early:
         result.reasons.append(early)
@@ -1029,6 +1058,8 @@ def run_inbox(opts: Options, rep: Reporter) -> int:
         )
     if not opts.dats_dir.is_dir():
         raise InboxError(f"DAT folder not found: {opts.dats_dir} (set [inbox] dats_dir or --dats)")
+    for handler in kind_handlers():
+        handler.validate(opts)
     library = DatLibrary(opts.dats_dir, opts.cache_dir)
     if not library.systems():
         raise InboxError(f"no Redump or No-Intro DATs warpzone knows in {opts.dats_dir}")

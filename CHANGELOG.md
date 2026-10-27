@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ## [Unreleased]
 
+### Added
+
+- `warpzone inbox` files arcade (MAME) sets. A dropped `.zip` (or a folder of them) is identified by the size and CRC32 of its members against up to three XML databases, set in `[inbox]`: `mame_dat` (MAME's `-listxml`, or the official `mameXXXXlx.zip` as it is), `fbneo_dat` (the FinalBurn Neo arcade DAT) and `mame2003plus_dat` (the MAME 2003-Plus DAT). A set fits an emulator when every required ROM of the set, its parent, BIOS and devices is present, counting the BIOS and device zips already in `library/roms/mame/`; MAME is tried first (the ES-DE default), then FinalBurn Neo, then MAME 2003-Plus, and a set that fits none goes to review with the exact missing files and the zip they belong to. The zip is placed as `library/roms/mame/<set>.zip` (renamed after the set when it has another name), never overwriting. With `--apply`, an emulator other than the default is written as `<altemulator>` in the ES-DE gamelist (`gamelist_mame`, default `<root>/frontend/es-de/gamelists/mame/gamelist.xml`): only that game's entry is added, changed or, when the default now fits, stripped of its override; the rest of the file is kept as it is, it is written atomically and `gamelist.xml.bak` keeps the previous version. The listxml is streamed and cached as a compact index in the DAT cache folder.
+- `warpzone doctor` checks the three optional arcade DAT paths.
+
 ## [0.5.0] - 2026-10-27
 
 ### Added

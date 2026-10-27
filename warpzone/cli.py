@@ -258,6 +258,7 @@ def _inbox(args: argparse.Namespace, rep: Reporter) -> int:
         work_dir=work,
         cache_dir=inbox.default_cache_dir(),
         ra_key=os.environ.get(ra.KEY_ENV) or None,
+        settings=settings,
     )
     return EXIT_RUNTIME if inbox.run_inbox(options, rep) else EXIT_OK
 

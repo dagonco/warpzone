@@ -222,7 +222,7 @@ What it does for each item:
 
 Items modified in the last 30 seconds are left alone (they may still be copying), and `_*` folders, hidden files, `@eaDir` and `.DS_Store` are never items. warpzone does not edit whitelists: add the printed lines to the device whitelists yourself. Exit code 1 when any item needs review.
 
-Switch, MAME/arcade, Vita, PS3 and Xbox are not supported by `inbox` yet; those items go to review ("not supported by inbox yet").
+Switch, Vita, PS3 and Xbox are not supported by `inbox` yet; those items go to review ("not supported by inbox yet"). Arcade sets are handled separately, below.
 
 Configure it in the `[inbox]` table of the config (see [`examples/config.example.toml`](examples/config.example.toml)); with `--root` and `--dats` it needs no config file:
 
@@ -232,9 +232,37 @@ root = "/Volumes/hub"                       # the hub root as mounted here (hold
 dats_dir = "~/dats/libretro-database/metadat"  # redump/ and no-intro/ inside
 chdman = "/opt/homebrew/bin/chdman"           # optional: otherwise looked up on PATH
 rahasher = "~/tools/RAHasher"                 # optional: RetroAchievements hash check
+mame_dat = "~/dats/mame0282lx.zip"            # optional: arcade (see "Arcade (MAME) sets")
+fbneo_dat = "~/dats/fbneo-arcade.dat"
+mame2003plus_dat = "~/dats/mame2003-plus.xml"
 ```
 
 `bsdtar` and `dolphin_tool` work the same way, and `work_dir` moves the temporary files (they can take several GiB). Details in [`docs/design.md`](docs/design.md#inbox).
+
+### Arcade (MAME) sets
+
+An arcade `.zip` (or a folder of them) is identified by the size and CRC32 of its members, not unpacked, and filed as it is in `library/roms/mame/<set>.zip`. This needs at least one of three databases in XML, set in `[inbox]`; without any of them arcade zips take the usual path above and go to review ("no DAT match").
+
+| Key | File | Used for |
+|---|---|---|
+| `mame_dat` | MAME's `-listxml`, or the official `mameXXXXlx.zip` of a [MAME release](https://github.com/mamedev/mame/releases) as it is (the zip holds the listxml) | the ES-DE default emulator, "MAME - Current" |
+| `fbneo_dat` | `FinalBurn Neo (ClrMame Pro XML, Arcade only).dat` from the `dats/` folder of [FBNeo](https://github.com/libretro/FBNeo) | "FinalBurn Neo" |
+| `mame2003plus_dat` | `mame2003-plus.xml` from the `metadata/` folder of [mame2003-plus-libretro](https://github.com/libretro/mame2003-plus-libretro) | "MAME 2003-Plus" |
+
+Use the MAME version your frontend's core runs. A set *fits* an emulator when every required ROM (not `nodump`, not `optional`) of the set, its parent, its BIOS and its devices is present, counting the BIOS and device zips already in `library/roms/mame/`. The first emulator that fits wins: MAME (the default, nothing is written), else FinalBurn Neo, else MAME 2003-Plus. Otherwise the zip goes to review, and the reason lists the exact files missing per emulator and the zip they belong to (`MAME 0.282: mslug: needs neogeo.zip (2 file(s): sp-s2.sp1 9036d879, ...)`).
+
+The file keeps (or gets) the set's short name, `<set>.zip`, which MAME requires: a zip called anything else is renamed after the best-fitting database. Merged, split and non-merged sets are all accepted as long as the members match; a clone's zip is completed by its parent's zip already in the library. Nothing is ever overwritten: the same members are "already in the library", a different file under that name goes to review.
+
+For an emulator other than the default, `--apply` writes the ES-DE per-game override into the hub's gamelist (`frontend/es-de/gamelists/mame/gamelist.xml`, or `gamelist_mame`):
+
+```xml
+<game>
+	<path>./dino.zip</path>
+	<altemulator>FinalBurn Neo</altemulator>
+</game>
+```
+
+Only that game's entry is added, changed or (when the default now fits) stripped of its override; everything else in the file stays as it is. The file is written to `.part` and renamed, and `gamelist.xml.bak` keeps the file as it was before the run. The report mode prints what it would write. CHD disks of a set are listed as a note but not checked, and sets must be zips (`.7z` and `.rar` are not opened for arcade).
 
 ## Checking a machine
 
@@ -252,7 +280,7 @@ Inbox tools
 1 problem(s), 0 warning(s), 4 optional item(s) not set up. Fix the [!!] lines above.
 ```
 
-It covers warpzone and Python, the config file (and what each table enables), the local Syncthing and its REST API, the inbox tools (`chdman`, `bsdtar`, `RAHasher`, `dolphin-tool`), the DAT folder and how old the newest DAT is, the hub folder and its free space, and whether `RA_API_KEY` is set (never printed). A tool or table you do not use is shown as optional, not as a problem: for example, a desktop that only runs `inbox` does not need Syncthing. Use `--config PATH` for a config in another place.
+It covers warpzone and Python, the config file (and what each table enables), the local Syncthing and its REST API, the inbox tools (`chdman`, `bsdtar`, `RAHasher`, `dolphin-tool`), the DAT folder and how old the newest DAT is, the optional arcade DAT files, the hub folder and its free space, and whether `RA_API_KEY` is set (never printed). A tool or table you do not use is shown as optional, not as a problem: for example, a desktop that only runs `inbox` does not need Syncthing. Use `--config PATH` for a config in another place.
 
 ## The EmuDeck symlink gotcha
 

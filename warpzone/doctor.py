@@ -742,6 +742,56 @@ def check_dats(ctx: Context) -> list[Result]:
     return results
 
 
+# The arcade databases `inbox` can use: ([inbox] key, name, what it is, where to get it).
+ARCADE_DATS = (
+    (
+        "mame_dat",
+        "MAME DAT",
+        "MAME's -listxml (or the official mameXXXXlx.zip, read as it is)",
+        "download the mameXXXXlx.zip of the MAME version your frontend runs from "
+        "https://github.com/mamedev/mame/releases (the file is the zipped listxml)",
+    ),
+    (
+        "fbneo_dat",
+        "FinalBurn Neo DAT",
+        "the FinalBurn Neo arcade DAT",
+        "download 'FinalBurn Neo (ClrMame Pro XML, Arcade only).dat' from the dats/ folder of "
+        "https://github.com/libretro/FBNeo",
+    ),
+    (
+        "mame2003plus_dat",
+        "MAME 2003-Plus DAT",
+        "the MAME 2003-Plus DAT",
+        "download mame2003-plus.xml from the metadata/ folder of "
+        "https://github.com/libretro/mame2003-plus-libretro",
+    ),
+)
+
+
+def check_arcade_dats(ctx: Context) -> list[Result]:
+    """The optional arcade databases: each is `[--]` when not set, a problem when set
+    to something that is not a file (`inbox` would refuse to start), and `[ok]` when
+    the file is there."""
+    results = []
+    for key, name, what, fix in ARCADE_DATS:
+        value = getattr(ctx.config.settings, key)
+        if not value:
+            results.append(
+                Result(name, G_DATS, OPTIONAL, f"{key} is not set; arcade zips need {what}", fix)
+            )
+            continue
+        path = Path(value)
+        try:
+            size = path.stat().st_size if path.is_file() else None
+        except OSError:
+            size = None
+        if size is None:
+            results.append(Result(name, G_DATS, FAIL, f"{path} is not a file", fix))
+        else:
+            results.append(Result(name, G_DATS, OK, f"{path} ({size // 2**20} MiB)"))
+    return results
+
+
 def check_hub(ctx: Context) -> list[Result]:
     p = ctx.probes
     settings = ctx.config.settings
@@ -830,6 +880,7 @@ CHECKS: tuple[Callable[[Context], list[Result]], ...] = (
     check_syncthing,
     check_tools,
     check_dats,
+    check_arcade_dats,
     check_hub,
     check_ra,
 )

@@ -19,6 +19,7 @@ from warpzone.doctor import (
     Result,
     RunOutput,
     ToolSpec,
+    check_arcade_dats,
     check_base,
     check_config,
     check_dats,
@@ -525,6 +526,29 @@ class DatTests(TmpCase):
         os.utime(newer, (self.NOW - 86400, self.NOW - 86400))
         ctx = context(self.tmp, f'[inbox]\ndats_dir = "{dats}"\n', now=lambda: self.NOW)
         self.assertEqual(by_name(check_dats(ctx), "DAT age").status, OK)
+
+
+class ArcadeDatTests(TmpCase):
+    def test_nothing_set_is_optional_and_says_where_to_get_each_file(self) -> None:
+        results = check_arcade_dats(context(self.tmp, INBOX_ONLY))
+        self.assertEqual([r.status for r in results], [OPTIONAL] * 3)
+        self.assertIn("mamedev/mame/releases", results[0].fix)
+        self.assertIn("libretro/FBNeo", results[1].fix)
+        self.assertIn("mame2003-plus-libretro", results[2].fix)
+        self.assertEqual(exit_code(results), 0)
+
+    def test_a_configured_file_is_ok_and_a_missing_one_is_a_problem(self) -> None:
+        mame = self.tmp / "mame0282lx.zip"
+        mame.write_bytes(b"x" * 2048)
+        cfg = (
+            f'[inbox]\nmame_dat = "{mame}"\nfbneo_dat = "{self.tmp / "nope.dat"}"\n'
+            f'mame2003plus_dat = "{self.tmp}"\n'
+        )
+        results = check_arcade_dats(context(self.tmp, cfg))
+        self.assertEqual([r.status for r in results], [OK, FAIL, FAIL])
+        self.assertIn(str(mame), results[0].detail)
+        self.assertIn("is not a file", results[1].detail)
+        self.assertEqual(exit_code(results), 1)
 
 
 class HubTests(TmpCase):
