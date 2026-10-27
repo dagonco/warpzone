@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-27
+
 ### Added
 
 - `warpzone prune [device]`: deletes the files a device no longer whitelists. It asks Syncthing which files it ignores (after a full rescan) and deletes a file only if the hub still has it unchanged; files that exist only on the device are reported and kept. Report only by default, `--apply` deletes, `--max-gib` (default 50) caps one run unless `--force`, and `--notify-url` POSTs a JSON summary to a webhook.
@@ -36,5 +38,6 @@ First release.
 - Safety rule: API keys are never printed, logged or included in error messages.
 - Release process: tag-triggered GitHub Actions workflow, a maintainer checklist in `docs/releasing.md`, and this changelog.
 
-[Unreleased]: https://github.com/dagonco/warpzone/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/dagonco/warpzone/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/dagonco/warpzone/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/dagonco/warpzone/releases/tag/v0.1.0
