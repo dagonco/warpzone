@@ -271,6 +271,7 @@ error messages; the RetroAchievements key is read from `RA_API_KEY`, never from 
 | `warpzone prune [device]` | on the device | Reports, and with `--apply` deletes, the files of the whitelisted folders that the device no longer whitelists (see [Pruning](#pruning)). Report only by default. |
 | `warpzone bios` | on a device or the hub | Reports which BIOS and firmware files a library has, lacks or has wrong (see [BIOS check](#bios-check)). Read-only. Exit 1 if a required item is missing or wrong. |
 | `warpzone inbox` | a desktop that mounts the hub's share | Identifies, converts and files new games dropped in `inbox/` (see [Inbox](#inbox)). Report only by default, `--apply` acts. Exit 1 if any item needs review. |
+| `warpzone doctor` | any machine | Checklist of this machine: tools, config, local Syncthing, DATs, hub folder (see [Doctor](#doctor)). Offline, never changes anything. Exit 1 if a required check fails. |
 | `warpzone status` | anywhere | Folder state, need counts, errors, receive-only local changes, for the hub (and the local device if any). |
 | `warpzone render-ignores <device>` | anywhere | Prints the ignore lines a device folder would get. For debugging. |
 
@@ -537,6 +538,40 @@ The decisions (`skip_name`, `unsafe_member`, `select_purge`, `plan_units`,
 tested with stand-in `chdman` and `RAHasher` scripts, and one test runs the cartridge
 flow end to end with no external tool.
 
+## Doctor
+
+`warpzone doctor [--config PATH]` checks the machine it runs on and prints a checklist,
+in the spirit of `flutter doctor`: one line per check with a mark, a short detail and,
+for every problem, the exact fix for this platform.
+
+- **Offline and read-only.** It never installs, writes or deletes anything. The only
+  network-like probe is `GET /rest/system/ping` on the local Syncthing, and only when its
+  GUI address is a loopback one (a wildcard address is probed as `127.0.0.1`), with a
+  2-second timeout; the key comes from the local `config.xml` and is sent as a header,
+  never printed. `RA_API_KEY` is reported as "set" or "not set", nothing else.
+- **Statuses.** `[ok]`; `[! ]` warning (works, worth a look: DATs older than 180 days,
+  less than 20 GiB free on the hub, a tool that is on `PATH` but that `inbox` will not
+  use); `[!!]` problem; `[--]` optional and not set up. Only `[!!]` counts for the exit code.
+- **What is required.** Nothing is required of a feature the machine does not use. A
+  missing config file or a missing `[hub]`, `[devices]` or `[inbox]` table is `[--]`, and
+  the line says what the table would enable. Once an `[inbox]` table exists, `chdman`,
+  `bsdtar`, `dats_dir`, the hub root with `inbox/` and `library/roms/` become required.
+  `RAHasher`, `dolphin-tool` and `nsz` are always optional. A config that does not load,
+  a configured tool path that is not executable, a tool that cannot run, a local
+  Syncthing whose API does not answer, and Python older than 3.11 are always problems.
+- **Exit codes.** `0` when no check is a problem, `1` otherwise.
+- **Install hints** live in one table in `warpzone/doctor.py` (`TOOLS` and the `*_HINTS`
+  dicts), keyed by platform family: `macos`, `debian`, `fedora`, `arch`, `steamos`,
+  `linux` (any other Linux) and `other`, with an `any` fallback. A hint is added only
+  when it is known to be right for that family. SteamOS has a read-only root, so its hints
+  point at a container instead of a system package.
+- **Structure.** Each check is a function of a `Context` that returns `Result` records
+  (name, group, status, detail, fix). Everything it reads from the machine (`which`,
+  running a tool, the environment, the home folder, the clock, free space, the HTTP probe)
+  is a field of `Probes`, so the tests use fakes and no real tools. `render` and
+  `exit_code` are pure. The config is read as far as it can be: the `[inbox]` values are
+  used by the other checks even when another table is invalid.
+
 ## Syncthing API surface used
 
 All calls send `X-API-Key`. Base URL from config (hub) or the local
@@ -579,6 +614,7 @@ warpzone/
   bios.py            BIOS manifest, local overrides, pure `judge_*`, disk checks
   dat.py             Redump / No-Intro DAT parsing, cache, matching, disc grouping (pure)
   inbox.py           unpack, identify, convert, place, file the originals
+  doctor.py          machine checklist (`warpzone doctor`): checks, install hints, renderer
   ra.py              RetroAchievements: RAHasher wrapper, game list lookup
   localst.py         find and parse the local Syncthing config.xml
   profiles/steamos-emudeck.toml
@@ -625,6 +661,11 @@ logic is unit-tested without a network.
   links; whole runs on a temporary hub with tiny DATs and stand-in `chdman`,
   `RAHasher`, `bsdtar` and `dolphin-tool` scripts, including one cartridge flow with no
   external tool; the CLI, with the API key coming from the environment.
+- `doctor` tests: the renderer and exit code as pure functions; every check with fake
+  probes (tool present, missing per platform, unrunnable, unrecognizable version; config
+  missing, partial or invalid; Syncthing absent, answering, refusing, not on loopback;
+  DATs old or absent; hub unmounted, incomplete or short of space); and that no key
+  (RetroAchievements, Syncthing) appears anywhere in the output.
 
 ## CI (GitHub Actions)
 
