@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 
 from support import API_KEY, DECK_ID, HUB_ID, MACHINE_ID, FakeSyncthing
+from warpzone import __version__
 from warpzone.cli import main
 
 
@@ -49,6 +50,11 @@ class CliTests(unittest.TestCase):
         self.assertEqual(run()[0], 2)
         self.assertEqual(run("provision")[0], 2)
         self.assertEqual(run("nope")[0], 2)
+
+    def test_version_flag_prints_package_version(self) -> None:
+        code, out, _ = run("--version")
+        self.assertEqual(code, 0)
+        self.assertEqual(out.strip(), f"warpzone {__version__}")
 
     def test_missing_config_is_exit_2(self) -> None:
         code, _, err = run("check", "--config", str(Path(self.tmp) / "none.toml"))

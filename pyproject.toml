@@ -4,7 +4,6 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "warpzone"
-version = "0.1.0"
 description = "One game library on a home server, delivered to every console, with saves that follow you."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -22,12 +21,16 @@ classifiers = [
     "Environment :: Console",
 ]
 dependencies = []
+dynamic = ["version"]
 
 [project.scripts]
 warpzone = "warpzone.cli:main"
 
 [tool.setuptools]
 packages = ["warpzone"]
+
+[tool.setuptools.dynamic]
+version = { attr = "warpzone.__version__" }
 
 [tool.setuptools.package-data]
 warpzone = ["profiles/*.toml"]
