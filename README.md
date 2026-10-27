@@ -14,6 +14,7 @@ warpzone provision device deck      # on each console: one command
 warpzone prune                      # on a console: report (or --apply delete) what it no longer whitelists
 warpzone bios                       # which BIOS and firmware files the library has, lacks or has wrong
 warpzone inbox                      # report (or --apply) how new games in inbox/ would be filed
+warpzone doctor                     # check this machine: tools, config, Syncthing, DATs, hub; prints the fix for each problem
 ```
 
 ## The problem
