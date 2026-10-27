@@ -11,6 +11,7 @@ You have a NAS full of ROMs, a Steam Deck, maybe a Steam Machine, maybe a spare 
 warpzone check                      # validate the config, list missing whitelists
 warpzone provision hub              # once: set up the hub's Syncthing (remote API)
 warpzone provision device deck      # on each console: one command
+warpzone prune                      # on a console: report (or --apply delete) what it no longer whitelists
 ```
 
 ## The problem
@@ -124,6 +125,27 @@ Every device receives every whitelist but applies only its own.
 
 Folders without a whitelist (tools, media, saves, ES-DE) get their fixed ignore lines directly through the API; they need no files.
 
+## Pruning what a device no longer whitelists
+
+When you take something off a device's whitelist, Syncthing stops syncing it but leaves the files on the device. Run `prune` on the device to clean up. It only reports unless you add `--apply`:
+
+```
+$ warpzone prune
+wz-library: 412 leftover file(s), 38.2 GiB
+  roms/n64: 380 file(s), 36.9 GiB
+  roms/psx: 32 file(s), 1.3 GiB
+wz-library: kept 1 ignored file(s) the hub cannot restore
+  roms/n64/my-patch.z64 (the hub does not have it)
+total: 412 leftover file(s), 38.2 GiB
+report only: run again with --apply to delete
+
+$ warpzone prune --apply
+...
+wz-library: deleted 412 file(s), 38.2 GiB, removed 9 empty folder(s)
+```
+
+It asks Syncthing which files it ignores (after a full rescan) instead of guessing from the patterns, and it deletes a file only if the hub also has it, unchanged: anything that exists only on the device, or that you edited, is reported and kept. It refuses to delete more than `--max-gib` (default 50) in one run unless you pass `--force`, never touches `.stfolder`, `.stignore`, the whitelist files or other Syncthing folders, and refuses to run while a device is still bootstrapping. `--list` prints every file; `--notify-url URL` POSTs a JSON summary (`device`, `folder`, `files`, `bytes`, `applied`) to a webhook, for example a Home Assistant automation. Details in [`docs/design.md`](docs/design.md#pruning).
+
 ## The EmuDeck symlink gotcha
 
 EmuDeck exposes saves through symlinks under `~/Emulation/saves`. Syncthing never follows symlinks, so a folder pointed at the symlink syncs nothing and gives no error. The `steamos-emudeck` profile therefore points at the real directory of each emulator (for example RetroArch's saves under `~/.var/app/org.libretro.RetroArch/`). If you add a profile for another setup, resolve the links first (`readlink -f`).
@@ -135,6 +157,7 @@ Some save folders sit inside `~/Emulation`, which is the library root. That is f
 - **Receive-only devices.** The library, songs and tools are receive-only on devices, so a delete or an edit on a console can never propagate to the hub.
 - **Path changes are refused.** If a `wz-*` folder already exists in Syncthing with a different path than the config says, `warpzone` stops: changing a folder's path makes Syncthing see a mass delete. Remove the folder in Syncthing first (files stay on disk), then provision again.
 - **Additive only.** Devices are only ever added, never removed. Folders that are not prefixed `wz-` are never touched. Existing `wz-*` folders are patched only for the keys `warpzone` owns (label, path, type, devices, versioning, file watcher, and the rescan interval of whitelisted device folders); everything else you tuned is left alone.
+- **Pruning is opt-in.** `warpzone prune` reports by default; `--apply` deletes only files Syncthing ignores and the hub still has, within a size cap.
 - **Dry run.** Every writing command supports `--dry-run`: it reads state, prints the calls it would make (method, path, JSON body) and sends none.
 - **Secrets.** API keys are never printed, logged or included in error messages, and are redacted from dry-run output.
 - **Where it runs.** `provision device` talks to the local Syncthing on loopback (self-signed HTTPS is accepted only there) and reads the hub's API only to check that the whitelists exist before it changes anything. If the hub is unreachable it warns and carries on, because the bootstrap ignores keep it safe.
@@ -151,7 +174,6 @@ A profile says where things live on one kind of device: [`warpzone/profiles/`](w
 
 Not in v0.1:
 
-- `warpzone prune`: remove files a device no longer whitelists, report-only by default.
 - `warpzone inbox`: verify, rename (No-Intro/Redump via igir) and file new content.
 - A BIOS manifest with hashes and a `warpzone bios` checker.
 - Home Assistant: Syncthing folder sensors and script notifications.

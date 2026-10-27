@@ -152,6 +152,10 @@ class Client:
     def get_ignores(self, folder_id: str) -> list[str]:
         return list((self.get("/rest/db/ignores", folder=folder_id) or {}).get("ignore") or [])
 
+    def ignores_state(self, folder_id: str) -> dict[str, Any]:
+        """The raw `db/ignores` answer: `ignore`, `expanded` and `error` (load failure)."""
+        return self.get("/rest/db/ignores", folder=folder_id) or {}
+
     def set_ignores(self, folder_id: str, lines: list[str]) -> None:
         self.request("POST", "/rest/db/ignores", {"ignore": lines}, folder=folder_id)
 
@@ -173,5 +177,7 @@ class Client:
         entries = self.get("/rest/db/browse", folder=folder_id, levels="0") or []
         return [e["name"] for e in entries]
 
-    def scan(self, folder_id: str) -> None:
-        self.request("POST", "/rest/db/scan", None, folder=folder_id)
+    def scan(self, folder_id: str, sub: str | None = None) -> None:
+        """Scan the folder, or only `sub` inside it. With `sub`, Syncthing answers when done."""
+        params = {"folder": folder_id} if sub is None else {"folder": folder_id, "sub": sub}
+        self.request("POST", "/rest/db/scan", None, **params)

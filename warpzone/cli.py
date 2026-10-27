@@ -5,17 +5,26 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+import urllib.parse
 from collections.abc import Sequence
 from pathlib import Path
 
-from warpzone import __version__, ignores, localst, model, provision
+from warpzone import __version__, ignores, localst, model, provision, prune
 from warpzone.config import Config, ConfigError, default_config_path, load_config
 from warpzone.model import ModelError
 from warpzone.profiles import Profile, ProfileError, available_profiles, load_profile
 from warpzone.provision import ProvisionError, Reporter
+from warpzone.prune import PruneError
 from warpzone.syncthing import Client, SyncthingError
 
 EXIT_OK, EXIT_RUNTIME, EXIT_USAGE = 0, 1, 2
+
+
+def _webhook_url(value: str) -> str:
+    if urllib.parse.urlsplit(value).scheme not in ("http", "https"):
+        # The URL itself can be a secret, so it is not echoed.
+        raise argparse.ArgumentTypeError("must be an http:// or https:// URL")
+    return value
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -59,6 +68,38 @@ def _build_parser() -> argparse.ArgumentParser:
         help="seconds to wait for the whitelists to arrive (default: %(default)s)",
     )
 
+    pr = sub.add_parser(
+        "prune",
+        parents=[common],
+        help="delete files this device no longer whitelists (report only unless --apply)",
+    )
+    pr.add_argument(
+        "name", nargs="?", help="device name (default: the one matching local Syncthing)"
+    )
+    pr.add_argument(
+        "--syncthing-config", type=Path, help="local Syncthing config.xml or its folder"
+    )
+    pr.add_argument("--apply", action="store_true", help="delete the leftovers (default: report)")
+    pr.add_argument(
+        "--max-gib",
+        type=float,
+        default=prune.DEFAULT_MAX_GIB,
+        help="refuse to delete more than this in one run (default: %(default)s)",
+    )
+    pr.add_argument("--force", action="store_true", help="ignore --max-gib")
+    pr.add_argument("--list", action="store_true", dest="list_all", help="list every file")
+    pr.add_argument(
+        "--notify-url",
+        type=_webhook_url,
+        help="POST a JSON summary (device, folder, files, bytes, applied) to this URL",
+    )
+    pr.add_argument(
+        "--timeout",
+        type=float,
+        default=prune.DEFAULT_RESCAN_TIMEOUT,
+        help="seconds to wait for the rescan (default: %(default)s)",
+    )
+
     sub.add_parser("status", parents=[common], help="folder state on the hub and this machine")
     render = sub.add_parser(
         "render-ignores", parents=[common], help="print the ignore lines a device would get"
@@ -83,6 +124,14 @@ def _device(cfg: Config, name: str) -> str:
     if name not in cfg.devices:
         raise ConfigError(f"unknown device {name!r} (configured: {', '.join(sorted(cfg.devices))})")
     return name
+
+
+def _this_device(cfg: Config, client: Client) -> str:
+    mine = client.my_id()
+    names = [d.name for d in cfg.devices.values() if d.device_id == mine]
+    if len(names) != 1:
+        raise ConfigError("cannot tell which configured device this is; pass its name")
+    return names[0]
 
 
 def _eprint(message: str) -> None:
@@ -125,6 +174,26 @@ def _run(args: argparse.Namespace) -> int:
         provision.folder_status(client, "this machine", rep)
         return EXIT_OK
 
+    if args.command == "prune":
+        local = localst.parse_config(localst.find_config(args.syncthing_config))
+        client = Client(local.base_url, local.api_key, label="local")
+        name = args.name or _this_device(cfg, client)
+        problems = prune.prune_device(
+            cfg,
+            _device(cfg, name),
+            profiles[cfg.devices[name].profile],
+            client,
+            rep,
+            home=Path.home(),
+            apply=args.apply,
+            max_gib=args.max_gib,
+            force=args.force,
+            list_all=args.list_all,
+            notify_url=args.notify_url,
+            rescan_timeout=args.timeout,
+        )
+        return EXIT_RUNTIME if problems else EXIT_OK
+
     if args.target == "hub":
         provision.provision_hub(cfg, profiles, _hub_client(cfg, dry_run=args.dry_run), rep)
         return EXIT_OK
@@ -152,7 +221,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     except (ConfigError, ProfileError, ModelError) as exc:
         _eprint(f"warpzone: config error: {exc}")
         return EXIT_USAGE
-    except (SyncthingError, ProvisionError, localst.LocalSyncthingError) as exc:
+    except (SyncthingError, ProvisionError, PruneError, localst.LocalSyncthingError) as exc:
         _eprint(f"warpzone: error: {exc}")
         return EXIT_RUNTIME
     except KeyboardInterrupt:
