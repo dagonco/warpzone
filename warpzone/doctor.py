@@ -26,6 +26,7 @@ import shutil
 import ssl
 import subprocess
 import sys
+import textwrap
 import time
 import tomllib
 import urllib.error
@@ -57,6 +58,9 @@ PROBE_TIMEOUT_SECONDS = 2.0
 RUN_TIMEOUT_SECONDS = 10.0
 GIB = 1024**3
 DAY_SECONDS = 86400
+FALLBACK_WIDTH = 100  # when the terminal width is unknown (a pipe, a log)
+MIN_TEXT_WIDTH = 30  # never wrap narrower than this, however wide the labels are
+FIX_PREFIX = "fix: "
 
 G_BASE = "warpzone and Python"
 G_CONFIG = "Config"
@@ -480,11 +484,12 @@ def check_config(ctx: Context) -> list[Result]:
             )
         ]
     results = [Result("Config file", G_CONFIG, OK, f"{cfg.path} is valid")]
+    only_inbox = cfg.sections == ("inbox",)
     for key, label, enables in SECTIONS:
         if key in cfg.sections:
             extra = f" ({', '.join(cfg.devices)})" if key == "devices" and cfg.devices else ""
             results.append(Result(label, G_CONFIG, OK, f"present{extra}; enables {enables}"))
-        else:
+        elif not only_inbox:
             results.append(
                 Result(
                     label,
@@ -495,6 +500,18 @@ def check_config(ctx: Context) -> list[Result]:
                     "(see examples/config.example.toml)",
                 )
             )
+    if only_inbox:
+        # A machine that only files games has no use for the hub and device tables, so
+        # they are one note rather than two "not set up" items.
+        results.append(
+            Result(
+                "[hub], [devices]",
+                G_CONFIG,
+                OK,
+                "not used here; they are for the machine that runs provision, prune, check "
+                "and status",
+            )
+        )
     return results
 
 
@@ -897,23 +914,37 @@ def run_checks(probes: Probes) -> list[Result]:
 # ------------------------------------------------------------------ output
 
 
-def render(results: Sequence[Result]) -> list[str]:
-    """The report as lines: groups in the order they first appear, one line per check,
-    continuation lines for details and fixes."""
+def _wrap(text: str, width: int) -> list[str]:
+    """`text` as lines of at most `width` characters (a word longer than that stays whole,
+    so a path or a command is never cut). Newlines in `text` start new lines."""
     lines: list[str] = []
-    width = max((len(r.name) for r in results), default=0)
-    indent = " " * (7 + width + 1)
+    for line in text.splitlines() or [""]:
+        lines += textwrap.wrap(line, width, break_long_words=False, break_on_hyphens=False) or [""]
+    return lines
+
+
+def render(results: Sequence[Result], width: int = FALLBACK_WIDTH) -> list[str]:
+    """The report as lines no wider than `width` where the words allow it: groups in the
+    order they first appear, one line per check, continuation lines for details and
+    fixes. Wrapped lines hang under the start of the detail; a fix hangs under its text."""
+    lines: list[str] = []
+    label_width = max((len(r.name) for r in results), default=0)
+    indent = " " * (7 + label_width + 1)
+    room = max(width - len(indent), MIN_TEXT_WIDTH)
     groups = list(dict.fromkeys(r.group for r in results))
     for group in groups:
         if lines:
             lines.append("")
         lines.append(group)
         for r in (r for r in results if r.group == group):
-            detail = r.detail.splitlines() or [""]
-            lines.append(f"  {MARKS[r.status]} {r.name:<{width}} {detail[0]}".rstrip())
+            detail = _wrap(r.detail, room)
+            lines.append(f"  {MARKS[r.status]} {r.name:<{label_width}} {detail[0]}".rstrip())
             lines += [f"{indent}{extra}" for extra in detail[1:]]
             if r.fix:
-                lines.append(f"{indent}fix: {r.fix}")
+                hang = " " * len(FIX_PREFIX)
+                fix = _wrap(r.fix, room - len(FIX_PREFIX))
+                lines.append(f"{indent}{FIX_PREFIX}{fix[0]}")
+                lines += [f"{indent}{hang}{extra}" for extra in fix[1:]]
     lines += ["", summary(results)]
     return lines
 
@@ -934,10 +965,14 @@ def exit_code(results: Sequence[Result]) -> int:
     return 1 if any(r.status == FAIL for r in results) else 0
 
 
-def run_doctor(probes: Probes, out: Callable[[str], None] = print) -> int:
+def terminal_width() -> int:
+    return shutil.get_terminal_size((FALLBACK_WIDTH, 24)).columns
+
+
+def run_doctor(probes: Probes, out: Callable[[str], None] = print, width: int | None = None) -> int:
     results = run_checks(probes)
     out(f"warpzone doctor (config: {probes.config_path})")
     out("")
-    for line in render(results):
+    for line in render(results, terminal_width() if width is None else width):
         out(line)
     return exit_code(results)

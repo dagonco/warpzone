@@ -171,7 +171,7 @@ items: 12 ok, 1 missing, 1 wrong
 
 It is read-only and exits 1 when a required item is missing or wrong, so it also works in a script. Only systems that have games are judged: if the ROM folders of a system (for example `roms/3do`) hold nothing but EmuDeck placeholders, media or the BIOS zips themselves, the system is shown as "no games, not checked" and never affects the exit code. Naming it with `--system` checks it anyway. Without `--root` it uses this device's `~/Emulation` (from the profile) or, on the hub, `<hub root>/library`. `--system psx ps2` limits the check, `--all` lists the unknown files in `bios/`.
 
-Some items are "one of": a PlayStation needs one BIOS dump, not all of them. Zip sets for MAME (`neogeo.zip`, `naomi.zip`, `awbios.zip`, ...) are checked in `roms/mame/` by member name and CRC32. Only files of the expected size are read.
+Some items are "one of": a PlayStation needs one BIOS dump, not all of them. Zip sets for MAME (`neogeo.zip`, `naomi.zip`, `awbios.zip`, ...) are checked in `roms/mame/` by member name and CRC32. Only files of the expected size are read. Official firmware and disk images with no fixed hash are checked by their signature instead: the PS3 system software `bios/ps3/PS3UPDAT.PUP`. Cemu's `bios/cemu/keys.txt` (optional, only for WUD/WUX disc images) is checked for presence and shape, and its content is never printed. For Xbox it expects `mcpx_1.0.bin` and a 1 MiB flash BIOS (`Complex_4627v1.03.bin`, the name EmuDeck's xemu config uses). The PS3 firmware and `keys.txt` are staging copies: RPCS3 installs the firmware once, and Cemu reads its keys from its own folder.
 
 If you keep a modified or region-free BIOS on purpose, accept its hash in a local file, `bios.toml` next to your `config.toml` (or `--overrides PATH`), and it is reported as "accepted (local)". See [`examples/bios.example.toml`](examples/bios.example.toml).
 
@@ -304,7 +304,7 @@ The hub is the authority, and `warpzone` keeps no versions of the library (saves
 
 ## Profiles
 
-A profile says where things live on one kind of device: [`warpzone/profiles/`](warpzone/profiles). v0.1 ships `steamos-emudeck` (Steam Deck, Steam Machine). Profiles are plain TOML so adding a setup is a small pull request. A save entry like `[saves.dolphin-gc]` maps to the folder ID `wz-save-dolphin-gc` and the hub path `saves/dolphin/gc`.
+A profile says where things live on one kind of device: [`warpzone/data/profiles/`](warpzone/data/profiles). v0.1 ships `steamos-emudeck` (Steam Deck, Steam Machine). Profiles are plain TOML so adding a setup is a small pull request. A save entry like `[saves.dolphin-gc]` maps to the folder ID `wz-save-dolphin-gc` and the hub path `saves/dolphin/gc`.
 
 ## Roadmap
 

@@ -151,7 +151,7 @@ does not exist yet, so it creates the folder and warns about missing whitelists;
 ## Profiles
 
 A profile describes where things live on one kind of device. Profiles are data
-files shipped in the repo (`warpzone/profiles/<name>.toml`), because they are
+files shipped in the repo (`warpzone/data/profiles/<name>.toml`), because they are
 the part other people can reuse and improve.
 
 v0.1 ships `steamos-emudeck`. Paths use `~` and are expanded on the device.
@@ -401,8 +401,8 @@ appears in the payload.
 has an unexpected hash. The contract:
 
 - **Never downloads, never ships.** The manifest holds file names, sizes, md5
-  hashes and zip member CRC32s, all public metadata, and nothing else. The
-  command only reads the library and writes nothing.
+  hashes, zip member CRC32s and file signatures, all public metadata, and
+  nothing else. The command only reads the library and writes nothing.
 - **Data and curation.** File entries come from libretro-database
   `dat/System.dat`; the MAME zip sets (`neogeo.zip`, `naomi.zip`, `awbios.zip`,
   `bubsys.zip`, `ym2413.zip`, `qsound_hle.zip`) from MAME 0.282's own source.
@@ -416,6 +416,20 @@ has an unexpected hash. The contract:
   An item with no hash (DS `firmware.bin`, which differs per console) checks the
   size only. Zip items live under `roms/` and pass when every listed member has
   the listed CRC32; extra members are ignored.
+- **Kinds of check.** A file entry is judged in one of four ways (`check` in the
+  manifest). `hash` (the default) is size and md5. `magic` is for official
+  firmware that has no fixed hash (PS3 `PS3UPDAT.PUP`): the file must start with fixed bytes, and only that
+  many bytes are read. `present` is existence of a non-empty file. `keys` is for
+  a secret keys file (Cemu `keys.txt`): the file is read only to answer whether
+  it looks like one (hex-led lines, `#` comments), and the verdict is a fixed
+  text: its content is never printed, hashed or placed in a message. The Xbox
+  flash BIOS has no fixed hash, so any 1 MiB file named `Complex_4627v1.03.bin`
+  (the name EmuDeck's xemu config uses) or `Complex_4627.bin` passes on size
+  alone. The xemu HDD image is not checked: it is per device, holds the saves and
+  lives in `storage/xemu/`. The PS3 firmware and Cemu's `keys.txt` in `bios/` are
+  staging copies (RPCS3 installs the firmware once; Cemu reads its keys from
+  its own folder). Xbox, PS3 and Wii U are judged by the `xbox`, `ps3` and `wiiu`
+  ROM folders; `mlc01/` (Cemu saves and installed titles) does not count as games.
 - **Reading files.** The `bios/` folder is walked once, never following
   symlinks, and `skip_dirs` (`eden`, `azahar`: console keys and firmware) are
   neither listed nor opened. A file is hashed, in chunks, only when its size
@@ -444,7 +458,8 @@ has an unexpected hash. The contract:
   profiles, then `<hub root>/library`. The list of unknown files in `bios/` is
   only computed when every system is checked.
 
-The decisions (`judge_file`, `judge_zip`, `settle`, `unknown_files`,
+The decisions (`judge_file`, `judge_zip`, `judge_magic`, `judge_present`,
+`judge_keys`, `looks_like_keys`, `settle`, `unknown_files`,
 `default_root`, `is_game_file`, `has_games`, `render`) are pure and unit-tested without a filesystem; `Library`
 and `check_library` are the only parts that touch the disk.
 
@@ -631,7 +646,9 @@ for every problem, the exact fix for this platform.
   use); `[!!]` problem; `[--]` optional and not set up. Only `[!!]` counts for the exit code.
 - **What is required.** Nothing is required of a feature the machine does not use. A
   missing config file or a missing `[hub]`, `[devices]` or `[inbox]` table is `[--]`, and
-  the line says what the table would enable. Once an `[inbox]` table exists, `chdman`,
+  the line says what the table would enable. The exception is a config with only an
+  `[inbox]` table (a machine that just files games): `[hub]` and `[devices]` are then one
+  `[ok]` note, "not used here", instead of two `[--]` items. Once an `[inbox]` table exists, `chdman`,
   `bsdtar`, `dats_dir`, the hub root with `inbox/` and `library/roms/` become required.
   `RAHasher`, `dolphin-tool` and `nsz` are always optional. The three arcade DAT paths
   (`mame_dat`, `fbneo_dat`, `mame2003plus_dat`) are `[--]` when unset, `[!!]` when set to
@@ -648,7 +665,10 @@ for every problem, the exact fix for this platform.
   (name, group, status, detail, fix). Everything it reads from the machine (`which`,
   running a tool, the environment, the home folder, the clock, free space, the HTTP probe)
   is a field of `Probes`, so the tests use fakes and no real tools. `render` and
-  `exit_code` are pure. The config is read as far as it can be: the `[inbox]` values are
+  `exit_code` are pure. `render` wraps details and fixes to the terminal width
+  (`shutil.get_terminal_size`, 100 when it is unknown, never narrower than 30 columns
+  of text): continuation lines hang under the start of the detail, a fix under its text,
+  and a word longer than the line (a path, a URL) is never cut. The config is read as far as it can be: the `[inbox]` values are
   used by the other checks even when another table is invalid.
 
 ## Syncthing API surface used
@@ -697,8 +717,8 @@ warpzone/
   doctor.py          machine checklist (`warpzone doctor`): checks, install hints, renderer
   ra.py              RetroAchievements: RAHasher wrapper, game list lookup
   localst.py         find and parse the local Syncthing config.xml
-  profiles/steamos-emudeck.toml
-  data/bios.toml     BIOS manifest (names, sizes, hashes only)
+  data/bios.toml     BIOS manifest (names, sizes, hashes, signatures only)
+  data/profiles/steamos-emudeck.toml
 templates/
   patterns-common.stignore
   patterns-device.example.stignore
