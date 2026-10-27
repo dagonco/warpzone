@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-27
+
 ### Added
 
 - `warpzone doctor [--config PATH]`: a checklist for the machine it runs on, in the spirit of `flutter doctor`. One line per check (`[ok]`, `[! ]` warning, `[!!]` problem, `[--]` optional and not set up) with a short detail and, for every problem, the exact fix for the platform (Homebrew, apt, dnf, pacman, or a container on SteamOS). It checks warpzone and Python, the config file and which tables it has (and what each enables), the local Syncthing and whether its REST API answers on the loopback address, the inbox tools (`chdman`, `bsdtar`, `RAHasher`, `dolphin-tool`, `nsz`) with their version lines, the DAT folder and the age of the newest DAT, the hub folder with its free space, and whether `RA_API_KEY` is set. Offline apart from that one local request, never installs or changes anything, never prints a key. Exit 1 only when a required check fails.
@@ -54,7 +56,8 @@ First release.
 - Safety rule: API keys are never printed, logged or included in error messages.
 - Release process: tag-triggered GitHub Actions workflow, a maintainer checklist in `docs/releasing.md`, and this changelog.
 
-[Unreleased]: https://github.com/dagonco/warpzone/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/dagonco/warpzone/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/dagonco/warpzone/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/dagonco/warpzone/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/dagonco/warpzone/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/dagonco/warpzone/compare/v0.1.0...v0.2.0
