@@ -54,6 +54,9 @@ INBOX_KEYS = (
     "fbneo_dat",
     "mame2003plus_dat",
     "gamelist_mame",
+    "nsz",
+    "titledb_dir",
+    "switch_keys",
 )
 
 
@@ -61,7 +64,8 @@ INBOX_KEYS = (
 class InboxSettings:
     """The optional `[inbox]` table: where the hub is mounted on this machine, the DATs
     and the external tools `warpzone inbox` uses. A tool left unset is looked up on PATH
-    (RAHasher only when set)."""
+    (RAHasher only when set). `titledb_dir` (a clone of blawar/titledb) and `switch_keys`
+    (the console keys file, default ~/.switch/prod.keys) are for Switch games."""
 
     root: str | None = None
     dats_dir: str | None = None
@@ -74,6 +78,9 @@ class InboxSettings:
     fbneo_dat: str | None = None
     mame2003plus_dat: str | None = None
     gamelist_mame: str | None = None
+    nsz: str | None = None
+    titledb_dir: str | None = None
+    switch_keys: str | None = None
 
 
 @dataclass(frozen=True)

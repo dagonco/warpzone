@@ -79,10 +79,20 @@ dats_dir = "~/dats/libretro-database/metadat"
 # rahasher     RAHasher from RALibretro, built with CHD support: checks that a conversion
 #              keeps the RetroAchievements hash
 # dolphin_tool reads compressed GameCube images (.rvz) so they can be identified
+# nsz          reads the TitleID and version of Switch .nsp/.nsz files and decompresses
+#              .nsz (uv tool install nsz)
 # chdman = "/opt/homebrew/bin/chdman"
 # bsdtar = "/usr/bin/bsdtar"
 # rahasher = "~/tools/RAHasher"
 # dolphin_tool = "/Applications/Dolphin.app/Contents/MacOS/dolphin-tool"
+# nsz = "~/.local/bin/nsz"
+
+# Optional Switch support. A local clone of blawar/titledb names the games
+# (git clone --depth 1 https://github.com/blawar/titledb; git pull updates it). nsz needs
+# your console's keys file to read the CNMT inside a Switch file; warpzone only passes the
+# path to nsz and never reads or prints the file. Default: ~/.switch/prod.keys.
+# titledb_dir = "~/dats/titledb"
+# switch_keys = "~/.switch/prod.keys"
 
 # Optional arcade (MAME) support. Each file is an XML set database; set the ones you have
 # and warpzone checks a dropped arcade zip against them in this order, and uses the first

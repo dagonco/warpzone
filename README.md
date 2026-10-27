@@ -222,7 +222,7 @@ What it does for each item:
 
 Items modified in the last 30 seconds are left alone (they may still be copying), and `_*` folders, hidden files, `@eaDir` and `.DS_Store` are never items. warpzone does not edit whitelists: add the printed lines to the device whitelists yourself. Exit code 1 when any item needs review.
 
-Switch, Vita, PS3 and Xbox are not supported by `inbox` yet; those items go to review ("not supported by inbox yet"). Arcade sets are handled separately, below.
+Vita, PS3 and Xbox are not supported by `inbox` yet; those items go to review ("not supported by inbox yet"). Arcade sets and Switch games are handled separately, below.
 
 Configure it in the `[inbox]` table of the config (see [`examples/config.example.toml`](examples/config.example.toml)); with `--root` and `--dats` it needs no config file:
 
@@ -230,6 +230,7 @@ Configure it in the `[inbox]` table of the config (see [`examples/config.example
 [inbox]
 root = "/Volumes/hub"                       # the hub root as mounted here (holds inbox/ and library/)
 dats_dir = "~/dats/libretro-database/metadat"  # redump/ and no-intro/ inside
+titledb_dir = "~/dats/titledb"                # optional: a clone of blawar/titledb (Switch names)
 chdman = "/opt/homebrew/bin/chdman"           # optional: otherwise looked up on PATH
 rahasher = "~/tools/RAHasher"                 # optional: RetroAchievements hash check
 mame_dat = "~/dats/mame0282lx.zip"            # optional: arcade (see "Arcade (MAME) sets")
@@ -238,6 +239,24 @@ mame2003plus_dat = "~/dats/mame2003-plus.xml"
 ```
 
 `bsdtar` and `dolphin_tool` work the same way, and `work_dir` moves the temporary files (they can take several GiB). Details in [`docs/design.md`](docs/design.md#inbox).
+
+### Switch games
+
+`.nsp` and `.nsz` files (loose, in a folder or in an archive) are identified by what is inside them, named after [blawar/titledb](https://github.com/blawar/titledb) and filed the way the library already has them:
+
+| Kind | Where | Name |
+|---|---|---|
+| Game | `library/roms/switch/` | `<Title> [<TitleID>][v<version>][BASE].nsp` |
+| Update | `library/extras/switch/updates/<Title>/` | `<Title> [<UpdateTitleID>][v<version>][UPD].nsp` |
+| DLC | `library/extras/switch/dlc/<Title>/` | `<Title> - <DLC name> [<DlcTitleID>][v<version>][DLC].nsp` |
+
+The TitleID decides the kind (a game ends in `000`, an update in `800`, anything else is DLC) and the version comes from the file's CNMT, read with [`nsz`](https://github.com/nicoboss/nsz) (`uv tool install nsz`), which needs your console's `prod.keys` (`[inbox] switch_keys`, default `~/.switch/prod.keys`; warpzone only hands the path to `nsz` and never reads or prints the file). Titles come from a local clone of titledb (`git clone --depth 1 https://github.com/blawar/titledb`, set `titledb_dir` to it; `git pull` updates it): punctuation is made ASCII (`:` becomes ` -`, curly quotes become straight), words in capitals are written normally (short acronyms and roman numerals stay), and unsafe characters are dropped. A DLC that titledb only lists inside a bundle is named `<Bundle> (part N of M)` in the bundle's order.
+
+- `.nsz` is decompressed with `nsz -D` into the work folder and only the `.nsp` is placed. Because `nsz` exits 0 on some damaged files, the result is checked again: `nsz -V` must verify it and its PFS0 header must parse.
+- `.xci` and `.xcz` are never converted (no tool does it cleanly); they go to review with the reason.
+- Without `nsz` or the keys file, an `.nsp` falls back to the `[TitleID][vN]` in its file name and the report says so (a `.nsz` cannot be read and goes to review). A title titledb does not know, or an `.nsp` holding several titles, goes to review.
+- A file is never overwritten, and the check is by TitleID and version wherever the library has it: the same bytes are "already in the library", different bytes go to review.
+- Games print their whitelist line (`!/roms/switch/...`); updates and DLC are usually whitelisted by folder (`!/extras/switch/updates`, `!/extras/switch/dlc`), so the report says that once instead of one line per file.
 
 ### Arcade (MAME) sets
 
@@ -280,7 +299,7 @@ Inbox tools
 1 problem(s), 0 warning(s), 4 optional item(s) not set up. Fix the [!!] lines above.
 ```
 
-It covers warpzone and Python, the config file (and what each table enables), the local Syncthing and its REST API, the inbox tools (`chdman`, `bsdtar`, `RAHasher`, `dolphin-tool`), the DAT folder and how old the newest DAT is, the optional arcade DAT files, the hub folder and its free space, and whether `RA_API_KEY` is set (never printed). A tool or table you do not use is shown as optional, not as a problem: for example, a desktop that only runs `inbox` does not need Syncthing. Use `--config PATH` for a config in another place.
+It covers warpzone and Python, the config file (and what each table enables), the local Syncthing and its REST API, the inbox tools (`chdman`, `bsdtar`, `RAHasher`, `dolphin-tool`, `nsz`), the Switch titledb folder and keys file (presence only), the DAT folder and how old the newest DAT is, the optional arcade DAT files, the hub folder and its free space, and whether `RA_API_KEY` is set (never printed). A tool or table you do not use is shown as optional, not as a problem: for example, a desktop that only runs `inbox` does not need Syncthing. Use `--config PATH` for a config in another place.
 
 ## The EmuDeck symlink gotcha
 
