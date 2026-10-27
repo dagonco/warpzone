@@ -81,3 +81,20 @@ dats_dir = "~/dats/libretro-database/metadat"
 # bsdtar = "/usr/bin/bsdtar"
 # rahasher = "~/tools/RAHasher"
 # dolphin_tool = "/Applications/Dolphin.app/Contents/MacOS/dolphin-tool"
+
+# Optional arcade (MAME) support. Each file is an XML set database; set the ones you have
+# and warpzone checks a dropped arcade zip against them in this order, and uses the first
+# emulator whose database says the set is complete (the zip plus the BIOS and device zips
+# already in library/roms/mame/). The default emulator needs nothing in the gamelist; the
+# others are recorded as a per-game <altemulator> in the ES-DE gamelist. warpzone never
+# downloads these.
+# MAME's listxml, or the official mameXXXXlx.zip of a MAME release as it is (use the
+# version your frontend's MAME core runs):
+# mame_dat = "~/dats/mame0282lx.zip"
+# FinalBurn Neo, "ClrMame Pro XML, Arcade only" from the dats/ folder of libretro/FBNeo:
+# fbneo_dat = "~/dats/fbneo-arcade.dat"
+# MAME 2003-Plus, metadata/mame2003-plus.xml of libretro/mame2003-plus-libretro:
+# mame2003plus_dat = "~/dats/mame2003-plus.xml"
+# The ES-DE gamelist that holds the per-game emulator overrides. Default:
+# <root>/frontend/es-de/gamelists/mame/gamelist.xml
+# gamelist_mame = "/Volumes/hub/frontend/es-de/gamelists/mame/gamelist.xml"
