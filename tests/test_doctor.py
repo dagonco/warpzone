@@ -26,6 +26,7 @@ from warpzone.doctor import (
     check_dats,
     check_hub,
     check_ra,
+    check_switch,
     check_syncthing,
     check_tool,
     exit_code,
@@ -423,6 +424,57 @@ class ToolTests(TmpCase):
         r = check_tool(context(self.tmp, INBOX_ONLY), nsz)
         self.assertEqual(r.status, OPTIONAL)
         self.assertIn("uv tool install nsz", r.fix)
+        self.assertIn("Switch", r.detail + nsz.purpose)
+
+    def test_nsz_can_be_pointed_at_with_the_inbox_setting(self) -> None:
+        nsz = next(t for t in doctor.TOOLS if t.key == "nsz")
+        ctx = context(self.tmp, '[inbox]\nnsz = "/x/nsz"\n', executables=["/x/nsz"])
+        r = check_tool(ctx, nsz)
+        self.assertEqual(r.status, OK)
+        self.assertIn("/x/nsz", r.detail)
+        r = check_tool(context(self.tmp, '[inbox]\nnsz = "/nope/nsz"\n'), nsz)
+        self.assertEqual(r.status, FAIL)
+
+
+class SwitchCheckTests(TmpCase):
+    def titledb(self) -> Path:
+        folder = self.tmp / "titledb"
+        folder.mkdir()
+        (folder / "US.en.json").write_text("{}")
+        return folder
+
+    def test_nothing_set_is_optional_for_both(self) -> None:
+        results = check_switch(context(self.tmp, INBOX_ONLY))
+        self.assertEqual([r.status for r in results], [OPTIONAL, OPTIONAL])
+        self.assertIn("git clone", by_name(results, "titledb_dir").fix)
+        self.assertIn(".switch/prod.keys", by_name(results, "switch_keys").detail)
+
+    def test_titledb_dir_is_checked_for_region_files(self) -> None:
+        good = check_switch(context(self.tmp, f'[inbox]\ntitledb_dir = "{self.titledb()}"\n'))
+        self.assertEqual(by_name(good, "titledb_dir").status, OK)
+        self.assertIn("1 region file", by_name(good, "titledb_dir").detail)
+        empty = self.tmp / "empty"
+        empty.mkdir()
+        bad = check_switch(context(self.tmp, f'[inbox]\ntitledb_dir = "{empty}"\n'))
+        self.assertEqual(by_name(bad, "titledb_dir").status, FAIL)
+        gone = check_switch(context(self.tmp, '[inbox]\ntitledb_dir = "/nope/titledb"\n'))
+        self.assertEqual(by_name(gone, "titledb_dir").status, FAIL)
+
+    def test_default_keys_file_is_found_but_never_read(self) -> None:
+        keys = self.tmp / "home" / ".switch" / "prod.keys"
+        keys.parent.mkdir(parents=True)
+        keys.write_text("master_key_00 = " + "ab" * 16 + "\n")  # gitleaks:allow (fake)
+        results = check_switch(context(self.tmp, INBOX_ONLY))
+        r = by_name(results, "switch_keys")
+        self.assertEqual(r.status, OK)
+        self.assertNotIn("abab", r.detail + r.fix)
+
+    def test_configured_keys_path_must_exist(self) -> None:
+        r = by_name(
+            check_switch(context(self.tmp, '[inbox]\nswitch_keys = "/nope/k"\n')), "switch_keys"
+        )
+        self.assertEqual(r.status, FAIL)
+        self.assertIn("/nope/k", r.detail)
 
 
 def write_syncthing_config(home: Path, address: str = "127.0.0.1:8384") -> None:
@@ -709,6 +761,7 @@ class EndToEndTests(TmpCase):
                 doctor.G_CONFIG,
                 doctor.G_SYNCTHING,
                 doctor.G_TOOLS,
+                doctor.G_SWITCH,
                 doctor.G_DATS,
                 doctor.G_HUB,
                 doctor.G_RA,

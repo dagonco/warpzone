@@ -36,6 +36,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from warpzone import __version__, localst, model, ra
+from warpzone import inbox_switch as switch
 from warpzone.config import (
     INBOX_KEYS,
     ConfigError,
@@ -66,6 +67,7 @@ G_BASE = "warpzone and Python"
 G_CONFIG = "Config"
 G_SYNCTHING = "Syncthing"
 G_TOOLS = "Inbox tools"
+G_SWITCH = "Switch"
 G_DATS = "DATs"
 G_HUB = "Hub folder"
 G_RA = "RetroAchievements"
@@ -124,6 +126,15 @@ DOLPHIN_HINTS: HintTable = {
     "any": "dolphin-tool ships with Dolphin; install Dolphin",
 }
 NSZ_HINTS: HintTable = {"any": "uv tool install nsz (or: pipx install nsz)"}
+TITLEDB_REPO = "https://github.com/blawar/titledb"
+TITLEDB_HINT = (
+    f"git clone --depth 1 {TITLEDB_REPO}, then set titledb_dir in [inbox] to that clone "
+    "(update it with git pull); without it Switch games cannot be named"
+)
+KEYS_HINT = (
+    "put your console's prod.keys at ~/.switch/prod.keys, or set switch_keys in [inbox] to "
+    "its path; warpzone never reads the file, it only hands the path to nsz"
+)
 SYNCTHING_HINTS: HintTable = {
     "macos": "brew install syncthing && brew services start syncthing",
     "debian": "sudo apt install syncthing && systemctl --user enable --now syncthing",
@@ -199,8 +210,9 @@ TOOLS: tuple[ToolSpec, ...] = (
     ToolSpec(
         "nsz",
         ("nsz",),
-        "Switch .nsp/.xci compression; not used by inbox yet",
+        "Switch: reads .nsp/.nsz metadata and decompresses .nsz in inbox",
         NSZ_HINTS,
+        setting="nsz",
         version_args=None,
     ),
 )
@@ -329,6 +341,7 @@ class Probes:
     python: tuple[int, int, int] = field(default_factory=_python_version)
     now: Callable[[], float] = time.time
     is_dir: Callable[[Path], bool] = Path.is_dir
+    is_file: Callable[[Path], bool] = Path.is_file
     is_executable: Callable[[str], bool] = _is_executable
     mtime: Callable[[Path], float] = _mtime
     disk_free: Callable[[Path], tuple[int, int]] = _disk_free
@@ -809,6 +822,75 @@ def check_arcade_dats(ctx: Context) -> list[Result]:
     return results
 
 
+def check_switch(ctx: Context) -> list[Result]:
+    """Presence only: the titledb clone and the keys file. The keys file is never opened."""
+    p = ctx.probes
+    settings = ctx.config.settings
+    results: list[Result] = []
+    if not settings.titledb_dir:
+        results.append(
+            Result(
+                "titledb_dir",
+                G_SWITCH,
+                OPTIONAL,
+                "not set; only needed for Switch games (.nsp / .nsz) in inbox",
+                TITLEDB_HINT,
+            )
+        )
+    else:
+        directory = Path(settings.titledb_dir)
+        if not p.is_dir(directory):
+            results.append(
+                Result(
+                    "titledb_dir",
+                    G_SWITCH,
+                    FAIL,
+                    f"{directory} does not exist",
+                    f"clone it: {TITLEDB_HINT}",
+                )
+            )
+        elif not (found := switch.region_files(directory)):
+            results.append(
+                Result(
+                    "titledb_dir",
+                    G_SWITCH,
+                    FAIL,
+                    f"{directory} has no region files (like US.en.json)",
+                    f"is it a clone of {TITLEDB_REPO}? {TITLEDB_HINT}",
+                )
+            )
+        else:
+            results.append(
+                Result("titledb_dir", G_SWITCH, OK, f"{directory}: {len(found)} region file(s)")
+            )
+    keys = Path(settings.switch_keys) if settings.switch_keys else switch.default_keys(p.home)
+    if p.is_file(keys):
+        results.append(
+            Result("switch_keys", G_SWITCH, OK, f"{keys} (not read, only passed to nsz)")
+        )
+    elif settings.switch_keys:
+        results.append(
+            Result(
+                "switch_keys",
+                G_SWITCH,
+                FAIL,
+                f"[inbox] switch_keys = {keys} is not a file",
+                f"fix the path. {KEYS_HINT}",
+            )
+        )
+    else:
+        results.append(
+            Result(
+                "switch_keys",
+                G_SWITCH,
+                OPTIONAL,
+                f"{keys} not found; nsz needs it to read Switch metadata and to decompress .nsz",
+                KEYS_HINT,
+            )
+        )
+    return results
+
+
 def check_hub(ctx: Context) -> list[Result]:
     p = ctx.probes
     settings = ctx.config.settings
@@ -896,6 +978,7 @@ CHECKS: tuple[Callable[[Context], list[Result]], ...] = (
     check_config,
     check_syncthing,
     check_tools,
+    check_switch,
     check_dats,
     check_arcade_dats,
     check_hub,
