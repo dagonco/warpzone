@@ -24,6 +24,7 @@ here is out of scope for v0.1.
 
 - Moving, renaming, verifying or converting ROMs (that is igir's job, see the roadmap).
 - Shipping or locating any copyrighted content (ROMs, BIOS, keys, firmware).
+  The BIOS checker compares what the user has with public names, sizes and hashes.
 - Running on the hub itself. Many NAS ship an old Python; the hub is driven
   remotely through its Syncthing REST API.
 
@@ -257,6 +258,7 @@ API keys are never printed, logged or included in error messages.
 | `warpzone provision hub` | anywhere that reaches the hub API | Adds every configured device to the hub, creates/updates every `wz-*` folder on the hub and shares it with the devices that subscribe to it, sets the hub ignores. Idempotent. |
 | `warpzone provision device <name>` | on the device | Reads the local Syncthing API key from the local `config.xml` (searching the default locations, including the SyncThingy flatpak; `--syncthing-config PATH` overrides), adds the hub device, creates the subscribed folders with the bootstrap above (`--timeout SECONDS`). Idempotent. |
 | `warpzone prune [device]` | on the device | Reports, and with `--apply` deletes, the files of the whitelisted folders that the device no longer whitelists (see [Pruning](#pruning)). Report only by default. |
+| `warpzone bios` | on a device or the hub | Reports which BIOS and firmware files a library has, lacks or has wrong (see [BIOS check](#bios-check)). Read-only. Exit 1 if a required item is missing or wrong. |
 | `warpzone status` | anywhere | Folder state, need counts, errors, receive-only local changes, for the hub (and the local device if any). |
 | `warpzone render-ignores <device>` | anywhere | Prints the ignore lines a device folder would get. For debugging. |
 
@@ -375,6 +377,60 @@ Assistant webhook. The URL may embed a secret, so it is never printed, and a
 failed notification is a warning, not a failure of the run. No API key or path
 appears in the payload.
 
+## BIOS check
+
+`warpzone bios` compares a library folder with a manifest shipped in the package
+(`warpzone/data/bios.toml`) and reports what is present and correct, missing, or
+has an unexpected hash. The contract:
+
+- **Never downloads, never ships.** The manifest holds file names, sizes, md5
+  hashes and zip member CRC32s, all public metadata, and nothing else. The
+  command only reads the library and writes nothing.
+- **Data and curation.** File entries come from libretro-database
+  `dat/System.dat`; the MAME zip sets (`neogeo.zip`, `naomi.zip`, `awbios.zip`,
+  `bubsys.zip`, `ym2413.zip`, `qsound_hle.zip`) from MAME 0.282's own source.
+  The header of `bios.toml` says where each part came from and how to
+  regenerate it. Which items are required, and the groupings, are decided by
+  hand.
+- **Items.** An item is one thing to have and is satisfied when any one of its
+  files is ok, which is how "one PlayStation BIOS of your region" is expressed.
+  `any_name` items also accept a file of the same folder and size whose hash
+  matches under another name, for emulators that identify a BIOS by content.
+  An item with no hash (DS `firmware.bin`, which differs per console) checks the
+  size only. Zip items live under `roms/` and pass when every listed member has
+  the listed CRC32; extra members are ignored.
+- **Reading files.** The `bios/` folder is walked once, never following
+  symlinks, and `skip_dirs` (`eden`, `azahar`: console keys and firmware) are
+  neither listed nor opened. A file is hashed, in chunks, only when its size
+  equals the expected one. Zips are read through their central directory.
+- **Local overrides.** `bios.toml` next to the private config (or
+  `--overrides PATH`) may list extra accepted md5 hashes per manifest file
+  (`[saturn.accept]`) and items to skip (`[nds] unwanted = ["firmware"]`). A
+  file accepted that way is reported "accepted (local)". Unknown systems, files
+  or items in that file are errors, so a typo cannot silently accept nothing.
+- **Games decide what is judged.** Each system lists the `roms/` folders that
+  hold its games (`games` in the manifest, EmuDeck/ES-DE names, for example
+  `segacd = [segacd, megacd, megacdjp]`). A folder has games when it holds any
+  file other than the EmuDeck placeholders (`metadata.txt`, `systeminfo.txt`),
+  downloaded media, hidden or OS junk files and the BIOS zips of the manifest
+  (`is_game_file`, `has_games`; the walk stops at the first game). A system
+  with no games is reported as one line, "no games, not checked", and never
+  affects the exit code, so a missing BIOS for a console nobody plays is not a
+  false alarm. `--system NAME` forces the check. The MAME sets (Neo Geo, NAOMI,
+  Atomiswave, device sets) share `mame`, `arcade` and `fbneo` with their own
+  folder, so any arcade game makes them count.
+- **Exit code.** `0` when no required item is missing or wrong; `1` otherwise;
+  `2` for a usage or override-file error. A wrong file that sits next to an ok
+  alternative is reported but does not fail the run. Optional items never fail it.
+- **Root.** `--root` is the library folder (the one holding `bios/` and
+  `roms/`). Without it: the first existing `library` path of the configured
+  profiles, then `<hub root>/library`. The list of unknown files in `bios/` is
+  only computed when every system is checked.
+
+The decisions (`judge_file`, `judge_zip`, `settle`, `unknown_files`,
+`default_root`, `is_game_file`, `has_games`, `render`) are pure and unit-tested without a filesystem; `Library`
+and `check_library` are the only parts that touch the disk.
+
 ## Syncthing API surface used
 
 All calls send `X-API-Key`. Base URL from config (hub) or the local
@@ -414,12 +470,15 @@ warpzone/
   syncthing.py       minimal REST client (urllib), redaction, dry-run recorder
   provision.py       hub and device provisioning (diff desired vs actual → calls)
   prune.py           leftover detection (pure `classify`), delete, webhook
+  bios.py            BIOS manifest, local overrides, pure `judge_*`, disk checks
   localst.py         find and parse the local Syncthing config.xml
   profiles/steamos-emudeck.toml
+  data/bios.toml     BIOS manifest (names, sizes, hashes only)
 templates/
   patterns-common.stignore
   patterns-device.example.stignore
 examples/config.example.toml
+examples/bios.example.toml
 tests/               unittest; unit tests + e2e (two real Syncthing instances)
 docs/design.md       this file
 ```
@@ -446,6 +505,10 @@ logic is unit-tested without a network.
 - `prune` unit tests with the fake Syncthing: the pure decision (`classify`),
   every refusal (bootstrap ignores, wrong type, missing marker, size cap),
   protected names, nested folders, symlinks, re-check before delete, webhook.
+- `bios` tests: the pure judgements, manifest and override validation, and tmpdir
+  libraries with tiny fake files and a test-only manifest (no real BIOS hashes):
+  hashing only files of the expected size, content matches, local acceptance,
+  skipped folders, zip members, exit codes.
 
 ## CI (GitHub Actions)
 
@@ -460,7 +523,6 @@ logic is unit-tested without a network.
 ## Roadmap (not v0.1)
 
 - `warpzone inbox`: verify, rename (No-Intro/Redump via igir) and file new content.
-- BIOS manifest with hashes and a `warpzone bios` checker.
 - Home Assistant: Syncthing folder sensors, script notifications.
 - Switch save migration between emulators (one-shot, with backup).
 - More profiles (macOS, Windows, Batocera).

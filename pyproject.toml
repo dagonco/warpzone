@@ -33,7 +33,7 @@ packages = ["warpzone"]
 version = { attr = "warpzone.__version__" }
 
 [tool.setuptools.package-data]
-warpzone = ["profiles/*.toml"]
+warpzone = ["profiles/*.toml", "data/*.toml"]
 
 [tool.ruff]
 line-length = 100

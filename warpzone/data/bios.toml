@@ -1,0 +1,458 @@
+# BIOS manifest for `warpzone bios`: file names, sizes and hashes only.
+#
+# warpzone never downloads BIOS files and this repository holds none of their
+# content. Everything below is public metadata used to tell a user what to obtain
+# and whether what they have is the expected dump.
+#
+# Sources (checked October 2026):
+#   * File entries: libretro-database `dat/System.dat` v1.19.0
+#     (https://github.com/libretro/libretro-database/blob/master/dat/System.dat),
+#     the `rom ( name ... size ... md5 ... )` lines of each console's section.
+#     Kept as is, except: PS2 names lose the `pcsx2/bios/` prefix, and nds
+#     `firmware.bin` is size-only because every console has its own firmware.
+#   * Zip sets (`zip` items): member names and CRC32 from MAME 0.282's own source,
+#     tag `mame0282` of https://github.com/mamedev/mame (the BIOS macros and
+#     ROM_START blocks of src/mame/neogeo/neogeo.cpp, src/mame/sega/naomi.cpp,
+#     src/mame/sega/dc_atomiswave.cpp, src/mame/konami/nemesis.cpp (bubsys),
+#     src/devices/sound/ymopl.cpp (ym2413) and src/devices/sound/qsoundhle.cpp).
+#     A zip passes when every listed member is present with the listed CRC32;
+#     extra members are ignored.
+#
+# To regenerate: re-read those sections and macros, copy the md5/size (or the
+# member CRCs) here, and keep the curation below (which items are required, the
+# "any of" groupings, the notes). The curation is by hand on purpose.
+#
+# Format:
+#   [<system>]              title = "..."
+#                           games = ["folder", ...]  ROM folders (under roms/) that hold this
+#                           system's games; a system whose folders hold no games is not judged
+#   [[<system>.item]]       one thing to have; it is satisfied when ANY of its files is ok
+#     name       label shown in the report, unique within the system
+#     base       "bios" (default) or "roms": the folder `path` is relative to
+#     required   default true; a required item that is missing or wrong makes the exit code 1
+#     any_name   default false; if the file is absent, accept any file of the same
+#                folder and size whose md5 is accepted (emulators that identify a BIOS by content)
+#     note       what it unlocks
+#     files      [{ path, size, md5 }]; no md5 means the size alone is checked
+#     zip        instead of files: a zip under base, with a [<system>.item.members] table
+#                of member name = crc32
+#   skip_dirs  folders of bios/ that are never opened or listed (console keys and firmware)
+skip_dirs = ["eden", "azahar"]
+
+[psx]
+title = "Sony PlayStation"
+games = ["psx"]
+
+[[psx.item]]
+name = "bios"
+any_name = true
+note = "PlayStation games; one dump of the console region you play is enough"
+files = [
+  { path = "ps1_rom.bin", size = 524288, md5 = "81bbe60ba7a3d1cea1d48c14cbcc647b" },
+  { path = "psxonpsp660.bin", size = 524288, md5 = "c53ca5908936d412331790f4426c6c33" },
+  { path = "scph100.bin", size = 524288, md5 = "8abc1b549a4a80954addc48ef02c4521" },
+  { path = "scph1000.bin", size = 524288, md5 = "239665b1a3dade1b5a52c06338011044" },
+  { path = "scph1001.bin", size = 524288, md5 = "924e392ed05558ffdb115408c263dccf" },
+  { path = "scph1002.bin", size = 524288, md5 = "54847e693405ffeb0359c6287434cbef" },
+  { path = "scph101.bin", size = 524288, md5 = "6e3735ff4c7dc899ee98981385f6f3d0" },
+  { path = "scph102A.bin", size = 524288, md5 = "b10f5e0e3d9eb60e5159690680b1e774" },
+  { path = "scph102B.bin", size = 524288, md5 = "de93caec13d1a141a40a79f5c86168d6" },
+  { path = "scph102C.bin", size = 524288, md5 = "de93caec13d1a141a40a79f5c86168d6" },
+  { path = "scph3000.bin", size = 524288, md5 = "849515939161e62f6b866f6853006780" },
+  { path = "scph3500.bin", size = 524288, md5 = "cba733ceeff5aef5c32254f1d617fa62" },
+  { path = "scph5000.bin", size = 524288, md5 = "eb201d2d98251a598af467d4347bb62f" },
+  { path = "scph5500.bin", size = 524288, md5 = "8dd7d5296a650fac7319bce665a6a53c" },
+  { path = "scph5501.bin", size = 524288, md5 = "490f666e1afb15b7362b406ed1cea246" },
+  { path = "scph5502.bin", size = 524288, md5 = "32736f17079d0b2b7024407c39bd3050" },
+  { path = "scph5552.bin", size = 524288, md5 = "32736f17079d0b2b7024407c39bd3050" },
+  { path = "scph7001.bin", size = 524288, md5 = "1e68c231d0896b7eadcad1d7d8e76129" },
+  { path = "scph7002.bin", size = 524288, md5 = "b9d9a0286c33dc6b7237bb13cd46fdee" },
+  { path = "scph7003.bin", size = 524288, md5 = "490f666e1afb15b7362b406ed1cea246" },
+  { path = "scph7502.bin", size = 524288, md5 = "b9d9a0286c33dc6b7237bb13cd46fdee" },
+  { path = "scph9002(7502).bin", size = 524288, md5 = "b9d9a0286c33dc6b7237bb13cd46fdee" },
+]
+
+[ps2]
+title = "Sony PlayStation 2"
+games = ["ps2"]
+
+[[ps2.item]]
+name = "bios"
+any_name = true
+note = "PlayStation 2 games; one dump of the console region you play is enough"
+files = [
+  { path = "ps2-0100j-20000117.bin", size = 4194304, md5 = "acf4730ceb38ac9d8c7d8e21f2614600" },
+  { path = "ps2-0100jd-20000117.bin", size = 4194304, md5 = "32f2e4d5ff5ee11072a6bc45530f5765" },
+  { path = "ps2-0101j-20000217.bin", size = 4194304, md5 = "b1459d7446c69e3e97e6ace3ae23dd1c" },
+  { path = "ps2-0101jd-20000217.bin", size = 4194304, md5 = "acf9968c8f596d2b15f42272082513d1" },
+  { path = "ps2-0101xd-20000224.bin", size = 4194304, md5 = "d3f1853a16c2ec18f3cd1ae655213308" },
+  { path = "ps2-0110a-20000727.bin", size = 4194304, md5 = "a20c97c02210f16678ca3010127caf36" },
+  { path = "ps2-0110ad-20000727.bin", size = 4194304, md5 = "63e6fd9b3c72e0d7b920e80cf76645cd" },
+  { path = "ps2-0120a-20000902.bin", size = 4194304, md5 = "8db2fbbac7413bf3e7154c1e0715e565" },
+  { path = "ps2-0120e-20000902.bin", size = 4194304, md5 = "b7fa11e87d51752a98b38e3e691cbf17" },
+  { path = "ps2-0120ed-20000902-20030110.bin", size = 4194304, md5 = "3016b3dd42148a67e2c048595ca4d7ce" },
+  { path = "ps2-0120ed-20000902.bin", size = 4194304, md5 = "91c87cb2f2eb6ce529a2360f80ce2457" },
+  { path = "ps2-0120j-20001027-185015.bin", size = 4194304, md5 = "f63bc530bd7ad7c026fcd6f7bd0d9525" },
+  { path = "ps2-0120j-20001027-191435.bin", size = 4194304, md5 = "cee06bd68c333fc5768244eae77e4495" },
+  { path = "ps2-0150a-20001228.bin", size = 4194304, md5 = "8accc3c49ac45f5ae2c5db0adc854633" },
+  { path = "ps2-0150ad-20001228-20030520.bin", size = 4194304, md5 = "0bf988e9c7aaa4c051805b0fa6eb3387" },
+  { path = "ps2-0150e-20001228.bin", size = 4194304, md5 = "838544f12de9b0abc90811279ee223c8" },
+  { path = "ps2-0150ed-20001228-20030520.bin", size = 4194304, md5 = "6f9a6feb749f0533aaae2cc45090b0ed" },
+  { path = "ps2-0150j-20010118.bin", size = 4194304, md5 = "815ac991d8bc3b364696bead3457de7d" },
+  { path = "ps2-0150jd-20010118.bin", size = 4194304, md5 = "bb6bbc850458fff08af30e969ffd0175" },
+  { path = "ps2-0160a-20010427.bin", size = 4194304, md5 = "b107b5710042abe887c0f6175f6e94bb" },
+  { path = "ps2-0160a-20010704.bin", size = 4194304, md5 = "18bcaadb9ff74ed3add26cdf709fff2e" },
+  { path = "ps2-0160a-20011004.bin", size = 4194304, md5 = "7200a03d51cacc4c14fcdfdbc4898431" },
+  { path = "ps2-0160a-20020207.bin", size = 4194304, md5 = "d5ce2c7d119f563ce04bc04dbc3a323e" },
+  { path = "ps2-0160e-20010704.bin", size = 4194304, md5 = "491209dd815ceee9de02dbbc408c06d6" },
+  { path = "ps2-0160e-20011004.bin", size = 4194304, md5 = "8359638e857c8bc18c3c18ac17d9cc3c" },
+  { path = "ps2-0160e-20020319.bin", size = 4194304, md5 = "0d2228e6fd4fb639c9c39d077a9ec10c" },
+  { path = "ps2-0160e-20020426.bin", size = 4194304, md5 = "5b1f47fbeb277c6be2fccdd6344ff2fd" },
+  { path = "ps2-0160h-20010730.bin", size = 4194304, md5 = "352d2ff9b3f68be7e6fa7e6dd8389346" },
+  { path = "ps2-0160h-20020426.bin", size = 4194304, md5 = "315a4003535dfda689752cb25f24785c" },
+  { path = "ps2-0160j-20010427.bin", size = 4194304, md5 = "ab55cceea548303c22c72570cfd4dd71" },
+  { path = "ps2-0160j-20020426.bin", size = 4194304, md5 = "72da56fccb8fcd77bba16d1b6f479914" },
+  { path = "ps2-0170a-20030325.bin", size = 4194304, md5 = "8aa12ce243210128c5074552d3b86251" },
+  { path = "ps2-0170ad-20030325.bin", size = 4194304, md5 = "eb960de68f0c0f7f9fa083e9f79d0360" },
+  { path = "ps2-0170e-20030227.bin", size = 4194304, md5 = "6e69920fa6eef8522a1d688a11e41bc6" },
+  { path = "ps2-0170ed-20030227.bin", size = 4194304, md5 = "666018ffec65c5c7e04796081295c6c7" },
+  { path = "ps2-0170j-20030206.bin", size = 4194304, md5 = "312ad4816c232a9606e56f946bc0678a" },
+  { path = "ps2-0180cd-20030224.bin", size = 4194304, md5 = "240d4c5ddd4b54069bdc4a3cd2faf99d" },
+  { path = "ps2-0180j-20031028.bin", size = 4194304, md5 = "1c6cd089e6c83da618fbf2a081eb4888" },
+  { path = "ps2-0190a-20030623.bin", size = 4194304, md5 = "35461cecaa51712b300b2d6798825048" },
+  { path = "ps2-0190a-20040329.bin", size = 4194304, md5 = "81f4336c1de607dd0865011c0447052e" },
+  { path = "ps2-0190c-20030623.bin", size = 4194304, md5 = "1b6e631b536247756287b916f9396872" },
+  { path = "ps2-0190e-20030623.bin", size = 4194304, md5 = "bd6415094e1ce9e05daabe85de807666" },
+  { path = "ps2-0190e-20030822.bin", size = 4194304, md5 = "afde410bd026c16be605a1ae4bd651fd" },
+  { path = "ps2-0190h-20030623.bin", size = 4194304, md5 = "2e70ad008d4ec8549aada8002fdf42fb" },
+  { path = "ps2-0190j-20030623.bin", size = 4194304, md5 = "463d87789c555a4a7604e97d7db545d1" },
+  { path = "ps2-0190j-20030822.bin", size = 4194304, md5 = "00da1b177096cfd2532c8fa22b43e667" },
+  { path = "ps2-0190r-20030623.bin", size = 4194304, md5 = "b53d51edc7fc086685e31b811dc32aad" },
+  { path = "ps2-0200a-20040614.bin", size = 4194304, md5 = "d333558cc14561c1fdc334c75d5f37b7" },
+  { path = "ps2-0200e-20040614.bin", size = 4194304, md5 = "dc752f160044f2ed5fc1f4964db2a095" },
+  { path = "ps2-0200ed-20040614.bin", size = 4194304, md5 = "63ead1d74893bf7f36880af81f68a82d" },
+  { path = "ps2-0200h-20040614.bin", size = 4194304, md5 = "3e3e030c0f600442fa05b94f87a1e238" },
+  { path = "ps2-0200j-20040614.bin", size = 4194304, md5 = "0eee5d1c779aa50e94edd168b4ebf42e" },
+  { path = "ps2-0210j-20040917.bin", size = 4194304, md5 = "1ad977bb539fc9448a08ab276a836bbc" },
+  { path = "ps2-0220a-20050620.bin", size = 4194304, md5 = "929a14baca1776b00869f983aa6e14d2" },
+  { path = "ps2-0220a-20060210.bin", size = 4194304, md5 = "cb801b7920a7d536ba07b6534d2433ca" },
+  { path = "ps2-0220a-20060905.bin", size = 4194304, md5 = "40c11c063b3b9409aa5e4058e984e30c" },
+  { path = "ps2-0220ad-20050620.bin", size = 4194304, md5 = "9959ad7a8685cad66206e7752ca23f8b" },
+  { path = "ps2-0220ad-20060905.bin", size = 4194304, md5 = "21fe4cad111f7dc0f9af29477057f88d" },
+  { path = "ps2-0220e-20050620.bin", size = 4194304, md5 = "573f7d4a430c32b3cc0fd0c41e104bbd" },
+  { path = "ps2-0220e-20060210.bin", size = 4194304, md5 = "af60e6d1a939019d55e5b330d24b1c25" },
+  { path = "ps2-0220e-20060905.bin", size = 4194304, md5 = "80bbb237a6af9c611df43b16b930b683" },
+  { path = "ps2-0220h-20050620.bin", size = 4194304, md5 = "df63a604e8bff5b0599bd1a6c2721bd0" },
+  { path = "ps2-0220h-20060210.bin", size = 4194304, md5 = "549a66d0c698635ca9fa3ab012da7129" },
+  { path = "ps2-0220h-20060905.bin", size = 4194304, md5 = "c37bce95d32b2be480f87dd32704e664" },
+  { path = "ps2-0220j-20050620.bin", size = 4194304, md5 = "eb4f40fcf4911ede39c1bbfe91e7a89a" },
+  { path = "ps2-0220j-20060210.bin", size = 4194304, md5 = "5b1ba4bb914406fae75ab8e38901684d" },
+  { path = "ps2-0220j-20060905.bin", size = 4194304, md5 = "5de9d0d730ff1e7ad122806335332524" },
+  { path = "ps2-0230a-20080220.bin", size = 4194304, md5 = "21038400dc633070a78ad53090c53017" },
+  { path = "ps2-0230e-20080220.bin", size = 4194304, md5 = "dc69f0643a3030aaa4797501b483d6c4" },
+  { path = "ps2-0230h-20080220.bin", size = 4194304, md5 = "30d56e79d89fbddf10938fa67fe3f34e" },
+  { path = "ps2-0230j-20080220.bin", size = 4194304, md5 = "80ac46fa7e77b8ab4366e86948e54f83" },
+  { path = "ps2-0250e-20100415.bin", size = 4194304, md5 = "93ea3bcee4252627919175ff1b16a1d9" },
+  { path = "ps2-0250j-20100415.bin", size = 4194304, md5 = "d3e81e95db25f5a86a7b7474550a2155" },
+]
+
+[saturn]
+title = "Sega Saturn"
+games = ["saturn", "saturnjp"]
+
+[[saturn.item]]
+name = "bios"
+note = "Saturn games; Beetle Saturn looks for sega_101.bin (Japan) and mpr-17933.bin (US and Europe)"
+files = [
+  { path = "hisaturn.bin", size = 524288, md5 = "3ea3202e2634cb47cb90f3a05c015010" },
+  { path = "mpr-17933.bin", size = 524288, md5 = "3240872c70984b6cbfda1586cab68dbe" },
+  { path = "mpr-18100.bin", size = 524288, md5 = "cb2cebc1b6e573b7c44523d037edcd45" },
+  { path = "saturn_bios.bin", size = 524288, md5 = "af5828fdff51384f99b3c4926be27762" },
+  { path = "sega1003.bin", size = 524288, md5 = "74570fed4d44b2682b560c8cd44b8b6a" },
+  { path = "sega_100.bin", size = 524288, md5 = "af5828fdff51384f99b3c4926be27762" },
+  { path = "sega_100a.bin", size = 524288, md5 = "f273555d7d91e8a5a6bfd9bcf066331c" },
+  { path = "sega_101.bin", size = 524288, md5 = "85ec9ca47d8f6807718151cbcca8b964" },
+  { path = "vsaturn.bin", size = 524288, md5 = "ac4e4b6522e200c0d23d371a8cecbfd3" },
+]
+
+[dreamcast]
+title = "Sega Dreamcast"
+games = ["dreamcast"]
+
+[[dreamcast.item]]
+name = "boot"
+note = "Dreamcast games (Flycast)"
+files = [
+  { path = "dc/dc_boot.bin", size = 2097152, md5 = "e10c53c2f8b90bab96ead2d368858623" },
+]
+
+[[dreamcast.item]]
+name = "flash"
+note = "Dreamcast settings and language (Flycast)"
+files = [
+  { path = "dc/dc_flash.bin", size = 131072, md5 = "0a93f7940c455905bea6e392dfde92a4" },
+]
+
+[segacd]
+title = "Sega CD / Mega CD"
+games = ["segacd", "megacd", "megacdjp"]
+
+[[segacd.item]]
+name = "bios"
+note = "Sega CD / Mega CD games; the dump must match the game region"
+files = [
+  { path = "bios_CD_E.bin", size = 131072, md5 = "e66fa1dc5820d254611fdcdba0662372" },
+  { path = "bios_CD_J.bin", size = 131072, md5 = "278a9397d192149e84e820ac621a8edd" },
+  { path = "bios_CD_U.bin", size = 131072, md5 = "2efd74e3232ff260e371b99f84024f7f" },
+]
+
+[pce-cd]
+title = "NEC PC Engine CD / TurboGrafx-CD"
+games = ["pcenginecd", "tg-cd"]
+
+[[pce-cd.item]]
+name = "system card"
+note = "PC Engine CD games; syscard3.pce covers most of them"
+files = [
+  { path = "syscard1.pce", size = 262144, md5 = "2b7ccb3d86baa18f6402c176f3065082" },
+  { path = "syscard2.pce", size = 262144, md5 = "3cdd6614a918616bfc41c862e889dd79" },
+  { path = "syscard2u.pce", size = 262144, md5 = "94279f315e8b52904f65ab3108542afe" },
+  { path = "syscard3.pce", size = 262144, md5 = "38179df8f4ac870017db21ebcbf53114" },
+  { path = "syscard3u.pce", size = 262144, md5 = "0754f903b52e3b3342202bdafb13efa5" },
+]
+
+[[pce-cd.item]]
+name = "games express"
+required = false
+note = "Games Express card, only for the few games that need it"
+files = [
+  { path = "gecard.pce", size = 32768, md5 = "6d2cb14fc3e1f65ceb135633d1694122" },
+]
+
+[3do]
+title = "Panasonic 3DO"
+games = ["3do"]
+
+[[3do.item]]
+name = "bios"
+note = "3DO games; panafz10.bin is the usual choice"
+files = [
+  { path = "goldstar.bin", size = 1048576, md5 = "8639fd5e549bd6238cfee79e3e749114" },
+  { path = "panafz1.bin", size = 1048576, md5 = "f47264dd47fe30f73ab3c010015c155b" },
+  { path = "panafz10-norsa.bin", size = 1048576, md5 = "1477bda80dc33731a65468c1f5bcbee9" },
+  { path = "panafz10.bin", size = 1048576, md5 = "51f2f43ae2f3508a14d9f56597e2d3ce" },
+  { path = "panafz10e-anvil-norsa.bin", size = 1048576, md5 = "cf11bbb5a16d7af9875cca9de9a15e09" },
+  { path = "panafz10e-anvil.bin", size = 1048576, md5 = "a48e6746bd7edec0f40cff078f0bb19f" },
+  { path = "panafz10ja-anvil-kanji.bin", size = 1048576, md5 = "428577250f43edc902ea239c50d2240d" },
+  { path = "panafz1j-kanji.bin", size = 1048576, md5 = "c23fb5d5e6bb1c240d02cf968972be37" },
+  { path = "panafz1j-norsa.bin", size = 1048576, md5 = "f6c71de7470d16abe4f71b1444883dc8" },
+  { path = "panafz1j.bin", size = 1048576, md5 = "a496cfdded3da562759be3561317b605" },
+  { path = "sanyotry.bin", size = 1048576, md5 = "35fa1a1ebaaeea286dc5cd15487c13ea" },
+]
+
+[[3do.item]]
+name = "kanji font"
+required = false
+note = "Japanese text in some games"
+files = [
+  { path = "panafz1-kanji.bin", size = 933636, md5 = "b8dc97f778a6245c58e064b0312e8281" },
+]
+
+[[3do.item]]
+name = "arcade bios"
+required = false
+note = "Only for the arcade game Space Ace"
+files = [
+  { path = "3do_arcade_saot.bin", size = 524288, md5 = "8970fc987ab89a7f64da9f8a8c4333ff" },
+]
+
+[gba]
+title = "Nintendo Game Boy Advance"
+games = ["gba"]
+
+[[gba.item]]
+name = "bios"
+required = false
+note = "Better accuracy; most games boot without it"
+files = [
+  { path = "gba_bios.bin", size = 16384, md5 = "a860e8c0b6d573d191e4ec7db1b1e4f6" },
+]
+
+[nds]
+title = "Nintendo DS"
+games = ["nds"]
+
+[[nds.item]]
+name = "bios7"
+note = "DS games (melonDS, DeSmuME)"
+files = [
+  { path = "bios7.bin", size = 16384, md5 = "df692a80a5b1bc90728bc3dfc76cd948" },
+]
+
+[[nds.item]]
+name = "bios9"
+note = "DS games (melonDS, DeSmuME)"
+files = [
+  { path = "bios9.bin", size = 4096, md5 = "a392174eb3e572fed6447e956bde4b25" },
+]
+
+[[nds.item]]
+name = "firmware"
+required = false
+note = "Booting through the DS menu, wifi and user settings; every console has its own dump, so only the size is checked"
+files = [
+  { path = "firmware.bin", size = 262144 },
+]
+
+[lynx]
+title = "Atari Lynx"
+games = ["atarilynx"]
+
+[[lynx.item]]
+name = "boot rom"
+note = "Lynx games"
+files = [
+  { path = "lynxboot.img", size = 512, md5 = "fcd403db69f54290b51035d82f835e7b" },
+]
+
+[neogeo]
+title = "SNK Neo Geo (MAME set)"
+games = ["neogeo", "mame", "arcade", "fbneo"]
+
+[[neogeo.item]]
+name = "neogeo.zip"
+base = "roms"
+zip = "mame/neogeo.zip"
+note = "Neo Geo arcade games in MAME and FBNeo-style romsets"
+
+[neogeo.item.members]
+"000-lo.lo" = "5a86cff2"
+"japan-j3.bin" = "dff6d41f"
+"sfix.sfix" = "c2ea0cfd"
+"sm1.sm1" = "94416d67"
+"sp-1v1_3db8c.bin" = "162f0ebe"
+"sp-45.sp1" = "03cc9f6a"
+"sp-e.sp1" = "2723a5b5"
+"sp-j2.sp1" = "acede59c"
+"sp-j3.sp1" = "486cb450"
+"sp-s.sp1" = "c7f2fa45"
+"sp-s2.sp1" = "9036d879"
+"sp-s3.sp1" = "91b64be3"
+"sp-u2.sp1" = "e72943de"
+"sp1-j3.bin" = "fbc6d469"
+"sp1-u2" = "62f021f4"
+"sp1-u3.bin" = "2025b7a2"
+"sp1-u4.bin" = "1179a30f"
+"sp1.jipan.1024" = "9fb0abe4"
+"uni-bios_1_0.rom" = "0ce453a0"
+"uni-bios_1_1.rom" = "5dda0d84"
+"uni-bios_1_2.rom" = "4fa698e9"
+"uni-bios_1_2o.rom" = "e19d3ce9"
+"uni-bios_1_3.rom" = "b24b44a0"
+"uni-bios_2_0.rom" = "0c12c2ad"
+"uni-bios_2_1.rom" = "8dabf76b"
+"uni-bios_2_2.rom" = "2d50996a"
+"uni-bios_2_3.rom" = "27664eb5"
+"uni-bios_2_3o.rom" = "601720ae"
+"uni-bios_3_0.rom" = "a97c89a9"
+"uni-bios_3_1.rom" = "0c58093f"
+"uni-bios_3_2.rom" = "a4e8b9b3"
+"uni-bios_3_3.rom" = "24858466"
+"uni-bios_4_0.rom" = "a7aab458"
+"vs-bios.rom" = "f0e8f27d"
+
+[atomiswave]
+title = "Sammy Atomiswave (MAME set)"
+games = ["atomiswave", "mame", "arcade", "fbneo"]
+
+[[atomiswave.item]]
+name = "awbios.zip"
+base = "roms"
+zip = "mame/awbios.zip"
+note = "Atomiswave arcade games (Flycast, MAME)"
+
+[atomiswave.item.members]
+"bios0.ic23" = "719b2b0b"
+"bios1.ic23" = "d3e80a9f"
+"fpr-24363.ic48" = "82a105f0"
+
+[naomi]
+title = "Sega NAOMI (MAME set)"
+games = ["naomi", "mame", "arcade", "fbneo"]
+
+[[naomi.item]]
+name = "naomi.zip"
+base = "roms"
+zip = "mame/naomi.zip"
+note = "NAOMI arcade games (Flycast, MAME)"
+
+[naomi.item.members]
+"315-6188.ic31" = "7c9fea46"
+"boot_rom_64b8.ic606" = "7a50fab9"
+"develop.ic27" = "309a196a"
+"develop110.ic27" = "de7cfdb0"
+"epr-21336a.ic27" = "d3d57af8"
+"epr-21576.ic27" = "9dad3495"
+"epr-21576a.ic27" = "cedfe439"
+"epr-21576b.ic27" = "755a6e07"
+"epr-21576c.ic27" = "4599ad13"
+"epr-21576d.ic27" = "3b2afa7b"
+"epr-21576e.ic27" = "08c0add7"
+"epr-21576g.ic27" = "d2a1c6bf"
+"epr-21576h.ic27" = "d4895685"
+"epr-21576h_multi.ic27" = "cce01f1f"
+"epr-21577a.ic27" = "969dc491"
+"epr-21577d.ic27" = "60ddcbbe"
+"epr-21577e.ic27" = "cf36e97b"
+"epr-21577g.ic27" = "25f64af7"
+"epr-21577h.ic27" = "fdf17452"
+"epr-21578a.ic27" = "6c9aad83"
+"epr-21578d.ic27" = "dfd5f42a"
+"epr-21578e.ic27" = "087f09a3"
+"epr-21578f.ic27" = "628a27fd"
+"epr-21578g.ic27" = "55413214"
+"epr-21578h.ic27" = "7b452946"
+"epr-21579.ic27" = "71f9c918"
+"epr-21579d.ic27" = "33513691"
+"epr-21580a.ic27" = "46dbe90f"
+"main_eeprom.bin" = "fea29cbb"
+"naomi_boot_2491.ic27" = "5b28f868"
+"x76f100_eeprom.bin" = "3ea24b6a"
+"zukinver0930.ic25" = "58e17c23"
+
+[arcade]
+title = "Arcade device sets (MAME)"
+games = ["mame", "arcade", "fbneo"]
+
+[[arcade.item]]
+name = "bubsys.zip"
+base = "roms"
+required = false
+zip = "mame/bubsys.zip"
+note = "Konami Bubble System games"
+
+[arcade.item.members]
+"400a1.2b" = "5827b1e8"
+"400a2.1b" = "2f44f970"
+"400b03.8g" = "85c2afc5"
+"boot.bin" = "f0774fc2"
+
+[[arcade.item]]
+name = "ym2413.zip"
+base = "roms"
+required = false
+zip = "mame/ym2413.zip"
+note = "Games that use the YM2413 sound chip's internal instrument ROM"
+
+[arcade.item.members]
+"ym2413_instruments.bin" = "6f582d01"
+
+[[arcade.item]]
+name = "qsound_hle.zip"
+base = "roms"
+required = false
+zip = "mame/qsound_hle.zip"
+note = "Capcom QSound games"
+
+[arcade.item.members]
+"dl-1425.bin" = "d6cf5ef5"

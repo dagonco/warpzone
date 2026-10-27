@@ -12,6 +12,7 @@ warpzone check                      # validate the config, list missing whitelis
 warpzone provision hub              # once: set up the hub's Syncthing (remote API)
 warpzone provision device deck      # on each console: one command
 warpzone prune                      # on a console: report (or --apply delete) what it no longer whitelists
+warpzone bios                       # which BIOS and firmware files the library has, lacks or has wrong
 ```
 
 ## The problem
@@ -146,6 +147,34 @@ wz-library: deleted 412 file(s), 38.2 GiB, removed 9 empty folder(s)
 
 It asks Syncthing which files it ignores (after a full rescan) instead of guessing from the patterns, and it deletes a file only if the hub also has it, unchanged: anything that exists only on the device, or that you edited, is reported and kept. It refuses to delete more than `--max-gib` (default 50) in one run unless you pass `--force`, never touches `.stfolder`, `.stignore`, the whitelist files or other Syncthing folders, and refuses to run while a device is still bootstrapping. `--list` prints every file; `--notify-url URL` POSTs a JSON summary (`device`, `folder`, `files`, `bytes`, `applied`) to a webhook, for example a Home Assistant automation. Details in [`docs/design.md`](docs/design.md#pruning).
 
+## Checking BIOS files
+
+Many emulators refuse to start a game without the right BIOS or firmware, and the failure message rarely says which file. `warpzone bios` reads the library and tells you, per system, what is there, what is missing and what has an unexpected hash:
+
+```
+$ warpzone bios --root /path/to/library
+psx: Sony PlayStation
+  ok                  bios: SCPH1001.BIN (matches scph1001.bin)
+saturn: Sega Saturn
+  wrong (required)    bios: sega_101.bin: md5 cb37ed68..., expected 85ec9ca4...
+ps2: Sony PlayStation 2
+  missing (required)  bios: one of ps2-0100j-20000117.bin, ps2-0100jd-20000117.bin, ... (66 in all)
+                      unlocks: PlayStation 2 games; one dump of the console region you play is enough
+3do: Panasonic 3DO: no games in roms/{3do}, not checked
+unknown files in bios/: 3
+  (list them with --all)
+items: 12 ok, 1 missing, 1 wrong
+2 required item(s) missing or wrong
+```
+
+It is read-only and exits 1 when a required item is missing or wrong, so it also works in a script. Only systems that have games are judged: if the ROM folders of a system (for example `roms/3do`) hold nothing but EmuDeck placeholders, media or the BIOS zips themselves, the system is shown as "no games, not checked" and never affects the exit code. Naming it with `--system` checks it anyway. Without `--root` it uses this device's `~/Emulation` (from the profile) or, on the hub, `<hub root>/library`. `--system psx ps2` limits the check, `--all` lists the unknown files in `bios/`.
+
+Some items are "one of": a PlayStation needs one BIOS dump, not all of them. Zip sets for MAME (`neogeo.zip`, `naomi.zip`, `awbios.zip`, ...) are checked in `roms/mame/` by member name and CRC32. Only files of the expected size are read.
+
+If you keep a modified or region-free BIOS on purpose, accept its hash in a local file, `bios.toml` next to your `config.toml` (or `--overrides PATH`), and it is reported as "accepted (local)". See [`examples/bios.example.toml`](examples/bios.example.toml).
+
+The manifest only holds file names, sizes and hashes, taken from [libretro-database](https://github.com/libretro/libretro-database) and MAME. `warpzone` never downloads a BIOS and this repository contains none.
+
 ## The EmuDeck symlink gotcha
 
 EmuDeck exposes saves through symlinks under `~/Emulation/saves`. Syncthing never follows symlinks, so a folder pointed at the symlink syncs nothing and gives no error. The `steamos-emudeck` profile therefore points at the real directory of each emulator (for example RetroArch's saves under `~/.var/app/org.libretro.RetroArch/`). If you add a profile for another setup, resolve the links first (`readlink -f`).
@@ -175,14 +204,13 @@ A profile says where things live on one kind of device: [`warpzone/profiles/`](w
 Not in v0.1:
 
 - `warpzone inbox`: verify, rename (No-Intro/Redump via igir) and file new content.
-- A BIOS manifest with hashes and a `warpzone bios` checker.
 - Home Assistant: Syncthing folder sensors and script notifications.
 - Switch save migration between emulators (one-shot, with backup).
 - More profiles (macOS, Windows, Batocera).
 
 ## Legal
 
-`warpzone` ships and locates no ROMs, BIOS files, keys or firmware, and never will. It only moves files you already have between machines you own. Use your own legally obtained dumps.
+`warpzone` ships and locates no ROMs, BIOS files, keys or firmware, and never will. `warpzone bios` only compares what you already have with public file names, sizes and hashes. It only moves files you already have between machines you own. Use your own legally obtained dumps.
 
 ## License
 
