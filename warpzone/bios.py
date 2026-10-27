@@ -1,9 +1,14 @@
 """Check a game library's BIOS and firmware files against a shipped manifest.
 
 warpzone never downloads or ships BIOS files. The manifest (`data/bios.toml`) holds
-public metadata only: file names, sizes and hashes. The decisions (`judge_*`,
-`settle`, `unknown_files`, `render`) are pure; `Library` and `check_library` are the
-only parts that touch the disk. See docs/design.md.
+public metadata only: file names, sizes, hashes and file signatures. The decisions
+(`judge_*`, `settle`, `unknown_files`, `render`) are pure; `Library` and `check_library`
+are the only parts that touch the disk. See docs/design.md.
+
+A file entry has one of four kinds of check: `hash` (size and md5, the default),
+`magic` (it starts with fixed bytes, for official firmware and disk images that have no
+fixed hash), `present` (it exists and is not empty) and `keys` (a secret keys file: it
+must look like one, and its content is never printed, hashed or put in a message).
 """
 
 from __future__ import annotations
@@ -27,14 +32,22 @@ from warpzone.profiles import Profile
 from warpzone.provision import expand_home
 
 CHUNK = 1024 * 1024
+KEYS_SCAN_BYTES = 8 * 1024 * 1024  # a keys file is read this far, to see what it looks like
+KIND_HASH, KIND_MAGIC, KIND_PRESENT, KIND_KEYS = "hash", "magic", "present", "keys"
+KINDS = (KIND_HASH, KIND_MAGIC, KIND_PRESENT, KIND_KEYS)
 BASES = ("bios", "roms")
 OVERRIDES_FILE = "bios.toml"
 SHOWN_NAMES = 4
 PLACEHOLDERS = ("metadata.txt", "systeminfo.txt")
-NON_GAME_DIRS = ("media", "@eaDir", "#recycle")
+NON_GAME_DIRS = ("media", "@eaDir", "#recycle", "mlc01")  # mlc01: Cemu saves and installs
 JUNK_FILES = ("Thumbs.db", "desktop.ini")
 _MD5 = re.compile(r"^[0-9a-f]{32}$")
 _CRC32 = re.compile(r"^[0-9a-f]{8}$")
+_HEX_BYTES = re.compile(r"^(?:[0-9a-f]{2})+$")
+# A keys file is hex-led lines: a 32-digit key, or (in common key lists) a 16-digit id,
+# each followed by optional text.
+_KEY_LINE = re.compile(r"^(?:[0-9a-fA-F]{32}|[0-9a-fA-F]{16})(?:[\s#].*)?$")
+_KEY_32 = re.compile(r"^[0-9a-fA-F]{32}(?:[\s#]|$)")
 _KEY = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 
 
@@ -45,8 +58,10 @@ class BiosError(Exception):
 @dataclass(frozen=True)
 class BiosFile:
     path: str  # relative to the item's base, "/" separated
-    size: int
+    size: int | None  # None: the size is not checked (only for kinds other than hash)
     md5: frozenset[str]  # empty: only the size is checked
+    kind: str = KIND_HASH
+    magic: bytes = b""  # kind "magic": the file starts with these bytes
 
 
 @dataclass(frozen=True)
@@ -206,22 +221,54 @@ def _parse_item(system: str, raw: Any, where: str, err: Callable[[str], None]) -
         return None
     files: list[BiosFile] = []
     for entry in raw_files:
-        if not isinstance(entry, dict) or set(entry) - {"path", "size", "md5"}:
-            err(f"{where}.files: each entry is a table with path, size and md5")
-            continue
-        path, size = entry.get("path"), entry.get("size")
-        if not _path_ok(path):
-            err(f"{where}.files: bad path {path!r}")
-            continue
-        if not isinstance(size, int) or isinstance(size, bool) or size <= 0:
+        file = _parse_file(entry, where, err)
+        if file is not None:
+            files.append(file)
+    return Item(system, name, base, flags["required"], flags["any_name"], note, tuple(files))
+
+
+def _parse_file(entry: object, where: str, err: Callable[[str], None]) -> BiosFile | None:
+    allowed = {"path", "size", "md5", "check", "magic"}
+    if not isinstance(entry, dict) or set(entry) - allowed:
+        err(f"{where}.files: each entry is a table with path, size, md5, check and magic")
+        return None
+    path, size = entry.get("path"), entry.get("size")
+    if not _path_ok(path):
+        err(f"{where}.files: bad path {path!r}")
+        return None
+    kind = entry.get("check", KIND_HASH)
+    if kind not in KINDS:
+        err(f"{where}.files.{path}: check must be one of {', '.join(KINDS)}")
+        return None
+    if size is not None and (not isinstance(size, int) or isinstance(size, bool) or size <= 0):
+        err(f"{where}.files.{path}: size must be a positive integer")
+        return None
+    if kind == KIND_HASH:
+        if size is None:
             err(f"{where}.files.{path}: size must be a positive integer")
-            continue
+            return None
+        if "magic" in entry:
+            err(f'{where}.files.{path}: `magic` goes with check = "magic"')
+            return None
         md5 = _hashes(entry["md5"], _MD5) if "md5" in entry else frozenset()
         if md5 is None:
             err(f"{where}.files.{path}: md5 must be 32 hex digits (or a list of them)")
-            continue
-        files.append(BiosFile(path, size, md5))
-    return Item(system, name, base, flags["required"], flags["any_name"], note, tuple(files))
+            return None
+        return BiosFile(path, size, md5)
+    if "md5" in entry:
+        err(f'{where}.files.{path}: `md5` goes with check = "hash"')
+        return None
+    magic = b""
+    if kind == KIND_MAGIC:
+        raw_magic = entry.get("magic")
+        if not isinstance(raw_magic, str) or not _HEX_BYTES.match(raw_magic.lower()):
+            err(f"{where}.files.{path}: magic must be the first bytes in hex (even digit count)")
+            return None
+        magic = bytes.fromhex(raw_magic)
+    elif "magic" in entry or size is not None:
+        err(f'{where}.files.{path}: check = "{kind}" takes only a path')
+        return None
+    return BiosFile(path, size, frozenset(), kind, magic)
 
 
 def parse_manifest(data: dict[str, Any], source: str = "bios manifest") -> Manifest:
@@ -305,7 +352,7 @@ def parse_overrides(data: dict[str, Any], manifest: Manifest, source: str) -> Ov
         for extra in sorted(set(table) - {"accept", "unwanted"}):
             err(f"{key}: unknown key {extra!r}")
         paths = {
-            f.path for i in system.items for f in i.files
+            f.path for i in system.items for f in i.files if f.kind == KIND_HASH
         }  # a zip is accepted or not as a whole
         raw_accept = table.get("accept", {})
         if not isinstance(raw_accept, dict):
@@ -359,7 +406,16 @@ def _names(names: Sequence[str]) -> str:
 
 def needs_hash(file: BiosFile, size: int | None) -> bool:
     """Only a file of the expected size is worth reading, and only if the md5 matters."""
-    return size == file.size and bool(file.md5)
+    return file.kind == KIND_HASH and size == file.size and bool(file.md5)
+
+
+def needs_head(file: BiosFile, size: int | None) -> bool:
+    """A `magic` file is opened only when it exists and, if a size is given, has that size."""
+    return file.kind == KIND_MAGIC and size is not None and file.size in (None, size)
+
+
+def needs_scan(file: BiosFile, size: int | None) -> bool:
+    return file.kind == KIND_KEYS and bool(size)
 
 
 def judge_file(
@@ -376,6 +432,49 @@ def judge_file(
     expected = sorted(file.md5)
     shown = expected[0] if len(expected) == 1 else f"{expected[0]} or {len(expected) - 1} more"
     return Status.WRONG, f"md5 {md5}, expected {shown}"
+
+
+def judge_magic(file: BiosFile, size: int | None, head: bytes | None) -> tuple[Status, str]:
+    """`head` is the start of the file (at least `len(file.magic)` bytes), None if not read."""
+    if size is None:
+        return Status.MISSING, ""
+    if file.size is not None and size != file.size:
+        return Status.WRONG, f"size {size}, expected {file.size}"
+    if head is not None and head.startswith(file.magic):
+        return Status.OK, ""
+    return Status.WRONG, f"does not start with the expected signature (hex {file.magic.hex()})"
+
+
+def judge_present(size: int | None) -> tuple[Status, str]:
+    if size is None:
+        return Status.MISSING, ""
+    return (Status.OK, "") if size > 0 else (Status.WRONG, "the file is empty")
+
+
+def looks_like_keys(text: str) -> bool:
+    """Whether text is a keys file: every line that is not blank or a `#` comment starts
+    with a 32-digit hex key (or a 16-digit hex id), and at least one has a 32-digit key.
+    It returns a verdict and never part of the text."""
+    keys = 0
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if not _KEY_LINE.match(line):
+            return False
+        keys += bool(_KEY_32.match(line))
+    return keys > 0
+
+
+def judge_keys(size: int | None, looks_like: bool | None) -> tuple[Status, str]:
+    """The detail is fixed text: nothing from the file may end up in a message."""
+    if size is None:
+        return Status.MISSING, ""
+    if size == 0:
+        return Status.WRONG, "the file is empty"
+    if looks_like:
+        return Status.OK, ""
+    return Status.WRONG, "does not look like a keys file (hex-led lines)"
 
 
 def judge_zip(members: Mapping[str, str], crcs: Mapping[str, str] | None) -> tuple[Status, str]:
@@ -498,6 +597,17 @@ class Library:
             self._md5[key] = digest.hexdigest()
         return self._md5[key]
 
+    def head(self, base: str, rel: str, count: int) -> bytes:
+        with (self.root / base / rel).open("rb") as handle:
+            return handle.read(count)
+
+    def looks_like_keys(self, base: str, rel: str) -> bool:
+        """Reads the file only to answer yes or no; nothing of it is kept."""
+        data = self.head(base, rel, KEYS_SCAN_BYTES)
+        if len(data) == KEYS_SCAN_BYTES:  # cut mid-line: leave the partial last line out
+            data = data[: data.rfind(b"\n") + 1]
+        return looks_like_keys(data.decode("utf-8", "replace"))
+
     def zip_crcs(self, rel: str) -> dict[str, str] | None:
         """Member name -> crc32, read from the zip's directory (nothing is unpacked)."""
         path = self.root / "roms" / rel
@@ -516,6 +626,22 @@ def _check_zip(item: Item, lib: Library) -> tuple[FileCheck, ...]:
     return (FileCheck(item.zip_path, status, detail),)
 
 
+def _judge_on_disk(
+    file: BiosFile, extra: frozenset[str], size: int | None, lib: Library, base: str
+) -> tuple[Status, str]:
+    """Open the file only as far as its kind of check needs, then let a pure judge decide."""
+    if file.kind == KIND_MAGIC:
+        head = lib.head(base, file.path, len(file.magic)) if needs_head(file, size) else None
+        return judge_magic(file, size, head)
+    if file.kind == KIND_PRESENT:
+        return judge_present(size)
+    if file.kind == KIND_KEYS:
+        looks = lib.looks_like_keys(base, file.path) if needs_scan(file, size) else None
+        return judge_keys(size, looks)
+    md5 = lib.md5(base, file.path) if needs_hash(file, size) else None
+    return judge_file(file, extra, size, md5)
+
+
 def _check_files(
     item: Item, lib: Library, accept: Mapping[tuple[str, str], frozenset[str]]
 ) -> tuple[FileCheck, ...]:
@@ -526,11 +652,10 @@ def _check_files(
     for file in item.files:
         size = lib.size(item.base, file.path)
         try:
-            md5 = lib.md5(item.base, file.path) if needs_hash(file, size) else None
+            status, detail = _judge_on_disk(file, extra(file), size, lib, item.base)
         except OSError as exc:
             checks.append(FileCheck(file.path, Status.WRONG, f"cannot read it ({exc.strerror})"))
             continue
-        status, detail = judge_file(file, extra(file), size, md5)
         checks.append(FileCheck(file.path, status, detail))
     if not item.any_name or settle(checks) in (Status.OK, Status.LOCAL):
         return tuple(checks)
@@ -543,7 +668,9 @@ def _check_files(
         candidates = [
             f
             for f in item.files
-            if f.size == size and posixpath.dirname(f.path) == posixpath.dirname(rel)
+            if f.kind == KIND_HASH
+            and f.size == size
+            and posixpath.dirname(f.path) == posixpath.dirname(rel)
         ]
         if not candidates:
             continue

@@ -26,10 +26,16 @@ from warpzone.bios import (
     has_games,
     is_game_file,
     judge_file,
+    judge_keys,
+    judge_magic,
+    judge_present,
     judge_zip,
     load_manifest,
     load_overrides,
+    looks_like_keys,
     needs_hash,
+    needs_head,
+    needs_scan,
     parse_manifest,
     parse_overrides,
     render,
@@ -99,6 +105,25 @@ def fake_manifest() -> dict[str, Any]:
     }
 
 
+def kinds_manifest() -> dict[str, Any]:
+    return {
+        "kin": {
+            "title": "Kinds",
+            "games": ["kin"],
+            "item": [
+                {
+                    "name": "all kinds",
+                    "files": [
+                        {"path": "hdd.qcow2", "check": "magic", "magic": "514649fb"},
+                        {"path": "flag", "check": "present"},
+                        {"path": "keys.txt", "check": "keys"},
+                    ],
+                },
+            ],
+        }
+    }
+
+
 class JudgeFileTests(unittest.TestCase):
     def test_missing_when_there_is_no_size(self) -> None:
         self.assertEqual(judge_file(file(), frozenset(), None, None)[0], Status.MISSING)
@@ -140,6 +165,62 @@ class JudgeFileTests(unittest.TestCase):
         self.assertFalse(needs_hash(f, len(GOOD) + 1))
         self.assertFalse(needs_hash(f, None))
         self.assertFalse(needs_hash(BiosFile("fw.bin", 8, frozenset()), 8))
+
+
+def magic_file(size: int | None = None) -> BiosFile:
+    return BiosFile("fw.pup", size, frozenset(), "magic", b"SCEUF")
+
+
+KEYS_FILE = BiosFile("keys.txt", None, frozenset(), "keys")
+SECRET_KEY = "0123456789abcdef0123456789abcdef"  # fake  # gitleaks:allow
+
+
+class JudgeKindsTests(unittest.TestCase):
+    def test_magic_needs_the_signature_at_the_start(self) -> None:
+        self.assertEqual(judge_magic(magic_file(), 100, b"SCEUF\0\0\0")[0], Status.OK)
+        status, detail = judge_magic(magic_file(), 100, b"XSCEUF")
+        self.assertEqual(status, Status.WRONG)
+        self.assertIn("signature", detail)
+
+    def test_magic_missing_and_size(self) -> None:
+        self.assertEqual(judge_magic(magic_file(), None, None)[0], Status.MISSING)
+        status, detail = judge_magic(magic_file(100), 99, None)
+        self.assertEqual(status, Status.WRONG)
+        self.assertIn("size 99, expected 100", detail)
+        self.assertEqual(judge_magic(magic_file(100), 100, b"SCEUF")[0], Status.OK)
+
+    def test_magic_is_opened_only_when_it_can_pass(self) -> None:
+        self.assertFalse(needs_head(magic_file(), None))
+        self.assertTrue(needs_head(magic_file(), 5))
+        self.assertFalse(needs_head(magic_file(100), 99))
+        self.assertTrue(needs_head(magic_file(100), 100))
+        self.assertFalse(needs_head(file(), len(GOOD)))
+
+    def test_presence(self) -> None:
+        self.assertEqual(judge_present(None)[0], Status.MISSING)
+        self.assertEqual(judge_present(0)[0], Status.WRONG)
+        self.assertEqual(judge_present(1)[0], Status.OK)
+
+    def test_keys_file_shape(self) -> None:
+        self.assertTrue(looks_like_keys(f"# header\n\n{SECRET_KEY} # Game\n{SECRET_KEY}\n"))
+        self.assertTrue(looks_like_keys(f"{SECRET_KEY}\r\n0123456789abcdef\tsome title\r\n"))
+        self.assertFalse(looks_like_keys(""))
+        self.assertFalse(looks_like_keys("# only comments\n"))
+        self.assertFalse(looks_like_keys("0123456789abcdef only an id\n"))
+        self.assertFalse(looks_like_keys(f"{SECRET_KEY}\nthis is a text file\n"))
+        self.assertFalse(looks_like_keys("<html>" + SECRET_KEY))
+
+    def test_keys_verdict_never_carries_content(self) -> None:
+        self.assertEqual(judge_keys(None, None)[0], Status.MISSING)
+        self.assertEqual(judge_keys(0, None)[0], Status.WRONG)
+        self.assertEqual(judge_keys(10, True), (Status.OK, ""))
+        status, detail = judge_keys(10, False)
+        self.assertEqual(status, Status.WRONG)
+        self.assertNotIn(SECRET_KEY, detail)
+        self.assertFalse(needs_scan(KEYS_FILE, None))
+        self.assertFalse(needs_scan(KEYS_FILE, 0))
+        self.assertTrue(needs_scan(KEYS_FILE, 10))
+        self.assertFalse(needs_hash(KEYS_FILE, 10))
 
 
 class JudgeZipTests(unittest.TestCase):
@@ -192,6 +273,7 @@ class GamesTests(unittest.TestCase):
             "segacd/.stfolder",
             "segacd/Thumbs.db",
             "segacd/#recycle/old.chd",
+            "wiiu/mlc01/usr/save/00050000/user/save.dat",
             "mame/neogeo.zip",
         ):
             with self.subTest(rel):
@@ -287,6 +369,59 @@ class ParseManifestTests(unittest.TestCase):
         self.rejects(lambda d: d["con"]["item"].append(dict(item(d))), "two items are named")
         self.rejects(lambda d: d["arc"]["item"][0].update(members={"x": "zz"}), "not a crc32")
         self.rejects(lambda d: d["con"].update(title=""), "title")
+
+    def test_check_kinds_parse(self) -> None:
+        manifest = parse_manifest(kinds_manifest())
+        files = {f.path: f for f in manifest.systems["kin"].items[0].files}
+        self.assertEqual(files["hdd.qcow2"].kind, "magic")
+        self.assertEqual(files["hdd.qcow2"].magic, b"QFI\xfb")
+        self.assertIsNone(files["hdd.qcow2"].size)
+        self.assertEqual(files["flag"].kind, "present")
+        self.assertEqual(files["keys.txt"].kind, "keys")
+
+    def test_check_kinds_validation(self) -> None:
+        def mutate(**changes: Any) -> dict[str, Any]:
+            data = kinds_manifest()
+            data["kin"]["item"][0]["files"] = [{"path": "x", **changes}]
+            return data
+
+        for changes, text in (
+            ({"check": "weird"}, "check must be one of"),
+            ({"check": "magic"}, "magic must be"),
+            ({"check": "magic", "magic": "zz"}, "magic must be"),
+            ({"check": "magic", "magic": "abc"}, "magic must be"),
+            ({"check": "magic", "magic": "ab", "md5": "a" * 32}, "`md5` goes with"),
+            ({"check": "present", "size": 3}, "takes only a path"),
+            ({"check": "keys", "magic": "ab"}, "takes only a path"),
+            ({"check": "hash", "magic": "ab", "size": 3}, "`magic` goes with"),
+            ({}, "size must be a positive integer"),
+        ):
+            with self.subTest(changes), self.assertRaises(BiosError) as caught:
+                parse_manifest(mutate(**changes))
+            self.assertIn(text, str(caught.exception))
+
+    def test_shipped_manifest_has_xbox_ps3_and_wiiu(self) -> None:
+        manifest = load_manifest()
+        items = {(s.key, i.name): i for s in manifest.systems.values() for i in s.items}
+        self.assertEqual(manifest.systems["xbox"].games, ("xbox",))
+        self.assertEqual(manifest.systems["ps3"].games, ("ps3",))
+        self.assertEqual(manifest.systems["wiiu"].games, ("wiiu",))
+        mcpx = items["xbox", "mcpx boot rom"].files[0]
+        self.assertEqual(
+            (mcpx.size, mcpx.md5), (512, frozenset({"d49c52a4102f6df7bcf8d0617ac475ed"}))
+        )
+        self.assertTrue(items["xbox", "mcpx boot rom"].required)
+        flash = items["xbox", "flash bios"]
+        self.assertTrue(flash.required)
+        self.assertEqual({f.size for f in flash.files}, {1048576})
+        self.assertEqual(flash.files[0].path, "Complex_4627v1.03.bin")
+        self.assertIn("Complex_4627.bin", {f.path for f in flash.files})
+        self.assertNotIn(("xbox", "hdd image"), items)  # per device, lives in storage/xemu/
+        pup = items["ps3", "system software"].files[0]
+        self.assertEqual((pup.path, pup.magic), ("ps3/PS3UPDAT.PUP", b"SCEUF"))
+        keys = items["wiiu", "keys"]
+        self.assertFalse(keys.required)
+        self.assertEqual((keys.files[0].path, keys.files[0].kind), ("cemu/keys.txt", "keys"))
 
     def test_shipped_manifest_is_valid_and_has_the_expected_systems(self) -> None:
         manifest = load_manifest()
@@ -558,6 +693,93 @@ class FilesystemTests(unittest.TestCase):
     def test_unknown_system_name(self) -> None:
         with self.assertRaises(BiosError):
             self.check(systems=["nope"])
+
+
+class KindsFilesystemTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.root = Path(self._tmp.name)
+        data = kinds_manifest()
+        data["kin"]["item"] = [
+            {"name": n, "files": [f]}
+            for n, f in zip("abc", data["kin"]["item"][0]["files"], strict=True)
+        ]
+        self.manifest = parse_manifest(data)
+
+    def put(self, rel: str, data: bytes) -> None:
+        path = self.root / "bios" / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+
+    def check(self) -> dict[str, ItemResult]:
+        lib = Library(self.root, self.manifest.skip_dirs)
+        report = check_library(self.manifest, Overrides(), lib, ["kin"])
+        return {r.item.name: r for r in report.systems[0].results}
+
+    def test_everything_missing(self) -> None:
+        (self.root / "bios").mkdir()
+        self.assertEqual({r.status for r in self.check().values()}, {Status.MISSING})
+
+    def test_good_files(self) -> None:
+        self.put("hdd.qcow2", b"QFI\xfb" + bytes(100))
+        self.put("flag", b"x")
+        self.put("keys.txt", f"{SECRET_KEY} # Game\n".encode())
+        self.assertEqual({r.status for r in self.check().values()}, {Status.OK})
+
+    def test_bad_files(self) -> None:
+        self.put("hdd.qcow2", b"not a qcow2 image")
+        self.put("flag", b"")
+        self.put("keys.txt", b"just some text\n")
+        results = self.check()
+        self.assertEqual({r.status for r in results.values()}, {Status.WRONG})
+        self.assertIn("signature", results["a"].checks[0].detail)
+
+    def test_only_the_start_of_a_magic_file_is_read(self) -> None:
+        self.put("hdd.qcow2", b"QFI\xfb" + bytes(100))
+        with mock.patch.object(Library, "md5", side_effect=AssertionError("hashed")):
+            self.assertEqual(self.check()["a"].status, Status.OK)
+
+    def test_a_keys_file_is_never_hashed_and_never_printed(self) -> None:
+        self.put("keys.txt", f"{SECRET_KEY} # Secret Game Title\n".encode())
+        with mock.patch.object(Library, "md5", side_effect=AssertionError("hashed")):
+            report = check_library(self.manifest, Overrides(), Library(self.root), ["kin"])
+        text = "\n".join(render(report, show_all=True))
+        self.assertIn("keys.txt", text)
+        self.assertNotIn(SECRET_KEY, text)
+        self.assertNotIn("Secret Game Title", text)
+
+    def test_a_wrong_keys_file_does_not_leak_either(self) -> None:
+        self.put("keys.txt", f"{SECRET_KEY} fine\nbroken line with {SECRET_KEY}\n".encode())
+        report = check_library(self.manifest, Overrides(), Library(self.root), ["kin"])
+        text = "\n".join(render(report, show_all=True))
+        self.assertIn("does not look like a keys file", text)
+        self.assertNotIn(SECRET_KEY, text)
+        self.assertNotIn("broken line", text)
+
+    def test_unreadable_keys_file_is_wrong_not_a_crash(self) -> None:
+        self.put("keys.txt", f"{SECRET_KEY}\n".encode())
+        with mock.patch.object(Library, "head", side_effect=PermissionError(13, "denied")):
+            self.assertEqual(self.check()["c"].status, Status.WRONG)
+
+    def test_a_truncated_scan_ignores_the_cut_line(self) -> None:
+        line = f"{SECRET_KEY} # t\n".encode()
+        self.put("keys.txt", line * 4 + b"0123")
+        with mock.patch.object(bios, "KEYS_SCAN_BYTES", len(line) * 3 + 2):
+            self.assertEqual(self.check()["c"].status, Status.OK)
+
+    def test_flash_names_pass_on_size_alone_and_other_sizes_fail(self) -> None:
+        manifest = load_manifest()
+        lib_root = self.root / "lib"
+        (lib_root / "bios").mkdir(parents=True)
+        (lib_root / "bios" / "Complex_4627.bin").write_bytes(bytes(1048576))
+        report = check_library(manifest, Overrides(), Library(lib_root), ["xbox"])
+        flash = next(r for r in report.systems[0].results if r.item.name == "flash bios")
+        self.assertEqual(flash.status, Status.OK)
+        (lib_root / "bios" / "Complex_4627.bin").write_bytes(bytes(10))
+        report = check_library(manifest, Overrides(), Library(lib_root), ["xbox"])
+        flash = next(r for r in report.systems[0].results if r.item.name == "flash bios")
+        self.assertEqual(flash.status, Status.WRONG)
 
 
 class CliTests(unittest.TestCase):

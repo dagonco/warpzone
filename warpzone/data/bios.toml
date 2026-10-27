@@ -18,6 +18,22 @@
 #     A zip passes when every listed member is present with the listed CRC32;
 #     extra members are ignored.
 #
+#   * Xbox (xemu), PS3 (RPCS3) and Wii U (Cemu): what each emulator's own documentation
+#     asks for, not a database dump. xemu "Required Files" (https://xemu.app/docs/required-files/):
+#     the MCPX boot ROM `mcpx_1.0.bin` with MD5 d49c52a4102f6df7bcf8d0617ac475ed and a
+#     flash BIOS that can boot unsigned software (the docs recommend a modified retail
+#     BIOS, "Complex 4627"; no hash is fixed, so any 1 MiB file with a known name passes).
+#     The names come from EmuDeck's xemu setup (functions/EmuScripts/emuDeckXemu.sh), which
+#     points xemu at bios/mcpx_1.0.bin and bios/Complex_4627v1.03.bin. The HDD image
+#     `xbox_hdd.qcow2` is not checked: it holds the saves, is per device, lives in
+#     storage/xemu/ and EmuDeck downloads a blank one when it is missing. RPCS3 quickstart
+#     (https://rpcs3.net/quickstart): the official system software `PS3UPDAT.PUP`, installed
+#     once from File > Install Firmware (or `rpcs3 --installfw`); it is Sony's, has no
+#     single hash (it changes with every release) and is checked by its "SCEUF" signature.
+#     Cemu wiki (https://wiki.cemu.info): `keys.txt`, the disc keys, one 32-digit hex key
+#     per line with optional text or a `# title` comment after it (key lists in the wild
+#     also carry 16-digit hex ids, which are tolerated); needed only for WUD/WUX images.
+#
 # To regenerate: re-read those sections and macros, copy the md5/size (or the
 # member CRCs) here, and keep the curation below (which items are required, the
 # "any of" groupings, the notes). The curation is by hand on purpose.
@@ -33,11 +49,62 @@
 #     any_name   default false; if the file is absent, accept any file of the same
 #                folder and size whose md5 is accepted (emulators that identify a BIOS by content)
 #     note       what it unlocks
-#     files      [{ path, size, md5 }]; no md5 means the size alone is checked
+#     files      [{ path, size, md5 }]; no md5 means the size alone is checked. An entry may
+#                set `check` to another kind (no size or md5 then, except as noted):
+#                  "magic"    the file starts with the bytes `magic` (hex); `size` is optional
+#                  "present"  the file exists and is not empty
+#                  "keys"     a secret keys file: it must look like one (hex-led lines, `#`
+#                             comments); its content is never printed or hashed
 #     zip        instead of files: a zip under base, with a [<system>.item.members] table
 #                of member name = crc32
 #   skip_dirs  folders of bios/ that are never opened or listed (console keys and firmware)
 skip_dirs = ["eden", "azahar"]
+
+[xbox]
+title = "Microsoft Xbox"
+games = ["xbox"]
+
+[[xbox.item]]
+name = "mcpx boot rom"
+note = "Xbox games (xemu)"
+files = [
+  { path = "mcpx_1.0.bin", size = 512, md5 = "d49c52a4102f6df7bcf8d0617ac475ed" },
+]
+
+# xemu needs a flash BIOS that boots unsigned software, and has no fixed hash: any 1 MiB
+# file with one of these names passes. EmuDeck's xemu.toml points at Complex_4627v1.03.bin,
+# so that is the name to use; Complex_4627.bin is accepted as well (a real library holds
+# one with md5 39cee882148a87f93cb440b99dde3ceb).
+[[xbox.item]]
+name = "flash bios"
+note = "Xbox games (xemu); an unmodified retail BIOS will not boot them. EmuDeck's config names it Complex_4627v1.03.bin"
+files = [
+  { path = "Complex_4627v1.03.bin", size = 1048576 },
+  { path = "Complex_4627.bin", size = 1048576 },
+]
+
+[ps3]
+title = "Sony PlayStation 3"
+games = ["ps3"]
+
+[[ps3.item]]
+name = "system software"
+note = "PS3 games (RPCS3); this is a staging copy: install it once in RPCS3 (File > Install Firmware, or `rpcs3 --installfw`), the emulator does not read it from here"
+files = [
+  { path = "ps3/PS3UPDAT.PUP", check = "magic", magic = "5343455546" },
+]
+
+[wiiu]
+title = "Nintendo Wii U"
+games = ["wiiu"]
+
+[[wiiu.item]]
+name = "keys"
+required = false
+note = "Wii U disc images in WUD or WUX format (Cemu); optional, not needed for installed titles. This is a staging copy: Cemu reads keys.txt only from its own folder (~/.local/share/Cemu/keys.txt)"
+files = [
+  { path = "cemu/keys.txt", check = "keys" },
+]
 
 [psx]
 title = "Sony PlayStation"
