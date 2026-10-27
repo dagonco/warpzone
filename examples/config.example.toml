@@ -60,7 +60,7 @@ folders = ["library", "tools", "saves", "frontend", "songs"]
 [inbox]
 # The hub root as mounted on THIS machine: the folder that holds inbox/ and library/.
 # (Not [hub].root, which is the path on the hub's own filesystem.)
-root = "/Volumes/games"
+root = "/Volumes/hub"
 
 # Folder with the Redump and No-Intro DATs in clrmamepro format. Point it at
 # libretro-database's metadat/ folder (it holds redump/ and no-intro/), or at one flat

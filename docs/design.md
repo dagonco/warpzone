@@ -246,7 +246,7 @@ profile = "steamos-emudeck"
 folders = ["library", "tools", "saves", "frontend", "songs"]
 
 [inbox]                                      # optional, read only by `warpzone inbox`
-root = "/Volumes/games"                      # the hub root as mounted on this machine
+root = "/Volumes/hub"                      # the hub root as mounted on this machine
 dats_dir = "~/dats/libretro-database/metadat"
 work_dir = "~/tmp/warpzone"                  # optional; default: the system temp folder
 chdman = "/opt/homebrew/bin/chdman"          # optional tools; PATH is searched when unset

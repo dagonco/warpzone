@@ -182,7 +182,7 @@ Drop new dumps (files, folders or archives) in `inbox/` on the hub's share and r
 
 ```
 $ warpzone inbox
-inbox: /Volumes/games/inbox (report only), 2 item(s)
+inbox: /Volumes/hub/inbox (report only), 2 item(s)
 tools: chdman yes, bsdtar yes, rahasher yes, dolphin-tool no; DATs: dreamcast, gb, ...
 [1/2] some random name.zip
   nes: Adventure Island (USA).zip: would place
@@ -227,7 +227,7 @@ Configure it in the `[inbox]` table of the config (see [`examples/config.example
 
 ```toml
 [inbox]
-root = "/Volumes/games"                       # the hub root as mounted here (holds inbox/ and library/)
+root = "/Volumes/hub"                       # the hub root as mounted here (holds inbox/ and library/)
 dats_dir = "~/dats/libretro-database/metadat"  # redump/ and no-intro/ inside
 chdman = "/opt/homebrew/bin/chdman"           # optional: otherwise looked up on PATH
 rahasher = "~/tools/RAHasher"                 # optional: RetroAchievements hash check
