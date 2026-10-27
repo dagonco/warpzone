@@ -4,6 +4,7 @@ import tempfile
 import unittest
 from collections.abc import Mapping, Sequence
 from pathlib import Path
+from unittest import mock
 
 from support import API_KEY, HUB_ID
 from test_cli import run
@@ -154,6 +155,39 @@ class RenderTests(unittest.TestCase):
             ),
         )
 
+    def test_long_details_and_fixes_wrap_with_a_hanging_indent(self) -> None:
+        long = Result(
+            "tool",
+            "G",
+            FAIL,
+            "one two three four five six seven eight nine ten\nsecond line stays a line",
+            "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi omicron",
+        )
+        lines = render([long], width=44)
+        indent = " " * (7 + len("tool") + 1)
+        self.assertEqual(lines[1], "  [!!] tool one two three four five six")
+        self.assertEqual(lines[2], f"{indent}seven eight nine ten")
+        self.assertEqual(lines[3], f"{indent}second line stays a line")
+        fix = [line for line in lines if line.startswith(indent) and "fix:" in line]
+        self.assertEqual(len(fix), 1)
+        start = lines.index(fix[0])
+        self.assertEqual(lines[start], f"{indent}fix: alpha beta gamma delta")
+        self.assertTrue(lines[start + 1].startswith(f"{indent}     epsilon"))
+        for line in lines[1:-2]:
+            self.assertLessEqual(len(line), 44)
+
+    def test_a_word_longer_than_the_line_is_never_cut(self) -> None:
+        path = "/very/long/path/" + "x" * 80
+        lines = render([Result("a", "G", FAIL, f"see {path} now", f"mount {path}")], width=40)
+        self.assertEqual(sum(path in line for line in lines), 2)
+
+    def test_narrow_terminals_do_not_collapse_the_text(self) -> None:
+        lines = render([Result("a-very-long-label-name", "G", OK, "word " * 12)], width=10)
+        self.assertTrue(all(len(line.split()) >= 2 for line in lines[1:-2]))
+
+    def test_short_lines_are_left_alone_at_any_width(self) -> None:
+        self.assertEqual(render(self.RESULTS, width=200), render(self.RESULTS))
+
     def test_exit_code_only_fails_on_fail(self) -> None:
         self.assertEqual(exit_code(self.RESULTS), 1)
         self.assertEqual(exit_code([r for r in self.RESULTS if r.status != FAIL]), 0)
@@ -214,14 +248,31 @@ class ConfigTests(TmpCase):
         self.assertIn("bios works without it", results[0].detail)
         self.assertIn("config.example.toml", results[0].fix)
 
-    def test_inbox_only_config_is_valid_and_lists_what_each_table_enables(self) -> None:
+    def test_inbox_only_config_does_not_list_hub_and_devices_as_optional(self) -> None:
         results = check_config(context(self.tmp, INBOX_ONLY))
         self.assertEqual(by_name(results, "Config file").status, OK)
-        self.assertEqual(by_name(results, "[inbox]").status, OK)
-        hub = by_name(results, "[hub]")
-        self.assertEqual(hub.status, OPTIONAL)
-        self.assertIn("provision hub", hub.detail)
-        self.assertEqual(by_name(results, "[devices]").status, OPTIONAL)
+        inbox = by_name(results, "[inbox]")
+        self.assertEqual(inbox.status, OK)
+        self.assertIn("warpzone inbox", inbox.detail)
+        self.assertNotIn(OPTIONAL, {r.status for r in results})
+        self.assertFalse([r for r in results if r.name in ("[hub]", "[devices]")])
+        note = by_name(results, "[hub], [devices]")
+        self.assertEqual((note.status, note.fix), (OK, ""))
+        self.assertEqual(len(results), 3)
+
+    def test_inbox_only_summary_counts_no_optional_items(self) -> None:
+        results = check_config(context(self.tmp, INBOX_ONLY))
+        self.assertIn("0 optional item(s)", "\n".join(render(results)))
+
+    def test_a_config_with_a_hub_still_lists_the_missing_tables(self) -> None:
+        no_inbox = FULL.split("[inbox]")[0]
+        results = check_config(context(self.tmp, no_inbox))
+        self.assertEqual(by_name(results, "[hub]").status, OK)
+        self.assertEqual(by_name(results, "[devices]").status, OK)
+        inbox = by_name(results, "[inbox]")
+        self.assertEqual(inbox.status, OPTIONAL)
+        self.assertIn("warpzone inbox", inbox.detail)
+        self.assertFalse([r for r in results if r.name == "[hub], [devices]"])
 
     def test_full_config_shows_all_tables(self) -> None:
         results = check_config(context(self.tmp, FULL))
@@ -673,6 +724,33 @@ class EndToEndTests(TmpCase):
         before = sorted(p.relative_to(self.tmp) for p in self.tmp.rglob("*"))
         run_checks(make_probes(self.tmp, system="Linux"))
         self.assertEqual(sorted(p.relative_to(self.tmp) for p in self.tmp.rglob("*")), before)
+
+
+class WidthTests(TmpCase):
+    def run_with(self, width: int | None) -> list[str]:
+        probes = make_probes(self.tmp, system="Linux", os_release=DEBIAN)
+        lines: list[str] = []
+        run_doctor(probes, lines.append, width)
+        return lines
+
+    def test_an_explicit_width_is_used(self) -> None:
+        lines = self.run_with(60)
+        self.assertTrue(any("fix:" in line for line in lines))
+        narrow = self.run_with(50)
+        wide = self.run_with(200)
+        self.assertGreater(len(narrow), len(wide))
+
+    def test_the_terminal_width_falls_back_to_100(self) -> None:
+        with mock.patch.dict(os.environ, {}, clear=False) as env:
+            env.pop("COLUMNS", None)
+            with mock.patch("shutil.get_terminal_size", return_value=os.terminal_size((100, 24))):
+                self.assertEqual(doctor.terminal_width(), 100)
+
+    def test_without_a_width_the_terminal_decides(self) -> None:
+        with mock.patch.object(doctor, "terminal_width", return_value=45):
+            narrow = self.run_with(None)
+        self.assertEqual(narrow, self.run_with(45))
+        self.assertNotEqual(narrow, self.run_with(200))
 
 
 class CliTests(TmpCase):

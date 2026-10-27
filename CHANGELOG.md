@@ -14,6 +14,7 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ### Changed
 
+- `warpzone doctor` wraps long details and fixes to the terminal width (100 columns when it is unknown) with a hanging indent, and on a machine whose config has only an `[inbox]` table it no longer lists `[hub]` and `[devices]` as optional items that are not set up: they are one `[ok]` note.
 - The shipped profiles moved from `warpzone/profiles/` to `warpzone/data/profiles/`, so the folder no longer shares its name with the `warpzone/profiles.py` module, and building the wheel no longer warns about packages missing from the setuptools configuration. Nothing changes for users: profiles are still loaded by name.
 
 ## [0.5.0] - 2026-10-27

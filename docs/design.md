@@ -646,7 +646,9 @@ for every problem, the exact fix for this platform.
   use); `[!!]` problem; `[--]` optional and not set up. Only `[!!]` counts for the exit code.
 - **What is required.** Nothing is required of a feature the machine does not use. A
   missing config file or a missing `[hub]`, `[devices]` or `[inbox]` table is `[--]`, and
-  the line says what the table would enable. Once an `[inbox]` table exists, `chdman`,
+  the line says what the table would enable. The exception is a config with only an
+  `[inbox]` table (a machine that just files games): `[hub]` and `[devices]` are then one
+  `[ok]` note, "not used here", instead of two `[--]` items. Once an `[inbox]` table exists, `chdman`,
   `bsdtar`, `dats_dir`, the hub root with `inbox/` and `library/roms/` become required.
   `RAHasher`, `dolphin-tool` and `nsz` are always optional. The three arcade DAT paths
   (`mame_dat`, `fbneo_dat`, `mame2003plus_dat`) are `[--]` when unset, `[!!]` when set to
@@ -663,7 +665,10 @@ for every problem, the exact fix for this platform.
   (name, group, status, detail, fix). Everything it reads from the machine (`which`,
   running a tool, the environment, the home folder, the clock, free space, the HTTP probe)
   is a field of `Probes`, so the tests use fakes and no real tools. `render` and
-  `exit_code` are pure. The config is read as far as it can be: the `[inbox]` values are
+  `exit_code` are pure. `render` wraps details and fixes to the terminal width
+  (`shutil.get_terminal_size`, 100 when it is unknown, never narrower than 30 columns
+  of text): continuation lines hang under the start of the detail, a fix under its text,
+  and a word longer than the line (a path, a URL) is never cut. The config is read as far as it can be: the `[inbox]` values are
   used by the other checks even when another table is invalid.
 
 ## Syncthing API surface used
