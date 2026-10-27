@@ -202,7 +202,7 @@ def check_hub(cfg: Config, profiles: dict[str, Profile], client: Client, rep: Re
     return problems
 
 
-def _in_sync(info: dict[str, Any] | None) -> bool:
+def in_sync(info: dict[str, Any] | None) -> bool:
     """True when the local copy of a file is exactly the global one."""
     if not info:
         return False
@@ -230,7 +230,7 @@ def wait_for_files(
     pending = list(spec.required_files)
     announced = False
     while True:
-        pending = [f for f in pending if not _in_sync(client.db_file(spec.id, f))]
+        pending = [f for f in pending if not in_sync(client.db_file(spec.id, f))]
         if not pending:
             return
         if clock() >= deadline:

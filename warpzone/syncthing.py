@@ -152,6 +152,10 @@ class Client:
     def get_ignores(self, folder_id: str) -> list[str]:
         return list((self.get("/rest/db/ignores", folder=folder_id) or {}).get("ignore") or [])
 
+    def ignores_state(self, folder_id: str) -> dict[str, Any]:
+        """The raw `db/ignores` answer: `ignore`, `expanded` and `error` (load failure)."""
+        return self.get("/rest/db/ignores", folder=folder_id) or {}
+
     def set_ignores(self, folder_id: str, lines: list[str]) -> None:
         self.request("POST", "/rest/db/ignores", {"ignore": lines}, folder=folder_id)
 

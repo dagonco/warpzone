@@ -69,6 +69,10 @@ class FakeSyncthing:
         # (folder, name) -> number of db/file polls before it reports in sync.
         self.arrives_after: dict[tuple[str, str], int] = {}
         self.polls: dict[tuple[str, str], int] = {}
+        # (folder, name) -> a full db/file answer, taking precedence over arrives_after.
+        self.file_info: dict[tuple[str, str], dict[str, Any]] = {}
+        self.ignores_error: str | None = None  # what db/ignores reports for a bad include
+        self.scans = 0  # shows up as db/status stateChanged, like a finished scan
         self.requests: list[tuple[str, str, Any]] = []
         self._server = _Server(("127.0.0.1", 0), self._handler())
         self._thread = threading.Thread(
@@ -149,9 +153,18 @@ class FakeSyncthing:
                 return 500, "no such folder"
             if method == "POST":
                 self.ignores[folder] = list(body["ignore"])
-            return 200, {"ignore": self.ignores[folder], "expanded": [], "error": None}
+            return 200, {
+                "ignore": self.ignores[folder],
+                "expanded": [],
+                "error": self.ignores_error,
+            }
         if path == "/rest/db/status":
-            return 200, {"state": "idle", "globalFiles": 3, "needFiles": 0}
+            return 200, {
+                "state": "idle",
+                "stateChanged": str(self.scans),
+                "globalFiles": 3,
+                "needFiles": 0,
+            }
         if path == "/rest/db/browse":
             if folder not in self.browse and folder not in self.folders:
                 return 500, "no such folder"
@@ -159,6 +172,8 @@ class FakeSyncthing:
             return 200, [{"name": n, "type": "FILE_INFO_TYPE_FILE"} for n in names]
         if path == "/rest/db/file":
             key = (folder, query["file"])
+            if key in self.file_info:
+                return 200, self.file_info[key]
             if key not in self.arrives_after:
                 return 404, "No such object in the index"
             self.polls[key] = self.polls.get(key, 0) + 1
@@ -167,5 +182,6 @@ class FakeSyncthing:
             info = {"version": ["X:1"], "deleted": False, "invalid": False}
             return 200, {"global": info, "local": info}
         if (method, path) == ("POST", "/rest/db/scan"):
+            self.scans += 1
             return 200, None
         return 404, "not found"
