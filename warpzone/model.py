@@ -14,6 +14,9 @@ STAGGERED: dict[str, Any] = {"type": "staggered", "params": {"maxAge": str(30 * 
 NO_VERSIONING: dict[str, Any] = {"type": ""}
 
 
+LIBRARY_ID = "wz-library"
+
+
 class ModelError(Exception):
     pass
 
@@ -36,6 +39,8 @@ class FolderSpec:
     required_files: tuple[str, ...] = ()
     # Save folders whose directory is missing are skipped, not created.
     skip_if_missing: bool = False
+    # With skip_if_missing: create the missing directory when this one exists.
+    create_when: str | None = None
     # Only whitelisted device folders set it: it bounds how long a whitelist
     # edited on the hub takes to apply. None leaves Syncthing's default.
     rescan_interval_s: int | None = None
@@ -70,12 +75,11 @@ class _Def:
     fixed_ignores: tuple[str, ...] = ()
     save: bool = False
     skip_if_missing: bool = False
+    create_when: str | None = None
 
 
 _STATIC: dict[str, tuple[_Def, ...]] = {
-    "library": (
-        _Def("wz-library", "library", "sendonly", "receiveonly", "library", whitelist=True),
-    ),
+    "library": (_Def(LIBRARY_ID, "library", "sendonly", "receiveonly", "library", whitelist=True),),
     "songs": (_Def("wz-songs", "songs", "sendonly", "receiveonly", "songs", whitelist=True),),
     "tools": (_Def("wz-tools", "tools", "sendonly", "receiveonly", "tools"),),
     "frontend": (
@@ -110,6 +114,21 @@ def _defs_for(device: Device, profile: Profile) -> list[_Def]:
                     )
                 )
             continue
+        if group == "bios":
+            for place in profile.bios.values():
+                defs.append(
+                    _Def(
+                        f"wz-bios-{place.emu}-{place.kind}",
+                        f"library/{place.hub}",
+                        "sendonly",
+                        "receiveonly",
+                        device_path=place.path,
+                        fixed_ignores=place.ignore,
+                        skip_if_missing=True,
+                        create_when=place.create_when,
+                    )
+                )
+            continue
         for item in _STATIC[group]:
             if item.path_key not in profile.paths:
                 raise ModelError(
@@ -129,10 +148,11 @@ def device_specs(cfg: Config, device_name: str, profile: Profile) -> list[Folder
     device = cfg.devices[device_name]
     specs: list[FolderSpec] = []
     for item in _defs_for(device, profile):
-        path = item.device_path if item.save else profile.paths[item.path_key or ""]
-        assert path is not None
+        path = item.device_path or profile.paths[item.path_key or ""]
         if item.whitelist:
-            final = ignores.device_whitelist(device.name)
+            final = ignores.device_whitelist(
+                device.name, profile.library_excludes() if item.id == LIBRARY_ID else ()
+            )
             bootstrap: tuple[str, ...] | None = ignores.BOOTSTRAP_LINES
             required = (ignores.COMMON_FILE, ignores.device_file(device.name))
         else:
@@ -151,6 +171,7 @@ def device_specs(cfg: Config, device_name: str, profile: Profile) -> list[Folder
                 bootstrap_ignores=bootstrap,
                 required_files=required,
                 skip_if_missing=item.skip_if_missing,
+                create_when=item.create_when,
                 rescan_interval_s=device.rescan_seconds if item.whitelist else None,
             )
         )
@@ -161,16 +182,22 @@ def hub_specs(cfg: Config, profiles: dict[str, Profile]) -> list[FolderSpec]:
     """Every folder any device subscribes to, shared with exactly its subscribers."""
     subscribers: dict[str, list[str]] = {}
     defs: dict[str, _Def] = {}
+    # Placement paths of every profile in use: the hub library never sends them,
+    # each is delivered by its own folder instead.
+    excluded: tuple[str, ...] = ()
     for device in cfg.devices.values():
-        for item in _defs_for(device, profiles[device.profile]):
+        profile = profiles[device.profile]
+        for item in _defs_for(device, profile):
             defs.setdefault(item.id, item)
             subscribers.setdefault(item.id, []).append(device.name)
+            if item.id == LIBRARY_ID:
+                excluded = tuple(dict.fromkeys((*excluded, *profile.placement_ignores())))
 
     specs: list[FolderSpec] = []
     for folder_id, item in defs.items():
         names = subscribers[folder_id]
         if item.whitelist:
-            final = ignores.hub_whitelist()
+            final = ignores.hub_whitelist(excluded if folder_id == LIBRARY_ID else ())
             required = (ignores.COMMON_FILE, *(ignores.device_file(n) for n in names))
         else:
             final = ignores.inline(item.fixed_ignores)

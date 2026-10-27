@@ -1,8 +1,8 @@
 """Ignore-pattern rendering. Pure: no I/O.
 
 Whitelisted folders (library, songs) read their patterns from files that live
-inside the synced folder on the hub. Every other folder gets the same fixed
-lines inline, so it needs no file at all.
+inside the synced folder on the hub (the library adds fixed exclusions ahead of
+them). Every other folder gets the same fixed lines inline, so it needs no file at all.
 """
 
 COMMON_FILE = "patterns-common.stignore"
@@ -27,12 +27,19 @@ def include(filename: str) -> str:
     return f"#include {filename}"
 
 
-def hub_whitelist() -> tuple[str, ...]:
-    return (include(COMMON_FILE),)
+def hub_whitelist(excluded: tuple[str, ...] = ()) -> tuple[str, ...]:
+    """The hub library's lines. `excluded` paths go first: the first match wins."""
+    return (*excluded, include(COMMON_FILE))
 
 
-def device_whitelist(device: str) -> tuple[str, ...]:
-    return (include(device_file(device)),)
+def device_whitelist(device: str, excluded: tuple[str, ...] = ()) -> tuple[str, ...]:
+    """The device library's lines: what the device never receives, then its whitelist.
+
+    The whitelist lives on the hub and ends with `*`, so anything that must stay
+    out regardless of it (per-device data, EmuDeck symlinks, files delivered by
+    another folder) is listed before the include.
+    """
+    return (*excluded, include(device_file(device)))
 
 
 def inline(extra: tuple[str, ...] = ()) -> tuple[str, ...]:

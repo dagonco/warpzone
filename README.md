@@ -45,7 +45,7 @@ warpzone doctor                     # check this machine: tools, config, Syncthi
 └── inbox/                   never synced; drop zone for new content (SMB)
 ```
 
-Saves get their own folders so their two-way direction can never leak into the library. `songs` is not emulation (Clone Hero, YARG) and lands outside `~/Emulation`.
+Saves get their own folders so their two-way direction can never leak into the library. Keys and firmware that EmuDeck symlinks get their own receive-only folders too (`bios/eden/keys`, `bios/cemu` and so on; see [the symlink gotcha](#the-emudeck-symlink-gotcha)). `songs` is not emulation (Clone Hero, YARG) and lands outside `~/Emulation`.
 
 ## Requirements
 
@@ -307,6 +307,19 @@ EmuDeck exposes saves through symlinks under `~/Emulation/saves`. Syncthing neve
 
 Some save folders sit inside `~/Emulation`, which is the library root. That is fine: the library whitelist ignores them, and Syncthing supports nested folders when the parent ignores the child.
 
+The same trap exists in `~/Emulation/bios`: EmuDeck turns `eden/keys`, `eden/firmware`, `azahar/keys`, `ryujinx/keys`, `flycast/bios` and `shadps4/sys_modules` into symlinks, while the hub's `library/bios/` holds real folders at those paths. The profile therefore makes the device's library ignore those paths (ahead of your whitelist, so an edit cannot bring them back) and also `roms/wiiu/mlc01`, where Cemu keeps its own installs and saves (its saves sync separately).
+
+Keys and firmware reach the emulators through **BIOS placements**, listed in the profile: receive-only folders that map a hub folder under `library/bios/` to the emulator's real directory, delivering only the intended files. Add `bios` to the device's `folders` to opt in:
+
+| Hub path | Lands in | Only |
+|---|---|---|
+| `library/bios/eden/keys` | `~/.local/share/eden/keys` | `prod.keys`, `title.keys` |
+| `library/bios/eden/firmware` | `~/Emulation/storage/eden/nand/system/Contents/registered` (verify on a real device) | the folder |
+| `library/bios/azahar` | `~/.local/share/azahar-emu/sysdata` | `aes_keys.txt` |
+| `library/bios/cemu` | `~/.local/share/Cemu` | `keys.txt` |
+
+A placement whose emulator is not installed is skipped with a warning, like a save folder. The hub's library folder ignores these hub paths too, so each file belongs to exactly one folder. `warpzone bios` on a device therefore no longer sees these files in `~/Emulation/bios`: run it against the hub's `library/`. xemu's disk image (`xbox_hdd.qcow2`, which holds that console's Xbox saves) is deliberately not synced: it is per device. Details in [`docs/design.md`](docs/design.md#library-exclusions-and-bios-placements).
+
 ## Safety
 
 - **Receive-only devices.** The library, songs and tools are receive-only on devices, so a delete or an edit on a console can never propagate to the hub.
@@ -323,7 +336,7 @@ The hub is the authority, and `warpzone` keeps no versions of the library (saves
 
 ## Profiles
 
-A profile says where things live on one kind of device: [`warpzone/data/profiles/`](warpzone/data/profiles). v0.1 ships `steamos-emudeck` (Steam Deck, Steam Machine). Profiles are plain TOML so adding a setup is a small pull request. A save entry like `[saves.dolphin-gc]` maps to the folder ID `wz-save-dolphin-gc` and the hub path `saves/dolphin/gc`.
+A profile says where things live on one kind of device: [`warpzone/data/profiles/`](warpzone/data/profiles). v0.1 ships `steamos-emudeck` (Steam Deck, Steam Machine). Profiles are plain TOML so adding a setup is a small pull request. A save entry like `[saves.dolphin-gc]` maps to the folder ID `wz-save-dolphin-gc` and the hub path `saves/dolphin/gc`; a `[bios.cemu-keys]` placement maps to `wz-bios-cemu-keys`. The profile covers the saves of RetroArch, Dolphin, PrimeHack, DuckStation, PCSX2, melonDS, PPSSPP, RPCS3, Vita3K, MAME, RMG, ScummVM, Eden and Ryujinx (including user profiles, so a save keeps its owner on every console), Azahar, shadPS4, Cemu, Xenia (Proton or native), Flycast (VMU and flash only, never the BIOS) and YARG (settings, scores, profiles and playlists, never the song cache).
 
 ## Roadmap
 

@@ -9,11 +9,17 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
+from warpzone import ignores
 from warpzone.config import Config, parse_config
+from warpzone.profiles import load_profile
 
 HUB_ID = "AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA"
 DECK_ID = "BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB"
 MACHINE_ID = "CCCCCCC-CCCCCCC-CCCCCCC-CCCCCCC-CCCCCCC-CCCCCCC-CCCCCCC-CCCCCCC"
+# What the deck's library folder ends up with: the profile's exclusions, then its whitelist.
+DECK_LIBRARY_IGNORES = list(
+    ignores.device_whitelist("deck", load_profile("steamos-emudeck").library_excludes())
+)
 API_KEY = "fake-key"  # gitleaks:allow (test fixture, not a real key)
 
 

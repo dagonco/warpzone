@@ -13,7 +13,7 @@ from typing import Any
 # freshly synced whitelist file does not trigger one reliably (see design.md).
 DEFAULT_RESCAN_SECONDS = 300
 MIN_RESCAN_SECONDS = 5
-FOLDER_GROUPS = ("library", "songs", "tools", "saves", "frontend")
+FOLDER_GROUPS = ("library", "songs", "tools", "saves", "frontend", "bios")
 _DEVICE_ID_RE = re.compile(r"^[A-Z2-7]{7}(-[A-Z2-7]{7}){7}$")
 _NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 

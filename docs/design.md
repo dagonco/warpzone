@@ -34,7 +34,7 @@ here is out of scope for v0.1.
 <hub root>/
 ├── library/                 hub: send-only   → device: receive-only, per-device whitelist
 │   ├── roms/<system>/       ES-DE system folder names
-│   ├── bios/
+│   ├── bios/                some subfolders are also separate `wz-bios-*` folders (see Profiles)
 │   ├── extras/              switch/{updates,dlc,mods,misc}, amiibo/, texturepacks/
 │   ├── patterns-common.stignore
 │   └── patterns-<device>.stignore
@@ -67,6 +67,12 @@ Every folder warpzone manages has a stable Syncthing folder ID prefixed `wz-`.
 | `wz-media` | `frontend/media` | sendreceive | sendreceive | `media` | common only |
 | `wz-esde` | `frontend/es-de` | sendreceive | sendreceive | `esde` | fixed whitelist: `gamelists`, `collections` |
 | `wz-save-<emu>-<kind>` | `saves/<emu>/<kind>` | sendreceive | sendreceive | from profile | common only |
+| `wz-bios-<emu>-<kind>` | `library/<hub path from profile>` | sendonly | receiveonly | from profile | fixed whitelist from the profile |
+
+The `wz-library` ignore lines differ from the other whitelisted folders in one
+way: fixed exclusions come before the `#include`, on both sides (see
+[Library exclusions](#library-exclusions-and-bios-placements)). Save and
+`wz-bios-*` entries may carry their own ignore list (a whitelist ending in `*`).
 
 "Common only" and "fixed whitelist" folders get their ignore lines inline
 through `POST /rest/db/ignores` (the common lines, then the fixed or
@@ -81,9 +87,9 @@ Folder-level settings:
 - `fsWatcherEnabled: true` everywhere.
 
 A device subscribes to a subset of folders, set in the private config
-(`folders = ["library", "tools", "saves", "frontend", "songs"]`). `saves`
+(`folders = ["library", "tools", "saves", "frontend", "songs", "bios"]`). `saves`
 expands to every save folder of the device's profile; `frontend` expands to
-`wz-media` and `wz-esde`.
+`wz-media` and `wz-esde`; `bios` expands to every BIOS placement of the profile.
 
 ## Ignore files and the bootstrap problem
 
@@ -155,6 +161,7 @@ files shipped in the repo (`warpzone/data/profiles/<name>.toml`), because they a
 the part other people can reuse and improve.
 
 v0.1 ships `steamos-emudeck`. Paths use `~` and are expanded on the device.
+It has four kinds of entry; the shipped file is the reference, this is its shape:
 
 ```toml
 name = "steamos-emudeck"
@@ -167,57 +174,129 @@ tools = "~/.local/share/warpzone/tools"
 media = "~/Emulation/tools/downloaded_media"
 esde = "~/ES-DE"
 
+# Library paths the device never receives (before the whitelist).
+[library]
+ignore = ["/roms/wiiu/mlc01", "/bios/ryujinx/keys", "/bios/flycast/bios"]
+
 # One entry per save folder. `path` is the REAL directory: EmuDeck exposes
 # saves through symlinks under ~/Emulation/saves and Syncthing never follows
 # symlinks, so pointing Syncthing at the symlink would sync nothing.
 [saves.retroarch-saves]
 path = "~/.var/app/org.libretro.RetroArch/config/retroarch/saves"
-[saves.retroarch-states]
-path = "~/.var/app/org.libretro.RetroArch/config/retroarch/states"
-[saves.dolphin-gc]
-path = "~/.var/app/org.DolphinEmu.dolphin-emu/data/dolphin-emu/GC"
-[saves.dolphin-wii]
-path = "~/.var/app/org.DolphinEmu.dolphin-emu/data/dolphin-emu/Wii"
-[saves.dolphin-states]
-path = "~/.var/app/org.DolphinEmu.dolphin-emu/data/dolphin-emu/StateSaves"
-[saves.duckstation-saves]
-path = "~/Emulation/saves/duckstation/saves"
-[saves.duckstation-states]
-path = "~/Emulation/saves/duckstation/states"
-[saves.pcsx2-saves]
-path = "~/Emulation/saves/pcsx2/saves"
-[saves.pcsx2-states]
-path = "~/Emulation/saves/pcsx2/states"
-[saves.melonds-saves]
-path = "~/Emulation/saves/melonds/saves"
-[saves.melonds-states]
-path = "~/Emulation/saves/melonds/states"
-[saves.eden-saves]
-path = "~/Emulation/storage/eden/nand/user/save"
 [saves.ryujinx-user]
 path = "~/.config/Ryujinx/bis/user"
-ignore = ["!/save", "!/saveMeta", "*"]
-[saves.azahar-saves]
-path = "~/Emulation/storage/azahar/sdmc"
-[saves.azahar-states]
-path = "~/.local/share/azahar-emu/states"
-[saves.shadps4-saves]
-path = "~/.local/share/shadPS4/savedata"
-[saves.cemu-saves]
-path = "~/Emulation/roms/wiiu/mlc01/usr/save"
-[saves.xenia-content]
-path = "~/Emulation/roms/xbox360/content"
+ignore = ["!/save", "!/saveMeta", "*"]   # a whitelist for this folder only
+
+# BIOS placements: a hub folder delivered into the emulator's real directory.
+[bios.cemu-keys]
+hub = "bios/cemu"                         # below the hub's library/
+path = "~/.local/share/Cemu"
+ignore = ["!/keys.txt", "*"]
 ```
+
+Save entries (what each emulator keeps, all real directories): RetroArch saves
+and states; Dolphin GC, Wii and states; DuckStation, PCSX2, melonDS, MAME, RMG
+(saves and states); PPSSPP (saves and states); RPCS3 (savedata and trophy);
+Vita3K; ScummVM; PrimeHack (GC, Wii, states); Eden (`nand/user/save`, plus the
+user profiles in `nand/system/save/8000000000000010`); Ryujinx (`bis/user`
+restricted to `save` and `saveMeta`, plus the profiles in `bis/system/save`);
+Azahar (sdmc, states); shadPS4; Cemu (`mlc01/usr/save`); Xenia (Proton:
+`~/Emulation/roms/xbox360/content`, native: `~/.local/share/Xenia/content`;
+EmuDeck installs one or the other, and each has its own hub folder);
+Flycast (`vmu_save_*.bin` and the `nvmem` files only, from the folder that also
+holds the standalone BIOS, which stays out); YARG, which is not EmuDeck
+(`settings.json`, `scores`, `profiles`, `playlists` and `Custom`; never
+`songcache.bin` or `badsongs.txt`, which hold one machine's absolute paths).
+User profiles are synced so that a save keeps its owner on every console: a
+Switch save belongs to a profile ID, and the same ID must exist everywhere.
 
 The save key `<emu>-<kind>` maps to folder ID `wz-save-<emu>-<kind>` and hub
 path `saves/<emu>/<kind>`. A save folder with an `ignore` list gets those
 patterns (after `#include patterns-common.stignore`).
 
-Save paths that do not exist on the device yet (the emulator was never opened)
-are skipped with a warning, never created by warpzone, and picked up by the
-next `provision` run. Some save folders sit inside `~/Emulation`, which is the
+Save paths that do not exist on the device yet (the emulator was never opened,
+or is not installed) are skipped with a warning, never created by warpzone, and
+picked up by the next `provision` run. Skipping is per folder and never an
+error, so the many entries for emulators a console does not have cost one
+warning line each and nothing else. Some save folders sit inside `~/Emulation`, which is the
 `wz-library` root; that is fine because the library whitelist ignores them, and
 Syncthing supports nested folders when the parent ignores the child.
+
+### Library exclusions and BIOS placements
+
+EmuDeck replaces several folders inside `~/Emulation/bios` with symlinks to the
+emulator's real directories: `eden/keys`, `eden/firmware`, `azahar/keys`,
+`ryujinx/keys`, `flycast/bios`, `shadps4/sys_modules` (and the same for Citron,
+Yuzu and Suyu). Syncthing never follows symlinks, and the hub's `library/bios/`
+has real folders at several of those paths, so a library folder that tried to
+sync them would conflict or fail. Cemu has the opposite problem: it keeps its
+installs and saves in `roms/wiiu/mlc01`, which is per-device data. Two profile
+tables deal with it:
+
+- `[library] ignore`: anchored paths the device's library folder ignores. They
+  are written **before** the `#include patterns-<device>.stignore` line (the
+  first match wins and the whitelist ends with `*`, so nothing can un-ignore
+  them), which means a whitelist edit on the hub cannot bring them back. The
+  hub is not affected: it still holds and sends `roms/wiiu/mlc01` to nobody
+  who whitelists it.
+- `[bios.<emu>-<kind>]`: a **BIOS placement**. It maps a hub path below
+  `library/` (`hub`) to the emulator's real directory on the device (`path`),
+  through a receive-only folder `wz-bios-<emu>-<kind>` (send-only on the hub)
+  whose own `ignore` list lets only the intended files through. Optional keys:
+  `create_when` (create the target when that directory exists, i.e. the
+  emulator is installed but never wrote this folder; otherwise a missing target
+  is skipped like a save folder) and `verify = true` (the target is a best
+  guess that was not confirmed on a device).
+
+Shipped placements:
+
+| Folder | Hub path | Device target | Delivered |
+|---|---|---|---|
+| `wz-bios-eden-keys` | `bios/eden/keys` | `~/.local/share/eden/keys` | `prod.keys`, `title.keys` |
+| `wz-bios-eden-firmware` | `bios/eden/firmware` | `~/Emulation/storage/eden/nand/system/Contents/registered` (`verify`) | everything in the folder |
+| `wz-bios-azahar-keys` | `bios/azahar` | `~/.local/share/azahar-emu/sysdata` | `aes_keys.txt` |
+| `wz-bios-cemu-keys` | `bios/cemu` | `~/.local/share/Cemu` | `keys.txt` |
+
+Keys travel in exactly these files and nowhere else; their content is never
+printed. Eden firmware is uncertain: EmuDeck's `bios/eden/firmware` symlink
+points at `~/.local/share/eden/nand/system/Contents/registered`, but the same
+script sets Eden's `nand_directory` to `~/Emulation/storage/eden/nand`, so the
+symlink is probably dangling and the second path is where Eden reads firmware.
+Check it on a real device before relying on it.
+
+The path of every placement is also added to the library exclusions of the
+device **and of the hub's library folder**. The hub folder is then the only
+owner of those files, so the same file is never in two folders on the hub, and
+a device that does not subscribe to `bios` simply does not receive them from
+the library either (a placement is the only way those paths travel). The hub
+ignore lines come from the placements of every profile that a library
+subscriber uses.
+
+**Why nested folders.** A placement folder sits inside the hub's library
+folder (`library/bios/cemu` inside `library`). Syncthing's FAQ says nesting is
+"not supported, recommended or coded for, but it can be done successfully when
+you know what you're doing", and the only thing to avoid is circular shares.
+Making the parent ignore the child, as above, is the safe way to do it: the
+parent never scans the child, so its `.stfolder` and `.stignore` markers and
+its files belong to one folder only. The alternative of keeping the
+placements outside `library/` (for example a top-level `bios-keys/`) would
+avoid nesting but break the layout the BIOS checker and the inbox rely on
+(`library/bios/...`), so it was not chosen. The same parent-ignores-child
+arrangement already exists on devices, where save folders sit inside
+`~/Emulation`.
+
+**Not synced on purpose.** xemu's HDD image (`~/Emulation/storage/xemu/xbox_hdd.qcow2`)
+holds that console's Xbox saves inside a single disk image that is rewritten
+while the game runs, so two-way sync would corrupt it or leave conflict copies.
+It is per device and has no entry (as is xemu's `eeprom.bin`). xemu's BIOS files
+(`mcpx_1.0.bin`, `Complex_4627v1.03.bin`) are real files in `~/Emulation/bios`,
+so the library delivers them as it always did.
+Ryujinx keys, Flycast's standalone BIOS and shadPS4's modules are not placed
+yet either (the first two live in folders the library now ignores): add a
+`[bios.*]` entry when a hub layout for them exists.
+
+`warpzone bios` run on a device looks in the library folder, where the placed
+files no longer are; run it on the hub (`--root`) for keys and firmware.
 
 ## Private configuration
 
@@ -808,7 +887,14 @@ logic is unit-tested without a network.
   device reaches the hub. It then removes a system from the whitelist and checks
   that `prune` reports the leftovers, that `--max-gib 0` blocks the delete, and
   that `--apply` removes only the leftovers (a device-only file and every
-  whitelisted file stay).
+  whitelisted file stay). The same run covers the BIOS side: a plain BIOS file
+  arrives through the library, `bios/cemu/keys.txt` reaches the Cemu folder only
+  through its placement (a second file in the same hub folder does not, and the
+  library does not create `bios/cemu`), and a symlink at `bios/ryujinx/keys` is left
+  untouched.
+- Profile and model unit tests cover the placement and library-exclusion tables
+  (validation, overlaps, rendering order on the device and the hub); the provision
+  tests cover skipped, created (`create_when`) and dry-run targets.
 - `prune` unit tests with the fake Syncthing: the pure decision (`classify`),
   every refusal (bootstrap ignores, wrong type, missing marker, size cap),
   protected names, nested folders, symlinks, re-check before delete, webhook.

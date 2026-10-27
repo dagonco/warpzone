@@ -188,10 +188,24 @@ class EndToEndTests(unittest.TestCase):
         self.write(library / "roms/n64/other.z64", "not whitelisted")
         self.write(library / "roms/n64/sub/deep.z64", "nested")
         self.write(library / "roms/psx/Other Game (USA)/other.cue", "not whitelisted")
+        # BIOS: a plain file travels with the library; Cemu's keys.txt only through
+        # its placement (the library ignores bios/cemu on both sides).
+        self.write(library / "bios/psx/scph-fake.bin", "plain bios")
+        self.write(library / "bios/cemu/keys.txt", "fake keys, not real")
+        self.write(library / "bios/cemu/other.txt", "never delivered")
+        self.write(library / "bios/ryujinx/keys/prod.keys", "fake keys, not real")
 
         self.home = self.base / "home"
         saves = self.home / ".var/app/org.libretro.RetroArch/config/retroarch/saves"
         saves.mkdir(parents=True)
+        cemu = self.home / ".local/share/Cemu"
+        cemu.mkdir(parents=True)
+        # EmuDeck's symlink where the hub has a real folder: Syncthing must leave it be.
+        emulation = self.home / "Emulation"
+        keys_target = self.home / ".config/Ryujinx/system"
+        keys_target.mkdir(parents=True)
+        (emulation / "bios/ryujinx").mkdir(parents=True)
+        (emulation / "bios/ryujinx/keys").symlink_to(keys_target)
         config = self.base / "config.toml"
         config.write_text(
             f"""
@@ -206,7 +220,7 @@ addresses = ["{self.hub.address}"]
 [devices.deck]
 device_id = "{deck_id}"
 profile = "steamos-emudeck"
-folders = ["library", "saves"]
+folders = ["library", "saves", "bios"]
 addresses = ["{self.deck.address}"]
 rescan_seconds = 10
 """
@@ -229,10 +243,10 @@ rescan_seconds = 10
         out = self.wz("provision", "device", "deck", *device_args)  # idempotent
         self.assertIn("wz-library: ignores already final", out)
 
-        emulation = self.home / "Emulation"
-        self.assertEqual(
-            (emulation / ".stignore").read_text().strip(), "#include patterns-deck.stignore"
-        )
+        stignore = (emulation / ".stignore").read_text().splitlines()
+        self.assertEqual(stignore[-1], "#include patterns-deck.stignore")
+        for excluded in ("/roms/wiiu/mlc01", "/bios/ryujinx/keys", "/bios/cemu"):
+            self.assertIn(excluded, stignore)
 
         # Whitelisted content arrives; the rest does not.
         wait_for(
@@ -246,6 +260,7 @@ rescan_seconds = 10
         self.assertFalse((emulation / "roms/n64").exists())
         self.assertFalse((emulation / "roms/psx/Other Game (USA)").exists())
         self.assertEqual((emulation / "roms/nes/mario.nes").read_text(), "nes rom")
+        self.bios_scenario(emulation, cemu, keys_target)
 
         # Editing the whitelist on the hub changes what the device receives, with
         # no command run on the device. Syncthing applies a changed whitelist only
@@ -274,6 +289,23 @@ rescan_seconds = 10
         self.assertEqual(hub_save.read_text(), "save data")
 
         self.wz("status", *cfg)
+
+    def bios_scenario(self, emulation: Path, cemu: Path, keys_target: Path) -> None:
+        """A placement delivers into the emulator's own folder, the library stays out of it."""
+        wait_for(
+            lambda: (emulation / "bios/psx/scph-fake.bin").exists(),
+            "a plain BIOS file to arrive with the library",
+        )
+        wait_for(lambda: (cemu / "keys.txt").exists(), "keys.txt in the Cemu folder")
+        self.assertEqual((cemu / "keys.txt").read_text(), "fake keys, not real")
+        wait_for(lambda: self.settled(self.deck, "wz-bios-cemu-keys"), "the placement to settle")
+        self.assertFalse((cemu / "other.txt").exists())  # only the listed file
+        self.assertFalse((emulation / "bios/cemu").exists())  # not through the library
+        # The symlink survived and nothing was written through it.
+        self.assertTrue((emulation / "bios/ryujinx/keys").is_symlink())
+        self.assertEqual(list(keys_target.iterdir()), [])
+        # Eden's folder does not exist here, so its placements were skipped.
+        self.assertNotIn("wz-bios-eden-keys", {f["id"] for f in self.deck.client().folders()})
 
     def prune_scenario(self, cfg: list[str], library: Path, emulation: Path) -> None:
         """Take n64 off the whitelist again: its files stay on the device until pruned."""
