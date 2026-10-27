@@ -309,6 +309,9 @@ rescan_seconds = 10
         out = self.wz("prune", "--apply", *args)  # also: the device name is inferred
         self.assertIn("deleted 2 file(s)", out)
         self.assertFalse((n64 / "other.z64").exists())
+        print("DEBUG sub", self.deck.client().db_file("wz-library", "roms/n64/sub"), flush=True)
+        print("DEBUG n64", self.deck.client().db_file("wz-library", "roms/n64"), flush=True)
+        print("DEBUG ls", list((n64).rglob("*")), flush=True)
         self.assertFalse((n64 / "sub").exists())  # left empty, so removed
         self.assertEqual((n64 / "mine.txt").read_text(), "device only")
         self.assertEqual((emulation / "roms/nes/mario.nes").read_text(), "nes rom")
