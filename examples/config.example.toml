@@ -54,3 +54,30 @@ folders = ["library", "tools", "saves", "frontend"]
 device_id = "CCCCCCC-CCCCCCC-CCCCCCC-CCCCCCC-CCCCCCC-CCCCCCC-CCCCCCC-CCCCCCC"
 profile = "steamos-emudeck"
 folders = ["library", "tools", "saves", "frontend", "songs"]
+
+# Optional. Only `warpzone inbox` reads this table, and it works with just this table
+# (no [hub] or [devices]) on a desktop machine that mounts the hub's games share.
+[inbox]
+# The hub root as mounted on THIS machine: the folder that holds inbox/ and library/.
+# (Not [hub].root, which is the path on the hub's own filesystem.)
+root = "/Volumes/hub"
+
+# Folder with the Redump and No-Intro DATs in clrmamepro format. Point it at
+# libretro-database's metadat/ folder (it holds redump/ and no-intro/), or at one flat
+# folder of .dat files. warpzone never downloads them.
+dats_dir = "~/dats/libretro-database/metadat"
+
+# Optional. Local folder for unpacked archives and conversions (they can take several
+# GiB). Default: the system temp folder.
+# work_dir = "~/tmp/warpzone"
+
+# Optional external tools. Each is looked up on PATH when not set (RAHasher only when set).
+# chdman       converts discs to CHD (PlayStation, PlayStation 2, Saturn, Dreamcast)
+# bsdtar       unpacks .7z and .rar
+# rahasher     RAHasher from RALibretro, built with CHD support: checks that a conversion
+#              keeps the RetroAchievements hash
+# dolphin_tool reads compressed GameCube images (.rvz) so they can be identified
+# chdman = "/opt/homebrew/bin/chdman"
+# bsdtar = "/usr/bin/bsdtar"
+# rahasher = "~/tools/RAHasher"
+# dolphin_tool = "/Applications/Dolphin.app/Contents/MacOS/dolphin-tool"
