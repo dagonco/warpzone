@@ -12,6 +12,10 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 - `warpzone doctor` checks the three optional arcade DAT paths.
 - `warpzone bios` covers Xbox (xemu: `mcpx_1.0.bin` by md5 and a 1 MiB flash BIOS by name and size, `Complex_4627v1.03.bin` as EmuDeck names it), PlayStation 3 (RPCS3: `ps3/PS3UPDAT.PUP`, by its `SCEUF` signature) and Wii U (Cemu: optional `cemu/keys.txt`, checked for presence and shape and never printed or hashed). The manifest gains three kinds of check (`magic`, `present`, `keys`) next to the md5 one. The `xbox`, `ps3` and `wiiu` ROM folders decide whether each system is judged; Cemu's `mlc01/` does not count as games.
 
+### Changed
+
+- The shipped profiles moved from `warpzone/profiles/` to `warpzone/data/profiles/`, so the folder no longer shares its name with the `warpzone/profiles.py` module, and building the wheel no longer warns about packages missing from the setuptools configuration. Nothing changes for users: profiles are still loaded by name.
+
 ## [0.5.0] - 2026-10-27
 
 ### Added

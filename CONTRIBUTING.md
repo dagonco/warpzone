@@ -1,6 +1,6 @@
 # Contributing
 
-Small, focused pull requests are welcome. New device profiles are the easiest contribution: add a TOML file under `warpzone/profiles/` (see `steamos-emudeck.toml`) and a test that loads it.
+Small, focused pull requests are welcome. New device profiles are the easiest contribution: add a TOML file under `warpzone/data/profiles/` (see `steamos-emudeck.toml`) and a test that loads it.
 
 `warpzone` is standard library only and targets Python 3.11+. Please keep it that way, and never print or log API keys.
 

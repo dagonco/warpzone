@@ -27,13 +27,15 @@ dynamic = ["version"]
 warpzone = "warpzone.cli:main"
 
 [tool.setuptools]
-packages = ["warpzone"]
+# The data folders hold TOML only; listing them keeps setuptools from warning about them.
+packages = ["warpzone", "warpzone.data", "warpzone.data.profiles"]
 
 [tool.setuptools.dynamic]
 version = { attr = "warpzone.__version__" }
 
 [tool.setuptools.package-data]
-warpzone = ["profiles/*.toml", "data/*.toml"]
+"warpzone.data" = ["*.toml"]
+"warpzone.data.profiles" = ["*.toml"]
 
 [tool.ruff]
 line-length = 100

@@ -304,7 +304,7 @@ The hub is the authority, and `warpzone` keeps no versions of the library (saves
 
 ## Profiles
 
-A profile says where things live on one kind of device: [`warpzone/profiles/`](warpzone/profiles). v0.1 ships `steamos-emudeck` (Steam Deck, Steam Machine). Profiles are plain TOML so adding a setup is a small pull request. A save entry like `[saves.dolphin-gc]` maps to the folder ID `wz-save-dolphin-gc` and the hub path `saves/dolphin/gc`.
+A profile says where things live on one kind of device: [`warpzone/data/profiles/`](warpzone/data/profiles). v0.1 ships `steamos-emudeck` (Steam Deck, Steam Machine). Profiles are plain TOML so adding a setup is a small pull request. A save entry like `[saves.dolphin-gc]` maps to the folder ID `wz-save-dolphin-gc` and the hub path `saves/dolphin/gc`.
 
 ## Roadmap
 

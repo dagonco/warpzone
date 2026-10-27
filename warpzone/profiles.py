@@ -110,14 +110,14 @@ def load_profile_file(path: Path) -> Profile:
 
 
 def available_profiles() -> list[str]:
-    root = resources.files("warpzone") / "profiles"
+    root = resources.files("warpzone") / "data" / "profiles"
     return sorted(p.name.removesuffix(".toml") for p in root.iterdir() if p.name.endswith(".toml"))
 
 
 def load_profile(name: str) -> Profile:
     if not _NAME_RE.match(name):
         raise ProfileError(f"invalid profile name {name!r}")
-    resource = resources.files("warpzone") / "profiles" / f"{name}.toml"
+    resource = resources.files("warpzone") / "data" / "profiles" / f"{name}.toml"
     if not resource.is_file():
         known = ", ".join(available_profiles())
         raise ProfileError(f"unknown profile {name!r} (available: {known})")

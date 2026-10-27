@@ -151,7 +151,7 @@ does not exist yet, so it creates the folder and warns about missing whitelists;
 ## Profiles
 
 A profile describes where things live on one kind of device. Profiles are data
-files shipped in the repo (`warpzone/profiles/<name>.toml`), because they are
+files shipped in the repo (`warpzone/data/profiles/<name>.toml`), because they are
 the part other people can reuse and improve.
 
 v0.1 ships `steamos-emudeck`. Paths use `~` and are expanded on the device.
@@ -712,8 +712,8 @@ warpzone/
   doctor.py          machine checklist (`warpzone doctor`): checks, install hints, renderer
   ra.py              RetroAchievements: RAHasher wrapper, game list lookup
   localst.py         find and parse the local Syncthing config.xml
-  profiles/steamos-emudeck.toml
-  data/bios.toml     BIOS manifest (names, sizes, hashes only)
+  data/bios.toml     BIOS manifest (names, sizes, hashes, signatures only)
+  data/profiles/steamos-emudeck.toml
 templates/
   patterns-common.stignore
   patterns-device.example.stignore
