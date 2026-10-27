@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ## [Unreleased]
 
+### Added
+
+- `warpzone prune [device]`: deletes the files a device no longer whitelists. It asks Syncthing which files it ignores (after a full rescan) and deletes a file only if the hub still has it unchanged; files that exist only on the device are reported and kept. Report only by default, `--apply` deletes, `--max-gib` (default 50) caps one run unless `--force`, and `--notify-url` POSTs a JSON summary to a webhook.
+
 ## [0.1.0] - 2026-10-27
 
 First release.
