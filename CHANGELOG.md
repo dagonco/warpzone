@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-27
+
 ### Added
 
 - `warpzone inbox [--root PATH] [--dats PATH] [--apply]`: files new games dropped in `inbox/` into the library. Report only by default. For each item (a file or folder; `.zip`, `.7z` and `.rar` are unpacked into a local work folder, with unsafe members refused) it identifies every file by content, with size and CRC32 and SHA1 where the DAT has it, against Redump and No-Intro DATs in clrmamepro format (libretro-database's `metadat/`); converts to the library's format (CHD for PlayStation, PlayStation 2, Saturn and Dreamcast, a plain `.iso` for PSP, a zip named after the DAT for cartridge systems, `.iso` or `.rvz` kept for GameCube); and places it in `library/roms/<system>/` without ever replacing a file. Multi-disc games go in a `<game>.m3u/` folder with a playlist, and only when every disc is there. Originals move to `inbox/_done/<date>/` (folders older than 7 days are deleted on `--apply`); anything that cannot be placed moves to `inbox/_revisar/` with a `<item>.reason.txt`. The report gives each item's outcome, final path, RetroAchievements status and the whitelist line to add; warpzone never edits a whitelist. Optional RetroAchievements check with RAHasher (the hash must survive the conversion) and a lookup with `RA_API_KEY`. New `[inbox]` config table (`root`, `dats_dir`, `work_dir`, `chdman`, `bsdtar`, `rahasher`, `dolphin_tool`). Switch, MAME/arcade, Vita, PS3 and Xbox are not supported yet and go to review.
@@ -48,7 +50,8 @@ First release.
 - Safety rule: API keys are never printed, logged or included in error messages.
 - Release process: tag-triggered GitHub Actions workflow, a maintainer checklist in `docs/releasing.md`, and this changelog.
 
-[Unreleased]: https://github.com/dagonco/warpzone/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/dagonco/warpzone/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/dagonco/warpzone/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/dagonco/warpzone/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/dagonco/warpzone/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/dagonco/warpzone/releases/tag/v0.1.0
