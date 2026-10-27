@@ -1,5 +1,8 @@
 # warpzone
 
+[![ci](https://github.com/dagonco/warpzone/actions/workflows/ci.yml/badge.svg)](https://github.com/dagonco/warpzone/actions/workflows/ci.yml)
+[![release](https://img.shields.io/github/v/release/dagonco/warpzone)](https://github.com/dagonco/warpzone/releases/latest)
+
 Keep one game library on a home server and deliver it to every console you own, with saves that follow you from one device to the next.
 
 You have a NAS full of ROMs, a Steam Deck, maybe a Steam Machine, maybe a spare Mac. Each one has its own copy, its own idea of which games it wants, and its own saves. `warpzone` is a thin layer of conventions and automation on top of [Syncthing](https://syncthing.net) that makes the server the single source of truth. It never moves a byte of game data itself: it only configures Syncthing and keeps each device's setup honest.
@@ -48,8 +51,21 @@ Saves get their own folders so their two-way direction can never leak into the l
 
 ## Install
 
+From a release (see [CHANGELOG.md](CHANGELOG.md) for what each one contains):
+
 ```bash
-git clone <this repository> && cd warpzone
+pipx install https://github.com/dagonco/warpzone/releases/download/v0.1.0/warpzone-0.1.0-py3-none-any.whl
+# or, without pipx:
+python3 -m pip install --user https://github.com/dagonco/warpzone/releases/download/v0.1.0/warpzone-0.1.0-py3-none-any.whl
+warpzone --version
+```
+
+Each release also lists a `SHA256SUMS` file and carries a build provenance attestation (`gh attestation verify <file> --repo dagonco/warpzone`).
+
+From source:
+
+```bash
+git clone https://github.com/dagonco/warpzone.git && cd warpzone
 python3 -m warpzone --help        # run from the clone, nothing to install
 pip install .                     # optional: gives you a `warpzone` command
 ```

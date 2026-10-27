@@ -32,3 +32,7 @@ It takes about a minute. Set `WARPZONE_E2E_VERBOSE=1` to print the Syncthing log
 ## Documentation
 
 `docs/design.md` is the contract for the implementation. If you change behaviour, change it there too.
+
+## Releasing
+
+Maintainers: see [docs/releasing.md](docs/releasing.md). User-visible changes go under `[Unreleased]` in [CHANGELOG.md](CHANGELOG.md).
