@@ -206,11 +206,11 @@ class PureTests(unittest.TestCase):
         )
 
     def test_unsupported_kinds(self) -> None:
-        self.assertIn("Switch", unsupported_reason(["a/game.NSP"]) or "")
+        self.assertIsNone(unsupported_reason(["a/game.NSP", "b/game.xci"]))  # Switch has a handler
         self.assertIn("Vita", unsupported_reason(["x.vpk"]) or "")
         self.assertIn("PS3", unsupported_reason(["g/PS3_GAME/USRDIR/EBOOT.BIN"]) or "")
         self.assertIn("Xbox", unsupported_reason(["g/default.xbe"]) or "")
-        self.assertIn("not supported by inbox yet", unsupported_reason(["x.xci"]) or "")
+        self.assertIn("not supported by inbox yet", unsupported_reason(["x.vpk"]) or "")
         self.assertIsNone(unsupported_reason(["Game.nes", "Game.cue"]))
 
     def test_destination_verdicts(self) -> None:
@@ -504,11 +504,11 @@ class CartridgeTests(Base):
         )
 
     def test_unsupported_kinds_never_get_unpacked_or_hashed(self) -> None:
-        self.drop("game.nsp", b"switch")
-        self.zip_of("pack.zip", {"x/game.xci": b"switch"})
+        self.drop("game.vpk", b"vita")
+        self.zip_of("pack.zip", {"x/game.xiso": b"xbox"})
         self.assertEqual(self.go(tools=Tools()), 2)
-        self.assertIn("not supported by inbox yet (Switch", self.reason("game.nsp"))
-        self.assertIn("not supported by inbox yet (Switch", self.reason("pack.zip"))
+        self.assertIn("not supported by inbox yet (Vita", self.reason("game.vpk"))
+        self.assertIn("not supported by inbox yet (Xbox", self.reason("pack.zip"))
 
     def test_unsafe_archive_is_refused_with_its_reason(self) -> None:
         self.zip_of("evil.zip", {"../escape.nes": NES_ROM})

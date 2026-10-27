@@ -546,7 +546,9 @@ Syncthing state. The contract:
   continue. A configured path that does not exist is a configuration error.
 - **Arcade (MAME) sets.** See [Arcade sets](#arcade-sets) below; they do not go through
   DAT matching or conversion.
-- **Out of scope.** Switch, Vita, PS3 and Xbox. Their files are recognised by extension
+- **Switch games.** See [Switch games](#switch-games) below; they do not go through DAT
+  matching or conversion.
+- **Out of scope.** Vita, PS3 and Xbox. Their files are recognised by extension
   or folder and go to review with "not supported by inbox yet". A disc image kept as a
   single `.bin` for several tracks is not identified (the DATs list one file per track).
 - **Exit code.** `0` when every item is placed or already in the library; `1` when any
@@ -557,6 +559,65 @@ The decisions (`skip_name`, `unsafe_member`, `select_purge`, `plan_units`,
 `match_dat`, `group_discs`, `parse_dat`) are pure and unit-tested; conversions are
 tested with stand-in `chdman` and `RAHasher` scripts, and one test runs the cartridge
 flow end to end with no external tool.
+
+### Switch games
+
+A Switch dump is identified by its TitleID and version, not by a DAT, named after
+blawar/titledb and filed under the library's existing conventions. The code is in
+`warpzone/inbox_switch.py`, a second handler in `inbox.kind_handlers()`.
+
+- **Which items.** A top-level `.nsp`, `.nsz`, `.xci` or `.xcz`, or a folder or archive
+  (`.zip` by its directory, `.7z` and `.rar` by `bsdtar -tf`) holding at least one. The item
+  is taken whole: its Switch files are placed, and any other file in it (sidecars aside) is
+  named in the review reason. Archives are unpacked into the work folder with the same
+  safety checks as the rest of the inbox.
+- **Identification.** The CNMT is inside an encrypted NCA, so `nsz -i --depth 3 --keys
+  <keys> <file>` reads it: the output is parsed for the `Cnmt` blocks (`titleId`, and
+  `version` and `titleType`, both in hex). `nsz` also prints key material in its report, so
+  its output is never shown: lines mentioning a key are dropped from anything quoted.
+  A file with several CNMTs goes to review; a CNMT `titleType` that disagrees with the
+  TitleID is a review; the file wins over a different `[TitleID][vN]` in its name (noted).
+  Without `nsz` or the keys file, an `.nsp` takes `[TitleID][vN]` from its name and says
+  so; an `.nsz` is then reviewed. hactool is not used.
+- **Kind.** From the TitleID: ends in `000` game, `800` update, otherwise DLC. The game of
+  an update is its id minus `0x800`; of a DLC, `(id & ~0xFFF) - 0x1000`.
+- **Names.** Game: `roms/switch/<Title> [<TitleID>][v<N>][BASE].nsp`. Update:
+  `extras/switch/updates/<Title>/<Title> [<UpdateTitleID>][v<N>][UPD].nsp`. DLC:
+  `extras/switch/dlc/<Title>/<Title> - <DLC> [<DlcTitleID>][v<N>][DLC].nsp`. `<Title>` is
+  the game's name in the first titledb region file that has it (`US.en.json`, then the
+  other English ones, then the rest; a full-game entry beats a demo). Normalization:
+  typographic quotes and dashes become ASCII, trademark signs go, `:` becomes ` - `, path
+  characters (`\ / | * ? < > "` and controls) are dropped or replaced, spaces are collapsed,
+  and a word written in capitals is capitalized unless it is a roman numeral, a one-letter
+  word or a known short acronym (`DLC`, `BGM`), and the small words of a title (`of`, `the`)
+  go to lower case. A DLC's own name has the game's title removed from its start (also the
+  title without its ` - subtitle`). Names are cut to fit 255 bytes, keeping the `[...]` tail.
+- **Bundle parts.** A titledb entry whose `ids` lists several ids is a bundle. If its own
+  id comes first it is the pack itself and is left out; the other ids, in listed order,
+  are its parts. A DLC with no standalone entry in the region file that knows it is named
+  `<Bundle> (part N of M)`. A standalone entry (no `ids`, or only its own) names the DLC
+  itself.
+- **Compressed files.** `.nsz` is decompressed with `nsz -D --keys <keys> -o <work>` only
+  with `--apply`; the report only reads it with `-i`. `nsz` exits 0 on some damaged
+  inputs, so the output is accepted only if `nsz` exited 0 and printed `[DONE]`, its PFS0
+  header parses (magic, entry table, member bounds), and `nsz -V` exits 0 and prints
+  `[VERIFIED]`. Anything else is a review and the partial output is deleted with the work
+  folder. Only the `.nsp` reaches the library. `.xci` and `.xcz` are reviewed with the
+  reason that no tool converts them cleanly.
+- **Never overwrites.** The library is indexed once per run by `[TitleID][vN]` in file
+  names (`roms/switch`, `extras/switch/updates`, `extras/switch/dlc`). The same TitleID and
+  version, under any name, with identical bytes (size, then SHA-256) is "already in the
+  library"; different bytes are a review. Placement goes through `<name>.part`, read back
+  and renamed, as everywhere else.
+- **Whitelists.** A game prints its `!/roms/switch/...` line. Updates and DLC print none;
+  the report says once that they are usually whitelisted by folder
+  (`!/extras/switch/updates`, `!/extras/switch/dlc`).
+- **Configuration.** `[inbox] nsz` (the tool; PATH otherwise), `titledb_dir` (a clone of
+  blawar/titledb), `switch_keys` (default `~/.switch/prod.keys`). A configured
+  `titledb_dir` or `switch_keys` that does not exist stops the run (exit 2); unset or absent
+  ones only make the affected files go to review or fall back to file names. The titledb
+  region files are indexed into small JSON caches under `$XDG_CACHE_HOME/warpzone/titledb`,
+  keyed by size and modification time. The keys file is never opened by warpzone.
 
 ### Arcade sets
 
@@ -650,7 +711,7 @@ for every problem, the exact fix for this platform.
   `[inbox]` table (a machine that just files games): `[hub]` and `[devices]` are then one
   `[ok]` note, "not used here", instead of two `[--]` items. Once an `[inbox]` table exists, `chdman`,
   `bsdtar`, `dats_dir`, the hub root with `inbox/` and `library/roms/` become required.
-  `RAHasher`, `dolphin-tool` and `nsz` are always optional. The three arcade DAT paths
+  `RAHasher`, `dolphin-tool` and `nsz` are always optional, and so are the Switch `titledb_dir` and `switch_keys` (a configured path that does not exist is a problem; the keys file is only checked to exist, never read). The three arcade DAT paths
   (`mame_dat`, `fbneo_dat`, `mame2003plus_dat`) are `[--]` when unset, `[!!]` when set to
   something that is not a file (`inbox` refuses to start) and `[ok]` otherwise. A config that does not load,
   a configured tool path that is not executable, a tool that cannot run, a local
@@ -713,6 +774,7 @@ warpzone/
   bios.py            BIOS manifest, local overrides, pure `judge_*`, disk checks
   dat.py             Redump / No-Intro DAT parsing, cache, matching, disc grouping (pure)
   inbox.py           unpack, identify, convert, place, file the originals
+  inbox_switch.py    Switch games: identify with nsz, titledb names, decompress, place
   inbox_mame.py      arcade sets: MAME / FBNeo / 2003-Plus fit, emulator choice, ES-DE gamelist
   doctor.py          machine checklist (`warpzone doctor`): checks, install hints, renderer
   ra.py              RetroAchievements: RAHasher wrapper, game list lookup
@@ -761,6 +823,12 @@ logic is unit-tested without a network.
   links; whole runs on a temporary hub with tiny DATs and stand-in `chdman`,
   `RAHasher`, `bsdtar` and `dolphin-tool` scripts, including one cartridge flow with no
   external tool; the CLI, with the API key coming from the environment.
+- Switch tests (`test_inbox_switch.py`): kind, game-of-an-update, normalization, DLC name
+  and bundle numbering, file names and length limits, the `nsz --info` parser and the PFS0
+  header as pure functions; titledb region order and cache; whole runs on a temporary hub
+  with a stand-in `nsz` (placement of games, updates, DLC and bundle parts, `.nsz`
+  decompression and every way it can fail, name fallback, conflicts, review reasons, the
+  keys content never shown).
 - Arcade tests (`test_inbox_mame.py`): set database parsing and its cache, fit,
   set identification and the emulator decision as pure functions over tiny synthetic
   XML databases (BIOS alternatives, merged and split clones, devices, optional and nodump

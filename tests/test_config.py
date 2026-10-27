@@ -139,6 +139,16 @@ class InboxSettingsTests(unittest.TestCase):
         self.assertEqual(inbox.root, str(Path("~/hub").expanduser()))
         self.assertEqual(inbox.rahasher, "/opt/RAHasher")
         self.assertIsNone(inbox.chdman)
+        self.assertIsNone(inbox.titledb_dir)
+        data["inbox"] = {
+            "nsz": "/opt/nsz",
+            "titledb_dir": "~/titledb",
+            "switch_keys": "~/k/prod.keys",
+        }
+        inbox = parse_config(data).inbox
+        self.assertEqual(inbox.nsz, "/opt/nsz")
+        self.assertEqual(inbox.titledb_dir, str(Path("~/titledb").expanduser()))
+        self.assertEqual(inbox.switch_keys, str(Path("~/k/prod.keys").expanduser()))
 
     def test_mistakes_are_reported(self) -> None:
         for table, needle in (

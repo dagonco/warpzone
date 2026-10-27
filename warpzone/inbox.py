@@ -62,10 +62,6 @@ SIDECAR_EXTENSIONS = frozenset(
 JUNK_NAMES = frozenset({".DS_Store", "Thumbs.db", "desktop.ini", "@eaDir", "#recycle", "__MACOSX"})
 ZIP_DATE = (1996, 12, 24, 23, 32, 0)  # fixed, so the same game always zips to the same bytes
 UNSUPPORTED_EXTENSIONS = {
-    ".nsp": "Switch",
-    ".xci": "Switch",
-    ".nsz": "Switch",
-    ".xcz": "Switch",
     ".vpk": "Vita",
     ".xiso": "Xbox",
     ".pkg": "PS3",
@@ -242,6 +238,7 @@ class Tools:
     bsdtar: str | None = None
     rahasher: str | None = None
     dolphin_tool: str | None = None
+    nsz: str | None = None
 
 
 def find_tools(settings: InboxSettings, which: Callable[[str], str | None] = shutil.which) -> Tools:
@@ -260,6 +257,7 @@ def find_tools(settings: InboxSettings, which: Callable[[str], str | None] = shu
         bsdtar=pick("bsdtar", settings.bsdtar, "bsdtar"),
         rahasher=pick("rahasher", settings.rahasher, None),
         dolphin_tool=pick("dolphin_tool", settings.dolphin_tool, "dolphin-tool"),
+        nsz=pick("nsz", settings.nsz, "nsz"),
     )
 
 
@@ -576,14 +574,16 @@ class UnitResult:
     ra: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
     reason: str = ""
+    folder: str = ""  # library folder when it is not roms/<system> (Switch updates and DLC)
 
     @property
     def path(self) -> str:
-        return f"library/roms/{self.system}/{self.entry}"
+        return f"library/{self.folder or 'roms/' + self.system}/{self.entry}"
 
     @property
     def whitelist(self) -> str:
-        return whitelist_line(self.system, self.entry)
+        """The Syncthing line for a file in roms/; none for a folder-whitelisted extra."""
+        return "" if self.folder else whitelist_line(self.system, self.entry)
 
 
 @dataclass
@@ -638,9 +638,9 @@ class KindHandler(Protocol):
 
 def kind_handlers() -> list[KindHandler]:
     """The registry: one line per handler (imported late, they import this module)."""
-    from warpzone import inbox_mame
+    from warpzone import inbox_mame, inbox_switch
 
-    return [inbox_mame.HANDLER]
+    return [inbox_mame.HANDLER, inbox_switch.HANDLER]
 
 
 def _link_tracks(directory: Path, tracks: Sequence[Path]) -> None:
@@ -1045,6 +1045,7 @@ def _describe_tools(tools: Tools) -> str:
         ("bsdtar", tools.bsdtar),
         ("rahasher", tools.rahasher),
         ("dolphin-tool", tools.dolphin_tool),
+        ("nsz", tools.nsz),
     )
     return ", ".join(f"{n} {'yes' if p else 'no'}" for n, p in items)
 
@@ -1138,7 +1139,7 @@ def _print_item(
             rep.out(f"    {line}")
         for note in u.notes:
             rep.out(f"    note: {note}")
-        if u.outcome in ("placed", "already", "planned", "exists"):
+        if u.outcome in ("placed", "already", "planned", "exists") and u.whitelist:
             rep.out(f"    whitelist: {u.whitelist}")
     for note in result.notes:
         rep.out(f"  note: {note}")
@@ -1161,8 +1162,17 @@ def _summary(rep: Reporter, results: Sequence[ItemResult], apply: bool) -> int:
     review = [r for r in results if r.review]
     left = [r for r in results if r.left]
     lines = sorted(
-        {u.whitelist for u in units if u.outcome in ("placed", "already", "planned", "exists")}
+        {
+            u.whitelist
+            for u in units
+            if u.outcome in ("placed", "already", "planned", "exists") and u.whitelist
+        }
     )
+    if any(u.folder and u.outcome != "review" for u in units):
+        rep.out(
+            "Switch updates and DLC are usually whitelisted by folder, for example "
+            "!/extras/switch/updates and !/extras/switch/dlc"
+        )
     if lines:
         rep.out("whitelist lines (warpzone never edits a whitelist; add what you want):")
         for line in lines:
