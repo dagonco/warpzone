@@ -299,6 +299,23 @@ def _provision_whitelisted(
     rep.note(spec.id, "whitelist active, rescanning")
 
 
+def _create_target(spec: FolderSpec, dry_run: bool, rep: Reporter) -> bool:
+    """Create a missing target directory when its emulator is installed.
+
+    Only for entries that name an installed-marker directory (`create_when`):
+    the emulator exists but never wrote this folder, and the folder is where
+    the files must go. Everything else is skipped, never created.
+    """
+    if not spec.create_when or not os.path.isdir(spec.create_when):
+        return False
+    if dry_run:
+        rep.out(f"{spec.id}: dry-run: would create {spec.path}")
+    else:
+        os.makedirs(spec.path, exist_ok=True)
+        rep.note(spec.id, f"created {spec.path}")
+    return True
+
+
 def provision_device(
     cfg: Config,
     name: str,
@@ -321,16 +338,23 @@ def provision_device(
         )
 
     specs = [
-        dataclasses.replace(s, path=expand_home(s.path, home))
+        dataclasses.replace(
+            s,
+            path=expand_home(s.path, home),
+            create_when=expand_home(s.create_when, home) if s.create_when else None,
+        )
         for s in device_specs(cfg, name, profile)
     ]
     todo: list[FolderSpec] = []
     for spec in specs:
         if spec.skip_if_missing and not os.path.isdir(spec.path):
-            rep.warn(
-                f"{spec.id}: skipped, {spec.path} does not exist yet "
-                "(open the emulator once, then run provision again)"
-            )
+            if _create_target(spec, local.dry_run, rep):
+                todo.append(spec)
+            else:
+                rep.warn(
+                    f"{spec.id}: skipped, {spec.path} does not exist yet "
+                    "(open the emulator once, then run provision again)"
+                )
         else:
             todo.append(spec)
 

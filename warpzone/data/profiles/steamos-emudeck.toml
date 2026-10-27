@@ -8,6 +8,28 @@ tools = "~/.local/share/warpzone/tools"
 media = "~/Emulation/tools/downloaded_media"
 esde = "~/ES-DE"
 
+# Paths in the library folder that the device never receives from the hub, whatever
+# its whitelist says. These lines go ahead of the whitelist. The folders that the
+# `[bios.*]` entries below deliver are added automatically.
+[library]
+ignore = [
+  # Cemu keeps its installs and saves here; it is per-device data. The saves are
+  # synced on their own (saves.cemu-saves).
+  "/roms/wiiu/mlc01",
+  # EmuDeck replaces these folders with symlinks to the emulator's real directories
+  # and Syncthing never follows symlinks, so the hub's real folders would clash
+  # with them. (eden/keys, eden/firmware, azahar/keys and cemu are `[bios.*]`.)
+  "/bios/ryujinx/keys",
+  "/bios/flycast/bios",
+  "/bios/shadps4/sys_modules",
+  "/bios/citron/keys",
+  "/bios/citron/firmware",
+  "/bios/yuzu/keys",
+  "/bios/yuzu/firmware",
+  "/bios/suyu/keys",
+  "/bios/suyu/firmware",
+]
+
 # One entry per save folder. `path` is the REAL directory: EmuDeck exposes
 # saves through symlinks under ~/Emulation/saves and Syncthing never follows
 # symlinks, so pointing Syncthing at the symlink would sync nothing.
@@ -35,9 +57,15 @@ path = "~/Emulation/saves/melonds/saves"
 path = "~/Emulation/saves/melonds/states"
 [saves.eden-saves]
 path = "~/Emulation/storage/eden/nand/user/save"
+# Switch user profiles: a save belongs to a profile ID, so the same profiles must
+# exist on every console for the saves to show up.
+[saves.eden-profiles]
+path = "~/Emulation/storage/eden/nand/system/save/8000000000000010"
 [saves.ryujinx-user]
 path = "~/.config/Ryujinx/bis/user"
 ignore = ["!/save", "!/saveMeta", "*"]
+[saves.ryujinx-profiles]
+path = "~/.config/Ryujinx/bis/system/save"
 [saves.azahar-saves]
 path = "~/Emulation/storage/azahar/sdmc"
 [saves.azahar-states]
@@ -48,3 +76,79 @@ path = "~/.local/share/shadPS4/savedata"
 path = "~/Emulation/roms/wiiu/mlc01/usr/save"
 [saves.xenia-content]
 path = "~/Emulation/roms/xbox360/content"
+# EmuDeck installs the Proton build of Xenia or the native one, not both. The two
+# keep separate hub folders, so consoles that run different builds do not share.
+[saves.xenia-native]
+path = "~/.local/share/Xenia/content"
+[saves.ppsspp-saves]
+path = "~/.var/app/org.ppsspp.PPSSPP/config/ppsspp/PSP/SAVEDATA"
+[saves.ppsspp-states]
+path = "~/.var/app/org.ppsspp.PPSSPP/config/ppsspp/PSP/PPSSPP_STATE"
+[saves.rpcs3-saves]
+path = "~/Emulation/storage/rpcs3/dev_hdd0/home/00000001/savedata"
+[saves.rpcs3-trophy]
+path = "~/Emulation/storage/rpcs3/dev_hdd0/home/00000001/trophy"
+[saves.vita3k-saves]
+path = "~/Emulation/storage/Vita3K/ux0/user/00/savedata"
+[saves.mame-saves]
+path = "~/Emulation/saves/mame/saves"
+[saves.mame-states]
+path = "~/Emulation/saves/mame/states"
+[saves.rmg-saves]
+path = "~/Emulation/saves/RMG/saves"
+[saves.rmg-states]
+path = "~/Emulation/saves/RMG/states"
+[saves.scummvm-saves]
+path = "~/Emulation/saves/scummvm/saves"
+[saves.primehack-gc]
+path = "~/.var/app/io.github.shiiion.primehack/data/dolphin-emu/GC"
+[saves.primehack-wii]
+path = "~/.var/app/io.github.shiiion.primehack/data/dolphin-emu/Wii"
+[saves.primehack-states]
+path = "~/.var/app/io.github.shiiion.primehack/data/dolphin-emu/StateSaves"
+
+# Flycast keeps its VMU memory cards (vmu_save_A1.bin, or <game>_vmu_save_A1.bin
+# per game) and the console flash (dc_nvmem.bin; <game>.nvmem for arcade boards) in
+# the same folder as the standalone BIOS (dc_boot.bin, dc_flash.bin). Only the saves
+# are listed: the BIOS is not synced from here.
+[saves.flycast-saves]
+path = "~/.var/app/org.flycast.Flycast/data/flycast"
+ignore = ["!/*vmu_save_*.bin", "!/*nvmem*", "*"]
+
+# YARG is not part of EmuDeck. This is the Linux build's data folder. The song cache
+# and the list of bad songs hold absolute paths of one machine, so they never sync.
+# scores/ holds a SQLite database: close the game on one console before playing on
+# another.
+[saves.yarg-data]
+path = "~/.config/unity3d/YARC/YARG/release"
+ignore = ["!/settings.json", "!/scores", "!/profiles", "!/playlists", "!/Custom", "*"]
+
+# BIOS placements. The library cannot deliver these files: EmuDeck turns these
+# folders into symlinks under ~/Emulation/bios and Syncthing never follows symlinks.
+# Each entry is a receive-only folder from `hub` (a folder under the hub's library/)
+# into the emulator's REAL directory, and only the files its `ignore` lets through
+# arrive. The library ignores the hub folder on both sides. A device opts in with
+# the `bios` group. `create_when`: create the target when this folder exists (the
+# emulator is installed); otherwise a missing target is skipped.
+[bios.eden-keys]
+hub = "bios/eden/keys"
+path = "~/.local/share/eden/keys"
+ignore = ["!/prod.keys", "!/title.keys", "*"]
+create_when = "~/.local/share/eden"
+[bios.eden-firmware]
+hub = "bios/eden/firmware"
+# EmuDeck points its bios/eden/firmware symlink at ~/.local/share/eden/nand/..., but
+# sets Eden's nand_directory to the folder below; this is the more likely one.
+path = "~/Emulation/storage/eden/nand/system/Contents/registered"
+create_when = "~/Emulation/storage/eden/nand"
+verify = true  # verify on a real device
+[bios.azahar-keys]
+hub = "bios/azahar"
+path = "~/.local/share/azahar-emu/sysdata"
+ignore = ["!/aes_keys.txt", "*"]
+create_when = "~/.local/share/azahar-emu"
+[bios.cemu-keys]
+hub = "bios/cemu"
+# Cemu reads keys.txt only from its user data folder.
+path = "~/.local/share/Cemu"
+ignore = ["!/keys.txt", "*"]

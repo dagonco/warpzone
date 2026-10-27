@@ -88,6 +88,9 @@ class CliTests(unittest.TestCase):
         self.assertIn("#include patterns-deck.stignore", out)
         self.assertIn("#   !/patterns-*.stignore", out)
         self.assertIn("(?d)@eaDir", out)
+        self.assertIn("/roms/wiiu/mlc01", out)
+        self.assertIn("# hub .stignore of the library folder:", out)
+        self.assertEqual(out.count("/bios/cemu"), 2)  # device library and hub library
         self.assertNotIn(API_KEY, out)
 
     def test_unreachable_hub_is_exit_1_without_key(self) -> None:

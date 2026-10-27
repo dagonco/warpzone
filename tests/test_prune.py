@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 from unittest import mock
 
-from support import API_KEY, DECK_ID, FakeSyncthing, make_config
+from support import API_KEY, DECK_ID, DECK_LIBRARY_IGNORES, FakeSyncthing, make_config
 from test_cli import run, write_config
 from warpzone.profiles import load_profile
 from warpzone.provision import Reporter
@@ -118,7 +118,7 @@ class Device:
             "type": "receiveonly",
             "paused": False,
         }
-        self.fake.ignores["wz-library"] = ["#include patterns-deck.stignore"]
+        self.fake.ignores["wz-library"] = list(DECK_LIBRARY_IGNORES)
         for name in ("patterns-common.stignore", "patterns-deck.stignore"):
             self.fake.file_info[("wz-library", name)] = {
                 "global": {"version": ["X:1"]},

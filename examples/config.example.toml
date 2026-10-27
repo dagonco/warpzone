@@ -40,7 +40,9 @@ profile = "steamos-emudeck"
 #   tools     scripts and docs (receive-only)
 #   saves     every save folder of the profile (two-way)
 #   frontend  ES-DE media, gamelists and collections (two-way)
-folders = ["library", "tools", "saves", "frontend"]
+#   bios      keys and firmware delivered into each emulator's own folder (receive-only);
+#             the library cannot deliver them because EmuDeck symlinks those folders
+folders = ["library", "tools", "saves", "frontend", "bios"]
 
 # Optional. Where the hub finds this device. Default ["dynamic"].
 # addresses = ["tcp://deck.local:22000"]
@@ -53,7 +55,7 @@ folders = ["library", "tools", "saves", "frontend"]
 [devices.machine]
 device_id = "CCCCCCC-CCCCCCC-CCCCCCC-CCCCCCC-CCCCCCC-CCCCCCC-CCCCCCC-CCCCCCC"
 profile = "steamos-emudeck"
-folders = ["library", "tools", "saves", "frontend", "songs"]
+folders = ["library", "tools", "saves", "frontend", "songs", "bios"]
 
 # Optional. Only `warpzone inbox` reads this table, and it works with just this table
 # (no [hub] or [devices]) on a desktop machine that mounts the hub's games share.

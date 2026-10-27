@@ -9,7 +9,7 @@ import urllib.parse
 from collections.abc import Sequence
 from pathlib import Path
 
-from warpzone import __version__, bios, doctor, ignores, inbox, localst, model, provision, prune, ra
+from warpzone import __version__, bios, doctor, inbox, localst, model, provision, prune, ra
 from warpzone.bios import BiosError
 from warpzone.config import (
     Config,
@@ -288,7 +288,10 @@ def _run(args: argparse.Namespace) -> int:
                 rep.out("# bootstrap, replaced once the whitelist has arrived:")
                 rep.out("\n".join(f"#   {line}" for line in spec.bootstrap_ignores))
             rep.out("\n".join(spec.ignores))
-        rep.out(f"# hub .stignore for whitelisted folders: {ignores.hub_whitelist()[0]}")
+        hub_library = {s.id: s for s in model.hub_specs(cfg, profiles)}.get(model.LIBRARY_ID)
+        if hub_library is not None:
+            rep.out("# hub .stignore of the library folder:")
+            rep.out("\n".join(hub_library.ignores))
         return EXIT_OK
 
     if args.command == "status":

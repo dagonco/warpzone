@@ -2,7 +2,17 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from support import API_KEY, DECK_ID, HUB_ID, MACHINE_ID, FakeSyncthing, make_config
+from support import (
+    API_KEY,
+    DECK_ID,
+    DECK_LIBRARY_IGNORES,
+    HUB_ID,
+    MACHINE_ID,
+    FakeSyncthing,
+    config_data,
+    make_config,
+)
+from warpzone.config import parse_config
 from warpzone.profiles import load_profile
 from warpzone.provision import (
     ProvisionError,
@@ -37,7 +47,13 @@ class HubTests(unittest.TestCase):
             self.assertEqual(library["path"], "/data/games/library")
             self.assertEqual(library["type"], "sendonly")
             self.assertFalse(library["paused"])  # created paused, then resumed
-            self.assertEqual(fake.ignores["wz-library"], ["#include patterns-common.stignore"])
+            self.assertEqual(
+                fake.ignores["wz-library"],
+                [
+                    *PROFILES["steamos-emudeck"].placement_ignores(),
+                    "#include patterns-common.stignore",
+                ],
+            )
             self.assertEqual(fake.ignores["wz-tools"][-1], "(?d)Thumbs.db")
             self.assertIn("wz-save-ryujinx-user", fake.folders)
             self.assertEqual(fake.ignores["wz-save-ryujinx-user"][-1], "*")
@@ -232,8 +248,13 @@ class DeviceTests(unittest.TestCase):
         # One emulator that was opened once: its save directory exists.
         (self.home / ".var/app/org.libretro.RetroArch/config/retroarch/saves").mkdir(parents=True)
 
-    def run_device(self, local_fake, hub_fake, *, timeout=60.0, dry_run=False, sleeps=None):
-        cfg = make_config(hub_fake.url if hub_fake else "http://127.0.0.1:1")
+    def run_device(
+        self, local_fake, hub_fake, *, timeout=60.0, dry_run=False, sleeps=None, folders=None
+    ):
+        data = config_data(hub_fake.url if hub_fake else "http://127.0.0.1:1")
+        if folders is not None:
+            data["devices"]["deck"]["folders"] = folders
+        cfg = parse_config(data)
         rep, lines = reporter()
         hub = Client(hub_fake.url, API_KEY, label="hub") if hub_fake else None
         local = Client(local_fake.url, API_KEY, label="local", dry_run=dry_run, sink=lines.append)
@@ -268,16 +289,14 @@ class DeviceTests(unittest.TestCase):
             self.assertEqual(library["path"], str(self.home / "Emulation"))
             self.assertEqual(library["type"], "receiveonly")
             self.assertFalse(library["paused"])
-            self.assertEqual(local.ignores["wz-library"], ["#include patterns-deck.stignore"])
+            self.assertEqual(local.ignores["wz-library"], DECK_LIBRARY_IGNORES)
 
             ignore_writes = [
                 b["ignore"]
                 for m, p, b in local.writes()
                 if p.startswith("/rest/db/ignores?folder=wz-library")
             ]
-            self.assertEqual(
-                ignore_writes, [["!/patterns-*.stignore", "*"], ["#include patterns-deck.stignore"]]
-            )
+            self.assertEqual(ignore_writes, [["!/patterns-*.stignore", "*"], DECK_LIBRARY_IGNORES])
             wl = [
                 (m, p.split("?")[0])
                 for m, p, b in local.writes()
@@ -298,7 +317,63 @@ class DeviceTests(unittest.TestCase):
             self.assertIn("wz-save-retroarch-saves", local.folders)
             self.assertNotIn("wz-save-dolphin-gc", local.folders)
             self.assertNotIn("wz-songs", local.folders)
-            self.assertEqual(sum("skipped" in w for w in rep.warnings), 17)
+            self.assertEqual(sum("skipped" in w for w in rep.warnings), 35)
+
+    def bios_device(self, local, hub, **kwargs):
+        self.hub_with_whitelists(hub)
+        for name in ("patterns-common.stignore", "patterns-deck.stignore"):
+            local.arrives_after[("wz-library", name)] = 0
+        return self.run_device(local, hub, folders=["library", "bios"], **kwargs)
+
+    def test_missing_placement_targets_are_skipped_not_fatal(self) -> None:
+        with FakeSyncthing(DECK_ID) as local, FakeSyncthing(HUB_ID) as hub:
+            rep, _ = self.bios_device(local, hub)
+            self.assertIn("wz-library", local.folders)
+            self.assertFalse([f for f in local.folders if f.startswith("wz-bios-")])
+            skipped = [w for w in rep.warnings if "skipped" in w]
+            self.assertEqual(len(skipped), 4)
+            self.assertFalse((self.home / ".local").exists())  # nothing was created
+
+    def test_placement_lands_in_the_emulators_real_directory(self) -> None:
+        cemu = self.home / ".local/share/Cemu"
+        cemu.mkdir(parents=True)
+        with FakeSyncthing(DECK_ID) as local, FakeSyncthing(HUB_ID) as hub:
+            self.bios_device(local, hub)
+            folder = local.folders["wz-bios-cemu-keys"]
+            self.assertEqual(folder["path"], str(cemu))
+            self.assertEqual(folder["type"], "receiveonly")
+            self.assertFalse(folder["paused"])
+            self.assertEqual(local.ignores["wz-bios-cemu-keys"][-2:], ["!/keys.txt", "*"])
+            self.assertNotIn("wz-bios-eden-keys", local.folders)
+
+    def test_target_is_created_only_when_the_emulator_is_installed(self) -> None:
+        eden = self.home / ".local/share/eden"
+        eden.mkdir(parents=True)  # Eden ran once, but never had a keys folder
+        with FakeSyncthing(DECK_ID) as local, FakeSyncthing(HUB_ID) as hub:
+            self.bios_device(local, hub)
+            self.assertTrue((eden / "keys").is_dir())
+            self.assertEqual(local.folders["wz-bios-eden-keys"]["path"], str(eden / "keys"))
+            # azahar has create_when too, but its emulator folder is absent
+            self.assertNotIn("wz-bios-azahar-keys", local.folders)
+            self.assertFalse((self.home / ".local/share/azahar-emu").exists())
+
+    def test_dry_run_does_not_create_the_target(self) -> None:
+        eden = self.home / ".local/share/eden"
+        eden.mkdir(parents=True)
+        with FakeSyncthing(DECK_ID) as local, FakeSyncthing(HUB_ID) as hub:
+            _, lines = self.bios_device(local, hub, dry_run=True)
+            self.assertFalse((eden / "keys").exists())
+            self.assertTrue(any("would create" in line for line in lines))
+            self.assertEqual(local.writes(), [])
+
+    def test_device_without_the_bios_group_has_no_placements(self) -> None:
+        (self.home / ".local/share/Cemu").mkdir(parents=True)
+        with FakeSyncthing(DECK_ID) as local, FakeSyncthing(HUB_ID) as hub:
+            self.hub_with_whitelists(hub)
+            for name in ("patterns-common.stignore", "patterns-deck.stignore"):
+                local.arrives_after[("wz-library", name)] = 0
+            self.run_device(local, hub)
+            self.assertFalse([f for f in local.folders if f.startswith("wz-bios-")])
 
     def test_second_run_writes_nothing(self) -> None:
         with FakeSyncthing(DECK_ID) as local, FakeSyncthing(HUB_ID) as hub:
@@ -346,7 +421,7 @@ class DeviceTests(unittest.TestCase):
                 sleep=lambda s: None,
             )
             self.assertTrue(any("pre-check" in w for w in rep.warnings))
-            self.assertEqual(local.ignores["wz-library"], ["#include patterns-deck.stignore"])
+            self.assertEqual(local.ignores["wz-library"], DECK_LIBRARY_IGNORES)
 
     def test_timeout_leaves_folder_on_bootstrap_ignores(self) -> None:
         with FakeSyncthing(DECK_ID) as local, FakeSyncthing(HUB_ID) as hub:
@@ -365,13 +440,13 @@ class DeviceTests(unittest.TestCase):
                 local.arrives_after[("wz-library", name)] = 0
             local.requests.clear()
             self.run_device(local, hub)
-            self.assertEqual(local.ignores["wz-library"], ["#include patterns-deck.stignore"])
+            self.assertEqual(local.ignores["wz-library"], DECK_LIBRARY_IGNORES)
             boot = [
                 b
                 for m, p, b in local.writes()
                 if p.startswith("/rest/db/ignores?folder=wz-library")
             ]
-            self.assertEqual(boot, [{"ignore": ["#include patterns-deck.stignore"]}])
+            self.assertEqual(boot, [{"ignore": DECK_LIBRARY_IGNORES}])
 
     def test_whitelisted_folder_gets_a_bounded_rescan_interval(self) -> None:
         with FakeSyncthing(DECK_ID) as local, FakeSyncthing(HUB_ID) as hub:
