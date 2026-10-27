@@ -9,7 +9,7 @@ import urllib.parse
 from collections.abc import Sequence
 from pathlib import Path
 
-from warpzone import __version__, bios, ignores, inbox, localst, model, provision, prune, ra
+from warpzone import __version__, bios, doctor, ignores, inbox, localst, model, provision, prune, ra
 from warpzone.bios import BiosError
 from warpzone.config import (
     Config,
@@ -160,6 +160,11 @@ def _build_parser() -> argparse.ArgumentParser:
         "else the system temp folder)",
     )
 
+    sub.add_parser(
+        "doctor",
+        parents=[common],
+        help="check this machine (tools, config, Syncthing, DATs, hub) and say how to fix it",
+    )
     sub.add_parser("status", parents=[common], help="folder state on the hub and this machine")
     render = sub.add_parser(
         "render-ignores", parents=[common], help="print the ignore lines a device would get"
@@ -259,6 +264,8 @@ def _inbox(args: argparse.Namespace, rep: Reporter) -> int:
 
 def _run(args: argparse.Namespace) -> int:
     rep = Reporter(print, warn_sink=_eprint)
+    if args.command == "doctor":  # offline, read-only, needs no valid config
+        return doctor.run_doctor(doctor.Probes(config_path=_config_path(args)), rep.out)
     if args.command == "bios":  # works without a config when --root is given
         return _bios(args, rep)
     if args.command == "inbox":  # needs at most the [inbox] table

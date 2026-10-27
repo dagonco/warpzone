@@ -14,6 +14,7 @@ warpzone provision device deck      # on each console: one command
 warpzone prune                      # on a console: report (or --apply delete) what it no longer whitelists
 warpzone bios                       # which BIOS and firmware files the library has, lacks or has wrong
 warpzone inbox                      # report (or --apply) how new games in inbox/ would be filed
+warpzone doctor                     # check this machine: tools, config, Syncthing, DATs, hub; prints the fix for each problem
 ```
 
 ## The problem
@@ -234,6 +235,24 @@ rahasher = "~/tools/RAHasher"                 # optional: RetroAchievements hash
 ```
 
 `bsdtar` and `dolphin_tool` work the same way, and `work_dir` moves the temporary files (they can take several GiB). Details in [`docs/design.md`](docs/design.md#inbox).
+
+## Checking a machine
+
+`warpzone doctor` is a checklist for the machine you run it on, in the spirit of `flutter doctor`. It prints one line per check (`[ok]`, `[! ]` warning, `[!!]` problem, `[--]` optional and not set up) and, for every problem, the exact fix for this platform (Homebrew on macOS, apt, dnf or pacman on Linux, a container on SteamOS). It never installs or changes anything, makes no network calls (the one probe is a request to your local Syncthing on `127.0.0.1`), and exits `1` only when something required is broken, so it can run in a script.
+
+```
+$ warpzone doctor
+Inbox tools
+  [ok] chdman       chdman - MAME Compressed Hunks of Data (CHD) manager 0.289 (unknown) (/opt/homebrew/bin/chdman)
+  [!!] bsdtar       not found (required by inbox)
+                    fix: sudo apt install libarchive-tools
+  [--] dolphin-tool not found (only for compressed GameCube images (.rvz))
+                    fix: install Dolphin (brew install --cask dolphin); ...
+...
+1 problem(s), 0 warning(s), 4 optional item(s) not set up. Fix the [!!] lines above.
+```
+
+It covers warpzone and Python, the config file (and what each table enables), the local Syncthing and its REST API, the inbox tools (`chdman`, `bsdtar`, `RAHasher`, `dolphin-tool`), the DAT folder and how old the newest DAT is, the hub folder and its free space, and whether `RA_API_KEY` is set (never printed). A tool or table you do not use is shown as optional, not as a problem: for example, a desktop that only runs `inbox` does not need Syncthing. Use `--config PATH` for a config in another place.
 
 ## The EmuDeck symlink gotcha
 

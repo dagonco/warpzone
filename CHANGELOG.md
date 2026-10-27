@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ## [Unreleased]
 
+### Added
+
+- `warpzone doctor [--config PATH]`: a checklist for the machine it runs on, in the spirit of `flutter doctor`. One line per check (`[ok]`, `[! ]` warning, `[!!]` problem, `[--]` optional and not set up) with a short detail and, for every problem, the exact fix for the platform (Homebrew, apt, dnf, pacman, or a container on SteamOS). It checks warpzone and Python, the config file and which tables it has (and what each enables), the local Syncthing and whether its REST API answers on the loopback address, the inbox tools (`chdman`, `bsdtar`, `RAHasher`, `dolphin-tool`, `nsz`) with their version lines, the DAT folder and the age of the newest DAT, the hub folder with its free space, and whether `RA_API_KEY` is set. Offline apart from that one local request, never installs or changes anything, never prints a key. Exit 1 only when a required check fails.
+
 ## [0.4.0] - 2026-10-27
 
 ### Added
