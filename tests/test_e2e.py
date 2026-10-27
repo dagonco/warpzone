@@ -186,6 +186,7 @@ class EndToEndTests(unittest.TestCase):
         self.write(library / "roms/nes/mario.nes", "nes rom")
         self.write(library / "roms/psx/Some Game (USA)/game.cue", "cue")
         self.write(library / "roms/n64/other.z64", "not whitelisted")
+        self.write(library / "roms/n64/sub/deep.z64", "nested")
         self.write(library / "roms/psx/Other Game (USA)/other.cue", "not whitelisted")
 
         self.home = self.base / "home"
@@ -261,6 +262,10 @@ rescan_seconds = 10
             "newly whitelisted system to reach the device",
         )
         self.assertFalse((emulation / "roms/psx/Other Game (USA)").exists())
+        wait_for(
+            lambda: (emulation / "roms/n64/sub/deep.z64").exists(), "nested file on the device"
+        )
+        self.prune_scenario(cfg, library, emulation)
 
         # A save created on the device reaches the hub.
         self.write(saves / "slot1.srm", "save data")
@@ -269,6 +274,52 @@ rescan_seconds = 10
         self.assertEqual(hub_save.read_text(), "save data")
 
         self.wz("status", *cfg)
+
+    def prune_scenario(self, cfg: list[str], library: Path, emulation: Path) -> None:
+        """Take n64 off the whitelist again: its files stay on the device until pruned."""
+        n64 = emulation / "roms/n64"
+        wait_for(lambda: self.settled(self.deck, "wz-library"), "device library to settle")
+        # Only on the device, and recorded by Syncthing before it becomes ignored.
+        self.write(n64 / "mine.txt", "device only")
+        self.deck.client().scan("wz-library")
+        wait_for(
+            lambda: self.deck.client().db_file("wz-library", "roms/n64/mine.txt") is not None,
+            "Syncthing to record the device-only file",
+        )
+
+        whitelist = library_file(library, "deck")
+        whitelist.write_text(whitelist.read_text().replace("!/roms/n64\n", ""))
+        wait_for(
+            lambda: "!/roms/n64" not in (emulation / "patterns-deck.stignore").read_text(),
+            "the shorter whitelist to reach the device",
+        )
+        # prune does not wait for rescan_seconds: it asks for a full rescan itself.
+        args = [*cfg, "--syncthing-config", str(self.deck.config_xml)]
+
+        out = self.wz("prune", "deck", *args)
+        self.assertIn("wz-library: 2 leftover file(s)", out)
+        self.assertIn("roms/n64/mine.txt (the hub does not have it)", out)
+        self.assertIn("report only", out)
+        self.assertTrue((n64 / "other.z64").exists())  # report only
+
+        # The cap holds even with --apply.
+        self.wz("prune", "--apply", "--max-gib", "0", *args, expect=1)
+        self.assertTrue((n64 / "other.z64").exists())
+
+        out = self.wz("prune", "--apply", *args)  # also: the device name is inferred
+        self.assertIn("deleted 2 file(s)", out)
+        self.assertFalse((n64 / "other.z64").exists())
+        self.assertFalse((n64 / "sub").exists())  # left empty, so removed
+        self.assertEqual((n64 / "mine.txt").read_text(), "device only")
+        self.assertEqual((emulation / "roms/nes/mario.nes").read_text(), "nes rom")
+        self.assertEqual((emulation / "roms/psx/Some Game (USA)/game.cue").read_text(), "cue")
+        for protected in ("patterns-common.stignore", "patterns-deck.stignore", ".stignore"):
+            self.assertTrue((emulation / protected).is_file(), protected)
+        self.assertTrue((emulation / ".stfolder").is_dir())
+
+        # Nothing left to do, and the hub still has its files.
+        self.assertIn("0 leftover file(s)", self.wz("prune", "--apply", *args))
+        self.assertTrue((library / "roms/n64/other.z64").exists())
 
     def wz_ok(self, *args: str) -> bool:
         env = {**os.environ, "HOME": str(self.home), "PYTHONPATH": str(REPO)}
