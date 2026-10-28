@@ -31,7 +31,7 @@ import time
 import tomllib
 import urllib.error
 import urllib.request
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -71,6 +71,9 @@ G_SWITCH = "Switch"
 G_DATS = "DATs"
 G_HUB = "Hub folder"
 G_RA = "RetroAchievements"
+G_INBOX = "Inbox"
+# The groups whose items only matter to the desktop that runs `warpzone inbox`.
+INBOX_GROUPS = (G_TOOLS, G_SWITCH, G_DATS, G_HUB, G_RA)
 
 # ------------------------------------------------------------------ install hints
 #
@@ -150,6 +153,19 @@ SYNCTHING_START_HINTS: HintTable = {
     "linux": "systemctl --user enable --now syncthing",
     "any": "start Syncthing",
 }
+
+SYSTEMD_USER_DIR = ".config/systemd/user"
+AUTOSTART_DIR = ".config/autostart"
+SYNCTHINGY_EXEC = (
+    "/usr/bin/flatpak run --command=syncthing com.github.zocker_160.SyncThingy "
+    "serve --no-browser --no-restart"
+)
+# Indented lines are not wrapped by `render`, so the unit can be copied as it is.
+SYNCTHING_UNIT = (
+    "  [Unit]\n  Description=Syncthing\n"
+    f"  [Service]\n  ExecStart={SYNCTHINGY_EXEC}\n  Restart=on-failure\n"
+    "  [Install]\n  WantedBy=default.target"
+)
 
 
 @dataclass(frozen=True)
@@ -244,6 +260,63 @@ def platform_family(system: str, os_release: Mapping[str, str]) -> str:
     return "linux"
 
 
+_EXEC_START = re.compile(r"^\s*Exec(?:Start)?\s*=(.*)$", re.MULTILINE)
+
+
+def _runs_syncthing(text: str) -> bool:
+    return any("syncthing" in line.lower() for line in _EXEC_START.findall(text))
+
+
+def judge_game_mode(
+    units: Mapping[str, str], enabled: Collection[str], autostart: Mapping[str, str]
+) -> tuple[str, str, str]:
+    """(status, detail, fix) for "will Syncthing run in Game Mode?". Game Mode starts no
+    desktop session, so only a systemd user unit that is enabled keeps Syncthing running
+    there. `units` maps the .service files of ~/.config/systemd/user to their text,
+    `enabled` holds the names linked in its default.target.wants, and `autostart` maps
+    the .desktop files of ~/.config/autostart to their text."""
+    running = sorted(name for name, text in units.items() if _runs_syncthing(text))
+    on = [name for name in running if name in enabled]
+    autostarted = sorted(name for name, text in autostart.items() if _runs_syncthing(text))
+    if on:
+        if autostarted:
+            return (
+                WARN,
+                f"{on[0]} starts Syncthing in Game Mode, but the desktop autostart entry "
+                f"{autostarted[0]} starts it too, so two instances compete for the same port",
+                f"remove ~/{AUTOSTART_DIR}/{autostarted[0]} so only the unit starts Syncthing",
+            )
+        return OK, f"{on[0]} is enabled, so Syncthing also runs in Game Mode", ""
+    unit = running[0] if running else "syncthing.service"
+    install = (
+        f"systemctl --user enable --now {unit}"
+        if running
+        else (
+            f"create ~/{SYSTEMD_USER_DIR}/syncthing.service with this content (for the "
+            f"SyncThingy flatpak):\n{SYNCTHING_UNIT}\n"
+            "then run:\n  systemctl --user daemon-reload\n"
+            "  systemctl --user enable --now syncthing.service"
+        )
+    )
+    if autostarted:
+        why = (
+            f"Syncthing is only started by the desktop autostart entry {autostarted[0]}, "
+            "which Game Mode never runs, so syncing stops whenever the console is in Game Mode"
+        )
+        install += (
+            f"\nand remove ~/{AUTOSTART_DIR}/{autostarted[0]} so two instances do not "
+            "compete for the same port"
+        )
+    elif running:
+        why = f"{running[0]} runs Syncthing but is not enabled, so it does not start on boot"
+    else:
+        why = (
+            "no systemd user unit starts Syncthing, so it does not run in Game Mode "
+            "(or after a reboot, until someone starts it by hand)"
+        )
+    return WARN, why, install
+
+
 def hint_for(table: HintTable, family: str) -> str:
     """The hint for `family`; a specific Linux family falls back to "linux", then "any"."""
     if family in table:
@@ -319,6 +392,21 @@ def _mtime(path: Path) -> float:
     return path.stat().st_mtime
 
 
+def _list_dir(path: Path) -> list[str]:
+    """Names inside `path` (broken symlinks included); empty when it cannot be listed."""
+    try:
+        return sorted(os.listdir(path))
+    except OSError:
+        return []
+
+
+def _read_text(path: Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+
+
 def _disk_free(path: Path) -> tuple[int, int]:
     """(total, free) bytes of the volume holding `path`."""
     usage = shutil.disk_usage(path)
@@ -344,6 +432,8 @@ class Probes:
     is_file: Callable[[Path], bool] = Path.is_file
     is_executable: Callable[[str], bool] = _is_executable
     mtime: Callable[[Path], float] = _mtime
+    list_dir: Callable[[Path], list[str]] = _list_dir
+    read_text: Callable[[Path], str] = _read_text
     disk_free: Callable[[Path], tuple[int, int]] = _disk_free
 
     @property
@@ -602,6 +692,32 @@ def check_syncthing(ctx: Context) -> list[Result]:
             "restart Syncthing and check its GUI address",
         )
     ]
+
+
+def check_game_mode(ctx: Context) -> list[Result]:
+    """SteamOS only, and only when Syncthing is installed: does it run in Game Mode?"""
+    p = ctx.probes
+    if p.family != "steamos":
+        return []
+    try:
+        localst.find_config(env=p.env, home=p.home, platform="linux")
+    except localst.LocalSyncthingError:
+        return []
+    unit_dir = p.home / SYSTEMD_USER_DIR
+    units = {
+        name: p.read_text(unit_dir / name)
+        for name in p.list_dir(unit_dir)
+        if name.endswith(".service")
+    }
+    enabled = set(p.list_dir(unit_dir / "default.target.wants"))
+    autostart_dir = p.home / AUTOSTART_DIR
+    autostart = {
+        name: p.read_text(autostart_dir / name)
+        for name in p.list_dir(autostart_dir)
+        if name.endswith(".desktop")
+    }
+    status, detail, fix = judge_game_mode(units, enabled, autostart)
+    return [Result("Game Mode", G_SYNCTHING, status, detail, fix)]
 
 
 def _scrub(text: str, key: str) -> str:
@@ -973,10 +1089,34 @@ def check_ra(ctx: Context) -> list[Result]:
     ]
 
 
+def collapse_inbox(results: Sequence[Result]) -> list[Result]:
+    """Without an [inbox] table, the optional inbox-only items become one line. Items that
+    are ok, warn or fail stay: the machine has that tool or folder, and a broken one is worth
+    saying. Pure."""
+    kept = [r for r in results if not (r.group in INBOX_GROUPS and r.status == OPTIONAL)]
+    hidden = len(results) - len(kept)
+    if not hidden:
+        return kept
+    return [
+        *kept,
+        Result(
+            "Inbox",
+            G_INBOX,
+            OK,
+            f"not set up on this machine ({hidden} optional item(s) not listed): only the "
+            "desktop that runs `warpzone inbox` needs its tools, Switch titledb and keys, "
+            "DATs, hub folder and RetroAchievements key",
+            "add an [inbox] table to the config to check them here "
+            "(see examples/config.example.toml)",
+        ),
+    ]
+
+
 CHECKS: tuple[Callable[[Context], list[Result]], ...] = (
     check_base,
     check_config,
     check_syncthing,
+    check_game_mode,
     check_tools,
     check_switch,
     check_dats,
@@ -991,7 +1131,7 @@ def run_checks(probes: Probes) -> list[Result]:
     results: list[Result] = []
     for check in CHECKS:
         results += check(ctx)
-    return results
+    return results if ctx.inbox_configured else collapse_inbox(results)
 
 
 # ------------------------------------------------------------------ output
@@ -999,9 +1139,13 @@ def run_checks(probes: Probes) -> list[Result]:
 
 def _wrap(text: str, width: int) -> list[str]:
     """`text` as lines of at most `width` characters (a word longer than that stays whole,
-    so a path or a command is never cut). Newlines in `text` start new lines."""
+    so a path or a command is never cut). Newlines in `text` start new lines, and a line
+    that starts with a space is a code line: it is kept as it is, however long."""
     lines: list[str] = []
     for line in text.splitlines() or [""]:
+        if line.startswith(" "):
+            lines.append(line.rstrip())
+            continue
         lines += textwrap.wrap(line, width, break_long_words=False, break_on_hyphens=False) or [""]
     return lines
 

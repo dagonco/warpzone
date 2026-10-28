@@ -24,13 +24,16 @@ from warpzone.doctor import (
     check_base,
     check_config,
     check_dats,
+    check_game_mode,
     check_hub,
     check_ra,
     check_switch,
     check_syncthing,
     check_tool,
+    collapse_inbox,
     exit_code,
     hint_for,
+    judge_game_mode,
     load_config_state,
     platform_family,
     render,
@@ -752,7 +755,9 @@ class EndToEndTests(TmpCase):
         self.assertIn("RA_API_KEY", text)
 
     def test_run_checks_covers_every_group_in_order(self) -> None:
-        results = run_checks(make_probes(self.tmp))
+        probes = make_probes(self.tmp)
+        probes.config_path.write_text(INBOX_ONLY)
+        results = run_checks(probes)
         groups = list(dict.fromkeys(r.group for r in results))
         self.assertEqual(
             groups,
@@ -767,6 +772,42 @@ class EndToEndTests(TmpCase):
                 doctor.G_RA,
             ],
         )
+
+    def test_without_an_inbox_table_the_optional_inbox_items_are_one_line(self) -> None:
+        results = run_checks(make_probes(self.tmp))
+        groups = list(dict.fromkeys(r.group for r in results))
+        self.assertEqual(groups, [doctor.G_BASE, doctor.G_CONFIG, doctor.G_SYNCTHING, "Inbox"])
+        (line,) = [r for r in results if r.group == "Inbox"]
+        self.assertEqual(line.status, OK)
+        self.assertIn("not set up on this machine", line.detail)
+        self.assertIn("warpzone inbox", line.detail)
+        # A hub config without [inbox] collapses as well.
+        probes = make_probes(self.tmp)
+        probes.config_path.write_text(FULL.split("[inbox]")[0])
+        again = run_checks(probes)
+        self.assertEqual([r.group for r in again if r.group == "Inbox"], ["Inbox"])
+        self.assertNotIn(doctor.G_TOOLS, {r.group for r in again})
+
+    def test_collapse_keeps_found_and_broken_items(self) -> None:
+        results = [
+            Result("chdman", doctor.G_TOOLS, OK, "found"),
+            Result("bsdtar", doctor.G_TOOLS, OPTIONAL, "not found"),
+            Result("RAHasher", doctor.G_TOOLS, FAIL, "cannot run"),
+            Result("Hub folder", doctor.G_HUB, WARN, "looks like the hub"),
+            Result("Local Syncthing", doctor.G_SYNCTHING, OPTIONAL, "not installed"),
+        ]
+        out = collapse_inbox(results)
+        self.assertEqual(
+            [r.name for r in out], ["chdman", "RAHasher", "Hub folder", "Local Syncthing", "Inbox"]
+        )
+        self.assertIn("(1 optional item(s)", out[-1].detail)
+        # Nothing optional to hide: nothing added.
+        self.assertEqual(collapse_inbox(results[:1]), results[:1])
+
+    def test_the_collapsed_line_does_not_count_as_optional(self) -> None:
+        text = "\n".join(render(run_checks(make_probes(self.tmp))))
+        self.assertIn("Inbox", text)
+        self.assertIn("2 optional item(s)", text)  # config and Syncthing, not the inbox items
 
     def test_a_machine_with_nothing_set_up_has_no_required_failure(self) -> None:
         results = run_checks(make_probes(self.tmp))
@@ -825,3 +866,127 @@ class CliTests(TmpCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+UNIT = (
+    "[Unit]\nDescription=Syncthing\n\n[Service]\n"
+    "ExecStart=/usr/bin/flatpak run --command=syncthing com.github.zocker_160.SyncThingy serve\n"
+    "Restart=on-failure\n\n[Install]\nWantedBy=default.target\n"
+)
+DESKTOP = """[Desktop Entry]
+Type=Application
+Name=SyncThingy
+Exec=flatpak run com.github.zocker_160.SyncThingy
+"""
+OTHER_DESKTOP = "[Desktop Entry]\nType=Application\nExec=/usr/bin/steam\n"
+
+
+class JudgeGameModeTests(unittest.TestCase):
+    def test_enabled_unit_is_ok(self) -> None:
+        status, detail, fix = judge_game_mode(
+            {"syncthing.service": UNIT}, {"syncthing.service"}, {}
+        )
+        self.assertEqual(status, OK)
+        self.assertIn("Game Mode", detail)
+        self.assertEqual(fix, "")
+
+    def test_enabled_unit_plus_autostart_warns_about_two_instances(self) -> None:
+        status, detail, fix = judge_game_mode(
+            {"syncthing.service": UNIT}, {"syncthing.service"}, {"syncthingy.desktop": DESKTOP}
+        )
+        self.assertEqual(status, WARN)
+        self.assertIn("two instances", detail)
+        self.assertIn("remove ~/.config/autostart/syncthingy.desktop", fix)
+
+    def test_autostart_only_warns_and_shows_the_unit(self) -> None:
+        status, detail, fix = judge_game_mode({}, set(), {"syncthingy.desktop": DESKTOP})
+        self.assertEqual(status, WARN)
+        self.assertIn("desktop autostart", detail)
+        self.assertIn("never runs", detail)
+        self.assertIn(doctor.SYNCTHINGY_EXEC, fix)
+        self.assertIn("systemctl --user enable --now syncthing.service", fix)
+        self.assertIn("remove ~/.config/autostart/syncthingy.desktop", fix)
+        self.assertIn("two instances", fix)
+
+    def test_nothing_at_all_warns_without_an_autostart_step(self) -> None:
+        status, detail, fix = judge_game_mode({}, set(), {})
+        self.assertEqual(status, WARN)
+        self.assertIn("no systemd user unit", detail)
+        self.assertIn("ExecStart=" + doctor.SYNCTHINGY_EXEC, fix)
+        self.assertNotIn("remove", fix)
+
+    def test_a_unit_that_is_not_enabled_warns_and_names_it(self) -> None:
+        status, detail, fix = judge_game_mode({"st.service": UNIT}, set(), {})
+        self.assertEqual(status, WARN)
+        self.assertIn("st.service", detail)
+        self.assertEqual(fix, "systemctl --user enable --now st.service")
+
+    def test_other_units_and_entries_do_not_count(self) -> None:
+        other = "[Service]\nExecStart=/usr/bin/other\n"
+        status, _, _ = judge_game_mode(
+            {"other.service": other}, {"other.service"}, {"steam.desktop": OTHER_DESKTOP}
+        )
+        self.assertEqual(status, WARN)
+
+    def test_a_comment_or_description_mentioning_syncthing_does_not_count(self) -> None:
+        text = "[Unit]\nDescription=Syncthing helper\n[Service]\nExecStart=/usr/bin/other\n"
+        status, _, _ = judge_game_mode({"x.service": text}, {"x.service"}, {})
+        self.assertEqual(status, WARN)
+
+
+class CodeLineTests(unittest.TestCase):
+    def test_indented_fix_lines_are_never_wrapped(self) -> None:
+        command = "ExecStart=" + "word " * 30
+        lines = render([Result("x", "G", WARN, "d", f"intro\n  {command}")], 60)
+        (shown,) = [line for line in lines if "ExecStart=" in line]
+        self.assertTrue(shown.strip().startswith(command.rstrip()))
+
+
+class GameModeTests(TmpCase):
+    def setUp(self) -> None:
+        super().setUp()
+        self.home = self.tmp / "home"
+        write_syncthing_config(self.home)
+
+    def put(self, rel: str, text: str = "") -> None:
+        path = self.home / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+
+    def check(self, **kw):
+        return check_game_mode(context(self.tmp, system="Linux", os_release=STEAMOS, **kw))
+
+    def test_only_on_steamos(self) -> None:
+        self.assertEqual(check_game_mode(context(self.tmp, system="Linux", os_release=DEBIAN)), [])
+        self.assertEqual(check_game_mode(context(self.tmp)), [])
+
+    def test_skipped_when_syncthing_is_not_installed(self) -> None:
+        (self.home / ".local/state/syncthing/config.xml").unlink()
+        self.assertEqual(self.check(), [])
+
+    def test_reads_units_and_autostart_entries_from_the_home_folder(self) -> None:
+        self.put(".config/autostart/syncthingy.desktop", DESKTOP)
+        (r,) = self.check()
+        self.assertEqual((r.name, r.status), ("Game Mode", WARN))
+        self.put(".config/systemd/user/syncthing.service", UNIT)
+        link = self.home / ".config/systemd/user/default.target.wants/syncthing.service"
+        link.parent.mkdir(parents=True)
+        link.symlink_to(self.home / ".config/systemd/user/syncthing.service")
+        (r,) = self.check()
+        self.assertEqual(r.status, WARN)  # the autostart entry is still there
+        self.assertIn("two instances", r.detail)
+        (self.home / ".config/autostart/syncthingy.desktop").unlink()
+        (r,) = self.check()
+        self.assertEqual(r.status, OK)
+
+    def test_a_broken_symlink_still_counts_as_enabled_link_name(self) -> None:
+        self.put(".config/systemd/user/syncthing.service", UNIT)
+        link = self.home / ".config/systemd/user/default.target.wants/syncthing.service"
+        link.parent.mkdir(parents=True)
+        link.symlink_to(self.tmp / "gone")
+        (r,) = self.check()
+        self.assertEqual(r.status, OK)
+
+    def test_run_checks_includes_it_in_the_syncthing_group(self) -> None:
+        results = run_checks(make_probes(self.tmp, system="Linux", os_release=STEAMOS))
+        self.assertEqual(by_name(results, "Game Mode").group, doctor.G_SYNCTHING)

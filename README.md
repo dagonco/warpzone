@@ -173,6 +173,8 @@ It is read-only and exits 1 when a required item is missing or wrong, so it also
 
 Some items are "one of": a PlayStation needs one BIOS dump, not all of them. Zip sets for MAME (`neogeo.zip`, `naomi.zip`, `awbios.zip`, ...) are checked in `roms/mame/` by member name and CRC32. Only files of the expected size are read. Official firmware and disk images with no fixed hash are checked by their signature instead: the PS3 system software `bios/ps3/PS3UPDAT.PUP`. Cemu's `bios/cemu/keys.txt` (optional, only for WUD/WUX disc images) is checked for presence and shape, and its content is never printed. For Xbox it expects `mcpx_1.0.bin` and a 1 MiB flash BIOS (`Complex_4627v1.03.bin`, the name EmuDeck's xemu config uses). The PS3 firmware and `keys.txt` are staging copies: RPCS3 installs the firmware once, and Cemu reads its keys from its own folder.
 
+`warpzone bios` also warns when `bios/eden/firmware` holds subfolders or `.zip`/`.7z` archives: Eden reads only loose `.nca` files directly in that folder, so unpack a firmware release there rather than leaving it in a folder or an archive. The warning does not affect the exit code.
+
 If you keep a modified or region-free BIOS on purpose, accept its hash in a local file, `bios.toml` next to your `config.toml` (or `--overrides PATH`), and it is reported as "accepted (local)". See [`examples/bios.example.toml`](examples/bios.example.toml).
 
 The manifest only holds file names, sizes and hashes, taken from [libretro-database](https://github.com/libretro/libretro-database) and MAME. `warpzone` never downloads a BIOS and this repository contains none.
@@ -315,7 +317,7 @@ Inbox tools
 1 problem(s), 0 warning(s), 4 optional item(s) not set up. Fix the [!!] lines above.
 ```
 
-It covers warpzone and Python, the config file (and what each table enables), the local Syncthing and its REST API, the inbox tools (`chdman`, `bsdtar`, `RAHasher`, `dolphin-tool`, `nsz`), the Switch titledb folder and keys file (presence only), the DAT folder and how old the newest DAT is, the optional arcade DAT files, the hub folder and its free space, and whether `RA_API_KEY` is set (never printed). A tool or table you do not use is shown as optional, not as a problem: for example, a desktop that only runs `inbox` does not need Syncthing. Use `--config PATH` for a config in another place.
+It covers warpzone and Python, the config file (and what each table enables), the local Syncthing and its REST API, the inbox tools (`chdman`, `bsdtar`, `RAHasher`, `dolphin-tool`, `nsz`), the Switch titledb folder and keys file (presence only), the DAT folder and how old the newest DAT is, the optional arcade DAT files, the hub folder and its free space, and whether `RA_API_KEY` is set (never printed). A tool or table you do not use is shown as optional, not as a problem: for example, a desktop that only runs `inbox` does not need Syncthing, and a machine with no `[inbox]` table in its config gets one line saying inbox is not set up instead of the whole list of inbox tools, DATs and keys. On SteamOS with a local Syncthing it also checks that Syncthing will run in Game Mode, which starts no desktop session: only an enabled systemd user unit does, so a desktop autostart entry is reported with the unit to create (for the SyncThingy flatpak, `ExecStart=/usr/bin/flatpak run --command=syncthing com.github.zocker_160.SyncThingy serve --no-browser --no-restart`, then `systemctl --user enable --now syncthing.service`) and a reminder to remove the autostart entry. Use `--config PATH` for a config in another place.
 
 ## The EmuDeck symlink gotcha
 
@@ -323,7 +325,7 @@ EmuDeck exposes saves through symlinks under `~/Emulation/saves`. Syncthing neve
 
 Some save folders sit inside `~/Emulation`, which is the library root. That is fine: the library whitelist ignores them, and Syncthing supports nested folders when the parent ignores the child.
 
-The same trap exists in `~/Emulation/bios`: EmuDeck turns `eden/keys`, `eden/firmware`, `azahar/keys`, `ryujinx/keys`, `flycast/bios` and `shadps4/sys_modules` into symlinks, while the hub's `library/bios/` holds real folders at those paths. The profile therefore makes the device's library ignore those paths (ahead of your whitelist, so an edit cannot bring them back) and also `roms/wiiu/mlc01`, where Cemu keeps its own installs and saves (its saves sync separately).
+The same trap exists in `~/Emulation/bios`: EmuDeck turns `eden/keys`, `eden/firmware`, `azahar/keys`, `ryujinx/keys`, `flycast/bios` and `shadps4/sys_modules` into symlinks, while the hub's `library/bios/` holds real folders at those paths. The profile therefore makes the device's library ignore those paths (ahead of your whitelist, so an edit cannot bring them back) and also `roms/wiiu/mlc01`, where Cemu keeps its own installs and saves (its saves sync separately). It ignores EmuDeck's own files in the library too (`bios/PPSSPP/`, every `readme.txt` under `bios/`, the emulator-owned `bios/` folders `HdPacks`, `Mupen64plus`, `fbneo`, `kronos`, `same_cdi`, `ryujinx`, `shadps4` and `yuzu`, and each `roms/*/systeminfo.txt` and `metadata.txt`): they are not on the hub, so a receive-only console would otherwise list them as local changes.
 
 Keys and firmware reach the emulators through **BIOS placements**, listed in the profile: receive-only folders that map a hub folder under `library/bios/` to the emulator's real directory, delivering only the intended files. Add `bios` to the device's `folders` to opt in:
 
@@ -333,6 +335,8 @@ Keys and firmware reach the emulators through **BIOS placements**, listed in the
 | `library/bios/eden/firmware` | `~/Emulation/storage/eden/nand/system/Contents/registered` (verify on a real device) | the folder |
 | `library/bios/azahar` | `~/.local/share/azahar-emu/sysdata` | `aes_keys.txt` |
 | `library/bios/cemu` | `~/.local/share/Cemu` | `keys.txt` |
+
+Ryujinx has no placement. Its `system/` folder would need the same `prod.keys` and `title.keys` that Eden already receives, and two Syncthing folders cannot share one hub folder cleanly (see [the design notes](docs/design.md#library-exclusions-and-bios-placements)). Copy the two files from Eden's keys folder to `~/.config/Ryujinx/system/` once. Ryujinx cannot receive its firmware as files either: install it once from Ryujinx (Tools > Install Firmware, pointing at the Eden firmware folder, `~/Emulation/storage/eden/nand/system/Contents/registered`), the same way the PS3 firmware is installed once in RPCS3.
 
 A placement whose emulator is not installed is skipped with a warning, like a save folder. The hub's library folder ignores these hub paths too, so each file belongs to exactly one folder. `warpzone bios` on a device therefore no longer sees these files in `~/Emulation/bios`: run it against the hub's `library/`. xemu's disk image (`xbox_hdd.qcow2`, which holds that console's Xbox saves) is deliberately not synced: it is per device. Details in [`docs/design.md`](docs/design.md#library-exclusions-and-bios-placements).
 

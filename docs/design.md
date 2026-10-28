@@ -205,8 +205,9 @@ Azahar (sdmc, states); shadPS4; Cemu (`mlc01/usr/save`); Xenia (Proton:
 EmuDeck installs one or the other, and each has its own hub folder);
 Flycast (`vmu_save_*.bin` and the `nvmem` files only, from the folder that also
 holds the standalone BIOS, which stays out); YARG, which is not EmuDeck
-(`settings.json`, `scores`, `profiles`, `playlists` and `Custom`; never
-`songcache.bin` or `badsongs.txt`, which hold one machine's absolute paths).
+(`settings.json`, `scores`, `profiles`, `playlists` and `custom`, lowercase as
+the Linux build writes it; never `songcache.bin` or `badsongs.txt`, which hold one
+machine's absolute paths, nor the `*.bak` files in `profiles/`).
 User profiles are synced so that a save keeps its owner on every console: a
 Switch save belongs to a profile ID, and the same ID must exist everywhere.
 
@@ -238,7 +239,16 @@ tables deal with it:
   first match wins and the whitelist ends with `*`, so nothing can un-ignore
   them), which means a whitelist edit on the hub cannot bring them back. The
   hub is not affected: it still holds and sends `roms/wiiu/mlc01` to nobody
-  who whitelists it.
+  who whitelists it. A line may start with `(?d)` (Syncthing's "deletable"
+  prefix) so the ignored file does not stop the hub's deletion of its parent
+  folder. The shipped profile also lists EmuDeck's own files, which exist on
+  every console and not on the hub: `bios/PPSSPP`, every `readme.txt` under `bios/`,
+  the emulator-owned folders `bios/HdPacks`, `Mupen64plus`, `fbneo`, `kronos`,
+  `same_cdi`, `ryujinx`, `shadps4` and `yuzu`, and each
+  `roms/*/systeminfo.txt` and `metadata.txt`. `bios/mame` and `bios/neocd` are
+  deliberately not ignored: a hub may deliver BIOS files there. Without it a receive-only library
+  reports them as local changes (hundreds of files), and a revert would delete
+  them. Only those files are named: no folder that holds games is ignored.
 - `[bios.<emu>-<kind>]`: a **BIOS placement**. It maps a hub path below
   `library/` (`hub`) to the emulator's real directory on the device (`path`),
   through a receive-only folder `wz-bios-<emu>-<kind>` (send-only on the hub)
@@ -291,9 +301,23 @@ while the game runs, so two-way sync would corrupt it or leave conflict copies.
 It is per device and has no entry (as is xemu's `eeprom.bin`). xemu's BIOS files
 (`mcpx_1.0.bin`, `Complex_4627v1.03.bin`) are real files in `~/Emulation/bios`,
 so the library delivers them as it always did.
-Ryujinx keys, Flycast's standalone BIOS and shadPS4's modules are not placed
-yet either (the first two live in folders the library now ignores): add a
-`[bios.*]` entry when a hub layout for them exists.
+Flycast's standalone BIOS and shadPS4's modules are not placed yet (they live
+in folders the library now ignores): add a `[bios.*]` entry when a hub layout
+for them exists.
+
+**Ryujinx keys and firmware are manual on purpose.** Ryujinx reads `prod.keys`
+and `title.keys` from `~/.config/Ryujinx/system`, the same two files that
+`wz-bios-eden-keys` delivers from `library/bios/eden/keys`. A second placement
+for Ryujinx would need a second folder ID (`wz-bios-ryujinx-keys`) over the
+same hub directory, and that is not a clean arrangement: a Syncthing folder ID
+is the same on both ends, so the folder cannot be shared once and received at
+two paths; two hub folders over one directory would share its `.stfolder` and
+`.stignore` and scan and index the same files twice, which is the overlap the
+placements exist to avoid. Giving Ryujinx its own hub copy (`bios/ryujinx/keys`)
+would duplicate the keys. So the README tells the user to copy the two files
+once. Ryujinx firmware is installed from the emulator (Tools > Install
+Firmware, pointing at the Eden firmware folder), not delivered as files, like
+the PS3 firmware in RPCS3.
 
 `warpzone bios` run on a device looks in the library folder, where the placed
 files no longer are; run it on the hub (`--root`) for keys and firmware.
@@ -530,6 +554,13 @@ has an unexpected hash. The contract:
   false alarm. `--system NAME` forces the check. The MAME sets (Neo Geo, NAOMI,
   Atomiswave, device sets) share `mame`, `arcade` and `fbneo` with their own
   folder, so any arcade game makes them count.
+- **Eden firmware layout.** `skip_dirs` hides `eden/` from the manifest checks,
+  but `bios/eden/firmware` gets one layout check (`judge_firmware`, pure, over
+  the names directly inside it and whether each is a folder). Eden reads only
+  loose `.nca` files in that folder, so subfolders and `.zip`/`.7z` archives are
+  each reported as a `warning:` line (and one more when no loose `.nca` is
+  there at all). Nothing is opened. It runs only when every system is checked
+  and never changes the exit code.
 - **Exit code.** `0` when no required item is missing or wrong; `1` otherwise;
   `2` for a usage or override-file error. A wrong file that sits next to an ok
   alternative is reported but does not fail the run. Optional items never fail it.
@@ -539,7 +570,7 @@ has an unexpected hash. The contract:
   only computed when every system is checked.
 
 The decisions (`judge_file`, `judge_zip`, `judge_magic`, `judge_present`,
-`judge_keys`, `looks_like_keys`, `settle`, `unknown_files`,
+`judge_keys`, `judge_firmware`, `looks_like_keys`, `settle`, `unknown_files`,
 `default_root`, `is_game_file`, `has_games`, `render`) are pure and unit-tested without a filesystem; `Library`
 and `check_library` are the only parts that touch the disk.
 
@@ -841,13 +872,29 @@ for every problem, the exact fix for this platform.
   missing config file or a missing `[hub]`, `[devices]` or `[inbox]` table is `[--]`, and
   the line says what the table would enable. The exception is a config with only an
   `[inbox]` table (a machine that just files games): `[hub]` and `[devices]` are then one
-  `[ok]` note, "not used here", instead of two `[--]` items. Once an `[inbox]` table exists, `chdman`,
+  `[ok]` note, "not used here", instead of two `[--]` items. A config with no `[inbox]`
+  table (or no config at all) collapses the optional inbox-only items (the tools, the
+  Switch `titledb_dir` and `switch_keys`, the DAT folder and arcade DATs, the hub
+  folder and `RA_API_KEY`) into one `[ok]` line saying inbox is not set up on this
+  machine (`collapse_inbox`, pure); items that are `[ok]`, `[! ]` or `[!!]` stay. Once an `[inbox]` table exists, `chdman`,
   `bsdtar`, `dats_dir`, the hub root with `inbox/` and `library/roms/` become required.
   `RAHasher`, `dolphin-tool` and `nsz` are always optional, and so are the Switch `titledb_dir` and `switch_keys` (a configured path that does not exist is a problem; the keys file is only checked to exist, never read). The three arcade DAT paths
   (`mame_dat`, `fbneo_dat`, `mame2003plus_dat`) are `[--]` when unset, `[!!]` when set to
   something that is not a file (`inbox` refuses to start) and `[ok]` otherwise. A config that does not load,
   a configured tool path that is not executable, a tool that cannot run, a local
   Syncthing whose API does not answer, and Python older than 3.11 are always problems.
+- **Game Mode (SteamOS).** With a local Syncthing on SteamOS, `Game Mode` says whether
+  Syncthing runs without a desktop session. Game Mode starts no desktop session, so
+  `~/.config/autostart/*.desktop` entries never run there; only a systemd user unit
+  does. `judge_game_mode` is pure over the `.service` files of `~/.config/systemd/user`
+  (an `ExecStart` that runs syncthing), the names linked in its `default.target.wants`
+  (enabled) and the autostart entries (an `Exec` that runs syncthing). An enabled unit
+  is `[ok]`; with an autostart entry as well it is `[! ]` (two instances compete for
+  the port); an autostart entry alone, a unit that is not enabled, or nothing at all
+  is `[! ]` with a fix that shows a minimal unit for the SyncThingy flatpak
+  (`ExecStart=/usr/bin/flatpak run --command=syncthing com.github.zocker_160.SyncThingy serve --no-browser --no-restart`),
+  `systemctl --user enable --now syncthing.service` and, when there is one, the autostart
+  entry to remove. Fix lines that start with a space are code and are never wrapped.
 - **Exit codes.** `0` when no check is a problem, `1` otherwise.
 - **Install hints** live in one table in `warpzone/doctor.py` (`TOOLS` and the `*_HINTS`
   dicts), keyed by platform family: `macos`, `debian`, `fedora`, `arch`, `steamos`,
