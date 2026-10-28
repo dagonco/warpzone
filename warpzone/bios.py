@@ -41,6 +41,9 @@ SHOWN_NAMES = 4
 PLACEHOLDERS = ("metadata.txt", "systeminfo.txt")
 NON_GAME_DIRS = ("media", "@eaDir", "#recycle", "mlc01")  # mlc01: Cemu saves and installs
 JUNK_FILES = ("Thumbs.db", "desktop.ini")
+# Eden reads firmware only from loose .nca files directly inside this folder (below bios/).
+FIRMWARE_DIR = "eden/firmware"
+FIRMWARE_ARCHIVES = (".zip", ".7z")
 _MD5 = re.compile(r"^[0-9a-f]{32}$")
 _CRC32 = re.compile(r"^[0-9a-f]{8}$")
 _HEX_BYTES = re.compile(r"^(?:[0-9a-f]{2})+$")
@@ -139,6 +142,7 @@ class SystemReport:
 class Report:
     systems: tuple[SystemReport, ...]
     unknown: tuple[str, ...] | None  # None: not computed (only some systems were checked)
+    warnings: tuple[str, ...] = ()  # layout problems that no manifest item covers
 
     @property
     def problems(self) -> list[ItemResult]:
@@ -525,6 +529,35 @@ def unknown_files(present: Sequence[str], known: set[str]) -> tuple[str, ...]:
     return tuple(sorted(p for p in present if p not in known))
 
 
+def judge_firmware(entries: Mapping[str, bool]) -> tuple[str, ...]:
+    """Warnings about the Eden firmware folder; `entries` maps each name directly inside
+    it to whether it is a folder. Eden reads only loose .nca files in that folder: a
+    firmware release left in a subfolder or in an archive is never loaded."""
+    folder = f"bios/{FIRMWARE_DIR}"
+    subfolders = sorted(name for name, is_dir in entries.items() if is_dir)
+    archives = sorted(
+        name
+        for name, is_dir in entries.items()
+        if not is_dir and name.lower().endswith(FIRMWARE_ARCHIVES)
+    )
+    if not subfolders and not archives:
+        return ()
+    warnings: list[str] = []
+    if subfolders:
+        warnings.append(
+            f"{folder} holds {len(subfolders)} subfolder(s) ({_names(subfolders)}): Eden reads "
+            "only loose .nca files directly in that folder, so move the files out of them"
+        )
+    if archives:
+        warnings.append(
+            f"{folder} holds {len(archives)} archive(s) ({_names(archives)}): Eden does not "
+            "unpack them, so extract the .nca files directly into that folder"
+        )
+    if not any(not is_dir and name.lower().endswith(".nca") for name, is_dir in entries.items()):
+        warnings.append(f"{folder} has no loose .nca file, so Eden finds no firmware there")
+    return tuple(warnings)
+
+
 def default_root(
     cfg: Config, profiles: Mapping[str, Profile], home: Path, is_dir: Callable[[Path], bool]
 ) -> Path | None:
@@ -569,6 +602,15 @@ class Library:
                         continue
             self._index = index
         return self._index
+
+    def firmware_entries(self) -> dict[str, bool] | None:
+        """The names directly inside bios/eden/firmware and whether each is a folder;
+        None when the folder is absent. Nothing is opened."""
+        try:
+            with os.scandir(self.root / "bios" / FIRMWARE_DIR) as entries:
+                return {entry.name: entry.is_dir() for entry in entries}
+        except OSError:
+            return None
 
     def rom_paths(self, folder: str) -> Iterator[str]:
         """Files under roms/<folder>, as "folder/..." paths, without opening any."""
@@ -720,7 +762,9 @@ def check_library(
         reports.append(SystemReport(key, system.title, tuple(results), judged, system.games))
 
     unknown = None
+    warnings: tuple[str, ...] = ()
     if not systems:
+        warnings = judge_firmware(lib.firmware_entries() or {})
         known = {f.path for s in manifest.systems.values() for i in s.items for f in i.files}
         known |= {
             c.found
@@ -729,7 +773,7 @@ def check_library(
             if c.found
         }
         unknown = unknown_files(list(lib.bios_index()), known)
-    return Report(tuple(reports), unknown)
+    return Report(tuple(reports), unknown, warnings)
 
 
 # ------------------------------------------------------------------ output
@@ -803,6 +847,7 @@ def render(report: Report, *, show_all: bool = False) -> list[str]:
             lines.extend(f"  {path}" for path in report.unknown)
         else:
             lines.append("  (list them with --all)")
+    lines.extend(f"warning: {text}" for text in report.warnings)
     summary = (
         f"{counts[Status.OK] + counts[Status.LOCAL]} ok, {counts[Status.MISSING]} missing, "
         f"{counts[Status.WRONG]} wrong"

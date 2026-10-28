@@ -26,6 +26,7 @@ from warpzone.bios import (
     has_games,
     is_game_file,
     judge_file,
+    judge_firmware,
     judge_keys,
     judge_magic,
     judge_present,
@@ -260,6 +261,35 @@ class SettleTests(unittest.TestCase):
         self.assertFalse(result(True, Status.SKIPPED).blocking)
         self.assertFalse(result(False, Status.MISSING).blocking)
         self.assertFalse(result(False, Status.WRONG).blocking)
+
+
+class JudgeFirmwareTests(unittest.TestCase):
+    def test_loose_nca_files_are_fine(self) -> None:
+        self.assertEqual(judge_firmware({"a.nca": False, "b.cnmt.nca": False}), ())
+        self.assertEqual(judge_firmware({}), ())
+
+    def test_other_loose_files_are_not_a_problem_of_layout(self) -> None:
+        self.assertEqual(judge_firmware({"a.nca": False, "notes.txt": False}), ())
+
+    def test_subfolders_are_named(self) -> None:
+        (warning,) = judge_firmware({"a.nca": False, "Firmware 19.0": True})
+        self.assertIn("subfolder", warning)
+        self.assertIn("Firmware 19.0", warning)
+        self.assertIn("loose .nca", warning)
+
+    def test_archives_are_named_case_insensitively(self) -> None:
+        (warning,) = judge_firmware({"a.nca": False, "fw.ZIP": False, "fw2.7z": False})
+        self.assertIn("2 archive(s)", warning)
+        self.assertIn("fw.ZIP", warning)
+
+    def test_a_folder_with_no_loose_nca_says_so(self) -> None:
+        warnings = judge_firmware({"fw.zip": False, "sub": True})
+        self.assertEqual(len(warnings), 3)
+        self.assertIn("no loose .nca", warnings[-1])
+
+    def test_long_lists_are_cut(self) -> None:
+        warnings = judge_firmware({f"d{i}": True for i in range(9)})
+        self.assertIn("(9 in all)", warnings[0])
 
 
 class GamesTests(unittest.TestCase):
@@ -641,6 +671,26 @@ class FilesystemTests(unittest.TestCase):
         self.assertNotIn("keys/prod.keys", lib.bios_index())
         for call in spy.call_args_list:
             self.assertNotIn("keys", call.args[2])
+
+    def test_firmware_layout_warning_reaches_the_report_and_the_output(self) -> None:
+        self.put("bios/eden/firmware/fw.zip", b"x")
+        self.put("bios/eden/firmware/19.0/a.nca", b"x")
+        report, _ = self.check()
+        self.assertEqual(len(report.warnings), 3)
+        text = "\n".join(render(report))
+        self.assertIn("warning: bios/eden/firmware holds 1 subfolder(s) (19.0)", text)
+
+    def test_loose_firmware_and_a_missing_folder_give_no_warning(self) -> None:
+        report, _ = self.check()
+        self.assertEqual(report.warnings, ())
+        self.put("bios/eden/firmware/a.nca", b"x")
+        report, _ = self.check()
+        self.assertEqual(report.warnings, ())
+
+    def test_firmware_is_not_checked_when_systems_are_named(self) -> None:
+        self.put("bios/eden/firmware/fw.zip", b"x")
+        report, _ = self.check(systems=["con"])
+        self.assertEqual(report.warnings, ())
 
     def test_unknown_files_are_reported_when_every_system_is_checked(self) -> None:
         self.put("bios/a.bin", GOOD)
