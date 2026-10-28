@@ -1,6 +1,7 @@
 import io
 import os
 import tempfile
+import time
 import unittest
 import zipfile
 import zlib
@@ -49,6 +50,11 @@ OLD_R2 = b"old two " * 40
 OLD_R2_NEW = b"old two revised " * 40
 SOLO_R1 = b"solo one " * 40
 SOLO_OPT = b"solo optional " * 40
+AW_BIOS = b"atomiswave bios " * 40
+AW_GAME = b"atomiswave game " * 40
+NAOMI_BIOS = b"naomi bios " * 40
+NAOMI_GAME = b"naomi game " * 40
+NAOMI_CLONE = b"naomi clone " * 40
 
 
 def crc(data: bytes) -> str:
@@ -167,6 +173,35 @@ def mame_dat_with_new_old() -> str:
         machine_el("machine", "old", [rom_el("o1.bin", OLD_R1), rom_el("o2.bin", OLD_R2_NEW)])
         + "\n</mame>",
     )
+
+
+def mame_dat_with_boards() -> str:
+    """Plus an Atomiswave game (BIOS `awbios`), a Naomi game and its clone (the clone's
+    `romof` is the parent, whose `romof` is the BIOS) and a game on an unrelated BIOS."""
+    boards = [
+        machine_el("machine", "awbios", [rom_el("bios.ic23", AW_BIOS)], isbios="yes"),
+        machine_el(
+            "machine",
+            "mslug6",
+            [rom_el("ic.u1", AW_GAME), rom_el("bios.ic23", AW_BIOS, merge="bios.ic23")],
+            romof="awbios",
+        ),
+        machine_el("machine", "naomi", [rom_el("epr.bin", NAOMI_BIOS)], isbios="yes"),
+        machine_el(
+            "machine",
+            "ngame",
+            [rom_el("g1.ic", NAOMI_GAME), rom_el("epr.bin", NAOMI_BIOS, merge="epr.bin")],
+            romof="naomi",
+        ),
+        machine_el(
+            "machine",
+            "ngamec",
+            [rom_el("g1c.ic", NAOMI_CLONE), rom_el("g1.ic", NAOMI_GAME, merge="g1.ic")],
+            cloneof="ngame",
+            romof="ngame",
+        ),
+    ]
+    return mame_dat_with_new_old().replace("</mame>", "\n".join(boards) + "\n</mame>")
 
 
 def database(label: str, emulator: str | None, xml: str) -> SetDb:
@@ -374,23 +409,74 @@ class DecideTests(unittest.TestCase):
         support = support or support_of()
         return [
             Outcome(db.label, db.emulator, best_fit(db, own, stem, support))
-            for db in (self.mame, self.fbneo, self.plus)
+            for db in (self.fbneo, self.mame, self.plus)  # the order SOURCES gives
         ]
 
-    def test_mame_wins_when_it_fits(self) -> None:
-        d = decide(self.outcomes(keys(DINO_R1, DINO_R2), "dino", support_of(qsound_hle=keys(DSP))))
-        self.assertEqual((d.ok, d.set_name, d.emulator, d.why), (True, "dino", None, ()))
+    def test_the_order_is_fbneo_then_mame_then_2003_plus(self) -> None:
+        self.assertEqual(
+            [(key, emulator) for key, _, emulator in mame.SOURCES],
+            [("fbneo_dat", EMU_FBNEO), ("mame_dat", None), ("mame2003plus_dat", EMU_2003PLUS)],
+        )
 
-    def test_the_next_emulator_that_fits_is_used_and_the_miss_is_explained(self) -> None:
-        d = decide(self.outcomes(keys(DINO_R1, DINO_R2), "dino"))
-        self.assertEqual((d.ok, d.set_name, d.emulator), (True, "dino", EMU_FBNEO))
-        self.assertEqual(len(d.why), 1)
-        self.assertIn("MAME 0.282: dino: needs qsound_hle.zip or qsound.zip", d.why[0])
+    def test_fbneo_wins_over_mame_when_both_fit(self) -> None:
+        # CPS1 games only earn RetroAchievements in FinalBurn Neo.
+        d = decide(self.outcomes(keys(DINO_R1, DINO_R2), "dino", support_of(qsound_hle=keys(DSP))))
+        self.assertEqual((d.ok, d.set_name, d.emulator, d.why), (True, "dino", EMU_FBNEO, ()))
+
+    def test_mame_is_the_default_when_fbneo_does_not_have_the_set(self) -> None:
+        own = keys(SLUG_P1, SLUG_C1)
+        d = decide(self.outcomes(own, "mslug", support_of(neogeo=keys(BIOS_EURO, SFIX))))
+        self.assertEqual((d.ok, d.set_name, d.emulator), (True, "mslug", None))
+        self.assertEqual(d.why, ("FinalBurn Neo: no set shares a file with this zip",))
+
+    def test_the_miss_of_an_earlier_emulator_is_explained(self) -> None:
+        d = decide(self.outcomes(keys(DINO_R1, DINO_R2), "dino")[1:2])  # MAME alone
+        self.assertFalse(d.ok)
+        self.assertIn("MAME 0.282: dino: needs qsound_hle.zip or qsound.zip", d.reason)
 
     def test_2003_plus_is_the_last_resort(self) -> None:
         d = decide(self.outcomes(keys(OLD_R1, OLD_R2), "old"))
         self.assertEqual((d.ok, d.emulator), (True, EMU_2003PLUS))
         self.assertEqual(len(d.why), 2)
+
+    def test_atomiswave_and_naomi_games_go_to_flycast_when_mame_says_they_are_complete(
+        self,
+    ) -> None:
+        self.mame = database("MAME 0.282", None, mame_dat_with_boards())
+        cases = [
+            ("mslug6", keys(AW_GAME), {"awbios": keys(AW_BIOS)}, "awbios"),
+            ("ngame", keys(NAOMI_GAME), {"naomi": keys(NAOMI_BIOS)}, "naomi"),
+            # the clone's romof is its parent; the BIOS is two steps up
+            (
+                "ngamec",
+                keys(NAOMI_CLONE),
+                {"naomi": keys(NAOMI_BIOS), "ngame": keys(NAOMI_GAME)},
+                "naomi",
+            ),
+        ]
+        for stem, own, zips, bios in cases:
+            d = decide(self.outcomes(own, stem, support_of(**zips)))
+            self.assertEqual(
+                (d.ok, d.set_name, d.emulator, d.flycast_bios), (True, stem, "Flycast", bios)
+            )
+            self.assertEqual(d.label, "MAME 0.282")
+
+    def test_flycast_needs_the_set_to_be_complete_per_mame(self) -> None:
+        self.mame = database("MAME 0.282", None, mame_dat_with_boards())
+        d = decide(self.outcomes(keys(AW_GAME), "mslug6", support_of()))
+        self.assertFalse(d.ok)
+        self.assertIn("MAME 0.282: mslug6: needs awbios.zip", d.reason)
+        self.assertEqual(d.emulator, None)
+
+    def test_other_games_are_not_flycast(self) -> None:
+        d = decide(
+            self.outcomes(keys(SLUG_P1, SLUG_C1), "mslug", support_of(neogeo=keys(BIOS_EURO, SFIX)))
+        )
+        self.assertEqual((d.emulator, d.flycast_bios), (None, ""))
+        self.assertEqual(mame.flycast_bios(self.mame, "mslug"), "")
+
+    def test_the_boards_flycast_runs(self) -> None:
+        self.assertEqual(set(mame.FLYCAST_BIOS), {"awbios", "naomi", "naomi2", "naomigd"})
 
     def test_the_set_name_comes_from_the_emulator_that_fits(self) -> None:
         d = decide(self.outcomes(keys(OLD_R1, OLD_R2), "my old game"))
@@ -437,6 +523,31 @@ GAMELIST = """<?xml version="1.0"?>
 \t</game>
 </gameList>
 """
+
+
+class RecentGamelistTests(unittest.TestCase):
+    def test_only_a_change_within_the_window_counts(self) -> None:
+        now = 10_000.0
+        self.assertFalse(mame.recently_written(None, now))
+        self.assertTrue(mame.recently_written(now - 1, now))
+        self.assertTrue(mame.recently_written(now - 599, now))
+        self.assertFalse(mame.recently_written(now - 600, now))
+        self.assertFalse(mame.recently_written(now - 86_400, now))
+        self.assertTrue(mame.recently_written(now + 30, now))  # a clock a little ahead
+        self.assertTrue(mame.recently_written(now - 40, now, window=60))
+        self.assertFalse(mame.recently_written(now - 80, now, window=60))
+
+    def test_the_warning_says_how_long_ago_and_what_to_do(self) -> None:
+        text = mame.recent_warning("a/gamelist.xml", 1_000.0, 1_000.0 + 7 * 60 + 5)
+        self.assertIn("a/gamelist.xml was modified 7 min ago", text)
+        self.assertIn("quit ES-DE on every console", text)
+
+    def test_the_backup_name_and_place(self) -> None:
+        when = time.mktime((2026, 1, 2, 3, 4, 5, 0, 0, -1))
+        path = mame.backup_path(Path("/hub"), "ps3", when)
+        self.assertEqual(
+            path, Path("/hub/tools/logs/gamelist-backups/ps3-gamelist-20260102-030405.xml")
+        )
 
 
 class GamelistTests(unittest.TestCase):
@@ -577,6 +688,10 @@ class FlowBase(test_inbox.Base):
     def emulators(self) -> dict[str, str | None]:
         return mame.gamelist_emulators(self.gamelist.read_text())
 
+    def backup_files(self) -> list[Path]:
+        folder = self.hub / "tools" / "logs" / "gamelist-backups"
+        return sorted(folder.iterdir()) if folder.is_dir() else []
+
     def mslug_zip(self, name: str = "mslug.zip") -> Path:
         return self.zip_of(name, {"201-p1.p1": SLUG_P1, "201-c1.c1": SLUG_C1})
 
@@ -605,32 +720,70 @@ class FlowTests(FlowBase):
         self.assertEqual(self.done(), ["Metal Slug (my copy).zip"])
         self.assertFalse((self.hub / "frontend").exists())  # default fits: no gamelist needed
 
-    def test_fbneo_fallback_adds_the_override_and_keeps_every_other_entry(self) -> None:
+    def test_fbneo_goes_first_and_the_override_is_added_keeping_every_other_entry(self) -> None:
         self.write_gamelist(GAMELIST.replace("<altemulator>FinalBurn Neo</altemulator>", ""))
+        self.put_library("qsound_hle.zip", **{"dl-1425__bin": DSP})  # MAME would fit too
         self.zip_of("dino.zip", {"cde_23a.8f": DINO_R1, "cde_22a.7f": DINO_R2})
         before = mame.gamelist_emulators(self.gamelist.read_text())
         self.assertEqual(self.go(apply=False), 0, self.out)
-        self.assertIn("not MAME 0.282: dino: needs qsound_hle.zip or qsound.zip", self.out)
+        self.assertIn("emulator: FinalBurn Neo", self.out)
         self.assertIn("would add the emulator of dino.zip: FinalBurn Neo", self.out)
         self.assertEqual(mame.gamelist_emulators(self.gamelist.read_text()), before)
         self.assertEqual(self.go(), 0, self.out)
         self.assertEqual(self.emulators()["dino.zip"], EMU_FBNEO)
         self.assertEqual(self.emulators()["old.zip"], EMU_2003PLUS)
         self.assertIn('<custom attr="1">kept</custom>', self.gamelist.read_text())
-        bak = self.gamelist.with_name("gamelist.xml.bak")
         self.assertEqual(
-            bak.read_text(), GAMELIST.replace("<altemulator>FinalBurn Neo</altemulator>", "")
+            self.backup_files()[0].read_text(),
+            GAMELIST.replace("<altemulator>FinalBurn Neo</altemulator>", ""),
         )
+        self.assertFalse(self.gamelist.with_name("gamelist.xml.bak").exists())
         self.assertFalse(self.gamelist.with_name("gamelist.xml.part").exists())
 
-    def test_the_default_fitting_later_removes_the_override(self) -> None:
-        self.put_library("qsound_hle.zip", **{"dl-1425__bin": DSP})
-        self.write_gamelist(GAMELIST)
-        self.zip_of("dino.zip", {"cde_23a.8f": DINO_R1, "cde_22a.7f": DINO_R2})
+    def test_mame_is_the_default_after_fbneo_and_removes_a_stale_override(self) -> None:
+        self.write_gamelist(
+            GAMELIST.replace(
+                "<path>./mslug.zip</path>",
+                "<path>./mslug.zip</path>\n\t\t<altemulator>MAME 2003-Plus</altemulator>",
+            )
+        )
+        self.put_library("neogeo.zip", **{"sp-s2__sp1": BIOS_EURO, "sfix__sfix": SFIX})
+        self.mslug_zip()
         self.assertEqual(self.go(), 0, self.out)
-        self.assertNotIn("dino.zip", self.emulators())
-        self.assertIn("removed the emulator override of dino.zip (the default fits)", self.out)
+        self.assertIsNone(self.emulators()["mslug.zip"])
+        self.assertIn("<playcount>3</playcount>", self.gamelist.read_text())
+        self.assertIn("removed the emulator override of mslug.zip (the default fits)", self.out)
         self.assertEqual(self.emulators()["old.zip"], EMU_2003PLUS)
+
+    def test_atomiswave_goes_to_flycast_and_a_missing_dc_bios_is_noted(self) -> None:
+        self.mame_dat.write_text(mame_dat_with_boards())
+        self.put_library("awbios.zip", **{"bios__ic23": AW_BIOS})
+        self.zip_of("mslug6.zip", {"ic.u1": AW_GAME})
+        self.assertEqual(self.go(), 0, self.out)
+        self.assertEqual(self.emulators(), {"mslug6.zip": "Flycast"})
+        self.assertIn("emulator: Flycast", self.out)
+        self.assertIn("Flycast needs awbios.zip in bios/dc/: copy it from roms/mame/", self.out)
+        self.assertIn("warpzone never copies BIOS files", self.out)
+        self.assertFalse((self.hub / "library" / "bios").exists())  # nothing copied
+
+    def test_no_dc_bios_note_when_the_bios_is_already_there(self) -> None:
+        self.mame_dat.write_text(mame_dat_with_boards())
+        self.put_library("naomi.zip", **{"epr__bin": NAOMI_BIOS})
+        self.put_library("ngame.zip", **{"g1__ic": NAOMI_GAME})
+        bios = self.hub / "library" / "bios" / "dc"
+        bios.mkdir(parents=True)
+        (bios / "naomi.zip").write_bytes(b"whatever")
+        self.zip_of("ngamec.zip", {"g1c.ic": NAOMI_CLONE})
+        self.assertEqual(self.go(), 0, self.out)
+        self.assertEqual(self.emulators(), {"ngamec.zip": "Flycast"})
+        self.assertNotIn("bios/dc", self.out)
+
+    def test_an_incomplete_atomiswave_game_goes_to_review_not_to_flycast(self) -> None:
+        self.mame_dat.write_text(mame_dat_with_boards())
+        self.zip_of("mslug6.zip", {"ic.u1": AW_GAME})
+        self.assertEqual(self.go(), 1)
+        self.assertIn("needs awbios.zip", self.reason("mslug6.zip"))
+        self.assertFalse(self.gamelist.exists())
 
     def test_2003_plus_fallback_and_a_new_gamelist(self) -> None:
         self.zip_of("old.zip", {"o1.bin": OLD_R1, "o2.bin": OLD_R2})
@@ -644,15 +797,38 @@ class FlowTests(FlowBase):
         self.assertEqual(self.go(settings=self.settings(gamelist_mame=str(elsewhere))), 0)
         self.assertEqual(mame.gamelist_emulators(elsewhere.read_text()), {"old.zip": EMU_2003PLUS})
 
-    def test_backup_keeps_the_state_before_the_run_for_several_items(self) -> None:
+    def test_backup_keeps_the_state_before_the_run_outside_the_synced_tree(self) -> None:
         self.write_gamelist(mame.EMPTY_GAMELIST)
         self.zip_of("old.zip", {"o1.bin": OLD_R1, "o2.bin": OLD_R2})
         self.zip_of("dino.zip", {"cde_23a.8f": DINO_R1, "cde_22a.7f": DINO_R2})
-        self.assertEqual(self.go(), 0, self.out)
+        stamp = time.time()
+        name = time.strftime("mame-gamelist-%Y%m%d-%H%M%S.xml", time.localtime(stamp))
+        self.assertEqual(self.go(now=lambda: stamp), 0, self.out)
         self.assertEqual(self.emulators(), {"old.zip": EMU_2003PLUS, "dino.zip": EMU_FBNEO})
-        self.assertEqual(
-            self.gamelist.with_name("gamelist.xml.bak").read_text(), mame.EMPTY_GAMELIST
+        folder = self.hub / "tools" / "logs" / "gamelist-backups"
+        self.assertEqual([p.name for p in folder.iterdir()], [name])
+        self.assertEqual(self.backup_files()[0].read_text(), mame.EMPTY_GAMELIST)
+        self.assertEqual(sorted(p.name for p in self.gamelist.parent.iterdir()), ["gamelist.xml"])
+
+    def test_a_recently_modified_gamelist_warns_once_and_is_still_edited(self) -> None:
+        self.write_gamelist(mame.EMPTY_GAMELIST)  # written just now
+        self.zip_of("old.zip", {"o1.bin": OLD_R1, "o2.bin": OLD_R2})
+        self.zip_of("dino.zip", {"cde_23a.8f": DINO_R1, "cde_22a.7f": DINO_R2})
+        self.assertEqual(self.go(), 0, self.out)
+        self.assertEqual(self.out.count("quit ES-DE on every console"), 1)
+        self.assertIn(
+            "gamelist frontend/es-de/gamelists/mame/gamelist.xml was modified 0 min ago", self.out
         )
+        self.assertEqual(self.emulators(), {"old.zip": EMU_2003PLUS, "dino.zip": EMU_FBNEO})
+
+    def test_an_old_gamelist_and_a_report_run_do_not_warn(self) -> None:
+        self.write_gamelist(mame.EMPTY_GAMELIST)
+        self.zip_of("old.zip", {"o1.bin": OLD_R1, "o2.bin": OLD_R2})
+        self.assertEqual(self.go(apply=False), 0, self.out)  # report only: nothing is edited
+        self.assertNotIn("quit ES-DE", self.out)
+        test_inbox.age(self.gamelist, 3600)
+        self.assertEqual(self.go(), 0, self.out)
+        self.assertNotIn("quit ES-DE", self.out)
 
     def test_the_same_zip_in_the_library_is_already_there_and_the_gamelist_is_reconciled(
         self,

@@ -146,7 +146,11 @@ class PlacementTests(FlowBase):
         self.assertEqual(self.go(), 0, self.out)
         self.assertEqual(self.emulators(), {"Old.iso": None, PS3_NAME: ci.EMU_RPCS3_ISO})
         self.assertIn("<name>Old</name>", self.gamelist.read_text(encoding="utf-8"))
-        self.assertTrue(self.gamelist.with_name("gamelist.xml.bak").exists())
+        backups = self.hub / "tools" / "logs" / "gamelist-backups"
+        (backup,) = backups.iterdir()
+        self.assertRegex(backup.name, r"^ps3-gamelist-\d{8}-\d{6}\.xml$")
+        self.assertIn("<name>Old</name>", backup.read_text(encoding="utf-8"))
+        self.assertFalse(self.gamelist.with_name("gamelist.xml.bak").exists())
 
     def test_the_gamelist_path_can_be_configured(self) -> None:
         elsewhere = self.tmp / "gl" / "ps3.xml"

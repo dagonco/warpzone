@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
+from typing import Any
 
 from support import (
     API_KEY,
@@ -12,8 +13,8 @@ from support import (
     config_data,
     make_config,
 )
-from warpzone.config import parse_config
-from warpzone.profiles import load_profile
+from warpzone.config import Config, parse_config
+from warpzone.profiles import Profile, load_profile
 from warpzone.provision import (
     ProvisionError,
     Reporter,
@@ -34,12 +35,20 @@ def reporter() -> tuple[Reporter, list[str]]:
     return Reporter(lines.append), lines
 
 
+def run_hub(
+    cfg: Config, profiles: dict[str, Profile], client: Client, rep: Reporter, **kw: Any
+) -> None:
+    """`provision_hub` that does not wait for whitelists unless a test asks it to."""
+    kw.setdefault("wait_timeout", 0.0)
+    provision_hub(cfg, profiles, client, rep, **kw)
+
+
 class HubTests(unittest.TestCase):
     def test_creates_devices_and_folders(self) -> None:
         with FakeSyncthing(HUB_ID) as fake:
             cfg = make_config(fake.url)
             rep, _ = reporter()
-            provision_hub(cfg, PROFILES, Client(fake.url, API_KEY), rep)
+            run_hub(cfg, PROFILES, Client(fake.url, API_KEY), rep)
 
             ids = {d["deviceID"] for d in fake.devices}
             self.assertEqual(ids, {HUB_ID, DECK_ID, MACHINE_ID})
@@ -54,7 +63,7 @@ class HubTests(unittest.TestCase):
                     "#include patterns-common.stignore",
                 ],
             )
-            self.assertEqual(fake.ignores["wz-tools"][-1], "(?d)Thumbs.db")
+            self.assertEqual(fake.ignores["wz-tools"][-2:], ["(?d)Thumbs.db", "/logs"])
             self.assertIn("wz-save-ryujinx-user", fake.folders)
             self.assertEqual(fake.ignores["wz-save-ryujinx-user"][-1], "*")
             self.assertEqual(fake.folders["wz-songs"]["devices"], [{"deviceID": MACHINE_ID}])
@@ -68,18 +77,111 @@ class HubTests(unittest.TestCase):
                 order,
                 [
                     ("POST", "/rest/config/folders"),
-                    ("POST", "/rest/db/ignores"),
+                    ("POST", "/rest/db/ignores"),  # bootstrap: whitelists only
                     ("PATCH", "/rest/config/folders/wz-songs"),
+                    ("POST", "/rest/db/scan"),
+                    ("POST", "/rest/db/ignores"),  # final
+                    ("POST", "/rest/db/scan"),
                 ],
             )
             created = [b for m, p, b in fake.writes() if p == "/rest/config/folders"]
             self.assertTrue(all(b["paused"] for b in created))
             self.assertTrue(any("wz-library" in w for w in rep.warnings))
 
+    def test_new_whitelisted_folder_bootstraps_before_the_full_scan(self) -> None:
+        with FakeSyncthing(HUB_ID) as fake:
+            cfg = make_config(fake.url)
+            names = ["patterns-common.stignore", "patterns-machine.stignore"]
+            for name in names:  # the whitelists of wz-songs are indexed right away
+                fake.file_info[("wz-songs", name)] = {
+                    "local": {"version": ["X:1"], "deleted": False, "invalid": False},
+                    "global": {"version": ["X:1"]},
+                }
+            rep, lines = reporter()
+            run_hub(cfg, PROFILES, Client(fake.url, API_KEY), rep, wait_timeout=5.0)
+            songs = [
+                (m, b)
+                for m, p, b in fake.writes()
+                if p.startswith("/rest/db/ignores?folder=wz-songs")
+            ]
+            self.assertEqual(
+                [b["ignore"] for _, b in songs],
+                [["!/patterns-*.stignore", "*"], fake.ignores["wz-songs"]],
+            )
+            self.assertEqual(fake.ignores["wz-songs"][-1], "#include patterns-common.stignore")
+            self.assertFalse(fake.folders["wz-songs"]["paused"])
+            self.assertFalse([w for w in rep.warnings if "wz-songs" in w])
+            self.assertIn(
+                "wz-songs: created at /data/games/songs, bootstrap ignores set, resumed, "
+                "final ignores set, full scan started",
+                lines,
+            )
+
+    def test_missing_whitelists_warn_but_still_set_the_final_ignores(self) -> None:
+        with FakeSyncthing(HUB_ID) as fake:
+            rep, _ = reporter()
+            run_hub(make_config(fake.url), PROFILES, Client(fake.url, API_KEY), rep)
+            self.assertEqual(fake.ignores["wz-library"][-1], "#include patterns-common.stignore")
+            self.assertFalse(fake.folders["wz-library"]["paused"])
+            warning = next(w for w in rep.warnings if w.startswith("wz-library"))
+            self.assertIn("patterns-common.stignore", warning)
+            self.assertIn("final ignores are set anyway", warning)
+
+    def test_bootstrap_waits_for_the_whitelists_to_be_indexed(self) -> None:
+        with FakeSyncthing(HUB_ID) as fake:
+            cfg = make_config(fake.url)
+            for name in ("patterns-common.stignore", "patterns-machine.stignore"):
+                fake.arrives_after[("wz-songs", name)] = 2
+            for name in ("patterns-common.stignore", "patterns-deck.stignore"):
+                fake.file_info[("wz-library", name)] = {"local": {"version": ["X:1"]}}
+            fake.file_info[("wz-library", "patterns-machine.stignore")] = {
+                "local": {"version": ["X:1"]}
+            }
+            slept: list[float] = []
+            now = [0.0]
+
+            def sleep(seconds: float) -> None:
+                slept.append(seconds)
+                now[0] += seconds
+
+            run_hub(
+                cfg,
+                PROFILES,
+                Client(fake.url, API_KEY),
+                reporter()[0],
+                wait_timeout=100.0,
+                poll=1.0,
+                sleep=sleep,
+                clock=lambda: now[0],
+            )
+            self.assertEqual(slept, [1.0, 1.0])  # two polls before the songs whitelists show up
+            self.assertEqual(fake.ignores["wz-songs"][-1], "#include patterns-common.stignore")
+
+    def test_existing_folder_keeps_the_direct_path(self) -> None:
+        with FakeSyncthing(HUB_ID) as fake:
+            cfg = make_config(fake.url)
+            run_hub(cfg, PROFILES, Client(fake.url, API_KEY), reporter()[0])
+            fake.ignores["wz-songs"] = []
+            fake.requests.clear()
+            run_hub(cfg, PROFILES, Client(fake.url, API_KEY), reporter()[0])
+            ignores = [b["ignore"] for m, p, b in fake.writes() if "db/ignores" in p]
+            self.assertEqual(ignores, [fake.ignores["wz-songs"]])
+            self.assertEqual(fake.ignores["wz-songs"][-1], "#include patterns-common.stignore")
+
+    def test_dry_run_prints_the_bootstrap_and_waits_for_nothing(self) -> None:
+        with FakeSyncthing(HUB_ID) as fake:
+            lines: list[str] = []
+            client = Client(fake.url, API_KEY, label="hub", dry_run=True, sink=lines.append)
+            rep, out = reporter()
+            provision_hub(make_config(fake.url), PROFILES, client, rep, wait_timeout=600.0)
+            self.assertEqual(fake.writes(), [])
+            self.assertTrue(any('"!/patterns-*.stignore", "*"' in line for line in lines))
+            self.assertTrue(any("would wait up to 600s for the whitelists" in o for o in out))
+
     def test_second_run_writes_nothing(self) -> None:
         with FakeSyncthing(HUB_ID) as fake:
             cfg = make_config(fake.url)
-            provision_hub(cfg, PROFILES, Client(fake.url, API_KEY), reporter()[0])
+            run_hub(cfg, PROFILES, Client(fake.url, API_KEY), reporter()[0])
             fake.browse = {
                 fid: [
                     "patterns-common.stignore",
@@ -90,36 +192,34 @@ class HubTests(unittest.TestCase):
             }
             fake.requests.clear()
             rep, _ = reporter()
-            provision_hub(cfg, PROFILES, Client(fake.url, API_KEY), rep)
+            run_hub(cfg, PROFILES, Client(fake.url, API_KEY), rep)
             self.assertEqual(fake.writes(), [])
             self.assertEqual(rep.warnings, [])
 
     def test_hub_id_mismatch(self) -> None:
         with FakeSyncthing(DECK_ID) as fake:
             with self.assertRaises(ProvisionError) as ctx:
-                provision_hub(
-                    make_config(fake.url), PROFILES, Client(fake.url, API_KEY), reporter()[0]
-                )
+                run_hub(make_config(fake.url), PROFILES, Client(fake.url, API_KEY), reporter()[0])
             self.assertIn("hub.device_id", str(ctx.exception))
             self.assertEqual(fake.writes(), [])
 
     def test_updates_only_owned_keys_and_never_removes_devices(self) -> None:
         with FakeSyncthing(HUB_ID) as fake:
             cfg = make_config(fake.url)
-            provision_hub(cfg, PROFILES, Client(fake.url, API_KEY), reporter()[0])
+            run_hub(cfg, PROFILES, Client(fake.url, API_KEY), reporter()[0])
             other = {"deviceID": "OTHER-ID"}
             fake.folders["wz-tools"].update(
                 label="renamed", rescanIntervalS=99, devices=[other, {"deviceID": DECK_ID}]
             )
             fake.requests.clear()
-            provision_hub(cfg, PROFILES, Client(fake.url, API_KEY), reporter()[0])
+            run_hub(cfg, PROFILES, Client(fake.url, API_KEY), reporter()[0])
             patches = [(p, b) for m, p, b in fake.writes() if m == "PATCH"]
             self.assertEqual(patches, [("/rest/config/folders/wz-tools", {"label": "wz-tools"})])
             self.assertEqual(fake.folders["wz-tools"]["rescanIntervalS"], 99)
 
             fake.folders["wz-tools"]["devices"] = [other]
             fake.requests.clear()
-            provision_hub(cfg, PROFILES, Client(fake.url, API_KEY), reporter()[0])
+            run_hub(cfg, PROFILES, Client(fake.url, API_KEY), reporter()[0])
             sent = next(b for m, p, b in fake.writes() if m == "PATCH")["devices"]
             self.assertEqual([d["deviceID"] for d in sent], ["OTHER-ID", DECK_ID])
 
@@ -127,7 +227,7 @@ class HubTests(unittest.TestCase):
         with FakeSyncthing(HUB_ID) as fake:
             fake.folders["photos"] = {"id": "photos", "path": "/p", "type": "sendreceive"}
             fake.ignores["photos"] = ["x"]
-            provision_hub(make_config(fake.url), PROFILES, Client(fake.url, API_KEY), reporter()[0])
+            run_hub(make_config(fake.url), PROFILES, Client(fake.url, API_KEY), reporter()[0])
             self.assertEqual(
                 fake.folders["photos"], {"id": "photos", "path": "/p", "type": "sendreceive"}
             )
@@ -136,26 +236,26 @@ class HubTests(unittest.TestCase):
     def test_path_change_is_refused(self) -> None:
         with FakeSyncthing(HUB_ID) as fake:
             cfg = make_config(fake.url)
-            provision_hub(cfg, PROFILES, Client(fake.url, API_KEY), reporter()[0])
+            run_hub(cfg, PROFILES, Client(fake.url, API_KEY), reporter()[0])
             fake.folders["wz-tools"]["path"] = "/somewhere/else"
             fake.requests.clear()
             with self.assertRaises(ProvisionError) as ctx:
-                provision_hub(cfg, PROFILES, Client(fake.url, API_KEY), reporter()[0])
+                run_hub(cfg, PROFILES, Client(fake.url, API_KEY), reporter()[0])
             self.assertIn("mass delete", str(ctx.exception))
             self.assertEqual(fake.folders["wz-tools"]["path"], "/somewhere/else")
 
     def test_trailing_slash_is_not_a_path_change(self) -> None:
         with FakeSyncthing(HUB_ID) as fake:
             cfg = make_config(fake.url)
-            provision_hub(cfg, PROFILES, Client(fake.url, API_KEY), reporter()[0])
+            run_hub(cfg, PROFILES, Client(fake.url, API_KEY), reporter()[0])
             fake.folders["wz-tools"]["path"] += "/"
-            provision_hub(cfg, PROFILES, Client(fake.url, API_KEY), reporter()[0])
+            run_hub(cfg, PROFILES, Client(fake.url, API_KEY), reporter()[0])
 
     def test_dry_run_makes_no_writes(self) -> None:
         with FakeSyncthing(HUB_ID) as fake:
             lines: list[str] = []
             client = Client(fake.url, API_KEY, label="hub", dry_run=True, sink=lines.append)
-            provision_hub(make_config(fake.url), PROFILES, client, reporter()[0])
+            run_hub(make_config(fake.url), PROFILES, client, reporter()[0])
             self.assertEqual(fake.writes(), [])
             self.assertEqual(fake.folders, {})
             self.assertTrue(any("POST /rest/config/folders" in line for line in lines))
@@ -186,7 +286,7 @@ class HubTests(unittest.TestCase):
 
     def test_status(self) -> None:
         with FakeSyncthing(HUB_ID) as fake:
-            provision_hub(make_config(fake.url), PROFILES, Client(fake.url, API_KEY), reporter()[0])
+            run_hub(make_config(fake.url), PROFILES, Client(fake.url, API_KEY), reporter()[0])
             fake.folders["wz-tools"]["paused"] = True
             rep, lines = reporter()
             folder_status(Client(fake.url, API_KEY), "hub", rep)

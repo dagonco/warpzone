@@ -79,7 +79,7 @@ class ModelTests(unittest.TestCase):
         self.assertEqual(library.body()["rescanIntervalS"], 300)
         self.assertIsNone(specs["wz-tools"].rescan_interval_s)
         self.assertNotIn("rescanIntervalS", specs["wz-tools"].body())
-        self.assertEqual(specs["wz-tools"].ignores, ignores.inline())
+        self.assertEqual(specs["wz-tools"].ignores, ignores.inline(("/logs",)))
         self.assertIsNone(specs["wz-tools"].bootstrap_ignores)
         self.assertEqual(specs["wz-media"].type, "sendreceive")
         self.assertEqual(specs["wz-esde"].ignores[-3:], ("!/gamelists", "!/collections", "*"))

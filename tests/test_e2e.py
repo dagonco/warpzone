@@ -230,7 +230,15 @@ rescan_seconds = 10
 
         self.wz("provision", "hub", "--dry-run", *cfg)
         self.assertEqual(self.hub.client().folders(), [])  # dry-run wrote nothing
-        self.wz("provision", "hub", *cfg)
+        # A new hub folder starts on whitelist-only ignores and waits until the hub's
+        # index holds the whitelists, then switches to the final ignores.
+        out = self.wz("provision", "hub", *cfg)
+        self.assertIn("wz-library: created", out)
+        self.assertIn("final ignores set, full scan started", out)
+        self.assertNotIn("not in the hub's index", self.output[-1])
+        self.assertEqual(
+            self.hub.client().get_ignores("wz-library")[-1], "#include patterns-common.stignore"
+        )
         self.wz("provision", "hub", *cfg)  # idempotent
 
         # The device refuses to start until the hub has scanned the whitelists.

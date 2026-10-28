@@ -16,6 +16,7 @@ from warpzone.profiles import Profile
 from warpzone.syncthing import Client, SyncthingError
 
 DEFAULT_WAIT_SECONDS = 600.0
+HUB_WAIT_SECONDS = 120.0  # `provision hub`: how long a new folder waits for its whitelists
 PREFIX = "wz-"
 
 
@@ -145,12 +146,73 @@ def _apply_ignores(
         _unpause(client, spec, rep)
 
 
+def _bootstrap_hub_folder(
+    client: Client,
+    spec: FolderSpec,
+    *,
+    timeout: float,
+    poll: float,
+    rep: Reporter,
+    sleep: Callable[[float], None],
+    clock: Callable[[], float],
+) -> bool:
+    """A newly created whitelisted hub folder: let only the whitelists through first.
+
+    The first full scan of a big library can take hours, and devices wait for their
+    `patterns-<device>.stignore` to show up in the hub's index. With every other file
+    ignored the scan reaches the whitelists at once; once they are indexed the final
+    ignores go in and the full scan starts. If they never show up the final ignores
+    are set anyway, so the folder is never left half-configured. Returns True when the
+    whitelists were indexed (or, in dry-run, would be waited for).
+    """
+    assert spec.bootstrap_ignores is not None
+    client.set_ignores(spec.id, list(spec.bootstrap_ignores))
+    rep.note(spec.id, "bootstrap ignores set")
+    _unpause(client, spec, rep)
+    client.scan(spec.id)
+    if client.dry_run:
+        rep.note(spec.id, f"dry-run: would wait up to {timeout:.0f}s for the whitelists")
+        pending: list[str] = []
+    else:
+        pending = _wait_pending(
+            client,
+            spec.id,
+            spec.required_files,
+            in_index,
+            timeout=timeout,
+            poll=poll,
+            rep=rep,
+            sleep=sleep,
+            clock=clock,
+        )
+    client.set_ignores(spec.id, list(spec.ignores))
+    client.scan(spec.id)
+    rep.note(spec.id, "final ignores set, full scan started")
+    if pending:
+        rep.warn(
+            f"{spec.id}: {', '.join(pending)} not in the hub's index after {timeout:.0f}s; "
+            f"the final ignores are set anyway. Add them under {spec.path}, then run "
+            "`warpzone check`"
+        )
+    return not pending
+
+
 def _missing_on(client: Client, spec: FolderSpec) -> list[str]:
     names = set(client.browse(spec.id))
     return [f for f in spec.required_files if f not in names]
 
 
-def provision_hub(cfg: Config, profiles: dict[str, Profile], client: Client, rep: Reporter) -> None:
+def provision_hub(
+    cfg: Config,
+    profiles: dict[str, Profile],
+    client: Client,
+    rep: Reporter,
+    *,
+    wait_timeout: float = HUB_WAIT_SECONDS,
+    poll: float = 2.0,
+    sleep: Callable[[float], None] = time.sleep,
+    clock: Callable[[], float] = time.monotonic,
+) -> None:
     actual = client.my_id()
     if actual != cfg.hub.device_id:
         raise ProvisionError(
@@ -165,9 +227,21 @@ def provision_hub(cfg: Config, profiles: dict[str, Profile], client: Client, rep
     for spec in hub_specs(cfg, profiles):
         current = existing.get(spec.id)
         created = _upsert_folder(client, spec, current, rep)
-        _apply_ignores(client, spec, current, created, rep)
+        bootstrapped = False
+        if created and spec.bootstrap_ignores is not None:
+            bootstrapped = True
+            _bootstrap_hub_folder(
+                client, spec, timeout=wait_timeout, poll=poll, rep=rep, sleep=sleep, clock=clock
+            )
+        else:
+            _apply_ignores(client, spec, current, created, rep)
         rep.flush(spec.id)
-        if not spec.required_files:
+        if not spec.required_files or bootstrapped:
+            if bootstrapped and client.dry_run:
+                rep.warn(
+                    f"{spec.id}: add {', '.join(spec.required_files)} under {spec.path}, "
+                    "then run `warpzone check`"
+                )
             continue
         if created:
             rep.warn(
@@ -216,6 +290,38 @@ def in_sync(info: dict[str, Any] | None) -> bool:
     )
 
 
+def in_index(info: dict[str, Any] | None) -> bool:
+    """True when this machine's index holds a live (not deleted, not invalid) copy."""
+    local = (info or {}).get("local")
+    return bool(local and not local.get("deleted") and not local.get("invalid"))
+
+
+def _wait_pending(
+    client: Client,
+    folder_id: str,
+    files: tuple[str, ...],
+    ready: Callable[[dict[str, Any] | None], bool],
+    *,
+    timeout: float,
+    poll: float,
+    rep: Reporter,
+    sleep: Callable[[float], None],
+    clock: Callable[[], float],
+) -> list[str]:
+    """Poll until every file is `ready`; returns the ones still pending at the deadline."""
+    deadline = clock() + timeout
+    pending = list(files)
+    announced = False
+    while True:
+        pending = [f for f in pending if not ready(client.db_file(folder_id, f))]
+        if not pending or clock() >= deadline:
+            return pending
+        if not announced:
+            rep.out(f"{folder_id}: waiting for {', '.join(pending)} (up to {timeout:.0f}s)")
+            announced = True
+        sleep(poll)
+
+
 def wait_for_files(
     client: Client,
     spec: FolderSpec,
@@ -226,23 +332,23 @@ def wait_for_files(
     sleep: Callable[[float], None] = time.sleep,
     clock: Callable[[], float] = time.monotonic,
 ) -> None:
-    deadline = clock() + timeout
-    pending = list(spec.required_files)
-    announced = False
-    while True:
-        pending = [f for f in pending if not in_sync(client.db_file(spec.id, f))]
-        if not pending:
-            return
-        if clock() >= deadline:
-            raise ProvisionError(
-                f"{spec.id}: {', '.join(pending)} did not arrive within {timeout:.0f}s. "
-                "The folder stays on the safe bootstrap ignores (only whitelists can arrive). "
-                "Check that the hub is online and has these files, then run provision again."
-            )
-        if not announced:
-            rep.out(f"{spec.id}: waiting for {', '.join(pending)} (up to {timeout:.0f}s)")
-            announced = True
-        sleep(poll)
+    pending = _wait_pending(
+        client,
+        spec.id,
+        spec.required_files,
+        in_sync,
+        timeout=timeout,
+        poll=poll,
+        rep=rep,
+        sleep=sleep,
+        clock=clock,
+    )
+    if pending:
+        raise ProvisionError(
+            f"{spec.id}: {', '.join(pending)} did not arrive within {timeout:.0f}s. "
+            "The folder stays on the safe bootstrap ignores (only whitelists can arrive). "
+            "Check that the hub is online and has these files, then run provision again."
+        )
 
 
 def _hub_precheck(hub: Client, specs: list[FolderSpec], rep: Reporter) -> None:

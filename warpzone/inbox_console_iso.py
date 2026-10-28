@@ -328,12 +328,7 @@ def _gamelist(ctx: Context, entry: str, res: UnitResult) -> None:
     if not ctx.opts.apply:
         res.notes.append(f"gamelist {shown}: would {verb} the emulator of {entry}: {EMU_RPCS3_ISO}")
         return
-    state = _state(ctx)
-    try:
-        inbox_mame.write_gamelist(path, new, backup=path not in state.backed_up)
-    except OSError as exc:
-        raise inbox_mame.GamelistError(f"cannot write {path}: {exc.strerror or exc}") from exc
-    state.backed_up.add(path)
+    res.notes.extend(inbox_mame.save_gamelist(ctx, path, new, "ps3", shown, _state(ctx).backed_up))
     res.notes.append(f"gamelist {shown}: {action} the emulator of {entry}: {EMU_RPCS3_ISO}")
 
 

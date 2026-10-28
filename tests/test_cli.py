@@ -123,7 +123,7 @@ class CliTests(unittest.TestCase):
     def test_provision_hub_for_real(self) -> None:
         with FakeSyncthing(HUB_ID) as hub:
             path = write_config(self.tmp, hub.url)
-            code, _, err = run("provision", "hub", "--config", path)
+            code, _, err = run("provision", "hub", "--timeout", "0", "--config", path)
             self.assertEqual(code, 0)
             self.assertIn("wz-library", hub.folders)
             self.assertIn("warning: wz-library", err)

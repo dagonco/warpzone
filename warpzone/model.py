@@ -32,8 +32,9 @@ class FolderSpec:
     devices: tuple[str, ...]  # remote device IDs; Syncthing adds the local one itself
     versioning: dict[str, Any] = field(default_factory=lambda: dict(NO_VERSIONING))
     ignores: tuple[str, ...] = ()
-    # Set only for folders whose ignores include a whitelist file that may not
-    # have arrived yet (device side).
+    # Set only for whitelisted folders: ignores that let only the whitelist files through.
+    # A device folder starts on them until its whitelist has arrived; a hub folder starts
+    # on them when it is created, so the first scan reaches the whitelists at once.
     bootstrap_ignores: tuple[str, ...] | None = None
     # Files that must exist in the folder root for `ignores` to load.
     required_files: tuple[str, ...] = ()
@@ -81,7 +82,10 @@ class _Def:
 _STATIC: dict[str, tuple[_Def, ...]] = {
     "library": (_Def(LIBRARY_ID, "library", "sendonly", "receiveonly", "library", whitelist=True),),
     "songs": (_Def("wz-songs", "songs", "sendonly", "receiveonly", "songs", whitelist=True),),
-    "tools": (_Def("wz-tools", "tools", "sendonly", "receiveonly", "tools"),),
+    # /logs holds what warpzone writes on the hub (gamelist backups): never synced.
+    "tools": (
+        _Def("wz-tools", "tools", "sendonly", "receiveonly", "tools", fixed_ignores=("/logs",)),
+    ),
     "frontend": (
         _Def("wz-media", "frontend/media", "sendreceive", "sendreceive", "media"),
         _Def(
@@ -211,6 +215,7 @@ def hub_specs(cfg: Config, profiles: dict[str, Profile]) -> list[FolderSpec]:
                 devices=tuple(cfg.devices[n].device_id for n in names),
                 versioning=_versioning(item, hub=True),
                 ignores=final,
+                bootstrap_ignores=ignores.BOOTSTRAP_LINES if item.whitelist else None,
                 required_files=required,
             )
         )

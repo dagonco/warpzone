@@ -145,13 +145,38 @@ default `rescanIntervalS` (3600 s). Whitelisted device folders therefore get
 minimum 5), so an edit applies within that time whatever the watcher does. A
 rescan only stats files and hashes what changed.
 
+**Hub bootstrap.** The hub has the opposite problem. Its folder is created with the final
+ignores (`#include patterns-common.stignore`), so the first full scan walks the whole
+library before the whitelists are in the hub's index, and a device waits for
+`patterns-<device>.stignore` until the scanner happens to reach it. With a large library
+on a slow disk that is hours. When `provision hub` **creates** a whitelisted folder
+(library, songs) it therefore does, in order:
+
+1. Create the folder paused and set the same bootstrap ignores the device uses
+   (`!/patterns-*.stignore`, `*`). The fixed hub exclusions are not needed: `*` ignores
+   everything the whitelists do not name.
+2. Unpause and trigger a scan. With everything else ignored it reaches the whitelists at
+   once, and Syncthing announces them to the devices in its first index batches.
+3. Wait (`provision hub --timeout`, default 120 s) until `patterns-common.stignore` and the
+   `patterns-<device>.stignore` of every subscribed device are in the hub's own index
+   (`GET /rest/db/file`: a live `local` record, not deleted, not invalid).
+4. Set the final ignores and scan again, which starts the full scan. Devices can by now
+   fetch their whitelist while the scanner is still working on the rest.
+
+If the whitelists are not in the index when the timeout runs out (they were never put on
+the hub, or the hub is very slow), it warns and still sets the final ignores: the hub
+folder is never left half-configured. Only creation does this; a folder that already
+exists keeps the direct path (ignores set if they differ, folder resumed if paused). In
+dry-run the calls are printed and nothing waits.
+
 If the device's whitelist does not exist on the hub, provisioning stops before
 step 1 with a clear error. It never creates a device folder that would pull the
 whole library. The check reads the hub's API (`GET /rest/db/browse`) with the
 hub credentials from the private config; if the hub is unreachable it warns and
 continues, which is safe because the bootstrap ignores only let whitelists
 through. On the hub side, `provision hub` cannot check files in a folder that
-does not exist yet, so it creates the folder and warns about missing whitelists;
+does not exist yet, so it creates the folder and warns about missing whitelists
+(only if they are still missing after the hub bootstrap above);
 `warpzone check` is the authoritative report once the hub has scanned.
 
 ## Profiles
@@ -374,7 +399,7 @@ error messages; the RetroAchievements key is read from `RA_API_KEY`, never from 
 | Command | Runs on | Does |
 |---|---|---|
 | `warpzone check` | anywhere | Validates config + profiles, reports which whitelists are missing on the hub (via `GET /rest/db/browse`), never writes. Exit 1 if any are missing; `--offline` skips the hub. |
-| `warpzone provision hub` | anywhere that reaches the hub API | Adds every configured device to the hub, creates/updates every `wz-*` folder on the hub and shares it with the devices that subscribe to it, sets the hub ignores. Idempotent. |
+| `warpzone provision hub` | anywhere that reaches the hub API | Adds every configured device to the hub, creates/updates every `wz-*` folder on the hub and shares it with the devices that subscribe to it, sets the hub ignores. A newly created whitelisted folder first lets only the whitelists through and waits for them (`--timeout`, default 120 s) before the full scan, see "Hub bootstrap". Idempotent. |
 | `warpzone provision device <name>` | on the device | Reads the local Syncthing API key from the local `config.xml` (searching the default locations, including the SyncThingy flatpak; `--syncthing-config PATH` overrides), adds the hub device, creates the subscribed folders with the bootstrap above (`--timeout SECONDS`). Idempotent. |
 | `warpzone prune [device]` | on the device | Reports, and with `--apply` deletes, the files of the whitelisted folders that the device no longer whitelists (see [Pruning](#pruning)). Report only by default. |
 | `warpzone bios` | on a device or the hub | Reports which BIOS and firmware files a library has, lacks or has wrong (see [BIOS check](#bios-check)). Read-only. Exit 1 if a required item is missing or wrong. |
@@ -778,7 +803,7 @@ signature. The code is in `warpzone/inbox_console_iso.py`, which is both a kind 
   (default `<root>/frontend/es-de/gamelists/ps3/gamelist.xml`) gets
   `<altemulator>RPCS3 ISO (Standalone)</altemulator>` for the game, written with the same
   helpers as the arcade gamelist (`inbox_mame.update_gamelist_entry`, atomic write,
-  `.bak` of the file before the run's first change). Report mode prints "would add". It
+  backup under `tools/logs/gamelist-backups/` before the run's first change). Report mode prints "would add". It
   is also done for a game that was already in the library. If the gamelist cannot be
   updated the item goes to review and a rerun retries it.
 
@@ -820,15 +845,30 @@ registry (`inbox.kind_handlers()`; a handler has `validate`, `claims` and `proce
   parent among them (a merged zip fits its parent and each of its clones), then the one
   that explains most members, games before BIOS and device sets; otherwise the set
   lacking the fewest files.
-- **Decision.** The databases are tried in the order MAME, FinalBurn Neo, MAME
-  2003-Plus, only the configured ones. The first whose set fits decides: MAME means the
-  ES-DE default (no `<altemulator>`), the others their ES-DE name, `FinalBurn Neo` and
-  `MAME 2003-Plus`. When none fits the zip goes to review, and the reason has one line per
+- **Decision.** The databases are tried in the order FinalBurn Neo, MAME, MAME
+  2003-Plus (the ordered tuple `SOURCES`), only the configured ones. The first whose set
+  fits decides: MAME means the ES-DE default (no `<altemulator>`; an override left in the
+  gamelist is removed), the others their ES-DE name, `FinalBurn Neo` and `MAME 2003-Plus`.
+  FinalBurn Neo comes before MAME because of RetroAchievements: EmuDeck turns them off
+  for the "MAME - Current" core (`cheevos_enable = "false"` in its `mame.cfg`) and the RA
+  arcade sets target FinalBurn Neo, so a CPS1 game such as dino or ddsom only earns
+  achievements there. A set FinalBurn Neo does not have simply falls through to MAME. When none fits the zip goes to review, and the reason has one line per
   database with the missing files (name and CRC32) grouped by the zip they belong to:
   `needs neogeo.zip`, `needs qsound_hle.zip or qsound.zip`, `<zip> in the library lacks`,
   `<set>.zip lacks`. If only some databases are configured, the others are simply not
   considered. BIOS and device sets (`neogeo`, `qsound_hle`) are filed with no emulator
   entry. The notes of a placed set say why earlier emulators did not fit.
+- **Atomiswave and Naomi (Flycast).** These Sega boards hang in MAME but run in Flycast
+  (checked on hardware). A game is one of them when the `romof` chain in MAME's database
+  ends in `awbios` (Atomiswave) or `naomi`, `naomi2`, `naomigd` (the Naomi family): a clone's
+  `romof` is its parent, whose `romof` is the BIOS, so the chain is followed up to a
+  small depth. If MAME's set is complete (same fit rule as above) the decision is
+  `<altemulator>Flycast</altemulator>` (the ES-DE label of the RetroArch core) whatever the
+  order above; an incomplete set is reviewed as usual, never sent to Flycast. Flycast
+  reads its BIOS from `library/bios/dc/` (`awbios.zip`, `naomi.zip`, same names as
+  MAME), not from `roms/mame/`. When the matching zip is not in `bios/dc/` the game is
+  still placed and a note tells the user to copy it from `roms/mame/`; warpzone never
+  copies BIOS files.
 - **Name and placement.** The result is `library/roms/mame/<set>.zip`, the set name of the
   database that decided, whatever the file was called; the bytes are the original's. It is
   copied to `<name>.part`, read back and compared member by member, then renamed. If the
@@ -845,11 +885,25 @@ registry (`inbox.kind_handlers()`; a handler has `validate`, `claims` and `proce
   several top-level elements, so it is not parsed and rewritten; entries are found by
   their `<path>`, XML comments are skipped, indentation and the newline style are copied,
   and the result is checked to be well-formed (when the original was) before it is
-  written. It is written to `gamelist.xml.part` and renamed, and `gamelist.xml.bak` holds
-  the file as it was before the run's first change. A missing file is created only when
+  written. It is written to `gamelist.xml.part` and renamed. Before the run's first
+  change to a gamelist, the file is copied to `<root>/tools/logs/gamelist-backups/
+  <system>-gamelist-<YYYYMMDD-HHMMSS>.xml` (`<system>` is `mame` or `ps3`). The backup is
+  not written next to the gamelist because that folder is synced both ways and the copy
+  would reach every console; `tools/logs` is excluded by the ignores of `wz-tools` (a
+  fixed `/logs` line), which `provision hub` applies to an existing folder too. A missing file is created only when
   an override is needed. Report mode prints each change as "would ...". If the gamelist
   cannot be updated after the zip was placed, the item goes to review and a rerun
   ("already in the library") retries it.
+- **ES-DE keeps its gamelist in memory.** On a console ES-DE reads the gamelist once and
+  rewrites it when a game is launched, so an edit made on the hub while ES-DE is open on
+  a console is overwritten when that console next saves. warpzone cannot see the
+  consoles, but a console that just played writes the file back through Syncthing, so
+  with `--apply` and before the first edit of a gamelist it compares the file's
+  modification time with the clock (`recently_written`, window 10 minutes). Within the
+  window it prints a warning, once per gamelist per run, saying to quit ES-DE on every
+  console and run `inbox` again if the change does not stick. It never refuses: the edit
+  is made either way. The same applies to the PS3 gamelist. A run's own write counts as a
+  modification, so a second `--apply` within 10 minutes warns about it too.
 - **Not covered.** CHD disks of a set are not in the zip: they are listed in a note, not
   checked. `.7z` and `.rar` are not opened for arcade. Samples are not checked. warpzone
   never downloads the databases.
@@ -1021,7 +1075,8 @@ logic is unit-tested without a network.
   XML databases (BIOS alternatives, merged and split clones, devices, optional and nodump
   ROMs); the gamelist update as a pure text function (add, change, remove, comments,
   other entries and unknown elements untouched, CRLF); whole runs on a temporary hub
-  (placement, rename, fallback to the other emulators, gamelist and `.bak`, conflict,
+  (placement, rename, the emulator order, Flycast for Atomiswave and Naomi, gamelist and
+  its backup, conflict,
   already in the library, review reasons, folders of zips, configuration errors).
 - Console image tests (`test_inbox_console_iso.py`): claiming rules, PARAM.SFO, ISO9660 and
   XDVDFS parsing as pure functions of bytes; signature verdicts on tiny synthetic images

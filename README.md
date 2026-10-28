@@ -90,6 +90,8 @@ warpzone provision hub
 
 This adds every configured device, creates the `wz-*` folders on the hub and shares each with the devices that subscribe to it. It is idempotent: run it again whenever you add a device.
 
+A whitelisted folder (library, songs) that this run **creates** is first set to let only the whitelists through, and `provision hub` waits (default 120 seconds, `--timeout`) until `patterns-common.stignore` and every subscribed device's `patterns-<device>.stignore` are in the hub's index; only then does it set the final ignores, which starts the full scan. Without this, the first scan of a big library on a slow NAS can take hours to reach the whitelists, and every `provision device` waits for them. If the whitelists never show up it warns and sets the final ignores anyway. A folder that already exists is not touched this way.
+
 **4. Provision each device, on the device.**
 
 ```bash
@@ -274,7 +276,7 @@ Xbox and Xbox 360 are told apart by the root executable, not by the offset. An i
 
 A full Redump-style Xbox image (game partition at 0x18300000) is never placed, because xemu cannot boot it: it goes to review with the instruction to convert it to XISO with [extract-xiso](https://github.com/XboxDev/extract-xiso).
 
-A PS3 `.iso` needs ES-DE's alternative emulator `RPCS3 ISO (Standalone)` (the system default is a shortcut launcher), so `--apply` also records `<altemulator>RPCS3 ISO (Standalone)</altemulator>` for the game in the hub's ES-DE gamelist (`frontend/es-de/gamelists/ps3/gamelist.xml`, or `gamelist_ps3`), the same way as for arcade sets below: only that game's entry is touched and `gamelist.xml.bak` keeps the previous file.
+A PS3 `.iso` needs ES-DE's alternative emulator `RPCS3 ISO (Standalone)` (the system default is a shortcut launcher), so `--apply` also records `<altemulator>RPCS3 ISO (Standalone)</altemulator>` for the game in the hub's ES-DE gamelist (`frontend/es-de/gamelists/ps3/gamelist.xml`, or `gamelist_ps3`), the same way as for arcade sets below: only that game's entry is touched and a copy of the previous file goes to `tools/logs/gamelist-backups/` on the hub (see below).
 
 ### Arcade (MAME) sets
 
@@ -286,7 +288,9 @@ An arcade `.zip` (or a folder of them) is identified by the size and CRC32 of it
 | `fbneo_dat` | `FinalBurn Neo (ClrMame Pro XML, Arcade only).dat` from the `dats/` folder of [FBNeo](https://github.com/libretro/FBNeo) | "FinalBurn Neo" |
 | `mame2003plus_dat` | `mame2003-plus.xml` from the `metadata/` folder of [mame2003-plus-libretro](https://github.com/libretro/mame2003-plus-libretro) | "MAME 2003-Plus" |
 
-Use the MAME version your frontend's core runs. A set *fits* an emulator when every required ROM (not `nodump`, not `optional`) of the set, its parent, its BIOS and its devices is present, counting the BIOS and device zips already in `library/roms/mame/`. The first emulator that fits wins: MAME (the default, nothing is written), else FinalBurn Neo, else MAME 2003-Plus. Otherwise the zip goes to review, and the reason lists the exact files missing per emulator and the zip they belong to (`MAME 0.282: mslug: needs neogeo.zip (2 file(s): sp-s2.sp1 9036d879, ...)`).
+Use the MAME version your frontend's core runs. A set *fits* an emulator when every required ROM (not `nodump`, not `optional`) of the set, its parent, its BIOS and its devices is present, counting the BIOS and device zips already in `library/roms/mame/`. The first emulator that fits wins: FinalBurn Neo, else MAME (the ES-DE default, so no override is written), else MAME 2003-Plus. FinalBurn Neo goes first because of RetroAchievements: EmuDeck turns them off for the "MAME - Current" core and the RA arcade sets target FinalBurn Neo, so CPS1 games such as `dino` or `ddsom` only earn achievements there.
+
+Sega Atomiswave and Naomi games are the exception: they hang in MAME but run in Flycast. They are recognised from the `romof` chain in the MAME database (BIOS `awbios`, `naomi`, `naomi2` or `naomigd`), and when MAME's set is complete they get `<altemulator>Flycast</altemulator>`. Flycast reads its BIOS from `bios/dc/` (same file names as MAME), so if `library/bios/dc/` lacks the matching zip, the game is still placed and the report tells you to copy that zip from `roms/mame/` yourself; warpzone never copies BIOS files. Otherwise the zip goes to review, and the reason lists the exact files missing per emulator and the zip they belong to (`MAME 0.282: mslug: needs neogeo.zip (2 file(s): sp-s2.sp1 9036d879, ...)`).
 
 The file keeps (or gets) the set's short name, `<set>.zip`, which MAME requires: a zip called anything else is renamed after the best-fitting database. Merged, split and non-merged sets are all accepted as long as the members match; a clone's zip is completed by its parent's zip already in the library. Nothing is ever overwritten: the same members are "already in the library", a different file under that name goes to review.
 
@@ -299,7 +303,9 @@ For an emulator other than the default, `--apply` writes the ES-DE per-game over
 </game>
 ```
 
-Only that game's entry is added, changed or (when the default now fits) stripped of its override; everything else in the file stays as it is. The file is written to `.part` and renamed, and `gamelist.xml.bak` keeps the file as it was before the run. The report mode prints what it would write. CHD disks of a set are listed as a note but not checked, and sets must be zips (`.7z` and `.rar` are not opened for arcade).
+Only that game's entry is added, changed or (when the default now fits) stripped of its override; everything else in the file stays as it is. The file is written to `.part` and renamed, and the file as it was before the run is copied to `<root>/tools/logs/gamelist-backups/<system>-gamelist-<YYYYMMDD-HHMMSS>.xml` (outside the synced gamelist folder, so the backup never reaches the consoles; `wz-tools` ignores `/logs`). The report mode prints what it would write.
+
+**Quit ES-DE on the consoles first.** ES-DE keeps its gamelist in memory and rewrites it when a game is launched, so an edit made on the hub while ES-DE is open on a console is overwritten. With `--apply`, if the gamelist was modified in the last 10 minutes (a console that just played writes it back through Syncthing), `inbox` warns, still makes the edit, and tells you to quit ES-DE on every console and run it again if the change does not stick. CHD disks of a set are listed as a note but not checked, and sets must be zips (`.7z` and `.rar` are not opened for arcade).
 
 ## Checking a machine
 

@@ -61,7 +61,16 @@ def _build_parser() -> argparse.ArgumentParser:
 
     prov = sub.add_parser("provision", help="configure Syncthing")
     prov_sub = prov.add_subparsers(dest="target", required=True, metavar="target")
-    prov_sub.add_parser("hub", parents=[common, writing], help="configure the hub (remote API)")
+    hub = prov_sub.add_parser(
+        "hub", parents=[common, writing], help="configure the hub (remote API)"
+    )
+    hub.add_argument(
+        "--timeout",
+        type=float,
+        default=provision.HUB_WAIT_SECONDS,
+        help="seconds a new whitelisted folder waits for its whitelists to be indexed "
+        "before the full scan starts (default: %(default)s)",
+    )
     dev = prov_sub.add_parser(
         "device", parents=[common, writing], help="configure this machine (run on the device)"
     )
@@ -325,7 +334,13 @@ def _run(args: argparse.Namespace) -> int:
         return EXIT_RUNTIME if problems else EXIT_OK
 
     if args.target == "hub":
-        provision.provision_hub(cfg, profiles, _hub_client(cfg, dry_run=args.dry_run), rep)
+        provision.provision_hub(
+            cfg,
+            profiles,
+            _hub_client(cfg, dry_run=args.dry_run),
+            rep,
+            wait_timeout=args.timeout,
+        )
         return EXIT_OK
 
     name = _device(cfg, args.name)

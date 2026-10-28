@@ -4,9 +4,10 @@ An arcade zip is identified by the CRC32 and size of its members against up to t
 set databases in XML (MAME's `-listxml`, the FinalBurn Neo arcade DAT and the MAME
 2003-Plus DAT). A set "fits" an emulator when every required ROM of the set, of its
 parent, of its BIOS and of its devices is present, in the dropped zip or in the BIOS and
-device zips already in `library/roms/mame/`. The first emulator that fits wins (MAME is
-the ES-DE default; the others are recorded as a per-game `<altemulator>` in the hub's
-ES-DE gamelist). See docs/design.md.
+device zips already in `library/roms/mame/`. The first emulator that fits wins: FinalBurn
+Neo, then MAME (the ES-DE default, so no `<altemulator>`), then MAME 2003-Plus; the others
+are recorded as a per-game `<altemulator>` in the hub's ES-DE gamelist. Sega Atomiswave
+and Naomi games, which hang in MAME, go to Flycast instead. See docs/design.md.
 
 The decisions (`evaluate`, `best_fit`, `decide`, `update_gamelist`, `parse_sets`,
 `describe_miss`) are pure; `MameHandler` and the cache and gamelist file helpers touch
@@ -20,6 +21,7 @@ import json
 import os
 import re
 import shutil
+import time
 import weakref
 import xml.etree.ElementTree as ET
 import zipfile
@@ -36,15 +38,31 @@ from warpzone.inbox import Context, InboxError, ItemFailure, ItemResult, Options
 SYSTEM = "mame"  # roms/<system>/ where arcade sets live
 GAMELIST_REL = ("frontend", "es-de", "gamelists", "mame", "gamelist.xml")
 CACHE_VERSION = 1
+# Gamelist backups live outside every synced folder (wz-tools ignores /logs).
+BACKUP_REL = ("tools", "logs", "gamelist-backups")
+RECENT_SECONDS = 600  # a gamelist modified more recently than this triggers a warning
 EMU_FBNEO = "FinalBurn Neo"  # ES-DE names, as written in <altemulator>
 EMU_2003PLUS = "MAME 2003-Plus"
+EMU_FLYCAST = "Flycast"  # the RetroArch core, for Atomiswave and Naomi
+# Sega arcade boards MAME hangs on and Flycast runs: the BIOS set a game's `romof` chain
+# ends in, and the board it stands for. Flycast reads the same zip names from bios/dc/.
+FLYCAST_BIOS = {
+    "awbios": "Atomiswave",
+    "naomi": "Naomi",
+    "naomi2": "Naomi 2",
+    "naomigd": "Naomi GD-ROM",
+}
+BIOS_DIR_FLYCAST = ("bios", "dc")  # under library/
 MAX_DEPTH = 8  # parent / BIOS chains are short; this only guards against a cycle
 SHOWN_FILES = 3
 # (config key, label or None to take the version from the DAT, <altemulator> value), in the
-# order they are tried: the ES-DE default first.
+# order they are tried. FinalBurn Neo goes before MAME (the ES-DE default, no
+# <altemulator>) because RetroAchievements: EmuDeck turns them off for the "MAME - Current"
+# core (`cheevos_enable = "false"` in its mame.cfg) and the RA arcade sets target FinalBurn
+# Neo, so a CPS1 game such as dino or ddsom only earns achievements there.
 SOURCES: tuple[tuple[str, str | None, str | None], ...] = (
-    ("mame_dat", None, None),
     ("fbneo_dat", EMU_FBNEO, EMU_FBNEO),
+    ("mame_dat", None, None),
     ("mame2003plus_dat", EMU_2003PLUS, EMU_2003PLUS),
 )
 KIND_RANK = {"game": 0, "bios": 1, "device": 2}
@@ -352,6 +370,23 @@ class Fit:
     present: frozenset[str] = frozenset()  # support zips found in the library
     used: int = 0  # members of the dropped zip that belong to this set
     disks: tuple[str, ...] = ()
+    flycast_bios: str = ""  # Atomiswave / Naomi BIOS set the game derives from, if any
+
+
+def flycast_bios(db: SetDb, name: str) -> str:
+    """The Atomiswave or Naomi BIOS set (`awbios`, `naomi`, ...) at the end of the set's
+    `romof` chain, "" for any other game. A clone's `romof` is its parent, whose own
+    `romof` is the BIOS, so the chain is followed."""
+    seen = {name}
+    machine = db.machines.get(name)
+    current = machine.romof if machine else ""
+    while current and current not in seen and len(seen) <= MAX_DEPTH:
+        if current in FLYCAST_BIOS:
+            return current
+        seen.add(current)
+        found = db.machines.get(current)
+        current = found.romof if found else ""
+    return ""
 
 
 def evaluate(db: SetDb, name: str, own: frozenset[Key], support: Support) -> Fit:
@@ -383,6 +418,7 @@ def evaluate(db: SetDb, name: str, own: frozenset[Key], support: Support) -> Fit
         frozenset(present),
         used,
         machine.disks,
+        flycast_bios(db, name) if machine.kind == "game" else "",
     )
 
 
@@ -443,6 +479,7 @@ class Decision:
     reason: str = ""  # when not ok: why, with the missing files
     why: tuple[str, ...] = ()  # when ok: what earlier emulators lacked
     disks: tuple[str, ...] = ()
+    flycast_bios: str = ""  # when Flycast was chosen: the BIOS set it needs in bios/dc/
 
 
 def _files(needs_: Sequence[Need]) -> str:
@@ -474,8 +511,22 @@ def describe_miss(outcome: Outcome) -> str:
 
 
 def decide(outcomes: Sequence[Outcome]) -> Decision:
-    """The first emulator, in the order given (MAME, FinalBurn Neo, MAME 2003-Plus),
-    whose set has everything it needs; otherwise a review with what each one lacks."""
+    """The first emulator, in the order given (FinalBurn Neo, MAME, MAME 2003-Plus),
+    whose set has everything it needs; otherwise a review with what each one lacks. An
+    Atomiswave or Naomi game that is complete per MAME's database goes to Flycast whatever
+    the order, since MAME hangs on those boards."""
+    for outcome in outcomes:
+        fit = outcome.fit
+        if outcome.emulator is None and fit is not None and fit.ok and fit.flycast_bios:
+            return Decision(
+                True,
+                fit.machine,
+                EMU_FLYCAST,
+                outcome.label,
+                fit.kind,
+                disks=fit.disks,
+                flycast_bios=fit.flycast_bios,
+            )
     skipped: list[str] = []
     for outcome in outcomes:
         fit = outcome.fit
@@ -682,7 +733,32 @@ def read_zip(path: Path, verify: bool) -> tuple[list[str], frozenset[Key]]:
     return [i.filename for i in infos], frozenset((i.file_size, f"{i.CRC:08x}") for i in infos)
 
 
-def write_gamelist(path: Path, text: str, backup: bool) -> None:
+def backup_path(root: Path, system: str, when: float) -> Path:
+    """Where the gamelist of `system` is backed up before a run edits it: outside every
+    synced folder (`tools/logs` is ignored by `wz-tools`), so it never reaches a console."""
+    stamp = time.strftime("%Y%m%d-%H%M%S", time.localtime(when))
+    return root.joinpath(*BACKUP_REL, f"{system}-gamelist-{stamp}.xml")
+
+
+def recently_written(mtime: float | None, now: float, window: float = RECENT_SECONDS) -> bool:
+    """Was the gamelist modified within `window` seconds before `now`? A console that
+    just played writes it back through Syncthing, so a recent change means ES-DE may
+    still be open there with its own copy in memory."""
+    return mtime is not None and now - mtime < window
+
+
+def recent_warning(shown: str, mtime: float, now: float) -> str:
+    minutes = max(0, int((now - mtime) // 60))
+    return (
+        f"gamelist {shown} was modified {minutes} min ago. ES-DE on a console keeps its "
+        "gamelist in memory and rewrites it when a game is launched, which would overwrite "
+        "this edit. If the change does not stick, quit ES-DE on every console and run "
+        "inbox again"
+    )
+
+
+def write_gamelist(path: Path, text: str, backup: Path | None) -> None:
+    """Replace the gamelist with `text`; with `backup`, first copy the current file there."""
     path.parent.mkdir(parents=True, exist_ok=True)
     part = path.with_name(path.name + ".part")
     part.unlink(missing_ok=True)
@@ -690,11 +766,37 @@ def write_gamelist(path: Path, text: str, backup: bool) -> None:
         part.write_bytes(text.encode("utf-8"))
         if path.exists():
             shutil.copymode(path, part)
-            if backup:
-                shutil.copy2(path, path.with_name(path.name + ".bak"))
+            if backup is not None:
+                backup.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(path, backup)
         os.replace(part, path)
     finally:
         part.unlink(missing_ok=True)
+
+
+def save_gamelist(
+    ctx: Context, path: Path, text: str, system: str, shown: str, seen: set[Path]
+) -> list[str]:
+    """Write an edited gamelist (only with --apply). The first write of a path in a run
+    backs the file up under `tools/logs/gamelist-backups/` and returns the warning notes
+    when the file was modified a few minutes ago. `seen` holds the paths done already."""
+    notes: list[str] = []
+    first = path not in seen
+    if first:
+        now = ctx.opts.now()
+        try:
+            mtime: float | None = path.stat().st_mtime
+        except OSError:
+            mtime = None
+        if mtime is not None and recently_written(mtime, now):
+            notes.append(recent_warning(shown, mtime, now))
+    backup = backup_path(ctx.opts.root, system, ctx.opts.now()) if first else None
+    try:
+        write_gamelist(path, text, backup)
+    except OSError as exc:
+        raise GamelistError(f"cannot write {path}: {exc.strerror or exc}") from exc
+    seen.add(path)
+    return notes
 
 
 def read_gamelist(path: Path) -> str | None:
@@ -846,6 +948,8 @@ class MameHandler:
         if entry != path.name:
             res.notes.append(f"renamed from {path.name} (the set name in {decision.label})")
         res.notes.append(self._emulator_note(decision))
+        if decision.flycast_bios:
+            res.notes.extend(self._flycast_notes(ctx, decision.flycast_bios))
         for why in decision.why:
             res.notes.append(f"not {why}")
         if decision.disks:
@@ -871,6 +975,17 @@ class MameHandler:
             except GamelistError as exc:  # the zip is placed; a rerun retries the gamelist
                 res.reason = f"{entry} is in the library but the gamelist was not updated: {exc}"
         return res
+
+    @staticmethod
+    def _flycast_notes(ctx: Context, bios: str) -> list[str]:
+        """Flycast takes its BIOS from `library/bios/dc/`, not from `roms/mame/`."""
+        notes = [f"{FLYCAST_BIOS[bios]} game: hangs in MAME, runs in Flycast"]
+        if not ctx.opts.root.joinpath("library", *BIOS_DIR_FLYCAST, f"{bios}.zip").is_file():
+            notes.append(
+                f"Flycast needs {bios}.zip in bios/dc/: copy it from roms/mame/ "
+                "(warpzone never copies BIOS files)"
+            )
+        return notes
 
     @staticmethod
     def _emulator_note(decision: Decision) -> str:
@@ -919,12 +1034,9 @@ class MameHandler:
         if not ctx.opts.apply:
             res.notes.append(f"gamelist {shown}: would {what}")
             return
-        state = _state(ctx)
-        try:
-            write_gamelist(path, new, backup=path not in state.backed_up)
-        except OSError as exc:
-            raise GamelistError(f"cannot write {path}: {exc.strerror or exc}") from exc
-        state.backed_up.add(path)
+        res.notes.extend(
+            save_gamelist(ctx, path, new, SYSTEM, shown, _state(ctx).backed_up),
+        )
         res.notes.append(f"gamelist {shown}: {what}")
 
 
