@@ -505,7 +505,7 @@ class CartridgeTests(Base):
 
     def test_unsupported_kinds_never_get_unpacked_or_hashed(self) -> None:
         self.drop("game.vpk", b"vita")
-        self.zip_of("pack.zip", {"x/game.xiso": b"xbox"})
+        self.zip_of("pack.zip", {"x/default.xbe": b"xbox"})
         self.assertEqual(self.go(tools=Tools()), 2)
         self.assertIn("not supported by inbox yet (Vita", self.reason("game.vpk"))
         self.assertIn("not supported by inbox yet (Xbox", self.reason("pack.zip"))

@@ -336,6 +336,7 @@ mame_dat = "~/dats/mame0282lx.zip"            # optional arcade databases (see I
 fbneo_dat = "~/dats/fbneo-arcade.dat"
 mame2003plus_dat = "~/dats/mame2003-plus.xml"
 gamelist_mame = "/Volumes/hub/frontend/es-de/gamelists/mame/gamelist.xml"  # optional
+gamelist_ps3 = "/Volumes/hub/frontend/es-de/gamelists/ps3/gamelist.xml"  # optional
 ```
 
 `warpzone inbox` reads only the `[inbox]` table, so a desktop that only files games
@@ -627,8 +628,11 @@ Syncthing state. The contract:
   DAT matching or conversion.
 - **Switch games.** See [Switch games](#switch-games) below; they do not go through DAT
   matching or conversion.
-- **Out of scope.** Vita, PS3 and Xbox. Their files are recognised by extension
-  or folder and go to review with "not supported by inbox yet". A disc image kept as a
+- **PS3, Xbox and Xbox 360 disc images.** See [Console disc images](#console-disc-images)
+  below; they are identified by signature, not by DAT.
+- **Out of scope.** Vita, and PS3 or Xbox content that is not a disc image (`.pkg`,
+  `.rap`, an extracted `PS3_GAME` or `default.xbe` folder). Their files are recognised by
+  extension or folder and go to review with "not supported by inbox yet". A disc image kept as a
   single `.bin` for several tracks is not identified (the DATs list one file per track).
 - **Exit code.** `0` when every item is placed or already in the library; `1` when any
   item went to review; `2` for a usage or configuration error.
@@ -697,6 +701,55 @@ blawar/titledb and filed under the library's existing conventions. The code is i
   ones only make the affected files go to review or fall back to file names. The titledb
   region files are indexed into small JSON caches under `$XDG_CACHE_HOME/warpzone/titledb`,
   keyed by size and modification time. The keys file is never opened by warpzone.
+
+### Console disc images
+
+PS3, Xbox and Xbox 360 images have no Redump or No-Intro entry, so they are identified by
+signature. The code is in `warpzone/inbox_console_iso.py`, which is both a kind handler in
+`inbox.kind_handlers()` and the one `UnmatchedHandler` in `inbox.unmatched_handlers()`.
+
+- **Signatures.** Reads are bounded (a few KiB at fixed offsets, directories up to 1 MiB,
+  a PARAM.SFO up to 64 KiB); an image is never read whole to be identified.
+  - *XDVDFS* (Xbox, Xbox 360): at each candidate partition offset (0, 0xFDA0000 XGD2,
+    0x2080000 XGD3, 0x18300000 Redump Xbox) the volume descriptor at +0x10000 must start
+    with `MICROSOFT*XBOX*MEDIA`; root sector (u32 at +0x14) and size (u32 at +0x18) give
+    the root directory, whose entries form a binary tree (`u16 left`, `u16 right` in
+    4-byte units, `u32 sector`, `u32 size`, `u8 attributes`, `u8 name length`, name) that
+    is walked with a visited set. The root executable decides: `default.xbe` at offset 0
+    is Xbox, `default.xex` at 0, 0xFDA0000 or 0x2080000 is Xbox 360, `default.xbe` at
+    0x18300000 is a full Xbox image that is not placed. Any other combination is not
+    recognised.
+  - *PS3*: an ISO9660 primary volume descriptor at sector 16; the root must hold
+    `PS3_DISC.SFB` and a `PS3_GAME` directory with `PARAM.SFO`, whose `TITLE_ID` and `TITLE`
+    are read.
+- **Claiming.** The handler claims an item (a file, a folder, or an archive listed by
+  `zipfile` or `bsdtar -tf`) when a file name ends in `.dec.iso`, `.xiso.iso` or `.xiso`.
+  Names alone never identify: a claimed file whose content is not recognised goes to
+  review. Every `.iso` or `.xiso` in a claimed item is sniffed; other non-sidecar files are
+  named in the review reason.
+- **Plain `.iso`.** A plain `.iso` must keep going through the DATs, so it is not claimed.
+  After `identify()` the files left unmatched are offered to `unmatched_handlers()`; this
+  handler sniffs the unmatched `.iso` files and places the ones that are PS3, Xbox or
+  Xbox 360 (or sends a full Xbox image to review) instead of reporting "no DAT match". A
+  PS2, PSP or GameCube image that a DAT matches is therefore never read for a signature,
+  and one that no DAT matches and no signature fits ends in review as before. The cost is
+  that an unmatched plain `.iso` is hashed once, like any other unmatched file.
+- **Placement.** `library/roms/ps3/`, `roms/xbox/` and `roms/xbox360/roms/` (the folder
+  EmuDeck's ES-DE system for the 360 reads), under the file's own name. It is copied to
+  `<name>.part`, read back and renamed; an existing name with the same size and SHA1 is
+  "already in the library", a different one a review (nothing replaced). The report shows
+  `detected: <platform>` (for PS3 also the TITLE_ID and title), the path and the whitelist
+  line (`!/roms/xbox360/roms/<name>`).
+- **Full Xbox images.** A game partition at 0x18300000 is flagged, never placed: xemu
+  cannot boot it. The review reason says to convert it to XISO with extract-xiso.
+- **PS3 emulator.** A PS3 `.iso` needs ES-DE's alternative emulator `RPCS3 ISO
+  (Standalone)`; the system default is a shortcut launcher. `[inbox] gamelist_ps3`
+  (default `<root>/frontend/es-de/gamelists/ps3/gamelist.xml`) gets
+  `<altemulator>RPCS3 ISO (Standalone)</altemulator>` for the game, written with the same
+  helpers as the arcade gamelist (`inbox_mame.update_gamelist_entry`, atomic write,
+  `.bak` of the file before the run's first change). Report mode prints "would add". It
+  is also done for a game that was already in the library. If the gamelist cannot be
+  updated the item goes to review and a rerun retries it.
 
 ### Arcade sets
 
@@ -855,6 +908,7 @@ warpzone/
   inbox.py           unpack, identify, convert, place, file the originals
   inbox_switch.py    Switch games: identify with nsz, titledb names, decompress, place
   inbox_mame.py      arcade sets: MAME / FBNeo / 2003-Plus fit, emulator choice, ES-DE gamelist
+  inbox_console_iso.py  PS3, Xbox and Xbox 360 disc images: identify by signature, place
   doctor.py          machine checklist (`warpzone doctor`): checks, install hints, renderer
   ra.py              RetroAchievements: RAHasher wrapper, game list lookup
   localst.py         find and parse the local Syncthing config.xml
@@ -922,6 +976,13 @@ logic is unit-tested without a network.
   other entries and unknown elements untouched, CRLF); whole runs on a temporary hub
   (placement, rename, fallback to the other emulators, gamelist and `.bak`, conflict,
   already in the library, review reasons, folders of zips, configuration errors).
+- Console image tests (`test_inbox_console_iso.py`): claiming rules, PARAM.SFO, ISO9660 and
+  XDVDFS parsing as pure functions of bytes; signature verdicts on tiny synthetic images
+  built in the tests (a minimal ISO9660 with the PS3 files, XDVDFS volumes at offset 0 and
+  at the XGD2, XGD3 and Redump offsets, the large offsets as sparse files); whole runs on a
+  temporary hub (placement, the plain `.iso` hook with a PS2 and a PSP image that a DAT
+  matches, already present, conflicts, the full Xbox image, wrong content under a claimed
+  name, the gamelist `<altemulator>`, zip and 7z input).
 - `doctor` tests: the renderer and exit code as pure functions; every check with fake
   probes (tool present, missing per platform, unrunnable, unrecognizable version; config
   missing, partial or invalid; Syncthing absent, answering, refusing, not on loopback;

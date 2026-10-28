@@ -110,3 +110,7 @@ dats_dir = "~/dats/libretro-database/metadat"
 # The ES-DE gamelist that holds the per-game emulator overrides. Default:
 # <root>/frontend/es-de/gamelists/mame/gamelist.xml
 # gamelist_mame = "/Volumes/hub/frontend/es-de/gamelists/mame/gamelist.xml"
+
+# PS3 games are placed with ES-DE's alternative emulator "RPCS3 ISO (Standalone)", recorded in
+# this gamelist. Default: <root>/frontend/es-de/gamelists/ps3/gamelist.xml
+# gamelist_ps3 = "/Volumes/hub/frontend/es-de/gamelists/ps3/gamelist.xml"
