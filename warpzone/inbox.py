@@ -63,7 +63,6 @@ JUNK_NAMES = frozenset({".DS_Store", "Thumbs.db", "desktop.ini", "@eaDir", "#rec
 ZIP_DATE = (1996, 12, 24, 23, 32, 0)  # fixed, so the same game always zips to the same bytes
 UNSUPPORTED_EXTENSIONS = {
     ".vpk": "Vita",
-    ".xiso": "Xbox",
     ".pkg": "PS3",
     ".rap": "PS3",
 }
@@ -638,9 +637,30 @@ class KindHandler(Protocol):
 
 def kind_handlers() -> list[KindHandler]:
     """The registry: one line per handler (imported late, they import this module)."""
-    from warpzone import inbox_mame, inbox_switch
+    from warpzone import inbox_console_iso, inbox_mame, inbox_switch
 
-    return [inbox_mame.HANDLER, inbox_switch.HANDLER]
+    return [inbox_mame.HANDLER, inbox_switch.HANDLER, inbox_console_iso.HANDLER]
+
+
+class UnmatchedHandler(Protocol):
+    """A second chance for files the DATs did not explain. `adopt` gets the staged files
+    of the item and the unmatched ones; it places (or sends to review) the ones it can
+    tell by their content, fills `result` and returns their item paths, which are then no
+    longer reported as "no DAT match"."""
+
+    def adopt(
+        self,
+        ctx: Context,
+        staged: Mapping[str, Staged],
+        unmatched: Sequence[FileInfo],
+        result: ItemResult,
+    ) -> set[str]: ...
+
+
+def unmatched_handlers() -> list[UnmatchedHandler]:
+    from warpzone import inbox_console_iso
+
+    return [inbox_console_iso.HANDLER]
 
 
 def _link_tracks(directory: Path, tracks: Sequence[Path]) -> None:
@@ -966,6 +986,9 @@ def _identify_and_place(ctx: Context, item: Path, work: Path, result: ItemResult
         for track in found[1]
     }
     unmatched = [f for f in unmatched if f.path not in owned]
+    for second in unmatched_handlers():
+        taken = second.adopt(ctx, by_rel, unmatched, result)
+        unmatched = [f for f in unmatched if f.path not in taken]
     for names in ambiguous:
         result.reasons.append("ambiguous DAT match, cannot tell apart: " + " | ".join(names))
     if unmatched:

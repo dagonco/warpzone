@@ -557,8 +557,12 @@ def update_gamelist(text: str, set_name: str, emulator: str | None) -> tuple[str
     """`text` with the per-game emulator of `<set_name>.zip` set to `emulator` (removed
     when None), and what was done: "unchanged", "added", "changed" or "removed".
     Everything else, comments and unknown elements included, stays as it is."""
+    return update_gamelist_entry(text, f"{set_name}.zip", emulator)
+
+
+def update_gamelist_entry(text: str, file_name: str, emulator: str | None) -> tuple[str, str]:
+    """`update_gamelist` for any game file name (`inbox_console_iso` uses it for PS3)."""
     nl = "\r\n" if "\r\n" in text else "\n"
-    file_name = f"{set_name}.zip"
     target = next((m for m in _game_blocks(text) if _entry_path(m.group(0)) == file_name), None)
     if target is None:
         if emulator is None:
@@ -678,7 +682,7 @@ def read_zip(path: Path, verify: bool) -> tuple[list[str], frozenset[Key]]:
     return [i.filename for i in infos], frozenset((i.file_size, f"{i.CRC:08x}") for i in infos)
 
 
-def _write_gamelist(path: Path, text: str, backup: bool) -> None:
+def write_gamelist(path: Path, text: str, backup: bool) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     part = path.with_name(path.name + ".part")
     part.unlink(missing_ok=True)
@@ -693,7 +697,7 @@ def _write_gamelist(path: Path, text: str, backup: bool) -> None:
         part.unlink(missing_ok=True)
 
 
-def _read_gamelist(path: Path) -> str | None:
+def read_gamelist(path: Path) -> str | None:
     try:
         return path.read_bytes().decode("utf-8")
     except FileNotFoundError:
@@ -897,7 +901,7 @@ class MameHandler:
             if settings.gamelist_mame
             else ctx.opts.root.joinpath(*GAMELIST_REL)
         )
-        text = _read_gamelist(path)
+        text = read_gamelist(path)
         if text is None:
             if decision.emulator is None:
                 return
@@ -917,7 +921,7 @@ class MameHandler:
             return
         state = _state(ctx)
         try:
-            _write_gamelist(path, new, backup=path not in state.backed_up)
+            write_gamelist(path, new, backup=path not in state.backed_up)
         except OSError as exc:
             raise GamelistError(f"cannot write {path}: {exc.strerror or exc}") from exc
         state.backed_up.add(path)

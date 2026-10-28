@@ -54,6 +54,7 @@ INBOX_KEYS = (
     "fbneo_dat",
     "mame2003plus_dat",
     "gamelist_mame",
+    "gamelist_ps3",
     "nsz",
     "titledb_dir",
     "switch_keys",
@@ -78,6 +79,7 @@ class InboxSettings:
     fbneo_dat: str | None = None
     mame2003plus_dat: str | None = None
     gamelist_mame: str | None = None
+    gamelist_ps3: str | None = None
     nsz: str | None = None
     titledb_dir: str | None = None
     switch_keys: str | None = None

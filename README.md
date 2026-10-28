@@ -222,7 +222,7 @@ What it does for each item:
 
 Items modified in the last 30 seconds are left alone (they may still be copying), and `_*` folders, hidden files, `@eaDir` and `.DS_Store` are never items. warpzone does not edit whitelists: add the printed lines to the device whitelists yourself. Exit code 1 when any item needs review.
 
-Vita, PS3 and Xbox are not supported by `inbox` yet; those items go to review ("not supported by inbox yet"). Arcade sets and Switch games are handled separately, below.
+Vita is not supported by `inbox` yet, and neither are PS3 or Xbox games kept as extracted folders or `.pkg` files; those items go to review ("not supported by inbox yet"). Arcade sets, Switch games and PS3, Xbox and Xbox 360 disc images are handled separately, below.
 
 Configure it in the `[inbox]` table of the config (see [`examples/config.example.toml`](examples/config.example.toml)); with `--root` and `--dats` it needs no config file:
 
@@ -257,6 +257,22 @@ The TitleID decides the kind (a game ends in `000`, an update in `800`, anything
 - Without `nsz` or the keys file, an `.nsp` falls back to the `[TitleID][vN]` in its file name and the report says so (a `.nsz` cannot be read and goes to review). A title titledb does not know, or an `.nsp` holding several titles, goes to review.
 - A file is never overwritten, and the check is by TitleID and version wherever the library has it: the same bytes are "already in the library", different bytes go to review.
 - Games print their whitelist line (`!/roms/switch/...`); updates and DLC are usually whitelisted by folder (`!/extras/switch/updates`, `!/extras/switch/dlc`), so the report says that once instead of one line per file.
+
+### PS3, Xbox and Xbox 360 disc images
+
+No Redump or No-Intro DAT can match these three, so they are identified by their signature, read in a few small pieces (never the whole image):
+
+| Image | Signature | Placed in |
+|---|---|---|
+| PS3, decrypted (`*.dec.iso`) | ISO9660 with `PS3_DISC.SFB` and `PS3_GAME/PARAM.SFO` (its `TITLE_ID` and `TITLE` are reported) | `library/roms/ps3/` |
+| Xbox, XISO (`*.xiso.iso`, `*.xiso`) | XDVDFS (`MICROSOFT*XBOX*MEDIA` at 0x10000) with `default.xbe` in the root | `library/roms/xbox/` |
+| Xbox 360 (plain `*.iso`) | XDVDFS partition at 0xFDA0000 (XGD2) or 0x2080000 (XGD3), or an extracted XISO at 0, with `default.xex` in the root | `library/roms/xbox360/roms/` |
+
+Xbox and Xbox 360 are told apart by the root executable, not by the offset. An item whose file names end in `.dec.iso`, `.xiso.iso` or `.xiso` (loose, in a folder or in an archive) is taken over; a plain `.iso` is left to the DATs first, so PS2, PSP and GameCube images are never touched, and only an `.iso` that no DAT explains is then sniffed and placed if it is one of these. The file keeps its name, nothing is overwritten (same size and SHA1 is "already in the library", anything else goes to review), and the report shows what was detected, the destination and the whitelist line (`!/roms/xbox360/roms/<name>`).
+
+A full Redump-style Xbox image (game partition at 0x18300000) is never placed, because xemu cannot boot it: it goes to review with the instruction to convert it to XISO with [extract-xiso](https://github.com/XboxDev/extract-xiso).
+
+A PS3 `.iso` needs ES-DE's alternative emulator `RPCS3 ISO (Standalone)` (the system default is a shortcut launcher), so `--apply` also records `<altemulator>RPCS3 ISO (Standalone)</altemulator>` for the game in the hub's ES-DE gamelist (`frontend/es-de/gamelists/ps3/gamelist.xml`, or `gamelist_ps3`), the same way as for arcade sets below: only that game's entry is touched and `gamelist.xml.bak` keeps the previous file.
 
 ### Arcade (MAME) sets
 
