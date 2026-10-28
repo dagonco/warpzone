@@ -128,11 +128,16 @@ class ProfileTests(unittest.TestCase):
         ignore = load_profile("steamos-emudeck").library_ignore
         for line in (
             "/bios/PPSSPP",
-            "/bios/readme.txt",
+            "(?d)/bios/**/readme.txt",
             "(?d)/roms/*/systeminfo.txt",
             "(?d)/roms/*/metadata.txt",
         ):
             self.assertIn(line, ignore)
+        for folder in ("HdPacks", "Mupen64plus", "fbneo", "kronos", "same_cdi", "ryujinx"):
+            self.assertIn(f"(?d)/bios/{folder}", ignore)
+        # A hub may deliver BIOS files into these two.
+        self.assertNotIn("(?d)/bios/mame", ignore)
+        self.assertNotIn("(?d)/bios/neocd", ignore)
         # Never a whole folder that holds games.
         self.assertNotIn("/roms", ignore)
 

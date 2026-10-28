@@ -33,7 +33,17 @@ ignore = [
   # revert would delete them). `(?d)` lets Syncthing remove a ROM folder that the hub
   # deleted even though one of these files is still inside it.
   "/bios/PPSSPP",
-  "/bios/readme.txt",
+  "(?d)/bios/**/readme.txt",
+  # EmuDeck's own folders in bios/: emulator-owned data that the hub never fills.
+  # (bios/mame and bios/neocd are not here: a hub may deliver BIOS files into them.)
+  "(?d)/bios/HdPacks",
+  "(?d)/bios/Mupen64plus",
+  "(?d)/bios/fbneo",
+  "(?d)/bios/kronos",
+  "(?d)/bios/same_cdi",
+  "(?d)/bios/ryujinx",
+  "(?d)/bios/shadps4",
+  "(?d)/bios/yuzu",
   "(?d)/roms/*/systeminfo.txt",
   "(?d)/roms/*/metadata.txt",
 ]
