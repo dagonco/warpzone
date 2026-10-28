@@ -1,0 +1,2 @@
+# Fake API key in the test fixtures (tests/support.py), flagged by generic-api-key.
+76c1f3e9ecbbc5d989974df6e481a100a9c05573:tests/support.py:generic-api-key:17
