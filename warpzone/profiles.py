@@ -148,7 +148,8 @@ def _parse_library(raw: Any, err: Callable[[str], None]) -> tuple[str, ...]:
     if not isinstance(ignore, list) or not all(isinstance(i, str) for i in ignore):
         err("library.ignore: must be a list of strings")
         return ()
-    bad = [i for i in ignore if not i.startswith("/") or i == "/"]
+    # An optional `(?d)` prefix lets Syncthing delete the file with its parent folder.
+    bad = [i for i in ignore if not (i.removeprefix("(?d)").startswith("/") and i != "/")]
     for item in bad:
         err(f"library.ignore: {item!r} must be a path below the library starting with `/`")
     return () if bad else tuple(ignore)

@@ -28,6 +28,14 @@ ignore = [
   "/bios/yuzu/firmware",
   "/bios/suyu/keys",
   "/bios/suyu/firmware",
+  # Files and folders EmuDeck writes into the library on every console. They are not
+  # on the hub, so a receive-only device would list them as local changes (and a
+  # revert would delete them). `(?d)` lets Syncthing remove a ROM folder that the hub
+  # deleted even though one of these files is still inside it.
+  "/bios/PPSSPP",
+  "/bios/readme.txt",
+  "(?d)/roms/*/systeminfo.txt",
+  "(?d)/roms/*/metadata.txt",
 ]
 
 # One entry per save folder. `path` is the REAL directory: EmuDeck exposes
@@ -115,13 +123,22 @@ path = "~/.var/app/io.github.shiiion.primehack/data/dolphin-emu/StateSaves"
 path = "~/.var/app/org.flycast.Flycast/data/flycast"
 ignore = ["!/*vmu_save_*.bin", "!/*nvmem*", "*"]
 
-# YARG is not part of EmuDeck. This is the Linux build's data folder. The song cache
-# and the list of bad songs hold absolute paths of one machine, so they never sync.
-# scores/ holds a SQLite database: close the game on one console before playing on
-# another.
+# YARG is not part of EmuDeck. This is the Linux build's data folder (it writes
+# `custom/` in lowercase). The song cache and the list of bad songs hold absolute
+# paths of one machine, so they never sync, and neither do the *.bak copies YARG
+# leaves next to the profiles. scores/ holds a SQLite database: close the game on
+# one console before playing on another.
 [saves.yarg-data]
 path = "~/.config/unity3d/YARC/YARG/release"
-ignore = ["!/settings.json", "!/scores", "!/profiles", "!/playlists", "!/Custom", "*"]
+ignore = [
+  "(?d)/profiles/*.bak",
+  "!/settings.json",
+  "!/scores",
+  "!/profiles",
+  "!/playlists",
+  "!/custom",
+  "*",
+]
 
 # BIOS placements. The library cannot deliver these files: EmuDeck turns these
 # folders into symlinks under ~/Emulation/bios and Syncthing never follows symlinks.

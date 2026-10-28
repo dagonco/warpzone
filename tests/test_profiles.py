@@ -77,10 +77,17 @@ class ProfileTests(unittest.TestCase):
         yarg = load_profile("steamos-emudeck").saves["yarg-data"]
         self.assertEqual(yarg.path, "~/.config/unity3d/YARC/YARG/release")
         self.assertEqual(yarg.ignore[-1], "*")
-        for name in ("settings.json", "scores", "profiles", "playlists", "Custom"):
+        for name in ("settings.json", "scores", "profiles", "playlists", "custom"):
             self.assertTrue(_whitelisted(yarg.ignore, name), name)
+        # YARG on Linux writes `custom/` in lowercase.
+        self.assertFalse(_whitelisted(yarg.ignore, "Custom"))
         for name in ("songcache.bin", "badsongs.txt", "logs", "currentSong.txt"):
             self.assertFalse(_whitelisted(yarg.ignore, name), name)
+
+    def test_yarg_ignores_the_bak_files_before_the_whitelist(self) -> None:
+        ignore = load_profile("steamos-emudeck").saves["yarg-data"].ignore
+        bak = ignore.index("(?d)/profiles/*.bak")
+        self.assertLess(bak, ignore.index("!/profiles"))  # the first match wins
 
     def test_shipped_bios_placements(self) -> None:
         profile = load_profile("steamos-emudeck")
@@ -116,6 +123,18 @@ class ProfileTests(unittest.TestCase):
         for hub in ("/bios/eden/keys", "/bios/eden/firmware", "/bios/azahar", "/bios/cemu"):
             self.assertIn(hub, excludes)
         self.assertEqual(len(excludes), len(set(excludes)))
+
+    def test_library_ignores_emudeck_own_files(self) -> None:
+        ignore = load_profile("steamos-emudeck").library_ignore
+        for line in (
+            "/bios/PPSSPP",
+            "/bios/readme.txt",
+            "(?d)/roms/*/systeminfo.txt",
+            "(?d)/roms/*/metadata.txt",
+        ):
+            self.assertIn(line, ignore)
+        # Never a whole folder that holds games.
+        self.assertNotIn("/roms", ignore)
 
     def test_every_shipped_profile_is_valid(self) -> None:
         self.assertIn("steamos-emudeck", available_profiles())
@@ -174,6 +193,9 @@ class ProfileTests(unittest.TestCase):
         parse_profile(
             {**base, "bios": {"a-b": good, "a-c": {"hub": "bios/x-2", "path": "~/y"}}}, "t"
         )
+        deletable = parse_profile({**base, "library": {"ignore": ["(?d)/y/*.txt"]}}, "t")
+        self.assertEqual(deletable.library_ignore, ("(?d)/y/*.txt",))
+        self.assert_invalid({**base, "library": {"ignore": ["(?d)roms"]}}, "library.ignore")
         self.assert_invalid({**base, "library": {"ignore": ["roms"]}}, "library.ignore")
         self.assert_invalid({**base, "library": {"ignore": "/roms"}}, "library.ignore")
         self.assert_invalid({**base, "library": {"x": 1}}, "library: unknown key")
