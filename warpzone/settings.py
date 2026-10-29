@@ -716,3 +716,104 @@ def _apply_locked(
     say(("(dry run) " if dry_run else "") + summary)
     log.line(f"apply: {summary}")
     return finish(1 if c.errors else 0, c)
+
+
+# ---------------------------------------------------------------------------------------------
+# Audit
+# ---------------------------------------------------------------------------------------------
+
+
+def audit_report(
+    ctx: Context, *, emulators: Iterable[str] = ()
+) -> tuple[list[plan.AuditRow], list[str]]:
+    """The audit rows and the warnings. Reads only; raises `LayerError` for an invalid layer."""
+    selected = select_emulators(ctx.profile, emulators)
+    layers = load_layers(ctx)
+    env = ctx.env
+    snapshots = state.Snapshots(env.state)
+    rows: list[plan.AuditRow] = []
+    for emu in selected:
+        try:
+            busy = state.running(emu.process, proc=env.proc)
+        except state.NoProc:
+            busy = False  # nothing to compare with; the files are still read
+        if busy:
+            rows.append(plan.row_running(emu.id))
+            continue
+        for target in targets_for(emu, layers.effective, env.home):
+            rows += _audit_file(emu, target, layers, snapshots)
+        for entry in emu.data.values():
+            rows += _audit_data(ctx, emu, entry, snapshots)
+    return rows, layers.warnings
+
+
+def _audit_file(
+    emu: EmulatorSettings, target: Target, layers: Layers, snapshots: state.Snapshots
+) -> list[plan.AuditRow]:
+    layered = layers.effective.get((emu.id, target.id), {})
+    try:
+        loaded = read_target(target)
+    except FileProblem as exc:
+        return [plan.row_invalid(emu.id, target.id, str(exc))]
+    if loaded is None:
+        return [plan.row_no_file(emu.id, target.id, creates=target.spec.create and bool(layered))]
+    try:
+        snapshot = snapshots.load(emu.id, target.id)
+    except (state.StateError, ValueError):
+        return [plan.row_invalid(emu.id, target.id, "the snapshot is corrupt")]
+    return plan.audit_rows(
+        emu.id,
+        target.id,
+        target.shown,
+        target.spec,
+        loaded.values,
+        loaded.fixed,
+        layered,
+        snapshot,
+        can_add=loaded.handler.can_add,
+    )
+
+
+def _audit_data(
+    ctx: Context, emu: EmulatorSettings, entry: DataFile, snapshots: state.Snapshots
+) -> list[plan.AuditRow]:
+    try:
+        st = read_data(ctx, emu.id, entry)
+        snapshot = snapshots.load_data(emu.id)
+    except FileProblem as exc:
+        return [plan.row_invalid(emu.id, entry.id, str(exc))]
+    except (state.StateError, ValueError):
+        return [plan.row_invalid(emu.id, entry.id, "the snapshot is corrupt")]
+    return plan.audit_data(
+        emu.id,
+        entry.id,
+        st.hash,
+        st.hub_hash,
+        (snapshot or {}).get(entry.id),
+        creatable=st.creatable,
+    )
+
+
+def audit(
+    ctx: Context,
+    *,
+    emulators: Iterable[str] = (),
+    all_keys: bool = False,
+    out: Callable[[str], None] = print,
+) -> int:
+    """Report drift between the layers and the files. Writes nothing, state included."""
+    select_emulators(ctx.profile, emulators)  # a usage error comes before any output
+    if not settings_folder_ready(ctx):
+        out("settings: no settings folder, nothing to audit")
+        return 0
+    try:
+        rows, warnings = audit_report(ctx, emulators=emulators)
+    except LayerError as exc:
+        for message in exc.errors:
+            out(f"invalid  {message}")
+        out("summary: a layer is invalid")
+        return 1
+    for message in warnings:
+        out(f"warning: {message}")
+    out(plan.render_audit(rows, all_keys=all_keys))
+    return plan.audit_exit_code(rows)
