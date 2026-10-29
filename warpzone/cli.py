@@ -9,7 +9,19 @@ import urllib.parse
 from collections.abc import Sequence
 from pathlib import Path
 
-from warpzone import __version__, bios, doctor, inbox, localst, model, provision, prune, ra
+from warpzone import (
+    __version__,
+    bios,
+    doctor,
+    inbox,
+    localst,
+    model,
+    provision,
+    prune,
+    ra,
+    settings,
+    settings_state,
+)
 from warpzone.bios import BiosError
 from warpzone.config import (
     Config,
@@ -169,6 +181,40 @@ def _build_parser() -> argparse.ArgumentParser:
         "else the system temp folder)",
     )
 
+    st = sub.add_parser("settings", help="emulator settings: apply the layers, audit drift")
+    st_sub = st.add_subparsers(dest="settings_command", required=True, metavar="action")
+    st_common = argparse.ArgumentParser(add_help=False)
+    st_common.add_argument(
+        "--device", metavar="NAME", help="device name (default: the one matching local Syncthing)"
+    )
+    st_common.add_argument(
+        "--emulator",
+        nargs="+",
+        action="extend",
+        metavar="ID",
+        default=[],
+        help="only these emulators (default: all)",
+    )
+    st_apply = st_sub.add_parser(
+        "apply",
+        parents=[common, st_common, writing],
+        help="write the layered keys into the emulators' files (never while one runs)",
+    )
+    st_apply.add_argument("--quiet", action="store_true", help="print nothing")
+    st_apply.add_argument(
+        "--overwrite-local",
+        action="store_true",
+        help="also write keys changed in an emulator and not captured yet",
+    )
+    st_audit = st_sub.add_parser(
+        "audit",
+        parents=[common, st_common],
+        help="report drift between the layers and the files (read only)",
+    )
+    st_audit.add_argument(
+        "--all", action="store_true", dest="all_keys", help="also list keys in sync"
+    )
+
     sub.add_parser(
         "doctor",
         parents=[common],
@@ -272,6 +318,30 @@ def _inbox(args: argparse.Namespace, rep: Reporter) -> int:
     return EXIT_RUNTIME if inbox.run_inbox(options, rep) else EXIT_OK
 
 
+def _settings(args: argparse.Namespace, cfg: Config, profiles: dict[str, Profile]) -> int:
+    if args.device:
+        name = _device(cfg, args.device)
+    else:
+        local = localst.parse_config(localst.find_config())
+        name = _this_device(cfg, Client(local.base_url, local.api_key, label="local"))
+    ctx = settings.make_context(
+        name,
+        profiles[cfg.devices[name].profile],
+        settings.Env(Path.home(), settings_state.state_dir()),
+    )
+    if args.settings_command == "audit":
+        return settings.audit(ctx, emulators=args.emulator, all_keys=args.all_keys)
+    return settings.apply(
+        ctx,
+        emulators=args.emulator,
+        dry_run=args.dry_run,
+        quiet=args.quiet,
+        overwrite_local=args.overwrite_local,
+        out=print,
+        err=_eprint,
+    )
+
+
 def _run(args: argparse.Namespace) -> int:
     rep = Reporter(print, warn_sink=_eprint)
     if args.command == "doctor":  # offline, read-only, needs no valid config
@@ -281,6 +351,9 @@ def _run(args: argparse.Namespace) -> int:
     if args.command == "inbox":  # needs at most the [inbox] table
         return _inbox(args, rep)
     cfg, profiles = _load(args)
+
+    if args.command == "settings":
+        return _settings(args, cfg, profiles)
 
     if args.command == "check":
         rep.out(f"config ok: {len(cfg.devices)} device(s), profiles: {', '.join(profiles)}")
@@ -370,7 +443,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     except (BiosError, InboxError) as exc:
         _eprint(f"warpzone: error: {exc}")
         return EXIT_USAGE
-    except (SyncthingError, ProvisionError, PruneError, localst.LocalSyncthingError) as exc:
+    except (
+        SyncthingError,
+        ProvisionError,
+        PruneError,
+        localst.LocalSyncthingError,
+        settings.SettingsError,
+    ) as exc:
         _eprint(f"warpzone: error: {exc}")
         return EXIT_RUNTIME
     except KeyboardInterrupt:
