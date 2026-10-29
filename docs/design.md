@@ -1255,8 +1255,9 @@ exit 0
 
 - The interpreter is the absolute path of the Python that runs `provision`, because ES-DE in
   Game Mode does not have the user's `PATH`. `provision` first checks that this interpreter
-  imports `warpzone` from outside the current directory; when it cannot (warpzone run from a
-  clone) it warns and installs nothing.
+  imports `warpzone` from outside the current directory (run from `/`, without `PYTHONPATH`
+  and `PYTHONHOME`, as the script runs it); when it cannot (warpzone run from a clone) it
+  warns and installs nothing, and leaves `es_settings.xml` alone.
 - `env -u` drops what ES-DE's AppImage sets for its own libraries, which could break the
   system's Python. `timeout` bounds how long ES-DE waits. The output is discarded:
   `apply` logs to its own file, so a failure never shows in ES-DE or stops it.
@@ -1274,8 +1275,10 @@ exit 0
   The old file is copied first to
   `$XDG_STATE_HOME/warpzone/settings/backups/esde/es_settings/<YYYYMMDD-HHMMSS>-es_settings.xml`
   and the new one written atomically, as `apply` writes a config file. While ES-DE runs,
-  provision warns (quit ES-DE and run it again) and leaves the file alone; a missing file
-  (ES-DE never started) is a warning too, never created. `--dry-run` says what it would
+  provision warns (quit ES-DE and run it again) and leaves the file alone, as it does
+  when `/proc` is missing and ES-DE cannot be detected; a missing file (ES-DE never
+  started), one that is not UTF-8 or does not parse is a warning too, never created or
+  rewritten. `--dry-run` says what it would
   change. `doctor` still checks the setting.
 - Other files in `scripts/` are never touched. A device that stops subscribing to
   `settings` keeps the script, which then finds no settings folder and does nothing.
@@ -1470,15 +1473,22 @@ for every problem, the exact fix for this platform.
 - **Vita3K user.** When `~/.config/Vita3K/config.yml` has a `user-id:`, `judge_vita3k_user`
   (pure) is `[ok]` for `00` and `[! ]` for anything else: the profile syncs
   `ux0/user/00/savedata` only. A missing file or key says nothing.
-- **Emulator settings.** On a device whose config subscribes it to `settings`:
-  `Settings layers` (the local `wz-settings` folder and its marker exist; `common.toml` and
+- **Emulator settings.** On a device whose config subscribes it to `settings`. Doctor is
+  offline, so it finds the device in the local Syncthing `config.xml`: the configured
+  device whose ID is listed there and whose `paths.settings` is the path of the
+  `wz-settings` folder (the hub lists the same IDs but keeps that folder under its own root,
+  so it gets no such lines); with no local Syncthing, or no such device, the group is
+  silent. The lines are `Settings layers` (the local `wz-settings` folder and its marker exist, `[!!]` if not; `common.toml` and
   the device's layer parse and validate; a conflict copy or a secret key in a layer is
   `[!!]`, an unknown emulator or file id `[! ]`); `ES-DE startup script` (present,
   executable, and its interpreter exists, `[! ]` otherwise with `warpzone provision device
   <name>` as the fix; `CustomEventScripts` not `true` in `es_settings.xml` is `[! ]` with
-  `warpzone provision device <name>` run with ES-DE closed, or the menu path, as the fix); `Last settings apply` (from `last-apply.json`: a failed run
-  is `[! ]` with the log path, held keys are `[! ]` with `warpzone settings capture` as the
-  fix, no run yet is `[--]`). `judge_settings_layers`, `judge_esde_script`,
+  `warpzone provision device <name>` run with ES-DE closed, or the menu path, as the fix); `Last settings apply` (from `last-apply.json`, whose `time`,
+  `exit`, `written` and `held` fields it reads: a failed run is `[! ]` with the log path,
+  held keys are `[! ]` with `warpzone settings capture` as the fix, no run yet is `[--]`).
+  The script and the `CustomEventScripts` judges share the one `ES-DE startup script` line,
+  which shows the text of whichever is not `[ok]`; a missing `es_settings.xml` is `[! ]` too
+  (start ES-DE once). `judge_settings_layers`, `judge_esde_script`,
   `judge_event_scripts` and `judge_last_apply` are pure.
 - **Exit codes.** `0` when no check is a problem, `1` otherwise.
 - **Install hints** live in one table in `warpzone/doctor.py` (`TOOLS` and the `*_HINTS`
