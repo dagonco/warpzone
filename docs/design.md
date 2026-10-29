@@ -1262,8 +1262,21 @@ exit 0
   `apply` logs to its own file, so a failure never shows in ES-DE or stops it.
 - `~/ES-DE` is also the device path of `wz-esde`, whose whitelist lets only `gamelists` and
   `collections` through, so the script is never synced.
-- `provision` reads `es_settings.xml` and, when `CustomEventScripts` is not `true`, says how
-  to turn it on in ES-DE. It does not edit the file: ES-DE rewrites it when it quits.
+- `provision` also turns the scripts on. When `CustomEventScripts` in `es_settings.xml` is
+  not `true` (`event_scripts_enabled`, pure), it sets it, only while ES-DE is not running:
+  ES-DE keeps its settings in memory and rewrites the file when it quits, so an edit made
+  while it runs would be lost. ES-DE is detected as `apply` detects an emulator (`comm` and
+  the base name of `argv[0]`, names in `esde.ESDE_PROCESSES`: `es-de` and `ES-DE.AppImage`,
+  to be confirmed on a device). The edit (`enable_event_scripts`, pure) changes only the
+  `value` of the existing `<bool name="CustomEventScripts" .../>` element, or adds that one
+  line after the last `<bool .../>` line with its indentation and line ending; every other
+  byte stays as it was, and the result must still parse as the same settings plus that one.
+  The old file is copied first to
+  `$XDG_STATE_HOME/warpzone/settings/backups/esde/es_settings/<YYYYMMDD-HHMMSS>-es_settings.xml`
+  and the new one written atomically, as `apply` writes a config file. While ES-DE runs,
+  provision warns (quit ES-DE and run it again) and leaves the file alone; a missing file
+  (ES-DE never started) is a warning too, never created. `--dry-run` says what it would
+  change. `doctor` still checks the setting.
 - Other files in `scripts/` are never touched. A device that stops subscribing to
   `settings` keeps the script, which then finds no settings folder and does nothing.
 - Apply runs once per ES-DE start, possibly before Syncthing has pulled the newest layers.
@@ -1463,7 +1476,7 @@ for every problem, the exact fix for this platform.
   `[!!]`, an unknown emulator or file id `[! ]`); `ES-DE startup script` (present,
   executable, and its interpreter exists, `[! ]` otherwise with `warpzone provision device
   <name>` as the fix; `CustomEventScripts` not `true` in `es_settings.xml` is `[! ]` with
-  the menu path to turn it on); `Last settings apply` (from `last-apply.json`: a failed run
+  `warpzone provision device <name>` run with ES-DE closed, or the menu path, as the fix); `Last settings apply` (from `last-apply.json`: a failed run
   is `[! ]` with the log path, held keys are `[! ]` with `warpzone settings capture` as the
   fix, no run yet is `[--]`). `judge_settings_layers`, `judge_esde_script`,
   `judge_event_scripts` and `judge_last_apply` are pure.
@@ -1538,7 +1551,7 @@ warpzone/
   settings_layers.py layer files: parse, validate, merge, render (pure) and atomic write
   settings_plan.py   apply plan, capture candidates and pre-selection, audit rows (pure)
   settings_state.py  device state: snapshots, backups, log, lock, atomic write, processes
-  esde.py            ES-DE startup script and `es_settings.xml` check (pure)
+  esde.py            ES-DE startup script, `es_settings.xml` check and edit (pure)
   tomlw.py           TOML scalar and key writer (tomllib only reads)
   doctor.py          machine checklist (`warpzone doctor`): checks, install hints, renderer
   ra.py              RetroAchievements: RAHasher wrapper, game list lookup
@@ -1630,8 +1643,10 @@ logic is unit-tested without a network.
   `--yes` and the pattern flags, a report without a terminal, conflict copies and the
   Syncthing in-sync check with the fake Syncthing. Fake login values (marked for gitleaks)
   must never appear in output, layers, snapshots or the log. The startup script rendering
-  and `es_settings.xml` reading as pure functions; `provision device` writing the script and
-  its dry run. The e2e test subscribes the device to `settings` and checks that a layer file
+  and the `es_settings.xml` check and edit as pure functions (value changed, line added,
+  every other byte kept, CRLF); `provision device` writing the script and enabling the
+  setting with a backup, leaving it alone while a fake `/proc` shows ES-DE running, and
+  their dry run. The e2e test subscribes the device to `settings` and checks that a layer file
   travels both ways.
 - `doctor` tests: the renderer and exit code as pure functions; every check with fake
   probes (tool present, missing per platform, unrunnable, unrecognizable version; config
