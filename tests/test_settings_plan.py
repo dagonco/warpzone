@@ -4,9 +4,13 @@ import unittest
 
 from warpzone.profiles import SettingsFile
 from warpzone.settings_plan import (
+    AuditRow,
     Candidate,
     KeyPlan,
     apply_decisions,
+    audit_data,
+    audit_exit_code,
+    audit_rows,
     candidates,
     capture_snapshot,
     data_candidate,
@@ -17,6 +21,10 @@ from warpzone.settings_plan import (
     plan_apply,
     plan_data,
     preselect,
+    render_audit,
+    row_invalid,
+    row_no_file,
+    row_running,
     tracked,
 )
 
@@ -622,6 +630,260 @@ class CaptureSnapshotTests(unittest.TestCase):
 
     def test_keys_the_file_no_longer_has_are_dropped(self) -> None:
         self.assertEqual(self.snap({"a": "1", "gone": "x"}, {"a": "1"}, {}), {"a": "1"})
+
+
+EDEN_PATH = "~/.config/eden/qt-config.ini"
+SYNC_KEYS = [f"[Audio]k{n:02d}" for n in range(1, 15)]
+
+
+def _eden_rows() -> list[AuditRow]:
+    layered = dict.fromkeys(SYNC_KEYS, "1")
+    layered.update(
+        {
+            "[Renderer]resolution_setup": "2",
+            "[System]language_index": "1",
+            "[Folders]SaveStates": "x",
+        }
+    )
+    current = dict.fromkeys(SYNC_KEYS, "1")
+    current.update(
+        {
+            "[Renderer]resolution_setup": "3",
+            "[System]language_index": "4",
+            "[Folders]SaveStates": "x",
+            "[Misc]a": "9",
+            "[Misc]b": "9",
+            "[Misc]c": "9",
+            "[Misc]same": "5",
+        }
+    )
+    snapshot = {
+        "[Renderer]resolution_setup": "3",
+        "[System]language_index": "0",
+        "[Misc]a": "1",
+        "[Misc]b": "1",
+        "[Misc]c": "1",
+        "[Misc]same": "5",
+    }
+    return audit_rows(
+        "eden",
+        "qt-config",
+        EDEN_PATH,
+        SPEC,
+        current,
+        frozenset({"[Folders]SaveStates"}),
+        layered,
+        snapshot,
+        can_add=True,
+    )
+
+
+def _all_rows() -> list[AuditRow]:
+    return [
+        *_eden_rows(),
+        row_no_file("retroarch", "opt:Flycast", creates=True),
+        *audit_data("xemu", "eeprom", "a" * 64, "b" * 64, "a" * 64, creatable=True),
+        row_running("dolphin"),
+    ]
+
+
+EXAMPLE = """\
+eden  qt-config  ~/.config/eden/qt-config.ini
+  in sync        14 keys
+  pending        [Renderer]resolution_setup  here 3, hub 2      apply writes it
+  changed here   [System]language_index      here 4, hub 1      capture proposes it; apply holds it
+  cannot write   [Folders]SaveStates         not writable in the file
+  changed here   3 keys not on the hub (--all lists them)
+retroarch  opt:Flycast  no file (apply creates it)
+xemu  eeprom  pending: the hub copy differs, unchanged here since the last apply
+dolphin  running: its files may not hold its latest changes
+summary: 2 pending, 2 changed here, 1 cannot write"""
+
+
+class AuditRowsTests(unittest.TestCase):
+    def test_rows_classify_every_layered_key_then_the_changed_unlayered_ones(self) -> None:
+        rows = _eden_rows()
+        self.assertEqual(
+            [(r.status, r.key) for r in rows if r.status != "sync"],
+            [
+                ("pending", "[Renderer]resolution_setup"),
+                ("changed", "[System]language_index"),
+                ("cannot-write", "[Folders]SaveStates"),
+                ("changed", "[Misc]a"),
+                ("changed", "[Misc]b"),
+                ("changed", "[Misc]c"),
+            ],
+        )
+        self.assertEqual([r.key for r in rows if r.status == "sync"], SYNC_KEYS)
+        self.assertEqual({r.path for r in rows}, {EDEN_PATH})
+
+    def test_a_missing_key_the_format_can_add_is_pending(self) -> None:
+        rows = audit_rows("e", "f", "p", SPEC, {}, frozenset(), {"k": "1"}, None, can_add=True)
+        self.assertEqual((rows[0].status, rows[0].here, rows[0].hub), ("pending", None, "1"))
+        text = render_audit(rows, all_keys=False)
+        self.assertIn("here -, hub 1", text)
+
+    def test_a_missing_key_the_format_cannot_add_cannot_be_written(self) -> None:
+        rows = audit_rows("e", "f", "p", SPEC, {}, frozenset(), {"k": "1"}, None, can_add=False)
+        self.assertEqual(rows[0].status, "cannot-write")
+
+    def test_a_file_in_sync_has_only_sync_rows(self) -> None:
+        rows = audit_rows(
+            "e",
+            "f",
+            "p",
+            SPEC,
+            {"k": "1", "other": "x"},
+            frozenset(),
+            {"k": "1"},
+            {"k": "1", "other": "x"},
+            can_add=True,
+        )
+        self.assertEqual([r.status for r in rows], ["sync"])
+        self.assertEqual(audit_exit_code(rows), 0)
+
+    def test_unlayered_keys_without_a_baseline_or_new_are_not_reported(self) -> None:
+        rows = audit_rows(
+            "e", "f", "p", SPEC, {"a": "1", "n": "2"}, frozenset(), {}, {"a": "1"}, can_add=True
+        )
+        self.assertEqual(rows, [])
+        rows = audit_rows("e", "f", "p", SPEC, {"a": "1"}, frozenset(), {}, None, can_add=True)
+        self.assertEqual(rows, [])
+
+    def test_audit_never_lists_a_secret_or_a_noise_key_that_is_not_layered(self) -> None:
+        current = {
+            "[Web]n_user": "someone",
+            "cheevos_token": "tok",
+            "[Controls]x": "2",
+        }  # gitleaks:allow
+        snapshot = dict.fromkeys(current, "old")
+        rows = audit_rows("e", "f", "p", SPEC, current, frozenset(), {}, snapshot, can_add=True)
+        self.assertEqual(rows, [])
+
+    def test_a_layered_secret_key_never_shows_up_with_its_value(self) -> None:
+        rows = audit_rows(
+            "e",
+            "f",
+            "p",
+            SPEC,
+            {"cheevos_token": "aaa-secret"},  # gitleaks:allow
+            frozenset(),
+            {"cheevos_token": "bbb-secret", "k": "1"},  # gitleaks:allow
+            None,
+            can_add=True,
+        )
+        text = render_audit(rows, all_keys=True)
+        self.assertNotIn("secret", text)
+        self.assertNotIn("cheevos", text)
+        self.assertEqual([r.key for r in rows], ["k"])
+
+
+class AuditDataTests(unittest.TestCase):
+    def rows(self, current, hub, snapshot, creatable=True):
+        return audit_data("xemu", "eeprom", current, hub, snapshot, creatable=creatable)
+
+    def test_states(self) -> None:
+        cases = [
+            (("h", "h", "s"), ["sync"]),
+            (("a", "h", "a"), ["pending"]),
+            (("a", "h", None), ["pending"]),
+            (("c", "h", "a"), ["changed"]),
+            (("c", None, "a"), ["changed"]),
+            (("a", None, "a"), []),
+            (("a", None, None), []),
+            ((None, None, None), []),
+            ((None, "h", "a"), ["info"]),
+        ]
+        for args, statuses in cases:
+            with self.subTest(args=args):
+                self.assertEqual([r.status for r in self.rows(*args)], statuses)
+
+    def test_no_file_says_whether_apply_creates_it(self) -> None:
+        self.assertIn("apply creates it", self.rows(None, "h", None)[0].detail)
+        self.assertNotIn("creates", self.rows(None, "h", None, creatable=False)[0].detail)
+
+    def test_data_rows_carry_no_hash(self) -> None:
+        text = render_audit(self.rows("a" * 64, "b" * 64, "a" * 64), all_keys=True)
+        self.assertNotIn("a" * 12, text)
+        self.assertNotIn("b" * 12, text)
+
+
+class RenderAuditTests(unittest.TestCase):
+    maxDiff = None
+
+    def test_the_design_example(self) -> None:
+        self.assertEqual(render_audit(_all_rows(), all_keys=False), EXAMPLE)
+
+    def test_all_lists_the_keys_in_sync_and_the_changed_keys_not_on_the_hub(self) -> None:
+        lines = render_audit(_eden_rows(), all_keys=True).splitlines()
+        self.assertEqual(sum(1 for line in lines if line.startswith("  in sync")), 14)
+        self.assertIn(
+            "  changed here   " + "[Misc]a".ljust(28) + "here 9".ljust(19) + "capture proposes it",
+            [line.rstrip() for line in lines],
+        )
+        self.assertFalse(any("--all" in line for line in lines))
+        # the summary counts what needs attention and does not depend on --all
+        self.assertEqual(lines[-1], "summary: 1 pending, 2 changed here, 1 cannot write")
+
+    def test_values_are_cut_to_40_characters(self) -> None:
+        long = "x" * 100
+        rows = audit_rows(
+            "e", "f", "p", SPEC, {"k": long}, frozenset(), {"k": "short"}, None, can_add=True
+        )
+        text = render_audit(rows, all_keys=False)
+        self.assertIn("here " + "x" * 37 + "...,", text)
+        self.assertNotIn("x" * 38, text)
+
+    def test_values_are_shown_plainly_and_control_characters_escaped(self) -> None:
+        rows = audit_rows(
+            "e",
+            "f",
+            "p",
+            SPEC,
+            {"a": True, "b": 1.5, "c": "line\nbreak"},
+            frozenset(),
+            {"a": False, "b": 2, "c": "x"},
+            None,
+            can_add=True,
+        )
+        text = render_audit(rows, all_keys=False)
+        self.assertIn("here true, hub false", text)
+        self.assertIn("here 1.5, hub 2", text)
+        self.assertIn("here line\\nbreak, hub x", text)
+        self.assertEqual(len(text.splitlines()), 5)
+
+    def test_a_single_key_is_singular(self) -> None:
+        rows = audit_rows(
+            "e", "f", "p", SPEC, {"a": "1"}, frozenset(), {"a": "1"}, None, can_add=True
+        )
+        self.assertIn("  in sync        1 key", render_audit(rows, all_keys=False))
+
+    def test_nothing_to_report(self) -> None:
+        self.assertEqual(render_audit([], all_keys=False), "summary: everything in sync")
+
+    def test_invalid_rows(self) -> None:
+        rows = [
+            row_invalid("eden", "", "the device layer does not parse"),
+            row_invalid("ryujinx", "config", "not valid JSON"),
+        ]
+        text = render_audit(rows, all_keys=False)
+        self.assertEqual(
+            text,
+            "eden  invalid: the device layer does not parse\n"
+            "ryujinx  config  invalid: not valid JSON\n"
+            "summary: 2 invalid",
+        )
+        self.assertEqual(audit_exit_code(rows), 1)
+
+    def test_exit_code_is_one_for_pending_changed_cannot_write_or_invalid_only(self) -> None:
+        self.assertEqual(audit_exit_code([]), 0)
+        self.assertEqual(
+            audit_exit_code([row_running("a"), row_no_file("a", "f", creates=False)]), 0
+        )
+        for status in ("pending", "changed", "cannot-write", "invalid"):
+            with self.subTest(status=status):
+                self.assertEqual(audit_exit_code([AuditRow("e", "f", status)]), 1)
+        self.assertEqual(audit_exit_code([AuditRow("e", "f", "sync", key="k")]), 0)
 
 
 if __name__ == "__main__":

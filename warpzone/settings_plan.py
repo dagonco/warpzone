@@ -536,3 +536,273 @@ def capture_snapshot(
         )
     new.update({key: value for key, value in updates.items() if key in now})
     return new
+
+
+# ---------------------------------------------------------------------------------------------
+# Audit
+# ---------------------------------------------------------------------------------------------
+
+# Statuses of an `AuditRow`.
+SYNC = "sync"
+PENDING = "pending"
+CHANGED = "changed"
+INVALID = "invalid"
+INFO = "info"
+
+_LABELS = {
+    SYNC: "in sync",
+    PENDING: "pending",
+    CHANGED: "changed here",
+    CANNOT_WRITE: "cannot write",
+    INVALID: "invalid",
+}
+_RANK = {SYNC: 0, PENDING: 1, CHANGED: 2, CANNOT_WRITE: 3}
+_ATTENTION = (PENDING, CHANGED, CANNOT_WRITE, INVALID)
+VALUE_WIDTH = 40
+_LABEL_WIDTH = 15
+_KEY_GAP = 2
+_VALUE_GAP = 6
+
+
+@dataclass(frozen=True)
+class AuditRow:
+    """One line of the audit.
+
+    A row with a `key` describes one key of the file `emulator`/`file`; a row without describes
+    the file, or (with an empty `file`) the emulator. `here` and `hub` are the values (None:
+    absent), shown cut to 40 characters; `detail` is a short phrase that never holds a value.
+    """
+
+    emulator: str
+    file: str
+    status: str  # "sync" | "pending" | "changed" | "cannot-write" | "invalid" | "info"
+    key: str | None = None
+    here: Value | None = None
+    hub: Value | None = None
+    detail: str = ""
+    path: str = ""
+
+
+def row_running(emulator: str) -> AuditRow:
+    return AuditRow(emulator, "", INFO, detail="running: its files may not hold its latest changes")
+
+
+def row_no_file(emulator: str, file_id: str, *, creates: bool) -> AuditRow:
+    detail = "no file (apply creates it)" if creates else "no file"
+    return AuditRow(emulator, file_id, INFO, detail=detail)
+
+
+def row_invalid(emulator: str, file_id: str, detail: str) -> AuditRow:
+    return AuditRow(emulator, file_id, INVALID, detail=detail)
+
+
+def audit_rows(
+    emulator: str,
+    file_id: str,
+    path: str,
+    spec: SettingsFile,
+    current: Mapping[str, Value],
+    fixed: frozenset[str],
+    layered: Mapping[str, Value],
+    snapshot: Mapping[str, Value] | None,
+    *,
+    can_add: bool,
+) -> list[AuditRow]:
+    """The audit rows of one file that exists and was read.
+
+    Layered keys are classified like `apply` would (without `--overwrite-local`): `sync` (equal),
+    `pending` (apply writes it), `changed` (held: changed here and different from the hub) and
+    `cannot-write`. Tracked keys that are not layered are `changed` (hub None) when they differ
+    from the snapshot. Keys new to the file and files with no snapshot add no row. Rows come in the
+    order sync, pending, changed on the hub, cannot write, changed and not on the hub, each by key.
+    """
+    plans, _ = plan_apply(
+        current,
+        fixed,
+        layered,
+        snapshot,
+        can_add=can_add,
+        overwrite_local=False,
+        spec=spec,
+    )
+    rows: list[tuple[int, AuditRow]] = []
+
+    def add(
+        rank: int,
+        status: str,
+        key: str,
+        here: Value | None = None,
+        hub: Value | None = None,
+        detail: str = "",
+    ) -> None:
+        row = AuditRow(emulator, file_id, status, key, here, hub, detail, path)
+        rows.append((rank, row))
+
+    for plan in plans:
+        here = current.get(plan.key)
+        if plan.action == OK:
+            add(0, SYNC, plan.key, here)
+        elif plan.action == WRITE:
+            detail = "apply writes it" if plan.key in current else "apply adds it"
+            add(1, PENDING, plan.key, here=here, hub=plan.value, detail=detail)
+        elif plan.action == HELD:
+            add(
+                2,
+                CHANGED,
+                plan.key,
+                here=here,
+                hub=plan.value,
+                detail="capture proposes it; apply holds it",
+            )
+        else:
+            add(3, CANNOT_WRITE, plan.key, here=here, detail=plan.reason)
+    if snapshot is not None:
+        for key, value in tracked(current, fixed, spec).items():
+            if key not in layered and key in snapshot and not same(value, snapshot[key]):
+                add(4, CHANGED, key, here=value, detail="capture proposes it")
+    rows.sort(key=lambda item: item[0])  # stable: keys stay sorted inside a rank, file order in 4
+    return [row for _, row in rows]
+
+
+def audit_data(
+    emulator: str,
+    data_id: str,
+    current_hash: str | None,
+    hub_hash: str | None,
+    snapshot_hash: str | None,
+    *,
+    creatable: bool,
+) -> list[AuditRow]:
+    """The audit row of a system data file (none when there is nothing to say). `creatable`:
+    its `create_when` directory exists, so apply would create a missing file."""
+
+    def row(status: str, detail: str = "") -> list[AuditRow]:
+        return [AuditRow(emulator, data_id, status, detail=detail)]
+
+    action = plan_data(current_hash, hub_hash, snapshot_hash, overwrite_local=False)
+    if action == "none":
+        if current_hash is not None and snapshot_hash is not None and current_hash != snapshot_hash:
+            return row(CHANGED, "not on the hub, changed since the last apply: capture proposes it")
+        return []
+    if current_hash is None:
+        return [row_no_file(emulator, data_id, creates=creatable)]
+    if action == OK:
+        return row(SYNC)
+    if action == WRITE:
+        since = "unchanged here since the last apply" if snapshot_hash else "no earlier apply"
+        return row(PENDING, f"the hub copy differs, {since}")
+    return row(
+        CHANGED, "changed here and the hub copy differs: capture proposes it; apply holds it"
+    )
+
+
+def _cell(value: Value | None) -> str:
+    if value is None:
+        return "-"
+    text = str(value).lower() if isinstance(value, bool) else str(value)
+    text = "".join(c if c.isprintable() else c.encode("unicode_escape").decode() for c in text)
+    return text if len(text) <= VALUE_WIDTH else text[: VALUE_WIDTH - 3] + "..."
+
+
+def _values(row: AuditRow) -> str:
+    if row.status in (SYNC, CHANGED) and row.hub is None:
+        return f"here {_cell(row.here)}"
+    if row.status in (PENDING, CHANGED):
+        return f"here {_cell(row.here)}, hub {_cell(row.hub)}"
+    return ""
+
+
+def _plural(count: int) -> str:
+    return f"{count} key" if count == 1 else f"{count} keys"
+
+
+def _not_on_hub(row: AuditRow) -> bool:
+    return row.status == CHANGED and row.key is not None and row.hub is None
+
+
+def _file_lines(rows: list[AuditRow], all_keys: bool) -> list[str]:
+    first = rows[0]
+    head = f"{first.emulator}  {first.file}".rstrip() if first.file else first.emulator
+    if all(r.key is None for r in rows):
+        lines = []
+        for r in rows:
+            if r.status == INFO:
+                lines.append(f"{head}  {r.detail}")
+            else:
+                text = f"{_LABELS[r.status]}: {r.detail}" if r.detail else _LABELS[r.status]
+                lines.append(f"{head}  {text}")
+        return lines
+    shown: list[tuple[str, AuditRow | None, str]] = []  # (label, row, free text)
+    seen_sync = seen_group = False
+    n_sync = sum(1 for r in rows if r.status == SYNC)
+    n_group = sum(1 for r in rows if _not_on_hub(r))
+    for r in rows:
+        if r.key is None:
+            shown.append((_LABELS.get(r.status, ""), None, r.detail))
+        elif r.status == SYNC and not all_keys:
+            if not seen_sync:
+                seen_sync = True
+                shown.append((_LABELS[SYNC], None, _plural(n_sync)))
+        elif _not_on_hub(r) and not all_keys:
+            if not seen_group:
+                seen_group = True
+                text = f"{_plural(n_group)} not on the hub (--all lists them)"
+                shown.append((_LABELS[CHANGED], None, text))
+        else:
+            shown.append((_LABELS[r.status], r, ""))
+    keyed = [r for _, r, _ in shown if r is not None]
+    key_width = max((len(r.key or "") for r in keyed), default=0) + _KEY_GAP
+    value_width = max((len(_values(r)) for r in keyed), default=0) + _VALUE_GAP
+    lines = [f"{head}  {first.path}".rstrip()]
+    for label, r, text in shown:
+        prefix = f"  {label:<{_LABEL_WIDTH}}"
+        if r is None:
+            lines.append((prefix + text).rstrip())
+            continue
+        line = prefix + f"{r.key:<{key_width}}"
+        values = _values(r)
+        line += f"{values:<{value_width}}" if values else ""
+        lines.append((line + r.detail).rstrip())
+    return lines
+
+
+def _counts(rows: list[AuditRow]) -> dict[str, int]:
+    """Items that need attention, per status: a key, a file, or (per file) the group of keys that
+    changed here and are not on the hub, which counts once."""
+    counts = dict.fromkeys(_ATTENTION, 0)
+    groups: set[tuple[str, str]] = set()
+    for r in rows:
+        if r.status not in counts:
+            continue
+        if _not_on_hub(r):
+            groups.add((r.emulator, r.file))
+        else:
+            counts[r.status] += 1
+    counts[CHANGED] += len(groups)
+    return counts
+
+
+def audit_exit_code(rows: Iterable[AuditRow]) -> int:
+    """0 when everything is in sync, 1 when anything is pending, changed here, not writable or
+    invalid. A running emulator and a missing file do not count."""
+    return 1 if any(r.status in _ATTENTION for r in rows) else 0
+
+
+def render_audit(rows: Iterable[AuditRow], *, all_keys: bool) -> str:
+    """The audit text: one block per emulator and file, in the order of the rows, then a summary.
+
+    Without `all_keys`, the keys in sync and the changed keys that are not on the hub are
+    collapsed into one line each. Values are cut to 40 characters, secret keys never reach a row,
+    and system data files show no hash.
+    """
+    rows = list(rows)
+    blocks: dict[tuple[str, str], list[AuditRow]] = {}
+    for r in rows:
+        blocks.setdefault((r.emulator, r.file), []).append(r)
+    lines: list[str] = []
+    for block in blocks.values():
+        lines.extend(_file_lines(block, all_keys))
+    counts = _counts(rows)
+    parts = [f"{counts[s]} {_LABELS[s]}" for s in _ATTENTION if counts[s]]
+    lines.append("summary: " + (", ".join(parts) if parts else "everything in sync"))
+    return "\n".join(lines)
