@@ -45,6 +45,17 @@ from warpzone.config import (
     parse_inbox,
 )
 from warpzone.dat import SYSTEMS, DatLibrary
+from warpzone.flatpak import (
+    SYNCTHINGY_APP,
+    SYNCTHINGY_EXEC,
+    SYNCTHINGY_STOP,
+    app_dir,
+    app_ids,
+    is_syncthingy_config,
+    missing_apps,
+    override_command,
+    show_command,
+)
 from warpzone.model import ModelError
 from warpzone.profiles import ProfileError, available_profiles, load_profile
 from warpzone.syncthing import _is_loopback
@@ -66,6 +77,7 @@ FIX_PREFIX = "fix: "
 G_BASE = "warpzone and Python"
 G_CONFIG = "Config"
 G_SYNCTHING = "Syncthing"
+G_SAVES = "Save sync"
 G_TOOLS = "Inbox tools"
 G_SWITCH = "Switch"
 G_DATS = "DATs"
@@ -143,7 +155,7 @@ SYNCTHING_HINTS: HintTable = {
     "debian": "sudo apt install syncthing && systemctl --user enable --now syncthing",
     "fedora": "sudo dnf install syncthing && systemctl --user enable --now syncthing",
     "arch": "sudo pacman -S syncthing && systemctl --user enable --now syncthing",
-    "steamos": "flatpak install flathub com.github.zocker_160.SyncThingy "
+    "steamos": f"flatpak install flathub {SYNCTHINGY_APP} "
     "(the read-only root rules out system packages)",
     "any": "install Syncthing from https://syncthing.net/downloads/ and start it",
 }
@@ -154,16 +166,30 @@ SYNCTHING_START_HINTS: HintTable = {
     "any": "start Syncthing",
 }
 
+# RetroArch's Flycast core options. `reicast_per_content_vmus` is "disabled" (default),
+# "VMU A1" or "All VMUs" (libretro_core_options.h in github.com/flyinghead/flycast).
+FLYCAST_OPT = ".var/app/org.libretro.RetroArch/config/retroarch/config/Flycast/Flycast.opt"
+FLYCAST_VMU_KEY = "reicast_per_content_vmus"
+FLYCAST_VMU_FIX = (
+    "in RetroArch, with a Dreamcast game running, open Quick Menu > Core Options > "
+    'Per-Game Visual Memory Units/Systems (VMU) ("Per-Game VMUs") and choose "VMU A1" '
+    'or "All VMUs". Existing shared VMUs are not migrated: each game starts with an '
+    "empty card in RetroArch's saves folder, which retroarch-saves syncs"
+)
+
+# Vita3K's active user. The profile syncs the saves of user 00 only
+# (ux0/user/00/savedata); a user made in the GUI can get another id.
+VITA3K_CONFIG = ".config/Vita3K/config.yml"
+VITA3K_USER = "00"
+
 SYSTEMD_USER_DIR = ".config/systemd/user"
 AUTOSTART_DIR = ".config/autostart"
-SYNCTHINGY_EXEC = (
-    "/usr/bin/flatpak run --command=syncthing com.github.zocker_160.SyncThingy "
-    "serve --no-browser --no-restart"
-)
+SYNCTHING_UNIT_PATH = f"~/{SYSTEMD_USER_DIR}/syncthing.service"
 # Indented lines are not wrapped by `render`, so the unit can be copied as it is.
 SYNCTHING_UNIT = (
     "  [Unit]\n  Description=Syncthing\n"
-    f"  [Service]\n  ExecStart={SYNCTHINGY_EXEC}\n  Restart=on-failure\n"
+    f"  [Service]\n  ExecStart={SYNCTHINGY_EXEC}\n  ExecStop={SYNCTHINGY_STOP}\n"
+    "  Restart=on-failure\n"
     "  [Install]\n  WantedBy=default.target"
 )
 
@@ -317,6 +343,108 @@ def judge_game_mode(
     return WARN, why, install
 
 
+def _core_option(text: str, key: str) -> str | None:
+    """The value of `key` in a RetroArch core options file (`key = "value"` lines)."""
+    found = None
+    for line in text.splitlines():
+        name, sep, value = line.partition("=")
+        if sep and name.strip() == key:
+            found = value.strip().strip('"')
+    return found
+
+
+def judge_flycast_vmus(text: str) -> tuple[str, str, str]:
+    """(status, detail, fix) for the Flycast core's per-game VMU option, given the text of
+    Flycast.opt. Without per-game VMUs the core writes `vmu_save_*.bin` into the system
+    folder (bios/dc), which the library ignores: Dreamcast saves would never sync."""
+    value = _core_option(text, FLYCAST_VMU_KEY)
+    if value in ("VMU A1", "All VMUs"):
+        return OK, f'Flycast keeps per-game VMUs in the saves folder ("{value}")', ""
+    shown = f'"{value}"' if value is not None else "unset, which means disabled"
+    return (
+        WARN,
+        f"Flycast's per-game VMUs are off ({shown}), so the VMUs live in the system "
+        "folder (bios/dc), which warpzone does not sync and a revert would not restore",
+        FLYCAST_VMU_FIX,
+    )
+
+
+def vita3k_user_id(text: str) -> str | None:
+    """The `user-id:` of Vita3K's config.yml, without quotes or a trailing comment."""
+    match = re.search(r"^user-id:[ \t]*(.*)$", text, re.MULTILINE)
+    if not match:
+        return None
+    value = match.group(1).split(" #")[0].strip().strip("\"'")
+    return value or None
+
+
+def judge_vita3k_user(user: str) -> tuple[str, str, str]:
+    """(status, detail, fix) for Vita3K's active user id."""
+    if user == VITA3K_USER:
+        return OK, f"the active user is {user}, the one warpzone syncs", ""
+    return (
+        WARN,
+        f"the active user is {user}, but warpzone syncs the saves of user {VITA3K_USER} "
+        f"(ux0/user/{VITA3K_USER}/savedata), so this user's saves are not synced",
+        f"in Vita3K, switch to user {VITA3K_USER} (or delete the other user and keep "
+        f"{VITA3K_USER}); if the saves are in ux0/user/{user}/savedata, move them to "
+        f"ux0/user/{VITA3K_USER}/savedata. Vita3K has to be closed while you do it",
+    )
+
+
+def parse_show(output: str) -> dict[str, str]:
+    """`systemctl show` output (`Key=value` lines) as a dict."""
+    values: dict[str, str] = {}
+    for line in output.splitlines():
+        key, sep, value = line.partition("=")
+        if sep:
+            values[key.strip()] = value.strip()
+    return values
+
+
+def judge_unit_state(
+    output: str, *, flatpak: bool, stops_flatpak: bool
+) -> tuple[str, str, str] | None:
+    """(status, detail, fix) for the Syncthing user unit, from `systemctl --user show -p
+    ActiveState,SubState`. None when there is nothing to say (no such unit, or stopped).
+    A unit stuck in `activating (auto-restart)` is a start that keeps failing; with the
+    flatpak the usual cause is the old process still holding the port, because `flatpak
+    run` runs it in a scope of its own and `systemctl --user stop` does not reach it.
+    `stops_flatpak`: the unit already has an `ExecStop` that kills the flatpak."""
+    values = parse_show(output)
+    state, sub = values.get("ActiveState", ""), values.get("SubState", "")
+    if state == "active":
+        return OK, f"syncthing.service is {state} ({sub})", ""
+    if state != "activating" and sub != "auto-restart":
+        return None
+    detail = (
+        f"syncthing.service is {state} ({sub}): it keeps starting and failing, usually "
+        "because another Syncthing already holds the port"
+    )
+    if not flatpak:
+        return (
+            WARN,
+            detail,
+            "find the other Syncthing and stop it (`journalctl --user -u syncthing -n 20` "
+            "shows the error), then run: systemctl --user restart syncthing",
+        )
+    restart = "systemctl --user daemon-reload\n  systemctl --user restart syncthing"
+    kill = f"flatpak kill {SYNCTHINGY_APP}"
+    if stops_flatpak:
+        return (
+            WARN,
+            detail,
+            f"the old process is still running: stop it with `{kill}`, then run:\n  {restart}",
+        )
+    return (
+        WARN,
+        detail + ". `flatpak run` starts Syncthing in a scope of its own, so `systemctl --user "
+        "stop` leaves the old process running",
+        f"stop the old process with `{kill}`. Then make {SYNCTHING_UNIT_PATH} stop the "
+        f"flatpak too (it needs the ExecStop line):\n{SYNCTHING_UNIT}\nand run:\n  {restart}",
+    )
+
+
 def hint_for(table: HintTable, family: str) -> str:
     """The hint for `family`; a specific Linux family falls back to "linux", then "any"."""
     if family in table:
@@ -462,6 +590,9 @@ class ConfigState:
     devices: tuple[str, ...] = ()
     settings: InboxSettings = field(default_factory=InboxSettings)
     hub_root: str | None = None  # [hub] root as written, when it is a string
+    # Save and BIOS folder paths (with `~`) of the configured devices; empty when the
+    # config does not load, then the checks fall back to every shipped profile.
+    sync_paths: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -539,6 +670,7 @@ def load_config_state(path: Path) -> ConfigState:
     devices = tuple(sorted(raw_devices)) if isinstance(raw_devices, dict) else ()
     settings = parse_inbox(data.get("inbox"), [])  # keep whatever is valid
     errors: list[str] = []
+    sync_paths: dict[str, None] = {}
     try:
         if "hub" in data or "devices" in data:
             cfg = parse_config(data, set(available_profiles()))
@@ -546,7 +678,8 @@ def load_config_state(path: Path) -> ConfigState:
                 name: load_profile(name) for name in {d.profile for d in cfg.devices.values()}
             }
             for device in cfg.devices.values():
-                model.device_specs(cfg, device.name, profiles[device.profile])
+                for spec in model.device_specs(cfg, device.name, profiles[device.profile]):
+                    sync_paths[spec.path] = None
         else:
             unknown = sorted(set(data) - {"hub", "devices", "inbox"})
             errors += [f"config: unknown key {key!r}" for key in unknown]
@@ -558,7 +691,8 @@ def load_config_state(path: Path) -> ConfigState:
     hub_root = raw_hub.get("root") if isinstance(raw_hub, dict) else None
     if not isinstance(hub_root, str) or not hub_root:
         hub_root = None
-    return ConfigState(path, True, error, sections, devices, settings, hub_root)
+    paths = tuple(sync_paths) if error is None else ()
+    return ConfigState(path, True, error, sections, devices, settings, hub_root, paths)
 
 
 def check_config(ctx: Context) -> list[Result]:
@@ -718,6 +852,136 @@ def check_game_mode(ctx: Context) -> list[Result]:
     }
     status, detail, fix = judge_game_mode(units, enabled, autostart)
     return [Result("Game Mode", G_SYNCTHING, status, detail, fix)]
+
+
+def _expand(path: str, home: Path) -> str:
+    if path == "~":
+        return str(home)
+    return str(home / path[2:]) if path.startswith("~/") else path
+
+
+def _shipped_sync_paths() -> tuple[str, ...]:
+    """Save and BIOS folders of every shipped profile (with `~`)."""
+    paths: list[str] = []
+    for name in available_profiles():
+        profile = load_profile(name)
+        paths += [s.path for s in profile.saves.values()]
+        paths += [b.path for b in profile.bios.values()]
+    return tuple(paths)
+
+
+def check_flatpak_access(ctx: Context) -> list[Result]:
+    """Syncthing as the SyncThingy flatpak cannot see `~/.var/app/<app>` of other apps,
+    so a save folder there looks empty to it until the flatpak is granted the folder.
+    Only the apps that are installed (their folder exists) are checked."""
+    p = ctx.probes
+    name = "Flatpak access"
+    if p.system != "Linux":
+        return []
+    try:
+        config = localst.find_config(env=p.env, home=p.home, platform="linux")
+    except localst.LocalSyncthingError:
+        return []
+    if not is_syncthingy_config(config, p.home):
+        return []  # a native Syncthing sees whatever its user can
+    paths = ctx.config.sync_paths or _shipped_sync_paths()
+    apps = [
+        app
+        for app in app_ids((_expand(path, p.home) for path in paths), p.home)
+        if p.is_dir(p.home / ".var" / "app" / app)
+    ]
+    if not apps:
+        return []
+    grants = " ".join(f"--filesystem={app_dir(app)}" for app in apps)
+    try:
+        out = p.run(show_command())
+    except (OSError, subprocess.SubprocessError) as exc:
+        return [
+            Result(
+                name,
+                G_SYNCTHING,
+                WARN,
+                f"could not read the flatpak overrides ({type(exc).__name__}), so it is not "
+                "known whether Syncthing can see the emulators' save folders",
+                f"flatpak override --user {grants} {SYNCTHINGY_APP}",
+            )
+        ]
+    missing = missing_apps(apps, out.output if out.returncode == 0 else "", p.home)
+    if not missing:
+        return [
+            Result(
+                name,
+                G_SYNCTHING,
+                OK,
+                f"Syncthing is granted the data folders of {len(apps)} emulator(s) under "
+                "~/.var/app",
+            )
+        ]
+    commands = "\n".join(f"  {' '.join(override_command([app]))}" for app in missing)
+    return [
+        Result(
+            name,
+            G_SYNCTHING,
+            FAIL,
+            f"the Syncthing flatpak cannot see {', '.join(app_dir(a) for a in missing)}: "
+            "flatpak hides other apps' data folders, so those save folders look empty and "
+            "sync nothing",
+            f"run:\n{commands}\nthen restart Syncthing "
+            "(`systemctl --user restart syncthing`, or quit and reopen SyncThingy). "
+            "`warpzone provision device` does this for you",
+        )
+    ]
+
+
+def check_syncthing_unit(ctx: Context) -> list[Result]:
+    """Linux with a local Syncthing: is the `syncthing` user unit restart-looping?"""
+    p = ctx.probes
+    if p.system != "Linux":
+        return []
+    try:
+        config = localst.find_config(env=p.env, home=p.home, platform="linux")
+    except localst.LocalSyncthingError:
+        return []
+    try:
+        out = p.run(("systemctl", "--user", "show", "-p", "ActiveState,SubState", "syncthing"))
+    except (OSError, subprocess.SubprocessError):
+        return []
+    if out.returncode != 0:
+        return []
+    unit = p.read_text(p.home / SYSTEMD_USER_DIR / "syncthing.service")
+    stops = f"flatpak kill {SYNCTHINGY_APP}" in "\n".join(
+        line for line in unit.splitlines() if line.strip().startswith("ExecStop")
+    )
+    verdict = judge_unit_state(
+        out.output, flatpak=is_syncthingy_config(config, p.home), stops_flatpak=stops
+    )
+    if verdict is None:
+        return []
+    status, detail, fix = verdict
+    return [Result("Syncthing unit", G_SYNCTHING, status, detail, fix)]
+
+
+def check_flycast(ctx: Context) -> list[Result]:
+    """Only when RetroArch's Flycast core has run (it writes its options file then)."""
+    p = ctx.probes
+    path = p.home / FLYCAST_OPT
+    if not p.is_file(path):
+        return []
+    status, detail, fix = judge_flycast_vmus(p.read_text(path))
+    return [Result("Flycast VMUs", G_SAVES, status, detail, fix)]
+
+
+def check_vita3k(ctx: Context) -> list[Result]:
+    """Only when Vita3K has written its config."""
+    p = ctx.probes
+    path = p.home / VITA3K_CONFIG
+    if not p.is_file(path):
+        return []
+    user = vita3k_user_id(p.read_text(path))
+    if user is None:  # no user chosen yet: nothing to compare
+        return []
+    status, detail, fix = judge_vita3k_user(user)
+    return [Result("Vita3K user", G_SAVES, status, detail, fix)]
 
 
 def _scrub(text: str, key: str) -> str:
@@ -1117,6 +1381,10 @@ CHECKS: tuple[Callable[[Context], list[Result]], ...] = (
     check_config,
     check_syncthing,
     check_game_mode,
+    check_flatpak_access,
+    check_syncthing_unit,
+    check_flycast,
+    check_vita3k,
     check_tools,
     check_switch,
     check_dats,

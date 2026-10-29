@@ -10,6 +10,39 @@ RetroArch, Dolphin, PrimeHack (GC, Wii, states), DuckStation, PCSX2, melonDS, PP
 
 YARG syncs `custom/` in lowercase, as YARG on Linux writes it, and ignores the `*.bak` files it leaves in `profiles/`. If the hub holds the content under `saves/yarg/data/Custom`, rename it to `custom`.
 
+## Syncthing on the console
+
+On SteamOS the Syncthing that warpzone configures is usually the SyncThingy flatpak (`com.github.zocker_160.SyncThingy`). To keep it running in Game Mode, start it from a systemd user unit, `~/.config/systemd/user/syncthing.service`:
+
+```
+[Unit]
+Description=Syncthing
+
+[Service]
+ExecStart=/usr/bin/flatpak run --command=syncthing com.github.zocker_160.SyncThingy serve --no-browser --no-restart
+ExecStop=/usr/bin/flatpak kill com.github.zocker_160.SyncThingy
+Restart=on-failure
+
+[Install]
+WantedBy=default.target
+```
+
+Then `systemctl --user daemon-reload` and `systemctl --user enable --now syncthing.service`.
+
+`ExecStop` is not optional. `flatpak run` puts Syncthing in a scope of its own, outside the unit, so `systemctl --user stop syncthing` does not stop it. Without `ExecStop`, a restart leaves the old process holding the port and the new one loops in `activating (auto-restart)`. If you are already in that state, run `flatpak kill com.github.zocker_160.SyncThingy`, fix the unit and restart it. `warpzone doctor` warns when the unit is in that loop.
+
+### Flatpak access to the emulators' folders
+
+A flatpak cannot see the data folder of another flatpak: `~/.var/app` is hidden from it even with the `host` filesystem. Several save folders in the profile live there (RetroArch, Dolphin, PPSSPP, PrimeHack, Flycast), so with the SyncThingy flatpak they look empty and sync nothing, with no error.
+
+The fix is one override per emulator, then a restart of Syncthing:
+
+```
+flatpak override --user --filesystem=~/.var/app/org.libretro.RetroArch com.github.zocker_160.SyncThingy
+```
+
+`warpzone provision device` does this for you when the local Syncthing is the SyncThingy flatpak: it adds the missing overrides for every save and BIOS folder of the profile under `~/.var/app/<app>` whose emulator is installed, leaves the ones that already exist alone, and tells you to restart Syncthing. With `--dry-run` it only prints the command. An emulator you install later is picked up the next time you run `provision device`. A native Syncthing needs none of this. `warpzone doctor` checks the overrides and prints the command for each missing one.
+
 ## The symlink gotcha
 
 EmuDeck exposes saves through symlinks under `~/Emulation/saves`. Syncthing never follows symlinks, so a folder pointed at the symlink syncs nothing and gives no error. The profile therefore points at the real directory of each emulator (for example RetroArch's saves under `~/.var/app/org.libretro.RetroArch/`). If you add a profile for another setup, resolve the links first (`readlink -f`).
@@ -25,8 +58,23 @@ The profile ignores files EmuDeck creates that are not on the hub, so a receive-
 - `bios/PPSSPP/` and every `readme.txt` under `bios/`.
 - The emulator-owned `bios/` folders `HdPacks`, `Mupen64plus`, `fbneo`, `kronos`, `same_cdi`, `ryujinx`, `shadps4` and `yuzu`.
 - Each `roms/*/systeminfo.txt` and `metadata.txt`.
+- RetroArch's Flycast VMUs and flash in `bios/dc/` (`vmu_save_*.bin`, `dc_nvmem.bin`). These two are ignored without `(?d)`, so a hub-side delete of `bios/dc` never takes them along. See [Dreamcast saves](#dreamcast-saves-retroarch-flycast).
 
 These come from the profile's `[library] ignore` list. The hub's library folder ignores the hub paths of the BIOS placements, so each file belongs to one folder. A line may start with `(?d)`. Run `provision device` again after upgrading to apply a changed profile.
+
+## Dreamcast saves (RetroArch Flycast)
+
+By default the Flycast core in RetroArch shares up to eight VMU files (`vmu_save_A1.bin` and the rest) between all games and writes them, with the console flash `dc_nvmem.bin`, into RetroArch's system folder, `~/Emulation/bios/dc/`. That folder is inside the receive-only library, so the profile has to ignore those files (see above) and they do not sync. Without the ignore lines a Revert on the console would erase them.
+
+To get Dreamcast saves synced, turn on the core option **Per-Game Visual Memory Units/Systems (VMU)** (shown as "Per-Game VMUs"; the key is `reicast_per_content_vmus`): start a Dreamcast game, open Quick Menu > Core Options and choose `VMU A1` (one card per game) or `All VMUs` (all eight per game). The VMUs then go to RetroArch's saves folder, which `retroarch-saves` syncs both ways. Cards already in `bios/dc/` are not migrated: every game starts with an empty one, so copy a card by hand if you want to keep it (the per-game file is named after the game's ID and the port, for example `<game id>.A1.bin`).
+
+`warpzone doctor` warns when `Flycast.opt` exists and the option is off or missing. The standalone Flycast (`flycast-saves`) is unaffected.
+
+## Vita3K syncs user 00
+
+The profile syncs `~/Emulation/storage/Vita3K/ux0/user/00/savedata`. A user created in Vita3K's own window can get another id (`01`, for example), and that user's saves are then not synced. Keep the saves under user `00` on every console: use the default user, or delete the other one and keep `00`. If the saves are already under another id, close Vita3K and move `ux0/user/<id>/savedata` to `ux0/user/00/savedata`.
+
+`warpzone doctor` reads `user-id:` in `~/.config/Vita3K/config.yml` and warns when it is not `00`.
 
 ## Xenia and Model 2 live inside `roms/`
 

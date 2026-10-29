@@ -349,7 +349,15 @@ class DeviceTests(unittest.TestCase):
         (self.home / ".var/app/org.libretro.RetroArch/config/retroarch/saves").mkdir(parents=True)
 
     def run_device(
-        self, local_fake, hub_fake, *, timeout=60.0, dry_run=False, sleeps=None, folders=None
+        self,
+        local_fake,
+        hub_fake,
+        *,
+        timeout=60.0,
+        dry_run=False,
+        sleeps=None,
+        folders=None,
+        **extra,
     ):
         data = config_data(hub_fake.url if hub_fake else "http://127.0.0.1:1")
         if folders is not None:
@@ -369,6 +377,7 @@ class DeviceTests(unittest.TestCase):
             wait_timeout=timeout,
             poll=1.0,
             sleep=(sleeps.append if sleeps is not None else lambda s: None),
+            **extra,
         )
         return rep, lines
 
@@ -597,6 +606,153 @@ class DeviceTests(unittest.TestCase):
                 any("POST /rest/db/ignores?folder=wz-library" in line for line in lines)
             )
             self.assertNotIn(API_KEY, "\n".join(lines))
+
+
+RA_APP = "org.libretro.RetroArch"
+DOLPHIN_APP = "org.DolphinEmu.dolphin-emu"
+SYNCTHINGY = "com.github.zocker_160.SyncThingy"
+
+
+class FlatpakRun:
+    """A fake `flatpak`: keeps the filesystem overrides the way `flatpak override` does."""
+
+    def __init__(self, granted: tuple[str, ...] = (), fail_on: str | None = None) -> None:
+        self.granted = list(granted)
+        self.fail_on = fail_on
+        self.commands: list[list[str]] = []
+
+    def __call__(self, command):
+        self.commands.append(list(command))
+        if self.fail_on and self.fail_on in command:
+            return 1, "error: boom"
+        if "--show" in command:
+            return 0, "[Context]\nfilesystems=host;" + "".join(f"{g};" for g in self.granted) + "\n"
+        self.granted += [a.split("=", 1)[1] for a in command if a.startswith("--filesystem=")]
+        return 0, ""
+
+    @property
+    def writes(self) -> list[list[str]]:
+        return [c for c in self.commands if "--show" not in c]
+
+
+class FlatpakAccessTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.home = Path(self._tmp.name)
+        for app, sub in (
+            (RA_APP, "config/retroarch/saves"),
+            (DOLPHIN_APP, "data/dolphin-emu/GC"),
+        ):
+            (self.home / ".var/app" / app / sub).mkdir(parents=True)
+        self.config = self.home / ".var/app" / SYNCTHINGY / "config/syncthing/config.xml"
+        data = config_data()
+        data["devices"]["deck"]["folders"] = ["saves"]
+        self.cfg = parse_config(data)
+
+    @staticmethod
+    def flatpak_warnings(rep: Reporter) -> list[str]:
+        return [w for w in rep.warnings if "skipped" not in w]
+
+    def provision(self, flatpak, *, config="flatpak", dry_run=False):
+        rep, lines = reporter()
+        path = {"flatpak": self.config, "native": self.home / ".local/state/syncthing/config.xml"}
+        with FakeSyncthing(DECK_ID) as local:
+            client = Client(local.url, API_KEY, label="local", dry_run=dry_run, sink=lines.append)
+            provision_device(
+                self.cfg,
+                "deck",
+                PROFILES["steamos-emudeck"],
+                client,
+                None,
+                rep,
+                home=self.home,
+                wait_timeout=0.0,
+                poll=1.0,
+                sleep=lambda s: None,
+                syncthing_config=path.get(config),
+                flatpak_run=flatpak,
+            )
+        return rep, lines
+
+    def test_grants_every_app_folder_the_profile_uses_in_one_override(self) -> None:
+        flatpak = FlatpakRun()
+        rep, lines = self.provision(flatpak)
+        self.assertEqual(
+            flatpak.writes,
+            [
+                [
+                    "flatpak",
+                    "override",
+                    "--user",
+                    f"--filesystem=~/.var/app/{RA_APP}",
+                    f"--filesystem=~/.var/app/{DOLPHIN_APP}",
+                    SYNCTHINGY,
+                ]
+            ],
+        )
+        self.assertTrue(any(f"granted ~/.var/app/{RA_APP}" in line for line in lines))
+        self.assertTrue(any("restart Syncthing" in w for w in self.flatpak_warnings(rep)))
+
+    def test_apps_that_are_not_installed_are_not_granted(self) -> None:
+        flatpak = FlatpakRun()
+        self.provision(flatpak)
+        flat = " ".join(" ".join(c) for c in flatpak.writes)
+        self.assertNotIn("ppsspp", flat)  # its folder does not exist, so it is skipped
+
+    def test_second_run_adds_nothing_and_asks_for_no_restart(self) -> None:
+        flatpak = FlatpakRun()
+        self.provision(flatpak)
+        flatpak.commands.clear()
+        rep, lines = self.provision(flatpak)
+        self.assertEqual(flatpak.writes, [])
+        self.assertEqual(self.flatpak_warnings(rep), [])
+        self.assertTrue(any("already granted" in line for line in lines))
+
+    def test_only_the_missing_override_is_added(self) -> None:
+        flatpak = FlatpakRun(granted=(f"~/.var/app/{RA_APP}",))
+        self.provision(flatpak)
+        (write,) = flatpak.writes
+        self.assertEqual(
+            write,
+            ["flatpak", "override", "--user", f"--filesystem=~/.var/app/{DOLPHIN_APP}", SYNCTHINGY],
+        )
+
+    def test_dry_run_reports_without_writing(self) -> None:
+        flatpak = FlatpakRun()
+        rep, lines = self.provision(flatpak, dry_run=True)
+        self.assertEqual(flatpak.writes, [])
+        self.assertEqual(self.flatpak_warnings(rep), [])
+        self.assertTrue(any("dry-run: would grant" in line for line in lines))
+        self.assertTrue(any("restart Syncthing" in line for line in lines))
+
+    def test_native_syncthing_or_unknown_location_is_left_alone(self) -> None:
+        for config in ("native", None):
+            flatpak = FlatpakRun()
+            self.provision(flatpak, config=config)
+            self.assertEqual(flatpak.commands, [], config)
+
+    def test_flatpak_that_fails_warns_with_the_command_and_provisioning_goes_on(self) -> None:
+        def broken(command):
+            raise FileNotFoundError(2, "No such file or directory")
+
+        rep, lines = self.provision(broken)
+        self.assertTrue(any("cannot read the flatpak overrides" in w for w in rep.warnings))
+        self.assertTrue(any(f"--filesystem=~/.var/app/{RA_APP}" in w for w in rep.warnings))
+        self.assertTrue(any(line.startswith("wz-save-retroarch-saves:") for line in lines))
+
+    def test_a_failed_override_warns_with_the_command(self) -> None:
+        rep, _ = self.provision(FlatpakRun(fail_on="--user"))
+        self.assertTrue(any("cannot read the flatpak overrides" in w for w in rep.warnings))
+        flatpak = FlatpakRun()
+        real = flatpak.__call__
+
+        def fail_write(command):
+            return real(command) if "--show" in command else (1, "denied")
+
+        rep, _ = self.provision(fail_write)
+        self.assertTrue(any("cannot grant Syncthing access" in w for w in rep.warnings))
+        self.assertFalse(any("restart Syncthing" in w for w in self.flatpak_warnings(rep)))
 
 
 class ExpandHomeTests(unittest.TestCase):

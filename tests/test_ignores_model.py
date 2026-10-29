@@ -135,6 +135,19 @@ class ModelTests(unittest.TestCase):
         self.assertEqual(lines[-1], "#include patterns-deck.stignore")
         self.assertEqual(len(lines), len(set(lines)))
 
+    def test_flycast_vmus_in_the_system_folder_are_never_received_or_flagged(self) -> None:
+        # RetroArch's Flycast core writes the shared VMUs and the console flash into
+        # bios/dc, inside the receive-only library. They are per-device data: ignored
+        # ahead of the whitelist, and without (?d) so a hub-side delete of the folder
+        # cannot take them with it.
+        lines = self.by_id(device_specs(self.cfg, "deck", self.profile))["wz-library"].ignores
+        include = lines.index("#include patterns-deck.stignore")
+        for line in ("/bios/dc/vmu_save_*.bin", "/bios/dc/dc_nvmem.bin"):
+            self.assertIn(line, lines)
+            self.assertLess(lines.index(line), include)
+        library = self.by_id(hub_specs(self.cfg, self.profiles))["wz-library"]
+        self.assertNotIn("/bios/dc/dc_nvmem.bin", library.ignores)
+
     def test_hub_library_ignores_what_placements_deliver(self) -> None:
         library = self.by_id(hub_specs(self.cfg, self.profiles))["wz-library"]
         self.assertEqual(

@@ -400,7 +400,7 @@ error messages; the RetroAchievements key is read from `RA_API_KEY`, never from 
 |---|---|---|
 | `warpzone check` | anywhere | Validates config + profiles, reports which whitelists are missing on the hub (via `GET /rest/db/browse`), never writes. Exit 1 if any are missing; `--offline` skips the hub. |
 | `warpzone provision hub` | anywhere that reaches the hub API | Adds every configured device to the hub, creates/updates every `wz-*` folder on the hub and shares it with the devices that subscribe to it, sets the hub ignores. A newly created whitelisted folder first lets only the whitelists through and waits for them (`--timeout`, default 120 s) before the full scan, see "Hub bootstrap". Idempotent. |
-| `warpzone provision device <name>` | on the device | Reads the local Syncthing API key from the local `config.xml` (searching the default locations, including the SyncThingy flatpak; `--syncthing-config PATH` overrides), adds the hub device, creates the subscribed folders with the bootstrap above (`--timeout SECONDS`). Idempotent. |
+| `warpzone provision device <name>` | on the device | Reads the local Syncthing API key from the local `config.xml` (searching the default locations, including the SyncThingy flatpak; `--syncthing-config PATH` overrides), adds the hub device, creates the subscribed folders with the bootstrap above (`--timeout SECONDS`). When that Syncthing is the SyncThingy flatpak it first grants it the missing `flatpak override --user --filesystem=~/.var/app/<app>` for every folder under `~/.var/app` (flatpak hides other apps' data), and asks for a Syncthing restart. Idempotent. |
 | `warpzone prune [device]` | on the device | Reports, and with `--apply` deletes, the files of the whitelisted folders that the device no longer whitelists (see [Pruning](#pruning)). Report only by default. |
 | `warpzone bios` | on a device or the hub | Reports which BIOS and firmware files a library has, lacks or has wrong (see [BIOS check](#bios-check)). Read-only. Exit 1 if a required item is missing or wrong. |
 | `warpzone inbox` | a desktop that mounts the hub's share | Identifies, converts and files new games dropped in `inbox/` (see [Inbox](#inbox)). Report only by default, `--apply` acts. Exit 1 if any item needs review. |
@@ -949,6 +949,29 @@ for every problem, the exact fix for this platform.
   (`ExecStart=/usr/bin/flatpak run --command=syncthing com.github.zocker_160.SyncThingy serve --no-browser --no-restart`),
   `systemctl --user enable --now syncthing.service` and, when there is one, the autostart
   entry to remove. Fix lines that start with a space are code and are never wrapped.
+  The unit has `ExecStop=/usr/bin/flatpak kill com.github.zocker_160.SyncThingy`: `flatpak
+  run` puts the process in a scope of its own, so `systemctl --user stop` does not reach
+  it. `Syncthing unit` (`judge_unit_state`, pure over `systemctl --user show -p
+  ActiveState,SubState syncthing`) is `[ok]` when the unit is active, says nothing when it
+  is stopped or absent, and is `[! ]` when it is `activating` or in `auto-restart` (a start
+  that keeps failing, normally the old process holding the port), with the fix: `flatpak
+  kill`, the unit with `ExecStop` unless the unit already has one, and a restart.
+  The flatpak app id and its commands live in `warpzone/flatpak.py`.
+- **Flatpak access.** With the SyncThingy flatpak as the local Syncthing (its `config.xml`
+  is in the flatpak's own folder), `Flatpak access` reads `flatpak override --user --show`
+  and compares it with the folders under `~/.var/app/<app>` that the configured devices'
+  profiles use (every shipped profile when the config does not load), for the apps that are
+  installed. Missing overrides are `[!!]`, because those save folders sync nothing; the fix
+  is one `flatpak override` per app plus a restart. `granted_apps` and `missing_apps` in
+  `warpzone/flatpak.py` are pure. A native Syncthing is not checked.
+- **Flycast VMUs.** When RetroArch's `Flycast.opt` exists, `judge_flycast_vmus` (pure, over
+  the file text) reads `reicast_per_content_vmus`: `VMU A1` and `All VMUs` are `[ok]`;
+  `disabled` or a missing key is `[! ]`, because the core then writes the shared VMUs into
+  `bios/dc`, which the profile's library ignores (`/bios/dc/vmu_save_*.bin`,
+  `/bios/dc/dc_nvmem.bin`) keep out of sync. The fix names the core option to change.
+- **Vita3K user.** When `~/.config/Vita3K/config.yml` has a `user-id:`, `judge_vita3k_user`
+  (pure) is `[ok]` for `00` and `[! ]` for anything else: the profile syncs
+  `ux0/user/00/savedata` only. A missing file or key says nothing.
 - **Exit codes.** `0` when no check is a problem, `1` otherwise.
 - **Install hints** live in one table in `warpzone/doctor.py` (`TOOLS` and the `*_HINTS`
   dicts), keyed by platform family: `macos`, `debian`, `fedora`, `arch`, `steamos`,
@@ -1010,6 +1033,7 @@ warpzone/
   inbox_switch.py    Switch games: identify with nsz, titledb names, decompress, place
   inbox_mame.py      arcade sets: MAME / FBNeo / 2003-Plus fit, emulator choice, ES-DE gamelist
   inbox_console_iso.py  PS3, Xbox and Xbox 360 disc images: identify by signature, place
+  flatpak.py         the SyncThingy flatpak: app id and the unit's commands
   doctor.py          machine checklist (`warpzone doctor`): checks, install hints, renderer
   ra.py              RetroAchievements: RAHasher wrapper, game list lookup
   localst.py         find and parse the local Syncthing config.xml

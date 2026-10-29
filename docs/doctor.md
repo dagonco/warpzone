@@ -30,6 +30,8 @@ Inbox tools
 - warpzone and Python.
 - The config file, and what each table enables.
 - The local Syncthing and its REST API.
+- RetroArch's Flycast option for per-game VMUs, when the core has run.
+- Vita3K's active user, when Vita3K has a config.
 - The inbox tools (`chdman`, `bsdtar`, `RAHasher`, `dolphin-tool`, `nsz`), the Switch titledb folder and keys file (presence only).
 - The DAT folder and how old the newest DAT is, and the optional arcade DAT files.
 - The hub folder and its free space.
@@ -49,6 +51,18 @@ If no unit exists, the fix shows one for the SyncThingy flatpak:
 ExecStart=/usr/bin/flatpak run --command=syncthing com.github.zocker_160.SyncThingy serve --no-browser --no-restart
 ```
 
-then `systemctl --user enable --now syncthing.service`, and a reminder to remove the autostart entry so two instances do not compete. It also warns when both a unit and an autostart entry start Syncthing.
+plus `ExecStop=/usr/bin/flatpak kill com.github.zocker_160.SyncThingy` (see [emudeck.md](emudeck.md#syncthing-on-the-console)), then `systemctl --user enable --now syncthing.service`, and a reminder to remove the autostart entry so two instances do not compete. It also warns when both a unit and an autostart entry start Syncthing.
+
+With the SyncThingy flatpak, `doctor` also checks that Syncthing can see the emulators' data folders (`flatpak override --user --show`). For every installed emulator whose folder under `~/.var/app` is missing from the overrides it reports a problem and prints the `flatpak override` command to fix it. See [emudeck.md](emudeck.md#flatpak-access-to-the-emulators-folders).
+
+The Syncthing unit is checked too: if `systemctl --user show syncthing` reports `activating (auto-restart)`, `doctor` warns that the unit keeps failing to start, usually because an old Syncthing still holds the port. With the SyncThingy flatpak the fix is `flatpak kill com.github.zocker_160.SyncThingy`, a unit with the `ExecStop` above, and a restart.
+
+## Dreamcast VMUs (RetroArch Flycast)
+
+When RetroArch's Flycast core has run (`Flycast.opt` exists in the RetroArch flatpak), `doctor` reads its `reicast_per_content_vmus` option. If it is `disabled` or missing, the core keeps the VMUs in `bios/dc/`, which warpzone does not sync, and the check warns with the menu path to change it. `VMU A1` and `All VMUs` are fine. See [emudeck.md](emudeck.md#dreamcast-saves-retroarch-flycast).
+
+## Vita3K user
+
+`doctor` reads `user-id:` in `~/.config/Vita3K/config.yml`. The profile syncs the saves of user `00`; if Vita3K's active user has another id, the check warns and says how to fix it. See [emudeck.md](emudeck.md#vita3k-syncs-user-00).
 
 Details in [design.md](design.md#doctor).

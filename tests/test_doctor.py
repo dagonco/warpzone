@@ -24,21 +24,29 @@ from warpzone.doctor import (
     check_base,
     check_config,
     check_dats,
+    check_flatpak_access,
+    check_flycast,
     check_game_mode,
     check_hub,
     check_ra,
     check_switch,
     check_syncthing,
+    check_syncthing_unit,
     check_tool,
+    check_vita3k,
     collapse_inbox,
     exit_code,
     hint_for,
+    judge_flycast_vmus,
     judge_game_mode,
+    judge_unit_state,
+    judge_vita3k_user,
     load_config_state,
     platform_family,
     render,
     run_checks,
     run_doctor,
+    vita3k_user_id,
 )
 
 RA_KEY = "ra-fake-key-1234567890"  # gitleaks:allow (test fixture, not a real key)
@@ -864,6 +872,87 @@ class CliTests(TmpCase):
         self.assertIn("doctor", out)
 
 
+class FlycastVmuTests(TmpCase):
+    OPT = ".var/app/org.libretro.RetroArch/config/retroarch/config/Flycast/Flycast.opt"
+
+    def test_judge_per_game_vmus_on_is_ok(self) -> None:
+        for value in ("VMU A1", "All VMUs"):
+            status, detail, fix = judge_flycast_vmus(f'reicast_per_content_vmus = "{value}"\n')
+            self.assertEqual(status, OK)
+            self.assertIn(value, detail)
+            self.assertEqual(fix, "")
+
+    def test_judge_disabled_or_unset_warns_with_the_option_to_change(self) -> None:
+        for text in (
+            'reicast_per_content_vmus = "disabled"\n',
+            'reicast_threaded_rendering = "enabled"\n',
+            "",
+        ):
+            status, detail, fix = judge_flycast_vmus(text)
+            self.assertEqual(status, WARN)
+            self.assertIn("bios/dc", detail)
+            self.assertIn("Per-Game", fix)
+            self.assertIn("All VMUs", fix)
+        self.assertIn('"disabled"', judge_flycast_vmus('reicast_per_content_vmus = "disabled"')[1])
+        self.assertIn("unset", judge_flycast_vmus("")[1])
+
+    def test_judge_reads_the_exact_key(self) -> None:
+        text = 'reicast_per_content_vmus_other = "All VMUs"\n'
+        self.assertEqual(judge_flycast_vmus(text)[0], WARN)
+
+    def test_nothing_without_the_options_file(self) -> None:
+        self.assertEqual(check_flycast(context(self.tmp)), [])
+
+    def test_reads_the_options_file_in_the_retroarch_flatpak(self) -> None:
+        path = self.tmp / "home" / self.OPT
+        path.parent.mkdir(parents=True)
+        path.write_text('reicast_per_content_vmus = "disabled"\n')
+        (r,) = check_flycast(context(self.tmp))
+        self.assertEqual((r.name, r.group, r.status), ("Flycast VMUs", doctor.G_SAVES, WARN))
+        path.write_text('reicast_per_content_vmus = "All VMUs"\n')
+        (r,) = check_flycast(context(self.tmp))
+        self.assertEqual(r.status, OK)
+
+
+class Vita3kUserTests(TmpCase):
+    CONFIG = ".config/Vita3K/config.yml"
+
+    def test_user_id_is_read_in_any_yaml_spelling(self) -> None:
+        self.assertEqual(vita3k_user_id('lang: 1\nuser-id: "01"\nx: 2\n'), "01")
+        self.assertEqual(vita3k_user_id("user-id: 00\n"), "00")
+        self.assertEqual(vita3k_user_id("user-id: '00'  # first user\n"), "00")
+        self.assertEqual(vita3k_user_id("user-id:   \n"), None)
+        self.assertEqual(vita3k_user_id("other-user-id: 01\n"), None)
+        self.assertEqual(vita3k_user_id("  user-id: 01\n"), None)  # nested key, not ours
+
+    def test_judge(self) -> None:
+        self.assertEqual(judge_vita3k_user("00")[0], OK)
+        status, detail, fix = judge_vita3k_user("01")
+        self.assertEqual(status, WARN)
+        self.assertIn("user 00", detail)
+        self.assertIn("ux0/user/01/savedata", fix)
+        self.assertIn("ux0/user/00/savedata", fix)
+        self.assertEqual(judge_vita3k_user("0")[0], WARN)  # the folder is called 00
+
+    def write(self, text: str) -> None:
+        path = self.tmp / "home" / self.CONFIG
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+
+    def test_nothing_without_a_config_or_a_user(self) -> None:
+        self.assertEqual(check_vita3k(context(self.tmp)), [])
+        self.write("lang: 1\n")
+        self.assertEqual(check_vita3k(context(self.tmp)), [])
+
+    def test_reads_the_config_in_the_home_folder(self) -> None:
+        self.write('user-id: "01"\n')
+        (r,) = check_vita3k(context(self.tmp))
+        self.assertEqual((r.name, r.group, r.status), ("Vita3K user", doctor.G_SAVES, WARN))
+        self.write('user-id: "00"\n')
+        (r,) = check_vita3k(context(self.tmp))
+        self.assertEqual(r.status, OK)
+
+
 if __name__ == "__main__":
     unittest.main()
 
@@ -990,3 +1079,223 @@ class GameModeTests(TmpCase):
     def test_run_checks_includes_it_in_the_syncthing_group(self) -> None:
         results = run_checks(make_probes(self.tmp, system="Linux", os_release=STEAMOS))
         self.assertEqual(by_name(results, "Game Mode").group, doctor.G_SYNCTHING)
+
+
+LOOPING = "ActiveState=activating\nSubState=auto-restart\n"
+RUNNING = "ActiveState=active\nSubState=running\n"
+STOPPED = "ActiveState=inactive\nSubState=dead\n"
+UNIT_WITH_STOP = UNIT + "ExecStop=/usr/bin/flatpak kill com.github.zocker_160.SyncThingy\n"
+
+
+class JudgeUnitStateTests(unittest.TestCase):
+    def test_running_is_ok(self) -> None:
+        status, detail, fix = judge_unit_state(RUNNING, flatpak=True, stops_flatpak=False)
+        self.assertEqual((status, fix), (OK, ""))
+        self.assertIn("running", detail)
+
+    def test_stopped_or_unknown_says_nothing(self) -> None:
+        self.assertIsNone(judge_unit_state(STOPPED, flatpak=True, stops_flatpak=False))
+        self.assertIsNone(judge_unit_state("", flatpak=True, stops_flatpak=False))
+
+    def test_restart_loop_with_the_flatpak_shows_the_unit_with_exec_stop(self) -> None:
+        status, detail, fix = judge_unit_state(LOOPING, flatpak=True, stops_flatpak=False)
+        self.assertEqual(status, WARN)
+        self.assertIn("auto-restart", detail)
+        self.assertIn("scope of its own", detail)
+        self.assertIn("flatpak kill com.github.zocker_160.SyncThingy", fix)
+        self.assertIn("ExecStart=" + doctor.SYNCTHINGY_EXEC, fix)
+        self.assertIn("ExecStop=/usr/bin/flatpak kill com.github.zocker_160.SyncThingy", fix)
+        self.assertIn("systemctl --user restart syncthing", fix)
+
+    def test_restart_loop_with_a_unit_that_already_stops_the_flatpak(self) -> None:
+        status, _, fix = judge_unit_state(LOOPING, flatpak=True, stops_flatpak=True)
+        self.assertEqual(status, WARN)
+        self.assertNotIn("ExecStart=", fix)
+        self.assertIn("flatpak kill", fix)
+        self.assertIn("systemctl --user restart syncthing", fix)
+
+    def test_restart_loop_without_the_flatpak_does_not_mention_it(self) -> None:
+        status, detail, fix = judge_unit_state(LOOPING, flatpak=False, stops_flatpak=False)
+        self.assertEqual(status, WARN)
+        self.assertNotIn("flatpak", detail + fix)
+        self.assertIn("journalctl", fix)
+
+    def test_a_bare_activating_state_counts_too(self) -> None:
+        out = "ActiveState=activating\nSubState=start\n"
+        self.assertEqual(judge_unit_state(out, flatpak=True, stops_flatpak=False)[0], WARN)
+
+    def test_the_unit_shown_by_the_game_mode_fix_has_exec_stop(self) -> None:
+        self.assertIn("ExecStop=" + doctor.SYNCTHINGY_STOP, doctor.SYNCTHING_UNIT)
+
+
+class SyncthingUnitTests(TmpCase):
+    def setUp(self) -> None:
+        super().setUp()
+        self.home = self.tmp / "home"
+        write_syncthing_config(self.home)
+        self.commands: list[tuple[str, ...]] = []
+
+    def check(self, output: str = LOOPING, code: int = 0, **kw):
+        def run(command):
+            self.commands.append(tuple(command))
+            return RunOutput(code, output)
+
+        return check_syncthing_unit(context(self.tmp, system="Linux", run=run, **kw))
+
+    def test_asks_systemd_for_the_user_unit(self) -> None:
+        self.check()
+        self.assertEqual(
+            self.commands,
+            [("systemctl", "--user", "show", "-p", "ActiveState,SubState", "syncthing")],
+        )
+
+    def test_warns_in_the_syncthing_group(self) -> None:
+        (r,) = self.check()
+        self.assertEqual((r.name, r.group, r.status), ("Syncthing unit", doctor.G_SYNCTHING, WARN))
+        self.assertIn("journalctl", r.fix)  # config.xml is not the flatpak's here
+
+    def test_flatpak_config_gets_the_flatpak_fix(self) -> None:
+        (self.home / ".local/state/syncthing/config.xml").unlink()
+        folder = self.home / ".var/app/com.github.zocker_160.SyncThingy/config/syncthing"
+        folder.mkdir(parents=True)
+        (folder / "config.xml").write_text(
+            f"<configuration><gui><address>127.0.0.1:8384</address><apikey>{ST_KEY}</apikey>"
+            "</gui></configuration>"
+        )
+        (r,) = self.check()
+        self.assertIn("ExecStop=", r.fix)
+        unit = self.home / ".config/systemd/user/syncthing.service"
+        unit.parent.mkdir(parents=True)
+        unit.write_text(UNIT_WITH_STOP)
+        (r,) = self.check()
+        self.assertNotIn("ExecStart=", r.fix)
+
+    def test_running_unit_is_ok_and_a_stopped_one_is_silent(self) -> None:
+        self.assertEqual(self.check(RUNNING)[0].status, OK)
+        self.assertEqual(self.check(STOPPED), [])
+
+    def test_skipped_off_linux_without_syncthing_or_without_systemctl(self) -> None:
+        self.assertEqual(check_syncthing_unit(context(self.tmp)), [])  # macOS
+        self.assertEqual(self.check(code=1), [])  # no user manager
+        (self.home / ".local/state/syncthing/config.xml").unlink()
+        self.assertEqual(self.check(), [])
+        self.home.joinpath(".local/state/syncthing/config.xml").write_text("<configuration/>")
+        self.assertEqual(
+            check_syncthing_unit(context(self.tmp, system="Linux")), []
+        )  # no systemctl
+
+
+RA_APP = "org.libretro.RetroArch"
+DOLPHIN_APP = "org.DolphinEmu.dolphin-emu"
+SYNCTHINGY = "com.github.zocker_160.SyncThingy"
+
+
+class FlatpakAccessTests(TmpCase):
+    def setUp(self) -> None:
+        super().setUp()
+        self.home = self.tmp / "home"
+        self.commands: list[tuple[str, ...]] = []
+
+    def syncthingy(self) -> None:
+        folder = self.home / ".var/app" / SYNCTHINGY / "config/syncthing"
+        folder.mkdir(parents=True)
+        (folder / "config.xml").write_text(
+            f"<configuration><gui><address>127.0.0.1:8384</address><apikey>{ST_KEY}</apikey>"
+            "</gui></configuration>"
+        )
+
+    def installed(self, *apps: str) -> None:
+        for app in apps:
+            (self.home / ".var/app" / app).mkdir(parents=True, exist_ok=True)
+
+    def check(self, shown: str = "", code: int = 0, config_text: str | None = None, **kw):
+        def run(command):
+            self.commands.append(tuple(command))
+            return RunOutput(code, shown)
+
+        return check_flatpak_access(context(self.tmp, config_text, system="Linux", run=run, **kw))
+
+    def test_missing_overrides_fail_with_one_command_per_app(self) -> None:
+        self.syncthingy()
+        self.installed(RA_APP, DOLPHIN_APP)
+        (r,) = self.check("[Context]\nfilesystems=host;\n")
+        self.assertEqual((r.name, r.group, r.status), ("Flatpak access", doctor.G_SYNCTHING, FAIL))
+        self.assertIn(f"~/.var/app/{RA_APP}", r.detail)
+        self.assertIn(f"~/.var/app/{DOLPHIN_APP}", r.detail)
+        self.assertIn(
+            f"  flatpak override --user --filesystem=~/.var/app/{RA_APP} {SYNCTHINGY}", r.fix
+        )
+        self.assertIn(
+            f"  flatpak override --user --filesystem=~/.var/app/{DOLPHIN_APP} {SYNCTHINGY}", r.fix
+        )
+        self.assertIn("restart Syncthing", r.fix)
+        self.assertEqual(self.commands, [("flatpak", "override", "--user", "--show", SYNCTHINGY)])
+
+    def test_only_the_missing_apps_are_named(self) -> None:
+        self.syncthingy()
+        self.installed(RA_APP, DOLPHIN_APP)
+        (r,) = self.check(f"[Context]\nfilesystems=host;~/.var/app/{RA_APP};\n")
+        self.assertEqual(r.status, FAIL)
+        self.assertNotIn(RA_APP, r.detail + r.fix)
+        self.assertIn(DOLPHIN_APP, r.fix)
+
+    def test_all_granted_is_ok(self) -> None:
+        self.syncthingy()
+        self.installed(RA_APP, DOLPHIN_APP)
+        shown = f"[Context]\nfilesystems=~/.var/app/{RA_APP};~/.var/app/{DOLPHIN_APP};\n"
+        (r,) = self.check(shown)
+        self.assertEqual(r.status, OK)
+
+    def test_apps_that_are_not_installed_are_not_checked(self) -> None:
+        self.syncthingy()
+        self.installed(RA_APP)
+        (r,) = self.check()
+        self.assertEqual(r.status, FAIL)
+        self.assertNotIn(DOLPHIN_APP, r.detail + r.fix)
+
+    def test_nothing_to_say_without_the_flatpak_or_any_installed_app(self) -> None:
+        self.assertEqual(self.check(), [])  # no Syncthing at all
+        self.syncthingy()
+        self.assertEqual(self.check(), [])  # no emulator flatpak installed
+        self.assertEqual(self.commands, [])  # and flatpak was not even asked
+        self.assertEqual(check_flatpak_access(context(self.tmp, home=self.home)), [])  # macOS
+
+    def test_native_syncthing_needs_nothing(self) -> None:
+        write_syncthing_config(self.home)
+        self.installed(RA_APP)
+        self.assertEqual(self.check(), [])
+        self.assertEqual(self.commands, [])
+
+    def test_flatpak_that_cannot_be_run_warns_with_the_command(self) -> None:
+        self.syncthingy()
+        self.installed(RA_APP)
+
+        def run(command):
+            raise FileNotFoundError(2, "No such file or directory")
+
+        (r,) = check_flatpak_access(context(self.tmp, system="Linux", run=run))
+        self.assertEqual(r.status, WARN)
+        self.assertIn(f"--filesystem=~/.var/app/{RA_APP}", r.fix)
+
+    def test_failed_show_counts_as_nothing_granted(self) -> None:
+        self.syncthingy()
+        self.installed(RA_APP)
+        (r,) = self.check("error: no such app", code=1)
+        self.assertEqual(r.status, FAIL)
+
+    def test_only_the_folders_the_config_subscribes_to_count(self) -> None:
+        self.syncthingy()
+        self.installed(RA_APP)
+        (r,) = self.check(config_text=FULL)  # the device has `saves`
+        self.assertEqual(r.status, FAIL)
+        no_saves = FULL.replace('["library", "saves"]', '["library"]')
+        self.assertEqual(self.check(config_text=no_saves), [])
+
+    def test_run_checks_includes_it(self) -> None:
+        self.syncthingy()
+        self.installed(RA_APP)
+        probes = make_probes(
+            self.tmp, system="Linux", os_release=STEAMOS, run=lambda c: RunOutput(0, "")
+        )
+        results = run_checks(probes)
+        self.assertEqual(by_name(results, "Flatpak access").status, FAIL)
