@@ -16,36 +16,8 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 
 from warpzone.profiles import SettingsFile
-
-Value = str | int | float | bool
-
-# TEMPORARY, replace at integration: `match` and `is_builtin_secret` belong to
-# warpzone/settings_formats.py (T2) and `same` to warpzone/settings_tree.py (T3). The fallbacks
-# below follow their fixed interfaces so that this branch stands alone; once both modules are
-# merged, delete the two `try` blocks' `except` bodies and keep only the imports.
-try:
-    from warpzone.settings_formats import is_builtin_secret, match
-except ImportError:  # pragma: no cover - only until T2 is merged
-    import re
-
-    _SECRET_WORDS = ("token", "password", "passwd", "secret", "apikey", "api_key")
-
-    def match(pattern: str, key: str) -> bool:
-        parts = (".*" if c == "*" else "." if c == "?" else re.escape(c) for c in pattern)
-        return re.fullmatch("".join(parts), key, re.DOTALL) is not None
-
-    def is_builtin_secret(key: str) -> bool:
-        last = key.rsplit("]", 1)[-1].rsplit(".", 1)[-1].lower()
-        return any(word in last for word in _SECRET_WORDS)
-
-
-try:
-    from warpzone.settings_tree import same
-except ImportError:  # pragma: no cover - only until T3 is merged
-
-    def same(a: object, b: object) -> bool:
-        return type(a) is type(b) and a == b
-
+from warpzone.settings_formats import Value, is_builtin_secret, match
+from warpzone.settings_tree import same
 
 # Actions of a `KeyPlan`.
 WRITE = "write"
