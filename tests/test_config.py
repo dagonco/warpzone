@@ -57,6 +57,12 @@ class ConfigTests(unittest.TestCase):
             "unknown folder 'games'",
         )
 
+    def test_settings_is_a_folder_group(self) -> None:
+        data = copy.deepcopy(config_data())
+        data["devices"]["deck"]["folders"] = ["library", "settings"]
+        cfg = parse_config(data)
+        self.assertEqual(cfg.devices["deck"].folders, ("library", "settings"))
+
     def test_unknown_profile(self) -> None:
         self.assert_error(
             lambda d: d["devices"]["deck"].update(profile="nope"),
