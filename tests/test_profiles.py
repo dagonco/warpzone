@@ -293,6 +293,10 @@ class ProfileTests(unittest.TestCase):
         self.assert_invalid(prof({"process": ["e"], "files": {"F": {}}}), "file id")
         self.assert_invalid(prof({"process": ["e"], "files": {"a:b": {}}}), "file id")
         self.assert_invalid(
+            prof({"process": ["e"], "files": {"data": {"path": "~/f.ini", "format": "ini"}}}),
+            "file id 'data' is reserved",
+        )
+        self.assert_invalid(
             prof({"process": ["e"], "files": {"f": []}}), "settings.e.files.f: must be a table"
         )
         self.assert_invalid(with_file(foo=1), "settings.e.files.f: unknown key 'foo'")

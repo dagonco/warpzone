@@ -297,6 +297,11 @@ def _parse_settings_files(
             err(f"{at}: file id must be lowercase letters, digits and hyphens")
             all_ok = False
             continue
+        if fid == "data":
+            # The device state keeps data-file hashes under this name.
+            err(f"{at}: file id 'data' is reserved")
+            all_ok = False
+            continue
         if not isinstance(entry, dict):
             err(f"{at}: must be a table")
             all_ok = False
