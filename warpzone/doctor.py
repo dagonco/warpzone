@@ -166,6 +166,11 @@ FLYCAST_VMU_FIX = (
     "empty card in RetroArch's saves folder, which retroarch-saves syncs"
 )
 
+# Vita3K's active user. The profile syncs the saves of user 00 only
+# (ux0/user/00/savedata); a user made in the GUI can get another id.
+VITA3K_CONFIG = ".config/Vita3K/config.yml"
+VITA3K_USER = "00"
+
 SYSTEMD_USER_DIR = ".config/systemd/user"
 AUTOSTART_DIR = ".config/autostart"
 SYNCTHINGY_EXEC = (
@@ -352,6 +357,29 @@ def judge_flycast_vmus(text: str) -> tuple[str, str, str]:
         f"Flycast's per-game VMUs are off ({shown}), so the VMUs live in the system "
         "folder (bios/dc), which warpzone does not sync and a revert would not restore",
         FLYCAST_VMU_FIX,
+    )
+
+
+def vita3k_user_id(text: str) -> str | None:
+    """The `user-id:` of Vita3K's config.yml, without quotes or a trailing comment."""
+    match = re.search(r"^user-id:[ \t]*(.*)$", text, re.MULTILINE)
+    if not match:
+        return None
+    value = match.group(1).split(" #")[0].strip().strip("\"'")
+    return value or None
+
+
+def judge_vita3k_user(user: str) -> tuple[str, str, str]:
+    """(status, detail, fix) for Vita3K's active user id."""
+    if user == VITA3K_USER:
+        return OK, f"the active user is {user}, the one warpzone syncs", ""
+    return (
+        WARN,
+        f"the active user is {user}, but warpzone syncs the saves of user {VITA3K_USER} "
+        f"(ux0/user/{VITA3K_USER}/savedata), so this user's saves are not synced",
+        f"in Vita3K, switch to user {VITA3K_USER} (or delete the other user and keep "
+        f"{VITA3K_USER}); if the saves are in ux0/user/{user}/savedata, move them to "
+        f"ux0/user/{VITA3K_USER}/savedata. Vita3K has to be closed while you do it",
     )
 
 
@@ -768,6 +796,19 @@ def check_flycast(ctx: Context) -> list[Result]:
     return [Result("Flycast VMUs", G_SAVES, status, detail, fix)]
 
 
+def check_vita3k(ctx: Context) -> list[Result]:
+    """Only when Vita3K has written its config."""
+    p = ctx.probes
+    path = p.home / VITA3K_CONFIG
+    if not p.is_file(path):
+        return []
+    user = vita3k_user_id(p.read_text(path))
+    if user is None:  # no user chosen yet: nothing to compare
+        return []
+    status, detail, fix = judge_vita3k_user(user)
+    return [Result("Vita3K user", G_SAVES, status, detail, fix)]
+
+
 def _scrub(text: str, key: str) -> str:
     return text.replace(key, "***") if key else text
 
@@ -1166,6 +1207,7 @@ CHECKS: tuple[Callable[[Context], list[Result]], ...] = (
     check_syncthing,
     check_game_mode,
     check_flycast,
+    check_vita3k,
     check_tools,
     check_switch,
     check_dats,

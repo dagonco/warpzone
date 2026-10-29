@@ -31,16 +31,19 @@ from warpzone.doctor import (
     check_switch,
     check_syncthing,
     check_tool,
+    check_vita3k,
     collapse_inbox,
     exit_code,
     hint_for,
     judge_flycast_vmus,
     judge_game_mode,
+    judge_vita3k_user,
     load_config_state,
     platform_family,
     render,
     run_checks,
     run_doctor,
+    vita3k_user_id,
 )
 
 RA_KEY = "ra-fake-key-1234567890"  # gitleaks:allow (test fixture, not a real key)
@@ -905,6 +908,45 @@ class FlycastVmuTests(TmpCase):
         self.assertEqual((r.name, r.group, r.status), ("Flycast VMUs", doctor.G_SAVES, WARN))
         path.write_text('reicast_per_content_vmus = "All VMUs"\n')
         (r,) = check_flycast(context(self.tmp))
+        self.assertEqual(r.status, OK)
+
+
+class Vita3kUserTests(TmpCase):
+    CONFIG = ".config/Vita3K/config.yml"
+
+    def test_user_id_is_read_in_any_yaml_spelling(self) -> None:
+        self.assertEqual(vita3k_user_id('lang: 1\nuser-id: "01"\nx: 2\n'), "01")
+        self.assertEqual(vita3k_user_id("user-id: 00\n"), "00")
+        self.assertEqual(vita3k_user_id("user-id: '00'  # first user\n"), "00")
+        self.assertEqual(vita3k_user_id("user-id:   \n"), None)
+        self.assertEqual(vita3k_user_id("other-user-id: 01\n"), None)
+        self.assertEqual(vita3k_user_id("  user-id: 01\n"), None)  # nested key, not ours
+
+    def test_judge(self) -> None:
+        self.assertEqual(judge_vita3k_user("00")[0], OK)
+        status, detail, fix = judge_vita3k_user("01")
+        self.assertEqual(status, WARN)
+        self.assertIn("user 00", detail)
+        self.assertIn("ux0/user/01/savedata", fix)
+        self.assertIn("ux0/user/00/savedata", fix)
+        self.assertEqual(judge_vita3k_user("0")[0], WARN)  # the folder is called 00
+
+    def write(self, text: str) -> None:
+        path = self.tmp / "home" / self.CONFIG
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+
+    def test_nothing_without_a_config_or_a_user(self) -> None:
+        self.assertEqual(check_vita3k(context(self.tmp)), [])
+        self.write("lang: 1\n")
+        self.assertEqual(check_vita3k(context(self.tmp)), [])
+
+    def test_reads_the_config_in_the_home_folder(self) -> None:
+        self.write('user-id: "01"\n')
+        (r,) = check_vita3k(context(self.tmp))
+        self.assertEqual((r.name, r.group, r.status), ("Vita3K user", doctor.G_SAVES, WARN))
+        self.write('user-id: "00"\n')
+        (r,) = check_vita3k(context(self.tmp))
         self.assertEqual(r.status, OK)
 
 

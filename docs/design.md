@@ -954,6 +954,9 @@ for every problem, the exact fix for this platform.
   `disabled` or a missing key is `[! ]`, because the core then writes the shared VMUs into
   `bios/dc`, which the profile's library ignores (`/bios/dc/vmu_save_*.bin`,
   `/bios/dc/dc_nvmem.bin`) keep out of sync. The fix names the core option to change.
+- **Vita3K user.** When `~/.config/Vita3K/config.yml` has a `user-id:`, `judge_vita3k_user`
+  (pure) is `[ok]` for `00` and `[! ]` for anything else: the profile syncs
+  `ux0/user/00/savedata` only. A missing file or key says nothing.
 - **Exit codes.** `0` when no check is a problem, `1` otherwise.
 - **Install hints** live in one table in `warpzone/doctor.py` (`TOOLS` and the `*_HINTS`
   dicts), keyed by platform family: `macos`, `debian`, `fedora`, `arch`, `steamos`,

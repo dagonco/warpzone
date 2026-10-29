@@ -37,6 +37,12 @@ To get Dreamcast saves synced, turn on the core option **Per-Game Visual Memory 
 
 `warpzone doctor` warns when `Flycast.opt` exists and the option is off or missing. The standalone Flycast (`flycast-saves`) is unaffected.
 
+## Vita3K syncs user 00
+
+The profile syncs `~/Emulation/storage/Vita3K/ux0/user/00/savedata`. A user created in Vita3K's own window can get another id (`01`, for example), and that user's saves are then not synced. Keep the saves under user `00` on every console: use the default user, or delete the other one and keep `00`. If the saves are already under another id, close Vita3K and move `ux0/user/<id>/savedata` to `ux0/user/00/savedata`.
+
+`warpzone doctor` reads `user-id:` in `~/.config/Vita3K/config.yml` and warns when it is not `00`.
+
 ## Xenia and Model 2 live inside `roms/`
 
 EmuDeck keeps some emulator files inside the system folders of `~/Emulation/roms`: Xenia's content under `roms/xbox360/` and Model 2's files under `roms/model2/`. The games themselves are in the `roms/` subfolder of each.
