@@ -1,14 +1,18 @@
+import dataclasses
+import json
 import os
+import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from unittest import mock
 
-from support import API_KEY, HUB_ID
+from support import API_KEY, DECK_ID, HUB_ID
 from test_cli import run
-from warpzone import __version__, doctor
+from warpzone import __version__, doctor, esde
 from warpzone.doctor import (
     FAIL,
     GIB,
@@ -29,6 +33,7 @@ from warpzone.doctor import (
     check_game_mode,
     check_hub,
     check_ra,
+    check_settings,
     check_switch,
     check_syncthing,
     check_syncthing_unit,
@@ -37,8 +42,12 @@ from warpzone.doctor import (
     collapse_inbox,
     exit_code,
     hint_for,
+    judge_esde_script,
+    judge_event_scripts,
     judge_flycast_vmus,
     judge_game_mode,
+    judge_last_apply,
+    judge_settings_layers,
     judge_unit_state,
     judge_vita3k_user,
     load_config_state,
@@ -48,6 +57,7 @@ from warpzone.doctor import (
     run_doctor,
     vita3k_user_id,
 )
+from warpzone.profiles import EmulatorSettings, Profile, SettingsFile, load_profile
 
 RA_KEY = "ra-fake-key-1234567890"  # gitleaks:allow (test fixture, not a real key)
 ST_KEY = "st-fake-key-0987654321"  # gitleaks:allow (test fixture, not a real key)
@@ -951,6 +961,338 @@ class Vita3kUserTests(TmpCase):
         self.write('user-id: "00"\n')
         (r,) = check_vita3k(context(self.tmp))
         self.assertEqual(r.status, OK)
+
+
+SETTINGS_PROFILE = Profile(
+    name="test",
+    description="",
+    settings={
+        "retroarch": EmulatorSettings(
+            id="retroarch",
+            process=("retroarch",),
+            files={"cfg": SettingsFile(id="cfg", path="~/r/retroarch.cfg", format="retroarch-cfg")},
+        )
+    },
+)
+LAYER = 'format = 1\n\n[retroarch.cfg]\nsavestate_auto_save = "true"\n'
+
+
+def layers(common: str | None = LAYER, own: str | None = LAYER, names=("common.toml", "deck.toml")):
+    return judge_settings_layers(
+        SETTINGS_PROFILE,
+        device="deck",
+        folder="/home/user/settings",
+        folder_exists=True,
+        marker_exists=True,
+        common=common,
+        own=own,
+        names=names,
+    )
+
+
+class SettingsJudgeTests(unittest.TestCase):
+    def test_valid_layers_are_ok(self) -> None:
+        status, detail, fix = layers()
+        self.assertEqual(status, OK)
+        self.assertIn("2 layer file(s)", detail)
+        self.assertEqual(fix, "")
+
+    def test_no_layer_files_yet_is_ok(self) -> None:
+        status, detail, _ = layers(None, None, ())
+        self.assertEqual(status, OK)
+        self.assertIn("no layer files", detail)
+
+    def test_a_missing_folder_or_marker_is_a_problem(self) -> None:
+        kw = dict(device="deck", folder="/h/s", common=None, own=None, names=())
+        status, detail, fix = judge_settings_layers(
+            SETTINGS_PROFILE, folder_exists=False, marker_exists=False, **kw
+        )
+        self.assertEqual(status, FAIL)
+        self.assertIn("/h/s does not exist", detail)
+        self.assertIn("warpzone provision device deck", fix)
+        status, detail, fix = judge_settings_layers(
+            SETTINGS_PROFILE, folder_exists=True, marker_exists=False, **kw
+        )
+        self.assertEqual(status, FAIL)
+        self.assertIn(".stfolder", detail)
+
+    def test_a_layer_that_does_not_parse_or_validate_is_a_problem(self) -> None:
+        for text in ("not = [toml", "[retroarch.cfg]\nk = 1\n", "format = 2\n"):
+            with self.subTest(text=text):
+                status, detail, fix = layers(own=text)
+                self.assertEqual(status, FAIL)
+                self.assertIn("deck.toml", detail)
+                self.assertIn("changes nothing", fix)
+
+    def test_a_secret_key_is_a_problem_named_without_its_value(self) -> None:
+        secret = "hunter2-fake-value"  # gitleaks:allow (test fixture, not a real secret)
+        status, detail, fix = layers(
+            common=f'format = 1\n\n[retroarch.cfg]\ncheevos_token = "{secret}"\n'
+        )
+        self.assertEqual(status, FAIL)
+        self.assertIn("cheevos_token", detail)
+        self.assertNotIn(secret, detail + fix)
+
+    def test_a_conflict_copy_is_a_problem(self) -> None:
+        status, detail, _ = layers(
+            names=("common.toml", "common.sync-conflict-20260101-000000-ABCDEFG.toml")
+        )
+        self.assertEqual(status, FAIL)
+        self.assertIn("sync-conflict", detail)
+
+    def test_an_unknown_emulator_or_file_is_only_a_warning(self) -> None:
+        status, detail, _ = layers(own='format = 1\n\n[nothere.cfg]\nk = "v"\n')
+        self.assertEqual(status, WARN)
+        self.assertIn("nothere", detail)
+        status, detail, _ = layers(own='format = 1\n\n[retroarch.other]\nk = "v"\n')
+        self.assertEqual(status, WARN)
+
+    def test_problems_outrank_warnings(self) -> None:
+        text = 'format = 1\n\n[nothere.cfg]\nk = "v"\n[retroarch.cfg]\napi_key = "x"\n'
+        status, detail, _ = layers(own=text)
+        self.assertEqual(status, FAIL)
+        self.assertIn("api_key", detail)
+
+
+class EsdeJudgeTests(unittest.TestCase):
+    def script(self, **kw):
+        values = dict(
+            device="deck",
+            script="/h/ES-DE/scripts/startup/warpzone-settings.sh",
+            exists=True,
+            executable=True,
+            interpreter="/opt/wz/bin/python",
+            interpreter_ok=True,
+        )
+        values.update(kw)
+        return judge_esde_script(**values)
+
+    def test_installed_and_working_is_ok(self) -> None:
+        status, detail, fix = self.script()
+        self.assertEqual(status, OK)
+        self.assertIn("/opt/wz/bin/python", detail)
+        self.assertEqual(fix, "")
+
+    def test_every_gap_is_a_warning_with_provision_as_the_fix(self) -> None:
+        for change in (
+            dict(exists=False, executable=False, interpreter=None, interpreter_ok=False),
+            dict(executable=False),
+            dict(interpreter=None, interpreter_ok=False),
+            dict(interpreter_ok=False),
+        ):
+            with self.subTest(change=change):
+                status, detail, fix = self.script(**change)
+                self.assertEqual(status, WARN)
+                self.assertTrue(detail)
+                self.assertIn("warpzone provision device deck", fix)
+
+    def test_the_setting_on_is_ok(self) -> None:
+        text = '<bool name="CustomEventScripts" value="true" />\n'
+        self.assertEqual(judge_event_scripts(text, "deck")[0], OK)
+
+    def test_the_setting_off_absent_or_unreadable_is_a_warning(self) -> None:
+        for text in (
+            '<bool name="CustomEventScripts" value="false" />\n',
+            '<bool name="Other" value="true" />\n',
+            "<bool name=",
+        ):
+            with self.subTest(text=text):
+                status, _, fix = judge_event_scripts(text, "deck")
+                self.assertEqual(status, WARN)
+                self.assertIn("warpzone provision device deck", fix)
+                self.assertIn("Enable custom event scripts", fix)
+                self.assertIn("ES-DE closed", fix)
+
+    def test_a_missing_file_asks_to_start_esde_once(self) -> None:
+        status, detail, fix = judge_event_scripts(None, "deck")
+        self.assertEqual(status, WARN)
+        self.assertIn("es_settings.xml", detail)
+        self.assertIn("start ES-DE once", fix)
+
+
+class LastApplyJudgeTests(unittest.TestCase):
+    LOG = "/h/.local/state/warpzone/settings/log"
+
+    def test_no_run_yet_is_optional(self) -> None:
+        status, detail, _ = judge_last_apply(None, self.LOG)
+        self.assertEqual(status, OPTIONAL)
+        self.assertIn("no run yet", detail)
+
+    def test_a_clean_run_is_ok(self) -> None:
+        info = {"time": "2026-10-29T10:00:00", "exit": 0, "written": 3, "held": 0}
+        status, detail, _ = judge_last_apply(info, self.LOG)
+        self.assertEqual(status, OK)
+        self.assertIn("2026-10-29T10:00:00", detail)
+
+    def test_a_failed_run_points_at_the_log(self) -> None:
+        for key in ("exit", "exit_code"):
+            status, detail, fix = judge_last_apply({"time": "t", key: 1}, self.LOG)
+            self.assertEqual(status, WARN)
+            self.assertIn("failed", detail)
+            self.assertIn(self.LOG, fix)
+
+    def test_held_keys_point_at_capture(self) -> None:
+        status, detail, fix = judge_last_apply({"time": "t", "exit": 0, "held": 2}, self.LOG)
+        self.assertEqual(status, WARN)
+        self.assertIn("2 key(s)", detail)
+        self.assertIn("warpzone settings capture", fix)
+
+    def test_odd_content_does_not_raise(self) -> None:
+        status, _, _ = judge_last_apply({"exit": "x", "held": None, "time": 5}, self.LOG)
+        self.assertEqual(status, OK)
+
+
+class SettingsCheckTests(TmpCase):
+    CONFIG = FULL.replace(
+        'folders = ["library", "saves"]', 'folders = ["saves", "settings", "frontend"]'
+    )
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.home = self.tmp / "home"
+        self.folder = self.home / ".local/share/warpzone/settings"
+        self.esde = self.home / "ES-DE"
+        self.state = self.home / ".local/state/warpzone/settings"
+
+    def syncthing(self, path: Path | None = None, ids=(DECK_ID, HUB_ID)) -> None:
+        folder = self.home / ".config/syncthing"
+        folder.mkdir(parents=True, exist_ok=True)
+        devices = "".join(f'<device id="{i}" name="x"/>' for i in ids)
+        shared = f'<device id="{HUB_ID}"/>'
+        wz = f'<folder id="wz-settings" path="{path or self.folder}/">{shared}</folder>'
+        (folder / "config.xml").write_text(
+            f"<configuration>{wz}{devices}<gui><address>127.0.0.1:8384</address>"
+            f"<apikey>{ST_KEY}</apikey></gui></configuration>"
+        )
+
+    def set_up_device(self) -> None:
+        self.syncthing()
+        (self.folder / ".stfolder").mkdir(parents=True)
+        (self.folder / "common.toml").write_text("format = 1\n")
+        script = esde.script_path(self.esde)
+        script.parent.mkdir(parents=True)
+        script.write_text(esde.render_startup_script(sys.executable, "deck"))
+        script.chmod(0o755)
+        settings = esde.settings_path(self.esde)
+        settings.parent.mkdir(parents=True)
+        settings.write_text('<bool name="CustomEventScripts" value="true" />\n')
+        self.state.mkdir(parents=True)
+        (self.state / "last-apply.json").write_text(
+            json.dumps({"time": "2026-10-29T10:00:00", "exit": 0, "written": 1, "held": 0})
+        )
+
+    def check(self, config_text: str | None = None, **kw):
+        kw.setdefault("executables", [str(esde.script_path(self.esde)), sys.executable])
+        return check_settings(
+            context(
+                self.tmp, self.CONFIG if config_text is None else config_text, system="Linux", **kw
+            )
+        )
+
+    def test_a_working_device_has_three_ok_lines(self) -> None:
+        self.set_up_device()
+        results = self.check()
+        self.assertEqual(
+            [(r.name, r.group, r.status) for r in results],
+            [
+                ("Settings layers", doctor.G_SETTINGS, OK),
+                ("ES-DE startup script", doctor.G_SETTINGS, OK),
+                ("Last settings apply", doctor.G_SETTINGS, OK),
+            ],
+        )
+
+    def test_each_gap_shows_on_its_own_line(self) -> None:
+        self.set_up_device()
+        esde.script_path(self.esde).unlink()
+        esde.settings_path(self.esde).write_text('<bool name="CustomEventScripts" value="false" />')
+        (self.state / "last-apply.json").unlink()
+        (self.folder / "common.toml").write_text("format = 9\n")
+        results = self.check()
+        self.assertEqual([r.status for r in results], [FAIL, WARN, OPTIONAL])
+        script = by_name(results, "ES-DE startup script")
+        self.assertIn("no startup script", script.detail)
+        self.assertIn("custom event scripts are off", script.detail)
+        self.assertEqual(exit_code(results), 1)
+
+    def test_an_interpreter_that_is_gone_is_a_warning(self) -> None:
+        self.set_up_device()
+        esde.script_path(self.esde).write_text(esde.render_startup_script("/gone/python", "deck"))
+        script = by_name(self.check(), "ES-DE startup script")
+        self.assertEqual(script.status, WARN)
+        self.assertIn("/gone/python", script.detail)
+
+    def test_a_missing_esde_settings_file_is_a_warning(self) -> None:
+        self.set_up_device()
+        esde.settings_path(self.esde).unlink()
+        script = by_name(self.check(), "ES-DE startup script")
+        self.assertEqual(script.status, WARN)
+        self.assertIn("start ES-DE once", script.fix)
+
+    def test_no_secret_value_reaches_the_output(self) -> None:
+        self.set_up_device()
+        secret = "hunter2-fake-value"  # gitleaks:allow (test fixture, not a real secret)
+        (self.folder / "deck.toml").write_text(
+            f'format = 1\n\n[retroarch.cfg]\ncheevos_token = "{secret}"\n'
+        )
+        (self.state / "last-apply.json").write_text(json.dumps({"exit": 0, "token": secret}))
+        text = "\n".join(render(self.check()))
+        self.assertIn("cheevos_token", text)
+        self.assertNotIn(secret, text)
+
+    def test_conflict_copies_are_found_in_the_folder(self) -> None:
+        self.set_up_device()
+        (self.folder / "files/xemu").mkdir(parents=True)
+        (self.folder / "files/xemu/eeprom.sync-conflict-20260101-000000-ABCDEFG.bin").write_text(
+            "x"
+        )
+        layers_result = by_name(self.check(), "Settings layers")
+        self.assertEqual(layers_result.status, FAIL)
+        self.assertIn("sync-conflict", layers_result.detail)
+
+    def test_a_missing_folder_is_a_problem(self) -> None:
+        self.set_up_device()
+        shutil.rmtree(self.folder)
+        r = by_name(self.check(), "Settings layers")
+        self.assertEqual(r.status, FAIL)
+        self.assertIn("warpzone provision device deck", r.fix)
+
+    def test_nothing_to_say_when_this_machine_is_not_a_settings_device(self) -> None:
+        self.set_up_device()
+        no_settings = FULL.replace('folders = ["library", "saves"]', 'folders = ["saves"]')
+        self.assertEqual(self.check(no_settings), [])  # the device does not subscribe
+        self.assertEqual(self.check(""), [])  # no config
+        self.assertEqual(self.check(FULL.replace("[devices.deck]", "[devices.other]")), [])
+        # the hub: it knows the device, but its settings folder lives elsewhere
+        self.syncthing(path=self.tmp / "data/games/settings")
+        self.assertEqual(self.check(), [])
+        # no Syncthing at all
+        (self.home / ".config/syncthing/config.xml").unlink()
+        self.assertEqual(self.check(), [])
+
+    def test_another_device_in_the_config_is_not_this_one(self) -> None:
+        self.set_up_device()
+        self.syncthing(ids=(HUB_ID,))
+        self.assertEqual(self.check(), [])
+
+    def test_a_profile_without_an_esde_path_skips_that_line(self) -> None:
+        self.set_up_device()
+        with_settings = load_profile("steamos-emudeck")
+        bare = dataclasses.replace(
+            with_settings, paths={k: v for k, v in with_settings.paths.items() if k != "esde"}
+        )
+        ctx = context(self.tmp, self.CONFIG, system="Linux")
+        device = dataclasses.replace(ctx.config.settings_devices[0], profile=bare)
+        ctx = Context(ctx.probes, dataclasses.replace(ctx.config, settings_devices=(device,)))
+        self.assertEqual(
+            [r.name for r in check_settings(ctx)], ["Settings layers", "Last settings apply"]
+        )
+
+    def test_the_run_includes_the_settings_checks(self) -> None:
+        self.set_up_device()
+        probes = make_probes(self.tmp, system="Linux")
+        probes.config_path.write_text(self.CONFIG)
+        names = [r.name for r in run_checks(probes)]
+        self.assertIn("Settings layers", names)
 
 
 if __name__ == "__main__":

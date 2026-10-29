@@ -545,9 +545,6 @@ def _write_script(path: Path, text: str) -> None:
         raise
 
 
-ES_DE_MENU = "Main menu > Other settings > Enable custom event scripts"
-
-
 def _enable_event_scripts(
     name: str,
     esde_dir: Path,
@@ -565,7 +562,7 @@ def _enable_event_scripts(
     """
     path = esde.settings_path(esde_dir)
     again = f"quit ES-DE and run `warpzone provision device {name}` again"
-    by_hand = f"or turn it on in ES-DE ({ES_DE_MENU})"
+    by_hand = f"or turn it on in ES-DE ({esde.MENU_PATH})"
     if not path.is_file():
         rep.warn(
             f"{path} does not exist, so ES-DE's custom event scripts were not turned on: "

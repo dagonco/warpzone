@@ -15,6 +15,7 @@ from pathlib import Path
 
 SCRIPT_NAME = "warpzone-settings.sh"
 SETTING = "CustomEventScripts"
+MENU_PATH = "Main menu > Other settings > Enable custom event scripts"
 # What the process list shows for ES-DE: `comm` of the unpacked binary, and `argv[0]` of the
 # AppImage. To be confirmed on a device.
 ESDE_PROCESSES = ("es-de", "ES-DE.AppImage")

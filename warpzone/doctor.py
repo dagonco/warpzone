@@ -31,11 +31,12 @@ import time
 import tomllib
 import urllib.error
 import urllib.request
+import xml.etree.ElementTree as ET
 from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from warpzone import __version__, localst, model, ra
+from warpzone import __version__, esde, localst, model, ra, settings_state
 from warpzone import inbox_switch as switch
 from warpzone.config import (
     INBOX_KEYS,
@@ -57,7 +58,8 @@ from warpzone.flatpak import (
     show_command,
 )
 from warpzone.model import ModelError
-from warpzone.profiles import ProfileError, available_profiles, load_profile
+from warpzone.profiles import Profile, ProfileError, available_profiles, load_profile
+from warpzone.settings_layers import LayerError, conflict_copies, parse_layer, validate
 from warpzone.syncthing import _is_loopback
 
 OK, WARN, FAIL, OPTIONAL = "ok", "warn", "fail", "optional"
@@ -82,6 +84,7 @@ G_TOOLS = "Inbox tools"
 G_SWITCH = "Switch"
 G_DATS = "DATs"
 G_HUB = "Hub folder"
+G_SETTINGS = "Emulator settings"
 G_RA = "RetroAchievements"
 G_INBOX = "Inbox"
 # The groups whose items only matter to the desktop that runs `warpzone inbox`.
@@ -535,6 +538,15 @@ def _read_text(path: Path) -> str:
         return ""
 
 
+def _list_tree(path: Path) -> list[str]:
+    """Every file under `path`, relative and with `/`; Syncthing's own folders are skipped."""
+    found: list[str] = []
+    for base, dirs, files in os.walk(path):
+        dirs[:] = [d for d in dirs if d not in (".stfolder", ".stversions")]
+        found += [(Path(base) / name).relative_to(path).as_posix() for name in files]
+    return sorted(found)
+
+
 def _disk_free(path: Path) -> tuple[int, int]:
     """(total, free) bytes of the volume holding `path`."""
     usage = shutil.disk_usage(path)
@@ -562,6 +574,7 @@ class Probes:
     mtime: Callable[[Path], float] = _mtime
     list_dir: Callable[[Path], list[str]] = _list_dir
     read_text: Callable[[Path], str] = _read_text
+    list_tree: Callable[[Path], list[str]] = _list_tree
     disk_free: Callable[[Path], tuple[int, int]] = _disk_free
 
     @property
@@ -579,6 +592,15 @@ class Result:
 
 
 @dataclass(frozen=True)
+class SettingsDevice:
+    """A configured device that subscribes to `settings`, with its profile."""
+
+    name: str
+    device_id: str
+    profile: Profile
+
+
+@dataclass(frozen=True)
 class ConfigState:
     """What could be read from the config file. `settings` is salvaged even when other
     parts of the file are invalid, so the checks that depend on it still make sense."""
@@ -593,6 +615,8 @@ class ConfigState:
     # Save and BIOS folder paths (with `~`) of the configured devices; empty when the
     # config does not load, then the checks fall back to every shipped profile.
     sync_paths: tuple[str, ...] = ()
+    # The devices that subscribe to `settings`; empty when the config does not load.
+    settings_devices: tuple[SettingsDevice, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -671,6 +695,7 @@ def load_config_state(path: Path) -> ConfigState:
     settings = parse_inbox(data.get("inbox"), [])  # keep whatever is valid
     errors: list[str] = []
     sync_paths: dict[str, None] = {}
+    settings_devices: list[SettingsDevice] = []
     try:
         if "hub" in data or "devices" in data:
             cfg = parse_config(data, set(available_profiles()))
@@ -680,6 +705,9 @@ def load_config_state(path: Path) -> ConfigState:
             for device in cfg.devices.values():
                 for spec in model.device_specs(cfg, device.name, profiles[device.profile]):
                     sync_paths[spec.path] = None
+                if "settings" in device.folders:
+                    entry = SettingsDevice(device.name, device.device_id, profiles[device.profile])
+                    settings_devices.append(entry)
         else:
             unknown = sorted(set(data) - {"hub", "devices", "inbox"})
             errors += [f"config: unknown key {key!r}" for key in unknown]
@@ -692,7 +720,8 @@ def load_config_state(path: Path) -> ConfigState:
     if not isinstance(hub_root, str) or not hub_root:
         hub_root = None
     paths = tuple(sync_paths) if error is None else ()
-    return ConfigState(path, True, error, sections, devices, settings, hub_root, paths)
+    subscribed = tuple(settings_devices) if error is None else ()
+    return ConfigState(path, True, error, sections, devices, settings, hub_root, paths, subscribed)
 
 
 def check_config(ctx: Context) -> list[Result]:
@@ -982,6 +1011,255 @@ def check_vita3k(ctx: Context) -> list[Result]:
         return []
     status, detail, fix = judge_vita3k_user(user)
     return [Result("Vita3K user", G_SAVES, status, detail, fix)]
+
+
+# Fields of `last-apply.json` that `judge_last_apply` reads: `time` (ISO 8601 text), `exit`
+# (or `exit_code`), `written` and `held` (counts). Anything missing or odd is ignored.
+def _count(info: Mapping[str, object], *names: str) -> int | None:
+    for name in names:
+        value = info.get(name)
+        if isinstance(value, int) and not isinstance(value, bool):
+            return value
+    return None
+
+
+def judge_settings_layers(
+    profile: Profile,
+    *,
+    device: str,
+    folder: str,
+    folder_exists: bool,
+    marker_exists: bool,
+    common: str | None,
+    own: str | None,
+    names: Sequence[str],
+) -> tuple[str, str, str]:
+    """Verdict on the settings folder and the two layers (`None` when a file is absent).
+
+    Messages name keys and ids, never values: a rejected value may be a secret.
+    """
+    provision = f"warpzone provision device {device}"
+    if not folder_exists:
+        return (
+            FAIL,
+            f"{folder} does not exist, so this device has no settings layers to apply",
+            f"run `{provision}`, and let Syncthing sync the folder",
+        )
+    if not marker_exists:
+        return (
+            FAIL,
+            f"{folder} is not a running Syncthing folder yet (no .stfolder inside), so "
+            "`settings apply` does nothing",
+            f"run `{provision}` and check that Syncthing is running",
+        )
+    errors: list[str] = []
+    warnings: list[str] = []
+    given = 0
+    for source, text in (("common.toml", common), (f"{device}.toml", own)):
+        if text is None:
+            continue
+        given += 1
+        try:
+            layer, notes = parse_layer(text, source)
+        except LayerError as exc:
+            errors += exc.errors
+            continue
+        found, notes_more = validate(layer, profile, source)
+        errors += found
+        warnings += notes + notes_more
+    errors += [f"{name}: Syncthing conflict copy" for name in conflict_copies(names)]
+    if errors:
+        return (
+            FAIL,
+            "\n".join(errors + warnings),
+            "`settings apply` changes nothing until this is fixed: correct the file on the "
+            "hub (secret keys are never layered), and for a conflict copy keep one version "
+            "and delete the other",
+        )
+    if warnings:
+        return (
+            WARN,
+            "\n".join(warnings),
+            "check the names against the device's profile; another profile may know them",
+        )
+    if not given:
+        return OK, f"{folder}: no layer files yet (nothing to apply)", ""
+    return OK, f"{folder}: {given} layer file(s) valid", ""
+
+
+def judge_esde_script(
+    *,
+    device: str,
+    script: str,
+    exists: bool,
+    executable: bool,
+    interpreter: str | None,
+    interpreter_ok: bool,
+) -> tuple[str, str, str]:
+    """Verdict on the ES-DE startup script that runs `settings apply`."""
+    fix = f"warpzone provision device {device}"
+    if not exists:
+        return (
+            WARN,
+            f"no startup script at {script}, so ES-DE does not apply the emulator settings "
+            "when it starts",
+            fix,
+        )
+    if not executable:
+        return WARN, f"{script} is not executable, so ES-DE cannot run it", fix
+    if interpreter is None:
+        return (
+            WARN,
+            f"{script} does not run `python -m warpzone` (edited by hand?)",
+            fix,
+        )
+    if not interpreter_ok:
+        return (
+            WARN,
+            f"{script} runs {interpreter}, which is gone or not executable "
+            "(was warpzone reinstalled elsewhere?)",
+            f"{fix} (from the warpzone you want ES-DE to use)",
+        )
+    return OK, f"{script} runs {interpreter}", ""
+
+
+def judge_event_scripts(xml_text: str | None, device: str) -> tuple[str, str, str]:
+    """Verdict on `CustomEventScripts` in `es_settings.xml` (`None` when the file is absent)."""
+    if xml_text is None:
+        return (
+            WARN,
+            "es_settings.xml not found, so it is not known whether ES-DE's custom event "
+            "scripts are on",
+            f"start ES-DE once, quit it, then run `warpzone provision device {device}`",
+        )
+    if esde.event_scripts_enabled(xml_text) is True:
+        return OK, "custom event scripts are on", ""
+    return (
+        WARN,
+        "ES-DE's custom event scripts are off (or unreadable), so it never runs the startup script",
+        f"quit ES-DE and run `warpzone provision device {device}` with ES-DE closed, or "
+        f"turn it on in ES-DE ({esde.MENU_PATH})",
+    )
+
+
+def judge_last_apply(info: Mapping[str, object] | None, log_path: str) -> tuple[str, str, str]:
+    """Verdict on the summary of the last `settings apply` (`None` when there is none)."""
+    if info is None:
+        return (
+            OPTIONAL,
+            "no run yet: nothing has applied the settings on this device",
+            "start ES-DE, or run `warpzone settings apply`",
+        )
+    when = info.get("time")
+    when_text = when if isinstance(when, str) and when else "at an unknown time"
+    code = _count(info, "exit", "exit_code") or 0
+    held = _count(info, "held") or 0
+    written = _count(info, "written")
+    if code != 0:
+        return (
+            WARN,
+            f"the last run ({when_text}) failed with exit code {code}",
+            f"see {log_path} (it never holds values), then run `warpzone settings apply`",
+        )
+    if held:
+        return (
+            WARN,
+            f"the last run ({when_text}) held {held} key(s) changed on this device: they "
+            "were not overwritten",
+            "`warpzone settings capture` sends them to the hub, or `warpzone settings "
+            "apply --overwrite-local` replaces them with the hub's values",
+        )
+    done = f", {written} written" if written is not None else ""
+    return OK, f"the last run ({when_text}) succeeded{done}", ""
+
+
+def _local_settings_device(ctx: Context) -> SettingsDevice | None:
+    """The configured settings device this machine is, or None.
+
+    Doctor is offline, so it reads the local Syncthing `config.xml`: this machine is the
+    device whose ID is listed there and whose `settings` path is where Syncthing keeps the
+    `wz-settings` folder. The hub lists the same device IDs but keeps that folder under its
+    own root, so it is not mistaken for a console.
+    """
+    p = ctx.probes
+    if not ctx.config.settings_devices:
+        return None
+    platform_name = "darwin" if p.system == "Darwin" else p.system.lower() or "linux"
+    try:
+        config = localst.find_config(env=p.env, home=p.home, platform=platform_name)
+        root = ET.fromstring(p.read_text(config))
+    except (localst.LocalSyncthingError, ET.ParseError):
+        return None
+    ids = {d.get("id") for d in root.findall("device")}
+    folder = next((f for f in root.findall("folder") if f.get("id") == "wz-settings"), None)
+    if folder is None:
+        return None
+    here = (folder.get("path") or "").rstrip("/")
+    for device in ctx.config.settings_devices:
+        wanted = _expand(device.profile.paths["settings"], p.home).rstrip("/")
+        if device.device_id in ids and wanted == here:
+            return device
+    return None
+
+
+def _merge(parts: Sequence[tuple[str, str, str]]) -> tuple[str, str, str]:
+    """One verdict from several: the worst status, and the text of every part that is not ok."""
+    bad = [part for part in parts if part[0] != OK]
+    if not bad:
+        return OK, "; ".join(part[1] for part in parts), ""
+    status = FAIL if any(part[0] == FAIL for part in bad) else WARN
+    return status, "; ".join(part[1] for part in bad), "; ".join(p[2] for p in bad if p[2])
+
+
+def check_settings(ctx: Context) -> list[Result]:
+    """On a device that subscribes to `settings`: layers, ES-DE startup script, last apply."""
+    device = _local_settings_device(ctx)
+    if device is None:
+        return []
+    p = ctx.probes
+    profile = device.profile
+    folder = Path(_expand(profile.paths["settings"], p.home))
+
+    def layer_text(name: str) -> str | None:
+        path = folder / name
+        return p.read_text(path) if p.is_file(path) else None
+
+    exists = p.is_dir(folder)
+    verdict = judge_settings_layers(
+        profile,
+        device=device.name,
+        folder=str(folder),
+        folder_exists=exists,
+        marker_exists=exists and p.is_dir(folder / ".stfolder"),
+        common=layer_text("common.toml") if exists else None,
+        own=layer_text(f"{device.name}.toml") if exists else None,
+        names=p.list_tree(folder) if exists else [],
+    )
+    results = [Result("Settings layers", G_SETTINGS, *verdict)]
+
+    if "esde" in profile.paths:
+        esde_dir = Path(_expand(profile.paths["esde"], p.home))
+        script = esde.script_path(esde_dir)
+        found = p.is_file(script)
+        interpreter = esde.script_interpreter(p.read_text(script)) if found else None
+        xml = esde.settings_path(esde_dir)
+        parts = [
+            judge_esde_script(
+                device=device.name,
+                script=str(script),
+                exists=found,
+                executable=found and p.is_executable(str(script)),
+                interpreter=interpreter,
+                interpreter_ok=interpreter is not None and p.is_executable(interpreter),
+            ),
+            judge_event_scripts(p.read_text(xml) if p.is_file(xml) else None, device.name),
+        ]
+        results.append(Result("ES-DE startup script", G_SETTINGS, *_merge(parts)))
+
+    state = settings_state.state_dir(p.env, p.home)
+    verdict = judge_last_apply(settings_state.read_last_apply(state), str(state / "log"))
+    results.append(Result("Last settings apply", G_SETTINGS, *verdict))
+    return results
 
 
 def _scrub(text: str, key: str) -> str:
@@ -1385,6 +1663,7 @@ CHECKS: tuple[Callable[[Context], list[Result]], ...] = (
     check_syncthing_unit,
     check_flycast,
     check_vita3k,
+    check_settings,
     check_tools,
     check_switch,
     check_dats,
