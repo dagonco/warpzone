@@ -16,25 +16,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 from . import tomlw
-
-try:
-    from .settings_formats import FormatError, NotWritable, ReadResult, Value
-except ImportError:  # settings_formats.py is not on this branch yet
-    Value = str | int | float | bool
-
-    @dataclass(frozen=True)
-    class ReadResult:
-        values: dict[str, Value]
-        fixed: frozenset[str]
-
-    class NotWritable(Exception):
-        def __init__(self, key: str) -> None:
-            super().__init__(key)
-            self.key = key
-
-    class FormatError(Exception):
-        """The text cannot be parsed."""
-
+from .settings_formats import FormatError, NotWritable, ReadResult, Value
 
 _BOM = "﻿"
 _SCALARS = (str, int, float, bool)

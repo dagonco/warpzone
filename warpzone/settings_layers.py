@@ -13,25 +13,9 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 
 from .profiles import Profile
+from .settings_formats import Value, is_builtin_secret, match
 from .tomlw import key as toml_key
 from .tomlw import scalar as toml_scalar
-
-try:
-    from .settings_formats import Value, is_builtin_secret, match
-except ImportError:  # pragma: no cover - until settings_formats (T2) is merged
-    import re
-
-    Value = str | int | float | bool  # type: ignore[misc]
-    _BUILTIN_SECRET_WORDS = ("token", "password", "passwd", "secret", "apikey", "api_key")
-
-    def match(pattern: str, key: str) -> bool:  # type: ignore[misc]
-        regex = "".join(".*" if c == "*" else "." if c == "?" else re.escape(c) for c in pattern)
-        return re.fullmatch(regex, key, re.DOTALL) is not None
-
-    def is_builtin_secret(key: str) -> bool:  # type: ignore[misc]
-        last = key.rsplit("]", 1)[-1].rsplit(".", 1)[-1].lower()
-        return any(word in last for word in _BUILTIN_SECRET_WORDS)
-
 
 LAYER_FORMAT = 1
 HEADER = "# Written by warpzone settings capture. Edit on the hub only; comments are not kept."
