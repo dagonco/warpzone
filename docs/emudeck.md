@@ -10,6 +10,27 @@ RetroArch, Dolphin, PrimeHack (GC, Wii, states), DuckStation, PCSX2, melonDS, PP
 
 YARG syncs `custom/` in lowercase, as YARG on Linux writes it, and ignores the `*.bak` files it leaves in `profiles/`. If the hub holds the content under `saves/yarg/data/Custom`, rename it to `custom`.
 
+## Syncthing on the console
+
+On SteamOS the Syncthing that warpzone configures is usually the SyncThingy flatpak (`com.github.zocker_160.SyncThingy`). To keep it running in Game Mode, start it from a systemd user unit, `~/.config/systemd/user/syncthing.service`:
+
+```
+[Unit]
+Description=Syncthing
+
+[Service]
+ExecStart=/usr/bin/flatpak run --command=syncthing com.github.zocker_160.SyncThingy serve --no-browser --no-restart
+ExecStop=/usr/bin/flatpak kill com.github.zocker_160.SyncThingy
+Restart=on-failure
+
+[Install]
+WantedBy=default.target
+```
+
+Then `systemctl --user daemon-reload` and `systemctl --user enable --now syncthing.service`.
+
+`ExecStop` is not optional. `flatpak run` puts Syncthing in a scope of its own, outside the unit, so `systemctl --user stop syncthing` does not stop it. Without `ExecStop`, a restart leaves the old process holding the port and the new one loops in `activating (auto-restart)`. If you are already in that state, run `flatpak kill com.github.zocker_160.SyncThingy`, fix the unit and restart it. `warpzone doctor` warns when the unit is in that loop.
+
 ## The symlink gotcha
 
 EmuDeck exposes saves through symlinks under `~/Emulation/saves`. Syncthing never follows symlinks, so a folder pointed at the symlink syncs nothing and gives no error. The profile therefore points at the real directory of each emulator (for example RetroArch's saves under `~/.var/app/org.libretro.RetroArch/`). If you add a profile for another setup, resolve the links first (`readlink -f`).

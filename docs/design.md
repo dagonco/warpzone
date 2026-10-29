@@ -949,6 +949,14 @@ for every problem, the exact fix for this platform.
   (`ExecStart=/usr/bin/flatpak run --command=syncthing com.github.zocker_160.SyncThingy serve --no-browser --no-restart`),
   `systemctl --user enable --now syncthing.service` and, when there is one, the autostart
   entry to remove. Fix lines that start with a space are code and are never wrapped.
+  The unit has `ExecStop=/usr/bin/flatpak kill com.github.zocker_160.SyncThingy`: `flatpak
+  run` puts the process in a scope of its own, so `systemctl --user stop` does not reach
+  it. `Syncthing unit` (`judge_unit_state`, pure over `systemctl --user show -p
+  ActiveState,SubState syncthing`) is `[ok]` when the unit is active, says nothing when it
+  is stopped or absent, and is `[! ]` when it is `activating` or in `auto-restart` (a start
+  that keeps failing, normally the old process holding the port), with the fix: `flatpak
+  kill`, the unit with `ExecStop` unless the unit already has one, and a restart.
+  The flatpak app id and its commands live in `warpzone/flatpak.py`.
 - **Flycast VMUs.** When RetroArch's `Flycast.opt` exists, `judge_flycast_vmus` (pure, over
   the file text) reads `reicast_per_content_vmus`: `VMU A1` and `All VMUs` are `[ok]`;
   `disabled` or a missing key is `[! ]`, because the core then writes the shared VMUs into
@@ -1018,6 +1026,7 @@ warpzone/
   inbox_switch.py    Switch games: identify with nsz, titledb names, decompress, place
   inbox_mame.py      arcade sets: MAME / FBNeo / 2003-Plus fit, emulator choice, ES-DE gamelist
   inbox_console_iso.py  PS3, Xbox and Xbox 360 disc images: identify by signature, place
+  flatpak.py         the SyncThingy flatpak: app id and the unit's commands
   doctor.py          machine checklist (`warpzone doctor`): checks, install hints, renderer
   ra.py              RetroAchievements: RAHasher wrapper, game list lookup
   localst.py         find and parse the local Syncthing config.xml

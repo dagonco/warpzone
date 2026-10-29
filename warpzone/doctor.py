@@ -45,6 +45,7 @@ from warpzone.config import (
     parse_inbox,
 )
 from warpzone.dat import SYSTEMS, DatLibrary
+from warpzone.flatpak import SYNCTHINGY_APP, SYNCTHINGY_EXEC, SYNCTHINGY_STOP, is_syncthingy_config
 from warpzone.model import ModelError
 from warpzone.profiles import ProfileError, available_profiles, load_profile
 from warpzone.syncthing import _is_loopback
@@ -173,14 +174,12 @@ VITA3K_USER = "00"
 
 SYSTEMD_USER_DIR = ".config/systemd/user"
 AUTOSTART_DIR = ".config/autostart"
-SYNCTHINGY_EXEC = (
-    "/usr/bin/flatpak run --command=syncthing com.github.zocker_160.SyncThingy "
-    "serve --no-browser --no-restart"
-)
+SYNCTHING_UNIT_PATH = f"~/{SYSTEMD_USER_DIR}/syncthing.service"
 # Indented lines are not wrapped by `render`, so the unit can be copied as it is.
 SYNCTHING_UNIT = (
     "  [Unit]\n  Description=Syncthing\n"
-    f"  [Service]\n  ExecStart={SYNCTHINGY_EXEC}\n  Restart=on-failure\n"
+    f"  [Service]\n  ExecStart={SYNCTHINGY_EXEC}\n  ExecStop={SYNCTHINGY_STOP}\n"
+    "  Restart=on-failure\n"
     "  [Install]\n  WantedBy=default.target"
 )
 
@@ -380,6 +379,59 @@ def judge_vita3k_user(user: str) -> tuple[str, str, str]:
         f"in Vita3K, switch to user {VITA3K_USER} (or delete the other user and keep "
         f"{VITA3K_USER}); if the saves are in ux0/user/{user}/savedata, move them to "
         f"ux0/user/{VITA3K_USER}/savedata. Vita3K has to be closed while you do it",
+    )
+
+
+def parse_show(output: str) -> dict[str, str]:
+    """`systemctl show` output (`Key=value` lines) as a dict."""
+    values: dict[str, str] = {}
+    for line in output.splitlines():
+        key, sep, value = line.partition("=")
+        if sep:
+            values[key.strip()] = value.strip()
+    return values
+
+
+def judge_unit_state(
+    output: str, *, flatpak: bool, stops_flatpak: bool
+) -> tuple[str, str, str] | None:
+    """(status, detail, fix) for the Syncthing user unit, from `systemctl --user show -p
+    ActiveState,SubState`. None when there is nothing to say (no such unit, or stopped).
+    A unit stuck in `activating (auto-restart)` is a start that keeps failing; with the
+    flatpak the usual cause is the old process still holding the port, because `flatpak
+    run` runs it in a scope of its own and `systemctl --user stop` does not reach it.
+    `stops_flatpak`: the unit already has an `ExecStop` that kills the flatpak."""
+    values = parse_show(output)
+    state, sub = values.get("ActiveState", ""), values.get("SubState", "")
+    if state == "active":
+        return OK, f"syncthing.service is {state} ({sub})", ""
+    if state != "activating" and sub != "auto-restart":
+        return None
+    detail = (
+        f"syncthing.service is {state} ({sub}): it keeps starting and failing, usually "
+        "because another Syncthing already holds the port"
+    )
+    if not flatpak:
+        return (
+            WARN,
+            detail,
+            "find the other Syncthing and stop it (`journalctl --user -u syncthing -n 20` "
+            "shows the error), then run: systemctl --user restart syncthing",
+        )
+    restart = "systemctl --user daemon-reload\n  systemctl --user restart syncthing"
+    kill = f"flatpak kill {SYNCTHINGY_APP}"
+    if stops_flatpak:
+        return (
+            WARN,
+            detail,
+            f"the old process is still running: stop it with `{kill}`, then run:\n  {restart}",
+        )
+    return (
+        WARN,
+        detail + ". `flatpak run` starts Syncthing in a scope of its own, so `systemctl --user "
+        "stop` leaves the old process running",
+        f"stop the old process with `{kill}`. Then make {SYNCTHING_UNIT_PATH} stop the "
+        f"flatpak too (it needs the ExecStop line):\n{SYNCTHING_UNIT}\nand run:\n  {restart}",
     )
 
 
@@ -784,6 +836,34 @@ def check_game_mode(ctx: Context) -> list[Result]:
     }
     status, detail, fix = judge_game_mode(units, enabled, autostart)
     return [Result("Game Mode", G_SYNCTHING, status, detail, fix)]
+
+
+def check_syncthing_unit(ctx: Context) -> list[Result]:
+    """Linux with a local Syncthing: is the `syncthing` user unit restart-looping?"""
+    p = ctx.probes
+    if p.system != "Linux":
+        return []
+    try:
+        config = localst.find_config(env=p.env, home=p.home, platform="linux")
+    except localst.LocalSyncthingError:
+        return []
+    try:
+        out = p.run(("systemctl", "--user", "show", "-p", "ActiveState,SubState", "syncthing"))
+    except (OSError, subprocess.SubprocessError):
+        return []
+    if out.returncode != 0:
+        return []
+    unit = p.read_text(p.home / SYSTEMD_USER_DIR / "syncthing.service")
+    stops = f"flatpak kill {SYNCTHINGY_APP}" in "\n".join(
+        line for line in unit.splitlines() if line.strip().startswith("ExecStop")
+    )
+    verdict = judge_unit_state(
+        out.output, flatpak=is_syncthingy_config(config, p.home), stops_flatpak=stops
+    )
+    if verdict is None:
+        return []
+    status, detail, fix = verdict
+    return [Result("Syncthing unit", G_SYNCTHING, status, detail, fix)]
 
 
 def check_flycast(ctx: Context) -> list[Result]:
@@ -1206,6 +1286,7 @@ CHECKS: tuple[Callable[[Context], list[Result]], ...] = (
     check_config,
     check_syncthing,
     check_game_mode,
+    check_syncthing_unit,
     check_flycast,
     check_vita3k,
     check_tools,

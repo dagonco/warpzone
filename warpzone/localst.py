@@ -9,6 +9,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from warpzone.flatpak import sandbox_dir
+
 
 class LocalSyncthingError(Exception):
     pass
@@ -41,7 +43,7 @@ def candidate_paths(
     config = Path(env["XDG_CONFIG_HOME"]) if env.get("XDG_CONFIG_HOME") else home / ".config"
     found += [state / "syncthing" / "config.xml", config / "syncthing" / "config.xml"]
     # SyncThingy (Flatpak) runs Syncthing with the sandbox's own XDG dirs.
-    flatpak = home / ".var" / "app" / "com.github.zocker_160.SyncThingy"
+    flatpak = sandbox_dir(home)
     found += [
         flatpak / ".local" / "state" / "syncthing" / "config.xml",
         flatpak / "config" / "syncthing" / "config.xml",

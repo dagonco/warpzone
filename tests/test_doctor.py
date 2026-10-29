@@ -30,6 +30,7 @@ from warpzone.doctor import (
     check_ra,
     check_switch,
     check_syncthing,
+    check_syncthing_unit,
     check_tool,
     check_vita3k,
     collapse_inbox,
@@ -37,6 +38,7 @@ from warpzone.doctor import (
     hint_for,
     judge_flycast_vmus,
     judge_game_mode,
+    judge_unit_state,
     judge_vita3k_user,
     load_config_state,
     platform_family,
@@ -1076,3 +1078,107 @@ class GameModeTests(TmpCase):
     def test_run_checks_includes_it_in_the_syncthing_group(self) -> None:
         results = run_checks(make_probes(self.tmp, system="Linux", os_release=STEAMOS))
         self.assertEqual(by_name(results, "Game Mode").group, doctor.G_SYNCTHING)
+
+
+LOOPING = "ActiveState=activating\nSubState=auto-restart\n"
+RUNNING = "ActiveState=active\nSubState=running\n"
+STOPPED = "ActiveState=inactive\nSubState=dead\n"
+UNIT_WITH_STOP = UNIT + "ExecStop=/usr/bin/flatpak kill com.github.zocker_160.SyncThingy\n"
+
+
+class JudgeUnitStateTests(unittest.TestCase):
+    def test_running_is_ok(self) -> None:
+        status, detail, fix = judge_unit_state(RUNNING, flatpak=True, stops_flatpak=False)
+        self.assertEqual((status, fix), (OK, ""))
+        self.assertIn("running", detail)
+
+    def test_stopped_or_unknown_says_nothing(self) -> None:
+        self.assertIsNone(judge_unit_state(STOPPED, flatpak=True, stops_flatpak=False))
+        self.assertIsNone(judge_unit_state("", flatpak=True, stops_flatpak=False))
+
+    def test_restart_loop_with_the_flatpak_shows_the_unit_with_exec_stop(self) -> None:
+        status, detail, fix = judge_unit_state(LOOPING, flatpak=True, stops_flatpak=False)
+        self.assertEqual(status, WARN)
+        self.assertIn("auto-restart", detail)
+        self.assertIn("scope of its own", detail)
+        self.assertIn("flatpak kill com.github.zocker_160.SyncThingy", fix)
+        self.assertIn("ExecStart=" + doctor.SYNCTHINGY_EXEC, fix)
+        self.assertIn("ExecStop=/usr/bin/flatpak kill com.github.zocker_160.SyncThingy", fix)
+        self.assertIn("systemctl --user restart syncthing", fix)
+
+    def test_restart_loop_with_a_unit_that_already_stops_the_flatpak(self) -> None:
+        status, _, fix = judge_unit_state(LOOPING, flatpak=True, stops_flatpak=True)
+        self.assertEqual(status, WARN)
+        self.assertNotIn("ExecStart=", fix)
+        self.assertIn("flatpak kill", fix)
+        self.assertIn("systemctl --user restart syncthing", fix)
+
+    def test_restart_loop_without_the_flatpak_does_not_mention_it(self) -> None:
+        status, detail, fix = judge_unit_state(LOOPING, flatpak=False, stops_flatpak=False)
+        self.assertEqual(status, WARN)
+        self.assertNotIn("flatpak", detail + fix)
+        self.assertIn("journalctl", fix)
+
+    def test_a_bare_activating_state_counts_too(self) -> None:
+        out = "ActiveState=activating\nSubState=start\n"
+        self.assertEqual(judge_unit_state(out, flatpak=True, stops_flatpak=False)[0], WARN)
+
+    def test_the_unit_shown_by_the_game_mode_fix_has_exec_stop(self) -> None:
+        self.assertIn("ExecStop=" + doctor.SYNCTHINGY_STOP, doctor.SYNCTHING_UNIT)
+
+
+class SyncthingUnitTests(TmpCase):
+    def setUp(self) -> None:
+        super().setUp()
+        self.home = self.tmp / "home"
+        write_syncthing_config(self.home)
+        self.commands: list[tuple[str, ...]] = []
+
+    def check(self, output: str = LOOPING, code: int = 0, **kw):
+        def run(command):
+            self.commands.append(tuple(command))
+            return RunOutput(code, output)
+
+        return check_syncthing_unit(context(self.tmp, system="Linux", run=run, **kw))
+
+    def test_asks_systemd_for_the_user_unit(self) -> None:
+        self.check()
+        self.assertEqual(
+            self.commands,
+            [("systemctl", "--user", "show", "-p", "ActiveState,SubState", "syncthing")],
+        )
+
+    def test_warns_in_the_syncthing_group(self) -> None:
+        (r,) = self.check()
+        self.assertEqual((r.name, r.group, r.status), ("Syncthing unit", doctor.G_SYNCTHING, WARN))
+        self.assertIn("journalctl", r.fix)  # config.xml is not the flatpak's here
+
+    def test_flatpak_config_gets_the_flatpak_fix(self) -> None:
+        (self.home / ".local/state/syncthing/config.xml").unlink()
+        folder = self.home / ".var/app/com.github.zocker_160.SyncThingy/config/syncthing"
+        folder.mkdir(parents=True)
+        (folder / "config.xml").write_text(
+            f"<configuration><gui><address>127.0.0.1:8384</address><apikey>{ST_KEY}</apikey>"
+            "</gui></configuration>"
+        )
+        (r,) = self.check()
+        self.assertIn("ExecStop=", r.fix)
+        unit = self.home / ".config/systemd/user/syncthing.service"
+        unit.parent.mkdir(parents=True)
+        unit.write_text(UNIT_WITH_STOP)
+        (r,) = self.check()
+        self.assertNotIn("ExecStart=", r.fix)
+
+    def test_running_unit_is_ok_and_a_stopped_one_is_silent(self) -> None:
+        self.assertEqual(self.check(RUNNING)[0].status, OK)
+        self.assertEqual(self.check(STOPPED), [])
+
+    def test_skipped_off_linux_without_syncthing_or_without_systemctl(self) -> None:
+        self.assertEqual(check_syncthing_unit(context(self.tmp)), [])  # macOS
+        self.assertEqual(self.check(code=1), [])  # no user manager
+        (self.home / ".local/state/syncthing/config.xml").unlink()
+        self.assertEqual(self.check(), [])
+        self.home.joinpath(".local/state/syncthing/config.xml").write_text("<configuration/>")
+        self.assertEqual(
+            check_syncthing_unit(context(self.tmp, system="Linux")), []
+        )  # no systemctl

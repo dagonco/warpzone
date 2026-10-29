@@ -51,7 +51,9 @@ If no unit exists, the fix shows one for the SyncThingy flatpak:
 ExecStart=/usr/bin/flatpak run --command=syncthing com.github.zocker_160.SyncThingy serve --no-browser --no-restart
 ```
 
-then `systemctl --user enable --now syncthing.service`, and a reminder to remove the autostart entry so two instances do not compete. It also warns when both a unit and an autostart entry start Syncthing.
+plus `ExecStop=/usr/bin/flatpak kill com.github.zocker_160.SyncThingy` (see [emudeck.md](emudeck.md#syncthing-on-the-console)), then `systemctl --user enable --now syncthing.service`, and a reminder to remove the autostart entry so two instances do not compete. It also warns when both a unit and an autostart entry start Syncthing.
+
+The Syncthing unit is checked too: if `systemctl --user show syncthing` reports `activating (auto-restart)`, `doctor` warns that the unit keeps failing to start, usually because an old Syncthing still holds the port. With the SyncThingy flatpak the fix is `flatpak kill com.github.zocker_160.SyncThingy`, a unit with the `ExecStop` above, and a restart.
 
 ## Dreamcast VMUs (RetroArch Flycast)
 
