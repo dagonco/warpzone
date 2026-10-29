@@ -53,6 +53,8 @@ ExecStart=/usr/bin/flatpak run --command=syncthing com.github.zocker_160.SyncThi
 
 plus `ExecStop=/usr/bin/flatpak kill com.github.zocker_160.SyncThingy` (see [emudeck.md](emudeck.md#syncthing-on-the-console)), then `systemctl --user enable --now syncthing.service`, and a reminder to remove the autostart entry so two instances do not compete. It also warns when both a unit and an autostart entry start Syncthing.
 
+With the SyncThingy flatpak, `doctor` also checks that Syncthing can see the emulators' data folders (`flatpak override --user --show`). For every installed emulator whose folder under `~/.var/app` is missing from the overrides it reports a problem and prints the `flatpak override` command to fix it. See [emudeck.md](emudeck.md#flatpak-access-to-the-emulators-folders).
+
 The Syncthing unit is checked too: if `systemctl --user show syncthing` reports `activating (auto-restart)`, `doctor` warns that the unit keeps failing to start, usually because an old Syncthing still holds the port. With the SyncThingy flatpak the fix is `flatpak kill com.github.zocker_160.SyncThingy`, a unit with the `ExecStop` above, and a restart.
 
 ## Dreamcast VMUs (RetroArch Flycast)

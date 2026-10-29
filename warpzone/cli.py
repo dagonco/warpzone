@@ -355,6 +355,7 @@ def _run(args: argparse.Namespace) -> int:
         rep,
         home=Path.home(),
         wait_timeout=args.timeout,
+        syncthing_config=local.config_path,
     )
     return EXIT_OK
 

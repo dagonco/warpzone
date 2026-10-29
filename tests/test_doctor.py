@@ -24,6 +24,7 @@ from warpzone.doctor import (
     check_base,
     check_config,
     check_dats,
+    check_flatpak_access,
     check_flycast,
     check_game_mode,
     check_hub,
@@ -1182,3 +1183,119 @@ class SyncthingUnitTests(TmpCase):
         self.assertEqual(
             check_syncthing_unit(context(self.tmp, system="Linux")), []
         )  # no systemctl
+
+
+RA_APP = "org.libretro.RetroArch"
+DOLPHIN_APP = "org.DolphinEmu.dolphin-emu"
+SYNCTHINGY = "com.github.zocker_160.SyncThingy"
+
+
+class FlatpakAccessTests(TmpCase):
+    def setUp(self) -> None:
+        super().setUp()
+        self.home = self.tmp / "home"
+        self.commands: list[tuple[str, ...]] = []
+
+    def syncthingy(self) -> None:
+        folder = self.home / ".var/app" / SYNCTHINGY / "config/syncthing"
+        folder.mkdir(parents=True)
+        (folder / "config.xml").write_text(
+            f"<configuration><gui><address>127.0.0.1:8384</address><apikey>{ST_KEY}</apikey>"
+            "</gui></configuration>"
+        )
+
+    def installed(self, *apps: str) -> None:
+        for app in apps:
+            (self.home / ".var/app" / app).mkdir(parents=True, exist_ok=True)
+
+    def check(self, shown: str = "", code: int = 0, config_text: str | None = None, **kw):
+        def run(command):
+            self.commands.append(tuple(command))
+            return RunOutput(code, shown)
+
+        return check_flatpak_access(context(self.tmp, config_text, system="Linux", run=run, **kw))
+
+    def test_missing_overrides_fail_with_one_command_per_app(self) -> None:
+        self.syncthingy()
+        self.installed(RA_APP, DOLPHIN_APP)
+        (r,) = self.check("[Context]\nfilesystems=host;\n")
+        self.assertEqual((r.name, r.group, r.status), ("Flatpak access", doctor.G_SYNCTHING, FAIL))
+        self.assertIn(f"~/.var/app/{RA_APP}", r.detail)
+        self.assertIn(f"~/.var/app/{DOLPHIN_APP}", r.detail)
+        self.assertIn(
+            f"  flatpak override --user --filesystem=~/.var/app/{RA_APP} {SYNCTHINGY}", r.fix
+        )
+        self.assertIn(
+            f"  flatpak override --user --filesystem=~/.var/app/{DOLPHIN_APP} {SYNCTHINGY}", r.fix
+        )
+        self.assertIn("restart Syncthing", r.fix)
+        self.assertEqual(self.commands, [("flatpak", "override", "--user", "--show", SYNCTHINGY)])
+
+    def test_only_the_missing_apps_are_named(self) -> None:
+        self.syncthingy()
+        self.installed(RA_APP, DOLPHIN_APP)
+        (r,) = self.check(f"[Context]\nfilesystems=host;~/.var/app/{RA_APP};\n")
+        self.assertEqual(r.status, FAIL)
+        self.assertNotIn(RA_APP, r.detail + r.fix)
+        self.assertIn(DOLPHIN_APP, r.fix)
+
+    def test_all_granted_is_ok(self) -> None:
+        self.syncthingy()
+        self.installed(RA_APP, DOLPHIN_APP)
+        shown = f"[Context]\nfilesystems=~/.var/app/{RA_APP};~/.var/app/{DOLPHIN_APP};\n"
+        (r,) = self.check(shown)
+        self.assertEqual(r.status, OK)
+
+    def test_apps_that_are_not_installed_are_not_checked(self) -> None:
+        self.syncthingy()
+        self.installed(RA_APP)
+        (r,) = self.check()
+        self.assertEqual(r.status, FAIL)
+        self.assertNotIn(DOLPHIN_APP, r.detail + r.fix)
+
+    def test_nothing_to_say_without_the_flatpak_or_any_installed_app(self) -> None:
+        self.assertEqual(self.check(), [])  # no Syncthing at all
+        self.syncthingy()
+        self.assertEqual(self.check(), [])  # no emulator flatpak installed
+        self.assertEqual(self.commands, [])  # and flatpak was not even asked
+        self.assertEqual(check_flatpak_access(context(self.tmp, home=self.home)), [])  # macOS
+
+    def test_native_syncthing_needs_nothing(self) -> None:
+        write_syncthing_config(self.home)
+        self.installed(RA_APP)
+        self.assertEqual(self.check(), [])
+        self.assertEqual(self.commands, [])
+
+    def test_flatpak_that_cannot_be_run_warns_with_the_command(self) -> None:
+        self.syncthingy()
+        self.installed(RA_APP)
+
+        def run(command):
+            raise FileNotFoundError(2, "No such file or directory")
+
+        (r,) = check_flatpak_access(context(self.tmp, system="Linux", run=run))
+        self.assertEqual(r.status, WARN)
+        self.assertIn(f"--filesystem=~/.var/app/{RA_APP}", r.fix)
+
+    def test_failed_show_counts_as_nothing_granted(self) -> None:
+        self.syncthingy()
+        self.installed(RA_APP)
+        (r,) = self.check("error: no such app", code=1)
+        self.assertEqual(r.status, FAIL)
+
+    def test_only_the_folders_the_config_subscribes_to_count(self) -> None:
+        self.syncthingy()
+        self.installed(RA_APP)
+        (r,) = self.check(config_text=FULL)  # the device has `saves`
+        self.assertEqual(r.status, FAIL)
+        no_saves = FULL.replace('["library", "saves"]', '["library"]')
+        self.assertEqual(self.check(config_text=no_saves), [])
+
+    def test_run_checks_includes_it(self) -> None:
+        self.syncthingy()
+        self.installed(RA_APP)
+        probes = make_probes(
+            self.tmp, system="Linux", os_release=STEAMOS, run=lambda c: RunOutput(0, "")
+        )
+        results = run_checks(probes)
+        self.assertEqual(by_name(results, "Flatpak access").status, FAIL)

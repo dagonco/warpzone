@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import dataclasses
 import os
+import subprocess
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from warpzone import flatpak
 from warpzone.config import Config
 from warpzone.model import FolderSpec, device_specs, hub_specs
 from warpzone.profiles import Profile
@@ -422,6 +424,82 @@ def _create_target(spec: FolderSpec, dry_run: bool, rep: Reporter) -> bool:
     return True
 
 
+FlatpakRunner = Callable[[Sequence[str]], tuple[int, str]]
+
+
+def run_flatpak(command: Sequence[str]) -> tuple[int, str]:
+    """(exit code, stdout and stderr) of a `flatpak` command; raises OSError if it cannot run."""
+    proc = subprocess.run(
+        list(command),
+        capture_output=True,
+        text=True,
+        errors="replace",
+        timeout=60,
+        stdin=subprocess.DEVNULL,
+        check=False,
+    )
+    return proc.returncode, (proc.stdout or "") + (proc.stderr or "")
+
+
+RESTART_SYNCTHING = (
+    "restart Syncthing for this to take effect (`systemctl --user restart syncthing`, or "
+    "quit and reopen SyncThingy)"
+)
+
+
+def ensure_flatpak_access(
+    specs: Iterable[FolderSpec],
+    config_path: Path | None,
+    home: Path,
+    rep: Reporter,
+    *,
+    dry_run: bool,
+    run: FlatpakRunner = run_flatpak,
+) -> None:
+    """Grant the SyncThingy flatpak the data folders of the emulators it must sync.
+
+    A flatpak cannot see `~/.var/app/<app>` of other apps, even with the `host`
+    filesystem, so a save folder there looks empty to Syncthing. Does nothing unless the
+    local Syncthing is that flatpak (its `config.xml` is in the flatpak's own folder).
+    Only the overrides that are missing are added, so a second run changes nothing.
+    """
+    if config_path is None or not flatpak.is_syncthingy_config(config_path, home):
+        return
+    apps = flatpak.app_ids((s.path for s in specs), home)
+    if not apps:
+        return
+    manual = " ".join(flatpak.override_command(apps))
+    try:
+        code, shown = run(flatpak.show_command())
+        if code != 0:
+            raise OSError(shown.strip() or f"exit code {code}")
+    except (OSError, subprocess.SubprocessError) as exc:
+        rep.warn(
+            f"cannot read the flatpak overrides ({exc}); Syncthing may not see the emulators' "
+            f"save folders. Run `{manual}`, then restart Syncthing"
+        )
+        return
+    missing = flatpak.missing_apps(apps, shown, home)
+    if not missing:
+        rep.out(f"syncthing flatpak: access to {len(apps)} emulator folder(s) already granted")
+        return
+    names = ", ".join(flatpak.app_dir(a) for a in missing)
+    command = flatpak.override_command(missing)
+    if dry_run:
+        rep.out(f"syncthing flatpak: dry-run: would grant {names} with: {' '.join(command)}")
+        rep.out(f"syncthing flatpak: dry-run: then you would need to {RESTART_SYNCTHING}")
+        return
+    try:
+        code, out = run(command)
+        if code != 0:
+            raise OSError(out.strip() or f"exit code {code}")
+    except (OSError, subprocess.SubprocessError) as exc:
+        rep.warn(f"cannot grant Syncthing access to {names} ({exc}). Run `{' '.join(command)}`")
+        return
+    rep.out(f"syncthing flatpak: granted {names}")
+    rep.warn(RESTART_SYNCTHING)
+
+
 def provision_device(
     cfg: Config,
     name: str,
@@ -434,6 +512,8 @@ def provision_device(
     wait_timeout: float = DEFAULT_WAIT_SECONDS,
     poll: float = 2.0,
     sleep: Callable[[float], None] = time.sleep,
+    syncthing_config: Path | None = None,
+    flatpak_run: FlatpakRunner = run_flatpak,
 ) -> None:
     device = cfg.devices[name]
     actual = local.my_id()
@@ -466,6 +546,8 @@ def provision_device(
 
     if hub is not None:
         _hub_precheck(hub, todo, rep)
+
+    ensure_flatpak_access(todo, syncthing_config, home, rep, dry_run=local.dry_run, run=flatpak_run)
 
     known = {d["deviceID"] for d in local.devices()}
     _ensure_device(local, cfg.hub.device_id, cfg.hub.name, cfg.hub.addresses, known, rep)

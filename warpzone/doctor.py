@@ -45,7 +45,17 @@ from warpzone.config import (
     parse_inbox,
 )
 from warpzone.dat import SYSTEMS, DatLibrary
-from warpzone.flatpak import SYNCTHINGY_APP, SYNCTHINGY_EXEC, SYNCTHINGY_STOP, is_syncthingy_config
+from warpzone.flatpak import (
+    SYNCTHINGY_APP,
+    SYNCTHINGY_EXEC,
+    SYNCTHINGY_STOP,
+    app_dir,
+    app_ids,
+    is_syncthingy_config,
+    missing_apps,
+    override_command,
+    show_command,
+)
 from warpzone.model import ModelError
 from warpzone.profiles import ProfileError, available_profiles, load_profile
 from warpzone.syncthing import _is_loopback
@@ -145,7 +155,7 @@ SYNCTHING_HINTS: HintTable = {
     "debian": "sudo apt install syncthing && systemctl --user enable --now syncthing",
     "fedora": "sudo dnf install syncthing && systemctl --user enable --now syncthing",
     "arch": "sudo pacman -S syncthing && systemctl --user enable --now syncthing",
-    "steamos": "flatpak install flathub com.github.zocker_160.SyncThingy "
+    "steamos": f"flatpak install flathub {SYNCTHINGY_APP} "
     "(the read-only root rules out system packages)",
     "any": "install Syncthing from https://syncthing.net/downloads/ and start it",
 }
@@ -580,6 +590,9 @@ class ConfigState:
     devices: tuple[str, ...] = ()
     settings: InboxSettings = field(default_factory=InboxSettings)
     hub_root: str | None = None  # [hub] root as written, when it is a string
+    # Save and BIOS folder paths (with `~`) of the configured devices; empty when the
+    # config does not load, then the checks fall back to every shipped profile.
+    sync_paths: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -657,6 +670,7 @@ def load_config_state(path: Path) -> ConfigState:
     devices = tuple(sorted(raw_devices)) if isinstance(raw_devices, dict) else ()
     settings = parse_inbox(data.get("inbox"), [])  # keep whatever is valid
     errors: list[str] = []
+    sync_paths: dict[str, None] = {}
     try:
         if "hub" in data or "devices" in data:
             cfg = parse_config(data, set(available_profiles()))
@@ -664,7 +678,8 @@ def load_config_state(path: Path) -> ConfigState:
                 name: load_profile(name) for name in {d.profile for d in cfg.devices.values()}
             }
             for device in cfg.devices.values():
-                model.device_specs(cfg, device.name, profiles[device.profile])
+                for spec in model.device_specs(cfg, device.name, profiles[device.profile]):
+                    sync_paths[spec.path] = None
         else:
             unknown = sorted(set(data) - {"hub", "devices", "inbox"})
             errors += [f"config: unknown key {key!r}" for key in unknown]
@@ -676,7 +691,8 @@ def load_config_state(path: Path) -> ConfigState:
     hub_root = raw_hub.get("root") if isinstance(raw_hub, dict) else None
     if not isinstance(hub_root, str) or not hub_root:
         hub_root = None
-    return ConfigState(path, True, error, sections, devices, settings, hub_root)
+    paths = tuple(sync_paths) if error is None else ()
+    return ConfigState(path, True, error, sections, devices, settings, hub_root, paths)
 
 
 def check_config(ctx: Context) -> list[Result]:
@@ -836,6 +852,85 @@ def check_game_mode(ctx: Context) -> list[Result]:
     }
     status, detail, fix = judge_game_mode(units, enabled, autostart)
     return [Result("Game Mode", G_SYNCTHING, status, detail, fix)]
+
+
+def _expand(path: str, home: Path) -> str:
+    if path == "~":
+        return str(home)
+    return str(home / path[2:]) if path.startswith("~/") else path
+
+
+def _shipped_sync_paths() -> tuple[str, ...]:
+    """Save and BIOS folders of every shipped profile (with `~`)."""
+    paths: list[str] = []
+    for name in available_profiles():
+        profile = load_profile(name)
+        paths += [s.path for s in profile.saves.values()]
+        paths += [b.path for b in profile.bios.values()]
+    return tuple(paths)
+
+
+def check_flatpak_access(ctx: Context) -> list[Result]:
+    """Syncthing as the SyncThingy flatpak cannot see `~/.var/app/<app>` of other apps,
+    so a save folder there looks empty to it until the flatpak is granted the folder.
+    Only the apps that are installed (their folder exists) are checked."""
+    p = ctx.probes
+    name = "Flatpak access"
+    if p.system != "Linux":
+        return []
+    try:
+        config = localst.find_config(env=p.env, home=p.home, platform="linux")
+    except localst.LocalSyncthingError:
+        return []
+    if not is_syncthingy_config(config, p.home):
+        return []  # a native Syncthing sees whatever its user can
+    paths = ctx.config.sync_paths or _shipped_sync_paths()
+    apps = [
+        app
+        for app in app_ids((_expand(path, p.home) for path in paths), p.home)
+        if p.is_dir(p.home / ".var" / "app" / app)
+    ]
+    if not apps:
+        return []
+    grants = " ".join(f"--filesystem={app_dir(app)}" for app in apps)
+    try:
+        out = p.run(show_command())
+    except (OSError, subprocess.SubprocessError) as exc:
+        return [
+            Result(
+                name,
+                G_SYNCTHING,
+                WARN,
+                f"could not read the flatpak overrides ({type(exc).__name__}), so it is not "
+                "known whether Syncthing can see the emulators' save folders",
+                f"flatpak override --user {grants} {SYNCTHINGY_APP}",
+            )
+        ]
+    missing = missing_apps(apps, out.output if out.returncode == 0 else "", p.home)
+    if not missing:
+        return [
+            Result(
+                name,
+                G_SYNCTHING,
+                OK,
+                f"Syncthing is granted the data folders of {len(apps)} emulator(s) under "
+                "~/.var/app",
+            )
+        ]
+    commands = "\n".join(f"  {' '.join(override_command([app]))}" for app in missing)
+    return [
+        Result(
+            name,
+            G_SYNCTHING,
+            FAIL,
+            f"the Syncthing flatpak cannot see {', '.join(app_dir(a) for a in missing)}: "
+            "flatpak hides other apps' data folders, so those save folders look empty and "
+            "sync nothing",
+            f"run:\n{commands}\nthen restart Syncthing "
+            "(`systemctl --user restart syncthing`, or quit and reopen SyncThingy). "
+            "`warpzone provision device` does this for you",
+        )
+    ]
 
 
 def check_syncthing_unit(ctx: Context) -> list[Result]:
@@ -1286,6 +1381,7 @@ CHECKS: tuple[Callable[[Context], list[Result]], ...] = (
     check_config,
     check_syncthing,
     check_game_mode,
+    check_flatpak_access,
     check_syncthing_unit,
     check_flycast,
     check_vita3k,

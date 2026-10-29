@@ -100,7 +100,7 @@ python3 -m warpzone --help
    warpzone provision device deck
    ```
 
-   It finds the local Syncthing's API key in its `config.xml` (including the SyncThingy flatpak), adds the hub, and creates the subscribed folders. Save folders whose directory does not exist yet are skipped with a warning and picked up by the next run. Use `--syncthing-config PATH` if your `config.xml` is somewhere unusual.
+   It finds the local Syncthing's API key in its `config.xml` (including the SyncThingy flatpak), adds the hub, and creates the subscribed folders. Save folders whose directory does not exist yet are skipped with a warning and picked up by the next run. With the SyncThingy flatpak it also grants it access to the emulators' `~/.var/app` folders (flatpak hides them) and asks you to restart Syncthing. Use `--syncthing-config PATH` if your `config.xml` is somewhere unusual.
 
 ## Commands
 

@@ -31,6 +31,18 @@ Then `systemctl --user daemon-reload` and `systemctl --user enable --now syncthi
 
 `ExecStop` is not optional. `flatpak run` puts Syncthing in a scope of its own, outside the unit, so `systemctl --user stop syncthing` does not stop it. Without `ExecStop`, a restart leaves the old process holding the port and the new one loops in `activating (auto-restart)`. If you are already in that state, run `flatpak kill com.github.zocker_160.SyncThingy`, fix the unit and restart it. `warpzone doctor` warns when the unit is in that loop.
 
+### Flatpak access to the emulators' folders
+
+A flatpak cannot see the data folder of another flatpak: `~/.var/app` is hidden from it even with the `host` filesystem. Several save folders in the profile live there (RetroArch, Dolphin, PPSSPP, PrimeHack, Flycast), so with the SyncThingy flatpak they look empty and sync nothing, with no error.
+
+The fix is one override per emulator, then a restart of Syncthing:
+
+```
+flatpak override --user --filesystem=~/.var/app/org.libretro.RetroArch com.github.zocker_160.SyncThingy
+```
+
+`warpzone provision device` does this for you when the local Syncthing is the SyncThingy flatpak: it adds the missing overrides for every save and BIOS folder of the profile under `~/.var/app/<app>` whose emulator is installed, leaves the ones that already exist alone, and tells you to restart Syncthing. With `--dry-run` it only prints the command. An emulator you install later is picked up the next time you run `provision device`. A native Syncthing needs none of this. `warpzone doctor` checks the overrides and prints the command for each missing one.
+
 ## The symlink gotcha
 
 EmuDeck exposes saves through symlinks under `~/Emulation/saves`. Syncthing never follows symlinks, so a folder pointed at the symlink syncs nothing and gives no error. The profile therefore points at the real directory of each emulator (for example RetroArch's saves under `~/.var/app/org.libretro.RetroArch/`). If you add a profile for another setup, resolve the links first (`readlink -f`).
