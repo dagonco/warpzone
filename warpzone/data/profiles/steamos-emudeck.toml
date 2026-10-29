@@ -28,6 +28,13 @@ ignore = [
   "/bios/yuzu/firmware",
   "/bios/suyu/keys",
   "/bios/suyu/firmware",
+  # RetroArch's Flycast core keeps the shared VMUs and the console flash here, in the
+  # system folder. They are per-device data and not on the hub, so a receive-only
+  # device would list them as local changes and a revert would erase them. No `(?d)`:
+  # a hub-side delete of bios/dc must not take them along. With the core option
+  # "Per-Game VMUs" on, the VMUs go to RetroArch's saves folder, which does sync.
+  "/bios/dc/vmu_save_*.bin",
+  "/bios/dc/dc_nvmem.bin",
   # Files and folders EmuDeck writes into the library on every console. They are not
   # on the hub, so a receive-only device would list them as local changes (and a
   # revert would delete them). `(?d)` lets Syncthing remove a ROM folder that the hub

@@ -24,6 +24,7 @@ from warpzone.doctor import (
     check_base,
     check_config,
     check_dats,
+    check_flycast,
     check_game_mode,
     check_hub,
     check_ra,
@@ -33,6 +34,7 @@ from warpzone.doctor import (
     collapse_inbox,
     exit_code,
     hint_for,
+    judge_flycast_vmus,
     judge_game_mode,
     load_config_state,
     platform_family,
@@ -862,6 +864,48 @@ class CliTests(TmpCase):
         code, out, _ = run("--help")
         self.assertEqual(code, 0)
         self.assertIn("doctor", out)
+
+
+class FlycastVmuTests(TmpCase):
+    OPT = ".var/app/org.libretro.RetroArch/config/retroarch/config/Flycast/Flycast.opt"
+
+    def test_judge_per_game_vmus_on_is_ok(self) -> None:
+        for value in ("VMU A1", "All VMUs"):
+            status, detail, fix = judge_flycast_vmus(f'reicast_per_content_vmus = "{value}"\n')
+            self.assertEqual(status, OK)
+            self.assertIn(value, detail)
+            self.assertEqual(fix, "")
+
+    def test_judge_disabled_or_unset_warns_with_the_option_to_change(self) -> None:
+        for text in (
+            'reicast_per_content_vmus = "disabled"\n',
+            'reicast_threaded_rendering = "enabled"\n',
+            "",
+        ):
+            status, detail, fix = judge_flycast_vmus(text)
+            self.assertEqual(status, WARN)
+            self.assertIn("bios/dc", detail)
+            self.assertIn("Per-Game", fix)
+            self.assertIn("All VMUs", fix)
+        self.assertIn('"disabled"', judge_flycast_vmus('reicast_per_content_vmus = "disabled"')[1])
+        self.assertIn("unset", judge_flycast_vmus("")[1])
+
+    def test_judge_reads_the_exact_key(self) -> None:
+        text = 'reicast_per_content_vmus_other = "All VMUs"\n'
+        self.assertEqual(judge_flycast_vmus(text)[0], WARN)
+
+    def test_nothing_without_the_options_file(self) -> None:
+        self.assertEqual(check_flycast(context(self.tmp)), [])
+
+    def test_reads_the_options_file_in_the_retroarch_flatpak(self) -> None:
+        path = self.tmp / "home" / self.OPT
+        path.parent.mkdir(parents=True)
+        path.write_text('reicast_per_content_vmus = "disabled"\n')
+        (r,) = check_flycast(context(self.tmp))
+        self.assertEqual((r.name, r.group, r.status), ("Flycast VMUs", doctor.G_SAVES, WARN))
+        path.write_text('reicast_per_content_vmus = "All VMUs"\n')
+        (r,) = check_flycast(context(self.tmp))
+        self.assertEqual(r.status, OK)
 
 
 if __name__ == "__main__":

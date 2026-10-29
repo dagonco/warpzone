@@ -30,6 +30,7 @@ Inbox tools
 - warpzone and Python.
 - The config file, and what each table enables.
 - The local Syncthing and its REST API.
+- RetroArch's Flycast option for per-game VMUs, when the core has run.
 - The inbox tools (`chdman`, `bsdtar`, `RAHasher`, `dolphin-tool`, `nsz`), the Switch titledb folder and keys file (presence only).
 - The DAT folder and how old the newest DAT is, and the optional arcade DAT files.
 - The hub folder and its free space.
@@ -50,5 +51,9 @@ ExecStart=/usr/bin/flatpak run --command=syncthing com.github.zocker_160.SyncThi
 ```
 
 then `systemctl --user enable --now syncthing.service`, and a reminder to remove the autostart entry so two instances do not compete. It also warns when both a unit and an autostart entry start Syncthing.
+
+## Dreamcast VMUs (RetroArch Flycast)
+
+When RetroArch's Flycast core has run (`Flycast.opt` exists in the RetroArch flatpak), `doctor` reads its `reicast_per_content_vmus` option. If it is `disabled` or missing, the core keeps the VMUs in `bios/dc/`, which warpzone does not sync, and the check warns with the menu path to change it. `VMU A1` and `All VMUs` are fine. See [emudeck.md](emudeck.md#dreamcast-saves-retroarch-flycast).
 
 Details in [design.md](design.md#doctor).

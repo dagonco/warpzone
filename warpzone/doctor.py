@@ -66,6 +66,7 @@ FIX_PREFIX = "fix: "
 G_BASE = "warpzone and Python"
 G_CONFIG = "Config"
 G_SYNCTHING = "Syncthing"
+G_SAVES = "Save sync"
 G_TOOLS = "Inbox tools"
 G_SWITCH = "Switch"
 G_DATS = "DATs"
@@ -153,6 +154,17 @@ SYNCTHING_START_HINTS: HintTable = {
     "linux": "systemctl --user enable --now syncthing",
     "any": "start Syncthing",
 }
+
+# RetroArch's Flycast core options. `reicast_per_content_vmus` is "disabled" (default),
+# "VMU A1" or "All VMUs" (libretro_core_options.h in github.com/flyinghead/flycast).
+FLYCAST_OPT = ".var/app/org.libretro.RetroArch/config/retroarch/config/Flycast/Flycast.opt"
+FLYCAST_VMU_KEY = "reicast_per_content_vmus"
+FLYCAST_VMU_FIX = (
+    "in RetroArch, with a Dreamcast game running, open Quick Menu > Core Options > "
+    'Per-Game Visual Memory Units/Systems (VMU) ("Per-Game VMUs") and choose "VMU A1" '
+    'or "All VMUs". Existing shared VMUs are not migrated: each game starts with an '
+    "empty card in RetroArch's saves folder, which retroarch-saves syncs"
+)
 
 SYSTEMD_USER_DIR = ".config/systemd/user"
 AUTOSTART_DIR = ".config/autostart"
@@ -315,6 +327,32 @@ def judge_game_mode(
             "(or after a reboot, until someone starts it by hand)"
         )
     return WARN, why, install
+
+
+def _core_option(text: str, key: str) -> str | None:
+    """The value of `key` in a RetroArch core options file (`key = "value"` lines)."""
+    found = None
+    for line in text.splitlines():
+        name, sep, value = line.partition("=")
+        if sep and name.strip() == key:
+            found = value.strip().strip('"')
+    return found
+
+
+def judge_flycast_vmus(text: str) -> tuple[str, str, str]:
+    """(status, detail, fix) for the Flycast core's per-game VMU option, given the text of
+    Flycast.opt. Without per-game VMUs the core writes `vmu_save_*.bin` into the system
+    folder (bios/dc), which the library ignores: Dreamcast saves would never sync."""
+    value = _core_option(text, FLYCAST_VMU_KEY)
+    if value in ("VMU A1", "All VMUs"):
+        return OK, f'Flycast keeps per-game VMUs in the saves folder ("{value}")', ""
+    shown = f'"{value}"' if value is not None else "unset, which means disabled"
+    return (
+        WARN,
+        f"Flycast's per-game VMUs are off ({shown}), so the VMUs live in the system "
+        "folder (bios/dc), which warpzone does not sync and a revert would not restore",
+        FLYCAST_VMU_FIX,
+    )
 
 
 def hint_for(table: HintTable, family: str) -> str:
@@ -720,6 +758,16 @@ def check_game_mode(ctx: Context) -> list[Result]:
     return [Result("Game Mode", G_SYNCTHING, status, detail, fix)]
 
 
+def check_flycast(ctx: Context) -> list[Result]:
+    """Only when RetroArch's Flycast core has run (it writes its options file then)."""
+    p = ctx.probes
+    path = p.home / FLYCAST_OPT
+    if not p.is_file(path):
+        return []
+    status, detail, fix = judge_flycast_vmus(p.read_text(path))
+    return [Result("Flycast VMUs", G_SAVES, status, detail, fix)]
+
+
 def _scrub(text: str, key: str) -> str:
     return text.replace(key, "***") if key else text
 
@@ -1117,6 +1165,7 @@ CHECKS: tuple[Callable[[Context], list[Result]], ...] = (
     check_config,
     check_syncthing,
     check_game_mode,
+    check_flycast,
     check_tools,
     check_switch,
     check_dats,

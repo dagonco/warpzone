@@ -25,8 +25,17 @@ The profile ignores files EmuDeck creates that are not on the hub, so a receive-
 - `bios/PPSSPP/` and every `readme.txt` under `bios/`.
 - The emulator-owned `bios/` folders `HdPacks`, `Mupen64plus`, `fbneo`, `kronos`, `same_cdi`, `ryujinx`, `shadps4` and `yuzu`.
 - Each `roms/*/systeminfo.txt` and `metadata.txt`.
+- RetroArch's Flycast VMUs and flash in `bios/dc/` (`vmu_save_*.bin`, `dc_nvmem.bin`). These two are ignored without `(?d)`, so a hub-side delete of `bios/dc` never takes them along. See [Dreamcast saves](#dreamcast-saves-retroarch-flycast).
 
 These come from the profile's `[library] ignore` list. The hub's library folder ignores the hub paths of the BIOS placements, so each file belongs to one folder. A line may start with `(?d)`. Run `provision device` again after upgrading to apply a changed profile.
+
+## Dreamcast saves (RetroArch Flycast)
+
+By default the Flycast core in RetroArch shares up to eight VMU files (`vmu_save_A1.bin` and the rest) between all games and writes them, with the console flash `dc_nvmem.bin`, into RetroArch's system folder, `~/Emulation/bios/dc/`. That folder is inside the receive-only library, so the profile has to ignore those files (see above) and they do not sync. Without the ignore lines a Revert on the console would erase them.
+
+To get Dreamcast saves synced, turn on the core option **Per-Game Visual Memory Units/Systems (VMU)** (shown as "Per-Game VMUs"; the key is `reicast_per_content_vmus`): start a Dreamcast game, open Quick Menu > Core Options and choose `VMU A1` (one card per game) or `All VMUs` (all eight per game). The VMUs then go to RetroArch's saves folder, which `retroarch-saves` syncs both ways. Cards already in `bios/dc/` are not migrated: every game starts with an empty one, so copy a card by hand if you want to keep it (the per-game file is named after the game's ID and the port, for example `<game id>.A1.bin`).
+
+`warpzone doctor` warns when `Flycast.opt` exists and the option is off or missing. The standalone Flycast (`flycast-saves`) is unaffected.
 
 ## Xenia and Model 2 live inside `roms/`
 

@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ## [Unreleased]
 
+### Fixed
+
+- Dreamcast: the `steamos-emudeck` profile now ignores `/bios/dc/vmu_save_*.bin` and `/bios/dc/dc_nvmem.bin` in the device library. RetroArch's Flycast core writes them there, so a receive-only console listed them as local changes and a revert would have erased them. `warpzone doctor` warns when the core option for per-game VMUs (`reicast_per_content_vmus`) is off, since only per-game VMUs end up in RetroArch's saves folder and sync. Run `provision device` again to apply the new ignore lines.
+
 ## [0.1.0] - 2026-10-28
 
 First public release. warpzone keeps one game library on a home server and delivers it to every console through Syncthing, with saves that sync both ways.

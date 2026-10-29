@@ -949,6 +949,11 @@ for every problem, the exact fix for this platform.
   (`ExecStart=/usr/bin/flatpak run --command=syncthing com.github.zocker_160.SyncThingy serve --no-browser --no-restart`),
   `systemctl --user enable --now syncthing.service` and, when there is one, the autostart
   entry to remove. Fix lines that start with a space are code and are never wrapped.
+- **Flycast VMUs.** When RetroArch's `Flycast.opt` exists, `judge_flycast_vmus` (pure, over
+  the file text) reads `reicast_per_content_vmus`: `VMU A1` and `All VMUs` are `[ok]`;
+  `disabled` or a missing key is `[! ]`, because the core then writes the shared VMUs into
+  `bios/dc`, which the profile's library ignores (`/bios/dc/vmu_save_*.bin`,
+  `/bios/dc/dc_nvmem.bin`) keep out of sync. The fix names the core option to change.
 - **Exit codes.** `0` when no check is a problem, `1` otherwise.
 - **Install hints** live in one table in `warpzone/doctor.py` (`TOOLS` and the `*_HINTS`
   dicts), keyed by platform family: `macos`, `debian`, `fedora`, `arch`, `steamos`,
