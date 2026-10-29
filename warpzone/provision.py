@@ -5,13 +5,14 @@ from __future__ import annotations
 import dataclasses
 import os
 import subprocess
+import sys
 import time
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from warpzone import flatpak
+from warpzone import esde, flatpak, settings_state
 from warpzone.config import Config
 from warpzone.model import FolderSpec, device_specs, hub_specs
 from warpzone.profiles import Profile
@@ -500,6 +501,178 @@ def ensure_flatpak_access(
     rep.warn(RESTART_SYNCTHING)
 
 
+ImportCheck = Callable[[str], bool]
+
+
+def run_import_check(python: str) -> bool:
+    """Whether `python` imports warpzone from outside the current folder.
+
+    Run from `/` and without the variables the startup script drops, so a clone in the
+    current folder or on PYTHONPATH does not make an interpreter look good that ES-DE's
+    script could not use.
+    """
+    env = {k: v for k, v in os.environ.items() if k not in ("PYTHONPATH", "PYTHONHOME")}
+    try:
+        proc = subprocess.run(
+            [python, "-c", "import warpzone"],
+            cwd="/",
+            env=env,
+            capture_output=True,
+            timeout=60,
+            stdin=subprocess.DEVNULL,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return proc.returncode == 0
+
+
+def _write_script(path: Path, text: str) -> None:
+    """Write an executable file atomically, creating its directories."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}{settings_state.TMP_SUFFIX}")
+    tmp.unlink(missing_ok=True)
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o755)
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            os.fchmod(fh.fileno(), 0o755)
+            fh.write(text.encode())
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
+
+
+ES_DE_MENU = "Main menu > Other settings > Enable custom event scripts"
+
+
+def _enable_event_scripts(
+    name: str,
+    esde_dir: Path,
+    rep: Reporter,
+    *,
+    dry_run: bool,
+    proc: Path,
+    state_root: Path,
+) -> None:
+    """Turn ES-DE's `CustomEventScripts` on, only while ES-DE is not running.
+
+    ES-DE keeps its settings in memory and rewrites the file when it quits, so an edit made
+    while it runs would be lost. The old file is backed up and the new one written
+    atomically, refusing when the file changed after it was read.
+    """
+    path = esde.settings_path(esde_dir)
+    again = f"quit ES-DE and run `warpzone provision device {name}` again"
+    by_hand = f"or turn it on in ES-DE ({ES_DE_MENU})"
+    if not path.is_file():
+        rep.warn(
+            f"{path} does not exist, so ES-DE's custom event scripts were not turned on: "
+            f"start ES-DE once, then run `warpzone provision device {name}` again ({by_hand})"
+        )
+        return
+    try:
+        before = settings_state.stamp(path)
+        text = path.read_bytes().decode("utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        rep.warn(f"cannot read {path} ({exc}); {by_hand}")
+        return
+    if esde.event_scripts_enabled(text) is True:
+        rep.out("es-de: custom event scripts already on")
+        return
+
+    def running() -> bool | None:
+        try:
+            return settings_state.running(esde.ESDE_PROCESSES, proc=proc)
+        except settings_state.NoProc:
+            return None
+
+    def refuse(state: bool | None) -> bool:
+        if state is None:
+            rep.warn(
+                "cannot tell whether ES-DE is running (no /proc), so its custom event scripts "
+                f"were not turned on: {again} on a system with /proc ({by_hand})"
+            )
+        elif state:
+            rep.warn(
+                f"ES-DE is running, so its custom event scripts were not turned on (it "
+                f"rewrites {path.name} when it quits): {again}"
+            )
+        return state is not False
+
+    if refuse(running()):
+        return
+    try:
+        new = esde.enable_event_scripts(text)
+    except esde.EsdeError as exc:
+        rep.warn(f"{path} was left alone: {exc}; {by_hand}")
+        return
+    if dry_run:
+        rep.out(f"es-de: dry-run: would set CustomEventScripts to true in {path}")
+        return
+    settings_state.backup(path, "esde", "es_settings", root=state_root)
+    if refuse(running()):  # ES-DE may have started while the backup was made
+        return
+    if not settings_state.atomic_write(path, new.encode(), expect=before):
+        rep.warn(f"{path} changed while it was being edited, so it was left alone: run again")
+        return
+    rep.out(f"es-de: set CustomEventScripts to true in {path} (old file backed up)")
+
+
+def ensure_esde_script(
+    name: str,
+    profile: Profile,
+    home: Path,
+    rep: Reporter,
+    *,
+    dry_run: bool,
+    python: str | None = None,
+    import_check: ImportCheck = run_import_check,
+    proc: Path = Path("/proc"),
+    state_root: Path | None = None,
+) -> None:
+    """Install ES-DE's startup script for `settings apply` and turn ES-DE's scripts on.
+
+    The script runs the Python that runs this command, so that interpreter must import
+    warpzone from outside the current folder; run from a clone it warns and installs
+    nothing. The script is rewritten only when its content differs. Does nothing when the
+    profile has no ES-DE folder.
+    """
+    if "esde" not in profile.paths:
+        return
+    python = python or sys.executable
+    esde_dir = Path(expand_home(profile.paths["esde"], home))
+    if not import_check(python):
+        rep.warn(
+            f"the ES-DE startup script was not installed: {python} cannot import warpzone "
+            "from outside the current folder (run from a clone?). Install warpzone for it "
+            f"(for example with pipx), then run `warpzone provision device {name}` from there"
+        )
+        return
+    path = esde.script_path(esde_dir)
+    text = esde.render_startup_script(python, name)
+    try:
+        current: str | None = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        current = None
+    if current == text:
+        if not dry_run and not os.access(path, os.X_OK):
+            path.chmod(0o755)
+            rep.out(f"es-de: made {path} executable")
+        else:
+            rep.out(f"es-de: script unchanged ({path})")
+    elif dry_run:
+        rep.out(f"es-de: dry-run: would write {path}:")
+        for line in text.splitlines():
+            rep.out(f"  {line}")
+    else:
+        _write_script(path, text)
+        rep.out(f"es-de: wrote {path}")
+    root = state_root if state_root is not None else settings_state.state_dir(home=home)
+    _enable_event_scripts(name, esde_dir, rep, dry_run=dry_run, proc=proc, state_root=root)
+
+
 def provision_device(
     cfg: Config,
     name: str,
@@ -514,6 +687,10 @@ def provision_device(
     sleep: Callable[[float], None] = time.sleep,
     syncthing_config: Path | None = None,
     flatpak_run: FlatpakRunner = run_flatpak,
+    python: str | None = None,
+    import_check: ImportCheck = run_import_check,
+    proc: Path = Path("/proc"),
+    state_root: Path | None = None,
 ) -> None:
     device = cfg.devices[name]
     actual = local.my_id()
@@ -570,6 +747,19 @@ def provision_device(
                 sleep=sleep,
             )
         rep.flush(spec.id)
+
+    if "settings" in device.folders:
+        ensure_esde_script(
+            name,
+            profile,
+            home,
+            rep,
+            dry_run=local.dry_run,
+            python=python,
+            import_check=import_check,
+            proc=proc,
+            state_root=state_root,
+        )
 
 
 def folder_status(client: Client, title: str, rep: Reporter) -> None:
