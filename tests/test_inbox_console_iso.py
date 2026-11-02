@@ -4,7 +4,16 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from console_iso_support import REDUMP, XGD2, XGD3, ps3_iso, sfo, write_xdvdfs, xdvdfs_dir
+from console_iso_support import (
+    REDUMP,
+    XGD2,
+    XGD3,
+    ps3_iso,
+    sfo,
+    write_xdvdfs,
+    xdvdfs_dir,
+    zarchive,
+)
 from inbox_support import age, make_stub, write_dat
 from test_inbox import Base
 from warpzone import inbox_console_iso as ci
@@ -15,6 +24,7 @@ from warpzone.inbox import Tools, whitelist_line
 PS3_NAME = "Test Game (Europe) (En,Fr).dec.iso"
 XBOX_NAME = "Brick Racer (USA).xiso.iso"
 X360_NAME = "Plain Shooter (USA).iso"
+WUA_NAME = "Plumber Bros U (Europe) (En,Fr).wua"
 GAMELIST = ("frontend", "es-de", "gamelists", "ps3", "gamelist.xml")
 
 
@@ -24,7 +34,7 @@ def detect_bytes(data: bytes) -> ci.Detected | None:
 
 class PureTests(unittest.TestCase):
     def test_claimed_names(self) -> None:
-        for name in ("A.dec.iso", "A.DEC.ISO", "b.xiso.iso", "c.xiso", "d/e.XISO.iso"):
+        for name in ("A.dec.iso", "A.DEC.ISO", "b.xiso.iso", "c.xiso", "d/e.XISO.iso", "f.wua"):
             self.assertTrue(ci.claimed_name(name), name)
         for name in ("A.iso", "A.dec", "A.xiso.zip", "A.iso.xiso.bak", "decrypted.iso"):
             self.assertFalse(ci.claimed_name(name), name)
@@ -33,7 +43,37 @@ class PureTests(unittest.TestCase):
         self.assertEqual(ci.destination(ci.PS3), "ps3")
         self.assertEqual(ci.destination(ci.XBOX), "xbox")
         self.assertEqual(ci.destination(ci.XBOX360), "xbox360/roms")
+        self.assertEqual(ci.destination(ci.WIIU), "wiiu/roms")
         self.assertIsNone(ci.destination(ci.XBOX_REDUMP))
+
+    def test_zarchive_footer(self) -> None:
+        found = ci.detect_wua(io.BytesIO(zarchive()))
+        self.assertEqual(found, ci.Detected(ci.WIIU))
+        assert found
+        self.assertEqual(found.describe(), "Wii U archive (Cemu ZArchive)")
+
+    def test_a_bad_zarchive_footer_is_not_recognised(self) -> None:
+        for data in (
+            b"",
+            b"x" * 143,
+            bytes(500),
+            zarchive(magic=0x169F52D7),
+            zarchive(size=1234),  # the recorded size is not the file size
+            zarchive()[:-1],
+            zarchive() + b"\x00",
+        ):
+            self.assertIsNone(ci.detect_wua(io.BytesIO(data)))
+
+    def test_zarchive_detection_only_reads_the_footer(self) -> None:
+        reads: list[int] = []
+
+        class Spy(io.BytesIO):
+            def read(self, n: int | None = -1) -> bytes:
+                reads.append(-1 if n is None else n)
+                return super().read(n)
+
+        self.assertIsNotNone(ci.detect_wua(Spy(zarchive(body=1 << 20))))
+        self.assertTrue(reads and max(reads) <= 1024, reads)
 
     def test_sfo_strings_and_integers(self) -> None:
         values = ci.parse_sfo(sfo({"TITLE": "A  Game\n2", "TITLE_ID": "BLUS00001", "N": 7}))
@@ -192,6 +232,18 @@ class PlacementTests(FlowBase):
         self.assertEqual(self.library(), ["ps3/Game.iso"])
         self.assertEqual(self.emulators(), {"Game.iso": ci.EMU_RPCS3_ISO})
 
+    def test_wua_goes_to_wiiu_roms(self) -> None:
+        data = zarchive(5000)
+        self.drop(WUA_NAME, data)
+        self.assertEqual(self.go(), 0, self.out)
+        self.assertEqual(self.library(), [f"wiiu/roms/{WUA_NAME}"])
+        self.assertEqual((self.roms / "wiiu" / "roms" / WUA_NAME).read_bytes(), data)
+        self.assertIn("detected: Wii U archive (Cemu ZArchive)", self.out)
+        self.assertIn(f"path: library/roms/wiiu/roms/{WUA_NAME}", self.out)
+        self.assertIn(whitelist_line("wiiu/roms", WUA_NAME), self.out)
+        self.assertFalse(self.gamelist.exists())
+        self.assertEqual(self.review(), [])
+
     def test_report_only_changes_nothing(self) -> None:
         self.drop(PS3_NAME, ps3_iso())
         self.assertEqual(self.go(apply=False), 0, self.out)
@@ -273,6 +325,28 @@ class ReviewTests(FlowBase):
         self.assertEqual(self.go(), 1, self.out)
         self.assertIn("not recognised", self.reason("Locked.dec.iso"))
 
+    def test_a_wua_with_a_bad_footer_goes_to_review(self) -> None:
+        self.drop("Broken.wua", zarchive(magic=0))
+        self.assertEqual(self.go(), 1, self.out)
+        self.assertIn("not recognised", self.reason("Broken.wua"))
+        self.assertIn("ZArchive", self.reason("Broken.wua"))
+        self.assertEqual(self.library(), [])
+
+    def test_a_truncated_wua_goes_to_review(self) -> None:
+        self.drop("Cut.wua", zarchive(5000)[:-100])
+        self.assertEqual(self.go(), 1, self.out)
+        self.assertEqual(self.library(), [])
+
+    def test_another_image_under_a_wua_name_is_not_placed(self) -> None:
+        self.drop("Fake.wua", ps3_iso())
+        self.assertEqual(self.go(), 1, self.out)
+        self.assertEqual(self.library(), [])
+
+    def test_a_zarchive_under_an_iso_name_is_not_placed(self) -> None:
+        self.drop("Fake.iso", zarchive())
+        self.assertEqual(self.go(), 1, self.out)
+        self.assertEqual(self.library(), [])
+
     def test_a_ps2_iso_in_a_dat_keeps_its_normal_route(self) -> None:
         ps2 = b"ps2 dvd image " * 5000
         write_dat(
@@ -310,6 +384,7 @@ class ClaimingTests(FlowBase):
         self.assertTrue(self.claims(self.drop("a.dec.iso", b"x")))
         self.assertTrue(self.claims(self.drop("b.xiso.iso", b"x")))
         self.assertTrue(self.claims(self.drop("c.xiso", b"x")))
+        self.assertTrue(self.claims(self.drop("w.wua", b"x")))
         self.assertFalse(self.claims(self.drop("d.iso", b"x")))
         self.assertFalse(self.claims(self.drop("e.zip", b"x")))
         self.assertTrue(self.claims(self.drop("dir", {"sub/f.dec.iso": b"x"})))
@@ -332,6 +407,30 @@ class ArchiveTests(FlowBase):
         self.zip_of("pack.zip", {X360_NAME: source.read_bytes()})
         self.assertEqual(self.go(), 0, self.out)
         self.assertEqual(self.library(), [f"xbox360/roms/{X360_NAME}"])
+
+    def test_a_wua_inside_a_zip(self) -> None:
+        data = zarchive(3000)
+        self.zip_of("pack.zip", {f"sub/{WUA_NAME}": data, "Notes.txt": b"hi"})
+        self.assertEqual(self.go(), 0, self.out)
+        self.assertEqual((self.roms / "wiiu" / "roms" / WUA_NAME).read_bytes(), data)
+        self.assertEqual(self.done(), ["pack.zip"])
+
+    def test_a_seven_zip_with_a_wua_is_unpacked_with_bsdtar(self) -> None:
+        payload = self.tmp / "payload"
+        payload.write_bytes(zarchive(4000))
+        source = (
+            "import shutil, sys\n"
+            "a = sys.argv[1:]\n"
+            f"if a[0] == '-tf':\n    print({WUA_NAME!r}); sys.exit(0)\n"
+            "dest = a[a.index('-C') + 1]\n"
+            f"shutil.copy({str(payload)!r}, dest + '/' + {WUA_NAME!r})\n"
+        )
+        bsdtar = make_stub(self.tmp / "bin", "bsdtar", source)
+        self.drop("pack.7z", b"7z")
+        self.assertEqual(self.go(tools=Tools(chdman=self.chdman, bsdtar=bsdtar)), 0, self.out)
+        self.assertEqual(self.library(), [f"wiiu/roms/{WUA_NAME}"])
+        placed = self.roms / "wiiu" / "roms" / WUA_NAME
+        self.assertEqual(placed.read_bytes(), payload.read_bytes())
 
     def test_a_seven_zip_is_listed_and_unpacked_with_bsdtar(self) -> None:
         data = ps3_iso("BLES09999", "Packed")

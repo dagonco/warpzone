@@ -1,6 +1,6 @@
 """Console disc images that no DAT can match, for `warpzone inbox`.
 
-Three kinds of image have no Redump / No-Intro entry, so they are identified by their
+Four kinds of file have no Redump / No-Intro entry, so they are identified by their
 signature instead of by hash:
 
 - PS3 decrypted discs (`*.dec.iso`): ISO9660 with `PS3_DISC.SFB` and `PS3_GAME/PARAM.SFO`,
@@ -10,14 +10,19 @@ signature instead of by hash:
 - Xbox 360 disc images (plain `.iso`): an XDVDFS game partition at 0xFDA0000 (XGD2) or
   0x2080000 (XGD3), or an extracted XISO at offset 0, whose root holds `default.xex`.
   Filed in `roms/xbox360/roms/` (the folder EmuDeck's ES-DE system for the 360 reads).
+- Wii U `.wua` archives (Cemu's ZArchive): the 144-byte footer at the end of the file ends
+  with the version 0x61bf3a01 and the magic 0x169f52d6 (big-endian), and its total-size field
+  equals the size of the file. Filed in `roms/wiiu/roms/` (where Cemu's game path points). A
+  `.wua` is only ever judged by that footer: it is never sniffed as a disc image, and a
+  `.iso` is never taken for a ZArchive.
 
 A full Redump-style Xbox image (game partition at 0x18300000) is recognised but never
 placed: xemu cannot boot it, so it goes to review with the instruction to convert it with
 extract-xiso.
 
 How the module hooks into `inbox.py`: `HANDLER` is both a kind handler (it claims items
-whose file names end in `.dec.iso`, `.xiso.iso` or `.xiso`, in a folder or an archive) and
-an `UnmatchedHandler` (a plain `.iso` that the DATs could not explain is sniffed, and if it
+whose file names end in `.dec.iso`, `.xiso.iso`, `.xiso` or `.wua`, in a folder or an archive)
+and an `UnmatchedHandler` (a plain `.iso` that the DATs could not explain is sniffed, and if it
 is one of these formats it is placed instead of going to review). PS2, PSP and GameCube
 `.iso` files are therefore untouched: they are matched by the DATs first, and only an
 unmatched `.iso` is ever read for a signature.
@@ -47,17 +52,19 @@ from warpzone import inbox, inbox_mame
 from warpzone.dat import FileInfo
 from warpzone.inbox import Context, ItemFailure, ItemResult, Options, Staged, UnitResult
 
-PS3, XBOX, XBOX360, XBOX_REDUMP = "ps3", "xbox", "xbox360", "xbox-redump"
+PS3, XBOX, XBOX360, XBOX_REDUMP, WIIU = "ps3", "xbox", "xbox360", "xbox-redump", "wiiu"
 PLATFORMS = {
     PS3: "PS3 decrypted disc image",
     XBOX: "Xbox (XISO)",
     XBOX360: "Xbox 360 disc image",
     XBOX_REDUMP: "Xbox full disc image (Redump layout)",
+    WIIU: "Wii U archive (Cemu ZArchive)",
 }
 # Where each kind goes inside library/roms/.
-FOLDERS = {PS3: "ps3", XBOX: "xbox", XBOX360: "xbox360/roms"}
-CLAIMED_SUFFIXES = (".dec.iso", ".xiso.iso", ".xiso")
-SNIFFED_SUFFIXES = (".iso", ".xiso")
+FOLDERS = {PS3: "ps3", XBOX: "xbox", XBOX360: "xbox360/roms", WIIU: "wiiu/roms"}
+WUA_SUFFIX = ".wua"
+CLAIMED_SUFFIXES = (".dec.iso", ".xiso.iso", ".xiso", WUA_SUFFIX)
+SNIFFED_SUFFIXES = (".iso", ".xiso", WUA_SUFFIX)
 EMU_RPCS3_ISO = "RPCS3 ISO (Standalone)"  # the ES-DE name, as written in <altemulator>
 GAMELIST_REL = ("frontend", "es-de", "gamelists", "ps3", "gamelist.xml")
 CONVERT_HINT = (
@@ -76,6 +83,10 @@ REDUMP_PARTITION = 0x18300000
 MAX_DIR_BYTES = 1 << 20  # a directory bigger than this is not a game disc
 MAX_DIR_ENTRIES = 1 << 14
 MAX_SFO_BYTES = 1 << 16
+# The ZArchive footer: six offset/size sections (96 bytes), a SHA-256 of the archive (32 bytes),
+# then big-endian u64 total size, u32 version and u32 magic.
+ZARCHIVE_FOOTER = 144
+ZARCHIVE_VERSION, ZARCHIVE_MAGIC = 0x61BF3A01, 0x169F52D6
 _VERSION_SUFFIX = re.compile(r";\d+$")
 
 
@@ -283,9 +294,30 @@ def detect(f: BinaryIO) -> Detected | None:
     return _detect_xdvdfs(f) or _detect_ps3(f)
 
 
+def is_wua(name: str) -> bool:
+    return name.lower().endswith(WUA_SUFFIX)
+
+
+def detect_wua(f: BinaryIO) -> Detected | None:
+    """A Cemu ZArchive, from its footer alone: the last 16 bytes are the total size, the
+    version and the magic, and the size must be the file's own (so a truncated or a padded
+    file is not recognised). Reads 16 bytes from the end."""
+    size = f.seek(0, os.SEEK_END)
+    if size < ZARCHIVE_FOOTER:
+        return None
+    tail = _read_at(f, size - 16, 16)
+    if len(tail) != 16:
+        return None
+    total, version, magic = struct.unpack(">QII", tail)
+    if magic != ZARCHIVE_MAGIC or version != ZARCHIVE_VERSION or total != size:
+        return None
+    return Detected(WIIU)
+
+
 def detect_path(path: Path) -> Detected | None:
+    """`.wua` files are judged by the ZArchive footer only, everything else as a disc image."""
     with path.open("rb") as f:
-        return detect(f)
+        return detect_wua(f) if is_wua(path.name) else detect(f)
 
 
 # ------------------------------------------------------------------ disk
@@ -420,8 +452,8 @@ def _names_in(ctx: Context, item: Path) -> list[str]:
 
 
 class ConsoleIsoHandler:
-    """Items holding a `.dec.iso`, `.xiso.iso` or `.xiso` (the item is taken over whole), and
-    plain `.iso` files the DATs could not match (see `adopt`)."""
+    """Items holding a `.dec.iso`, `.xiso.iso`, `.xiso` or `.wua` (the item is taken over
+    whole), and plain `.iso` files the DATs could not match (see `adopt`)."""
 
     def validate(self, opts: Options) -> None:
         return None
@@ -455,7 +487,9 @@ class ConsoleIsoHandler:
             return
         if found is None:
             result.reasons.append(
-                f"{s.rel}: not recognised as a PS3 decrypted disc (PS3_DISC.SFB and "
+                f"{s.rel}: not recognised as a Wii U ZArchive (.wua)"
+                if is_wua(s.path.name)
+                else f"{s.rel}: not recognised as a PS3 decrypted disc (PS3_DISC.SFB and "
                 "PS3_GAME/PARAM.SFO), an Xbox XISO or an Xbox 360 disc image"
             )
             return
