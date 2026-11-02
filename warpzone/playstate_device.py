@@ -153,7 +153,8 @@ def sync_shared(
 
     Gamelists are written only while ES-DE has none in memory: closed, or starting (it reads
     them after its `startup` script). With ES-DE open the device only publishes. Each edit
-    backs the file up, keeps every other byte and is refused if the file changed.
+    backs the file up, keeps every other byte and is refused if the file changed. With
+    `dry_run` nothing is written, not even the lock file.
     """
     if "esde" not in profile.paths:
         return
@@ -162,6 +163,11 @@ def sync_shared(
         say("play state: no play state folder yet, nothing to do")
         return
     root = (state_root or settings_state.state_dir(home=home)).parent / "play-state"
+    if dry_run:  # it writes nothing, so it needs no lock, which would be a file of its own
+        _sync_shared(
+            device, profile, home, where, say, warn, dry_run, starting, proc, root, now, zone
+        )
+        return
     with settings_state.lock(root=root) as got:
         if not got:
             say("play state: another run is in progress, nothing done")

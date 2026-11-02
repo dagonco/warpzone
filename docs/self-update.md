@@ -49,6 +49,23 @@ Every run except `--dry-run` appends its messages, with a UTC timestamp, to `~/.
 
 Exit codes: `0` when it finished (warnings included), `3` when something was left for later because ES-DE, an emulator or a file ES-DE rewrites was open (run it again once it is closed), and `1` or `2` for a failure.
 
+## Checking a version
+
+`warpzone health [device]` says whether the installed version works on this device. It is the check the autonomous update will run after it switches to a new release, and you can run it by hand at any time. It changes nothing of yours.
+
+```bash
+warpzone health deck       # on the device
+warpzone health            # the device is the one whose ID matches the local Syncthing
+```
+
+It prints one line per check, then `health: ok` or how many failed, and exits `0` when it works and `1` when any check failed:
+
+- The config and the profiles load.
+- `settings apply`, `play-state sync`, `links sync` and `frontend refresh` run as dry runs (only the ones that apply to the device), each within the 15 seconds that ES-DE gives its startup scripts, without an error. A menu that is open does not fail it.
+- The ES-DE startup scripts and the systemd units that `provision device` installs for the device exist, and the Python they run exists and can import warpzone. Where there is no systemd user manager, the units are skipped.
+
+It is not `doctor`: it does not look at DATs or optional tools, and it does not prove that a game starts or that Syncthing syncs. `frontend refresh` reads the local Syncthing's REST API, so a Syncthing that is down fails that check.
+
 ## The timer
 
 `warpzone provision device <name>` installs two units in `~/.config/systemd/user/` and enables the timer, for every profile:

@@ -809,6 +809,7 @@ error messages; the RetroAchievements key is read from `RA_API_KEY`, never from 
 | `warpzone bios` | on a device or the hub | Reports which BIOS and firmware files a library has, lacks or has wrong (see [BIOS check](#bios-check)). Read-only. Exit 1 if a required item is missing or wrong. |
 | `warpzone inbox` | a desktop that mounts the hub's share | Identifies, converts and files new games dropped in `inbox/` (see [Inbox](#inbox)). Report only by default, `--apply` acts. Exit 1 if any item needs review. |
 | `warpzone self-update` | on the device | Moves the git checkout warpzone runs from to the newest `vX.Y.Z` tag when it is newer than `__version__` (see [Self-update](#self-update)). Needs no config. `--dry-run` reports only. Exit 0 for every outcome that needs no attention (including no network and not a checkout), 1 when a due update was refused or failed. |
+| `warpzone health [device]` | on the device | Checks that this version works here: loads the config and the profiles, runs `settings apply`, `play-state sync`, `links sync` and `frontend refresh` as dry runs within the 15 seconds ES-DE gives its startup scripts, and checks that the startup scripts and the units exist with an interpreter that imports warpzone (see [`warpzone health`](#warpzone-health)). Writes no user data, needs no DATs or tools. Exit 0 when it works, 1 when a check failed. |
 | `warpzone doctor` | any machine | Checklist of this machine: tools, config, local Syncthing, DATs, hub folder (see [Doctor](#doctor)). Offline, never changes anything. Exit 1 if a required check fails. |
 | `warpzone settings apply` | on the device | Writes the layered emulator settings into each emulator's config file: only the layered keys, with a backup, never while the emulator runs (see [Emulator settings](#emulator-settings)). Run by ES-DE at startup and by hand. |
 | `warpzone settings capture` | on the device | Shows what changed in the emulators' settings since the last sync and writes the keys the user chooses to the common or the device layer on the hub. |
@@ -821,7 +822,7 @@ would make (method, path, JSON body with secrets redacted) and sends no write.
 It still sends the GET requests it needs to compute the diff. Every command
 takes `--config PATH` (default `$WARPZONE_CONFIG`, then the XDG path).
 
-Exit codes: `0` ok, `1` runtime error, `2` usage or config error, and `3` only for `provision device --unattended` (deferred).
+Exit codes: `0` ok, `1` runtime error (for `health`, a failed check, a config error included), `2` usage or config error, and `3` only for `provision device --unattended` (deferred).
 
 `prune` has its own flags: `--apply`, `--max-gib N` (default 50), `--force`,
 `--list`, `--notify-url URL`, `--timeout SECONDS` (wait for the rescan),
@@ -2161,6 +2162,7 @@ do. Until then `warpzone self-update` behaves as described above.
 | `channel` and `pin` in the device config, validated | Implemented |
 | Ordering of release candidates (`tag_key`, `version_key`) | Implemented |
 | `provision device --unattended` and its exit code `3` | Implemented |
+| `warpzone health` | Implemented |
 | Everything else in this section | Not implemented |
 
 **Tag spelling.** A release is `vX.Y.Z` and a release candidate is `vX.Y.ZrcN`: the tag is
@@ -2210,10 +2212,10 @@ is not a supported device install.
 1. `python -I -c "import warpzone.cli, warpzone.provision, ..."`, and `--version` equal to
    the tag.
 2. `python -m warpzone provision device <device> --unattended`.
-3. `warpzone health` (a new command): loads the config and the profiles, runs
-   `settings apply`, `play-state sync`, `links sync` and `frontend refresh` as dry runs and
-   the startup scripts within the 15 seconds ES-DE allows them, and checks that the scripts
-   and units exist with a valid interpreter.
+3. `warpzone health` (see [`warpzone health`](#warpzone-health)): loads the config and the
+   profiles, runs `settings apply`, `play-state sync`, `links sync` and `frontend refresh` as
+   dry runs within the 15 seconds ES-DE allows its startup scripts, and checks that the
+   scripts and units exist with a valid interpreter.
 
 `doctor` is not used for this because it depends on the environment (DATs, tools). The check
 does not prove that a game starts or that Syncthing syncs; that is what retirement is for.
@@ -2255,6 +2257,55 @@ How `provision device --unattended` does that, and what it leaves as it was:
   records: `_busy`, the ES-DE settings and find-rule checks, and `titlelinks.sync`. Not being
   able to tell (no `/proc`) is a warning, not a deferral, because waiting would never help.
   An error exits `1`, also when something was deferred before it.
+
+#### `warpzone health`
+
+`warpzone health [device]` answers one question: does the installed version work on this
+device? It exits `0` when it does and `1` when any check failed, and it writes no user data.
+Without a device name it is the configured device whose ID matches the local Syncthing (as
+`prune` does). Each check prints one line (`ok`, `FAIL` or `skip`), then `health: ok` or the
+number of failed checks. `--config` and `--syncthing-config` work as elsewhere. In order:
+
+1. **Config and profiles.** The same load every command does, including that each device
+   subscribes only to folder groups its profile defines. A load error is a failed check and
+   nothing else runs.
+2. **The dry runs.** Only those that apply to the device, as `plan_steps` decides:
+   `settings apply` when it lists `settings`; `play-state sync` when it lists `play-state`,
+   its profile has an ES-DE folder and no `[artwork]` (a device with `[artwork]` merges the
+   play state in `frontend refresh`); `links sync` when it lists `library` and its profile has
+   `[links.*]`; `frontend refresh` when its profile has `[artwork]` and it lists `frontend`.
+   They run in this process, not through the startup scripts, which would write. A step fails
+   when it raises, when `settings apply` returns non-zero, or when it takes longer than the
+   15 seconds (`STARTUP_SECONDS`) of the `timeout 15` that ES-DE's scripts use. The time is
+   measured, not enforced: the caller bounds the whole run. Warnings are counted and are not
+   failures, and a menu that is open is not a failure either, since a dry run never waits for it.
+3. **Scripts and units.** `expected_files` lists what `provision device` leaves for this
+   device: the ES-DE startup scripts (`settings`, `library` with `[links.*]`, `play-state`), the
+   artwork and play state timers when the profile sets `refresh`, and the self-update units
+   unless `self_update = false`. A script must exist, be executable and run an interpreter that
+   exists and imports `warpzone` from outside the current folder. A service must exist and its
+   first `ExecStart` word must exist (and import `warpzone` when it runs `-m warpzone`). A
+   timer must exist. Services and timers are `skip`ped, not failed, when there is no systemd
+   user manager (`systemctl --user show-environment` fails), since `provision device` installs
+   none there. Enabled or active timers are not checked.
+
+**What each dry run does and does not write.** `settings apply --dry-run` takes no lock, writes
+no backup, snapshot or log line and no `last apply` record. `links sync --dry-run` only says
+what it would do. `play-state sync --dry-run` used to take the play state lock, which creates
+a lock file and its folder; a dry run now takes no lock. `frontend refresh` builds its local
+Syncthing client with `dry_run=True`, which sends only `GET`, and its gamelist step takes the
+`dry_run` path, which also publishes no ledger. So the Syncthing configuration, the
+gamelists, the ledgers, the emulators' files and the state folders are the same before and
+after (a test compares the whole home). The one thing it needs from the network is the local
+Syncthing's REST API for `frontend refresh` (and for the device name when none is given):
+unreachable, that step fails, and the differential verdict tells that from a bad version. With
+no local Syncthing found, `frontend refresh` runs without the scope check and warns, as the
+command itself does.
+
+It is not `doctor`: it does not look at DATs or optional tools, does not run the hub checks,
+and does not prove that a game starts or that Syncthing syncs. The decisions are pure
+(`plan_steps`, `expected_files`, `judge_step`, `judge_file`, `exit_code` in `health.py`) and
+the tests run it against a fake `/proc` and a fake Syncthing.
 
 **Differential verdict.** The script does not trust the exit codes of a version that may be
 broken. It knows three outcomes: 0 passed, 3 deferred (the menu opened during the check),
@@ -2425,6 +2476,7 @@ warpzone/
   playstate_device.py  play state on a device: files, ES-DE gamelists, generated gamelists
   tomlw.py           TOML scalar and key writer (tomllib only reads)
   doctor.py          machine checklist (`warpzone doctor`): checks, install hints, renderer
+  health.py          `warpzone health`: the dry runs and file checks that say a version works (decisions pure)
   ra.py              RetroAchievements: RAHasher wrapper, game list lookup
   localst.py         find and parse the local Syncthing config.xml
   data/bios.toml     BIOS manifest (names, sizes, hashes, signatures only)

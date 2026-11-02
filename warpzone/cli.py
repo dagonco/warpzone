@@ -331,6 +331,19 @@ def _build_parser() -> argparse.ArgumentParser:
         "(never a downgrade; offline is not an error)",
     )
 
+    hl = sub.add_parser(
+        "health",
+        parents=[common],
+        help="on a device: check that this version works (config, the dry runs of what ES-DE "
+        "and the timers run, the startup scripts and units); writes nothing",
+    )
+    hl.add_argument(
+        "name", nargs="?", help="device name (default: the one matching local Syncthing)"
+    )
+    hl.add_argument(
+        "--syncthing-config", type=Path, help="local Syncthing config.xml or its folder"
+    )
+
     sub.add_parser(
         "doctor",
         parents=[common],
@@ -594,6 +607,21 @@ def _self_update(args: argparse.Namespace, rep: Reporter) -> int:
     )
 
 
+def _health(args: argparse.Namespace, rep: Reporter) -> int:
+    from warpzone import health
+
+    def local() -> localst.LocalSyncthing | None:
+        try:
+            return localst.parse_config(localst.find_config(args.syncthing_config))
+        except localst.LocalSyncthingError:
+            if args.syncthing_config is not None:
+                raise
+            return None  # this machine has no Syncthing: the checks that need it say so
+
+    probes = health.Probes(home=Path.home(), state=settings_state.state_dir(), local=local)
+    return health.run_health(lambda: _load(args), args.name, probes, rep.out)
+
+
 def _run(args: argparse.Namespace) -> int:
     if args.command == "settings":  # the apply path: no network code
         return _settings(args, *_load(args))
@@ -607,6 +635,8 @@ def _run(args: argparse.Namespace) -> int:
     rep = Reporter(print, warn_sink=_eprint)
     if args.command == "self-update":  # needs no config
         return _self_update(args, rep)
+    if args.command == "health":  # a failed check is a result, not a usage error
+        return _health(args, rep)
     if args.command == "doctor":  # offline, read-only, needs no valid config
         return doctor.run_doctor(doctor.Probes(config_path=_config_path(args)), rep.out)
     if args.command == "bios":  # works without a config when --root is given
