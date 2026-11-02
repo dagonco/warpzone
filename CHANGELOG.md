@@ -9,6 +9,7 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 ### Added
 
 - `warpzone inbox` recognises Wii U `.wua` files (Cemu's ZArchive) by the footer at the end of the file, reading only its last 16 bytes, and files them in `library/roms/wiiu/roms/` under their own name, also when they arrive inside a `.zip`, `.7z` or `.rar`. A `.wua` with a wrong or truncated footer goes to review. See [docs/inbox.md](docs/inbox.md).
+- `warpzone inbox` recognises PS4 `.pkg` files by the magic `\x7fCNT` and the content id (`XXnnnn-CUSAnnnnn_nn-...`) in the first bytes of the header, and files them in `library/roms/ps4/` under their own name, also inside an archive. The report shows the title id (`CUSA...`). A PS3 `.pkg` or a `.pkg` with an unexpected header keeps going to review. See [docs/inbox.md](docs/inbox.md).
 
 ## [0.2.0] - 2026-11-02
 
