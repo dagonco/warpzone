@@ -1,6 +1,6 @@
 # Adding new games: the inbox
 
-How `warpzone inbox` identifies, converts and files new dumps, including Switch, PS3, Xbox, Xbox 360, Wii U and arcade.
+How `warpzone inbox` identifies, converts and files new dumps, including Switch, 3DS, PS3, Xbox, Xbox 360, Wii U and arcade.
 
 Drop new dumps (files, folders or archives) in `inbox/` on the hub's share and run `warpzone inbox` on a desktop machine that mounts it (the NAS is too weak for conversions). Without `--apply` it only reports:
 
@@ -84,6 +84,17 @@ Titles come from a local clone of titledb (`git clone --depth 1 https://github.c
 - Without `nsz` or the keys file, an `.nsp` falls back to the `[TitleID][vN]` in its file name and the report says so. A `.nsz` cannot be read and goes to review. A title titledb does not know, or an `.nsp` holding several titles, goes to review.
 - A file is never overwritten. The check is by TitleID and version wherever the library has it: the same bytes are "already in the library", different bytes go to review.
 - Games print their whitelist line (`!/roms/switch/...`). Updates and DLC are usually whitelisted by folder (`!/extras/switch/updates`, `!/extras/switch/dlc`), so the report says that once instead of one line per file.
+
+## 3DS games
+
+`.3ds` and `.cci` files (the two names of one format, a cartridge image) are recognised by their header, not by a DAT and not by their name alone, whether they are loose, in a folder or in an archive. Only two 0x200-byte pieces are read:
+
+- the NCSD container: the magic `NCSD` at 0x100, and an image size (u32 at 0x104, counted in 0x200-byte units) that is not bigger than the file;
+- partition 0: an NCCH header whose flags mark it as decrypted (NoCrypto).
+
+A decrypted image is filed in `library/roms/n3ds/<name>.cci`. A `.3ds` is renamed to `.cci` on the way in and its bytes do not change, so the same game dropped as `.3ds` and as `.cci` is the same file ("already in the library"). Nothing is ever overwritten: a different file under that name goes to review. The report shows what was detected, the destination and the whitelist line (`!/roms/n3ds/<name>.cci`).
+
+An encrypted image goes to review: Azahar, the 3DS emulator of the consoles, opens only decrypted images, so decrypt it first and drop the result. A file whose header is not valid (no `NCSD` or `NCCH` magic, a size bigger than the file, a truncated dump) goes to review with the reason. `.3dsx` homebrew and `.cia` installers are not images and are not handled here.
 
 ## PS3, PS4, Xbox, Xbox 360 and Wii U images
 
