@@ -364,10 +364,8 @@ class BuildTests(unittest.TestCase):
 
     def test_user_data_of_a_rom_that_left_the_device_is_dropped(self) -> None:
         old = source_xml(("./Z.zip", "Z", ("playcount", "2")))
-        self.assertEqual(
-            self.build(source_xml(("./A.zip", "A")), old, roms={"A.zip"})[0].path, "./A.zip"
-        )
-        self.assertEqual(len(self.build(source_xml(("./A.zip", "A")), old, roms={"A.zip"})), 1)
+        built = self.build(source_xml(("./A.zip", "A")), old, roms={"A.zip"})
+        self.assertEqual([e.path for e in built], ["./A.zip"])
 
     def test_the_result_is_deterministic_and_idempotent(self) -> None:
         src = source_xml(("./B.zip", "B", ("genre", "g")), ("./A.zip", "A", ("desc", "d")))
@@ -415,6 +413,18 @@ class RenderTests(unittest.TestCase):
         text = self.FMT.render([artwork.Entry("folder", "./Sub", {"name": "Sub"})])
         self.assertIsNotNone(ET.fromstring(text).find("folder"))
 
+    def test_es_de_puts_an_alternative_emulator_element_before_the_game_list(self) -> None:
+        # Seen in the hub's real gamelists: two top-level elements, so not a valid document.
+        text = (
+            '<?xml version="1.0"?>\n<alternativeEmulator>\n\t<label>melonDS</label>\n'
+            "</alternativeEmulator>\n<gameList>\n\t<game><path>./A.zip</path>"
+            "<name>A</name></game>\n</gameList>\n"
+        )
+        (entry,) = artwork.parse_gamelist(text)
+        self.assertEqual((entry.path, entry.fields), ("./A.zip", {"name": "A"}))
+        (entry,) = artwork.parse_gamelist(text.encode())
+        self.assertEqual(entry.path, "./A.zip")
+
     def test_a_file_that_is_not_xml_is_an_error(self) -> None:
         with self.assertRaises(artwork.ArtworkError):
             artwork.parse_gamelist("<gameList><game>")
@@ -428,6 +438,15 @@ class RenderTests(unittest.TestCase):
             "<sortname>zz</sortname></game></gameList>"
         )
         self.assertTrue(artwork.same_content(self.FMT, built, saved))
+        # On exit the frontend lists games the hub never scraped, with nothing of the player's.
+        extra = saved.replace(
+            "</gameList>", "<game><path>./B.zip</path><name>B</name></game></gameList>"
+        )
+        self.assertTrue(artwork.same_content(self.FMT, built, extra))
+        played = saved.replace(
+            "</gameList>", "<game><path>./B.zip</path><playcount>1</playcount></game></gameList>"
+        )
+        self.assertFalse(artwork.same_content(self.FMT, built, played))
         other = saved.replace("0.8", "0.9")
         self.assertFalse(artwork.same_content(self.FMT, built, other))
         self.assertFalse(artwork.same_content(self.FMT, built, "<gameList/>"))

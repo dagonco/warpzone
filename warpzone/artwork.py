@@ -99,12 +99,28 @@ def metadata_ignores(systems: Collection[str]) -> tuple[str, ...]:
 # ------------------------------------------------------------------ reading
 
 
+_GAMELIST_BLOCK = re.compile(rb"<gameList(?:\s[^>]*)?(?:/>|>.*</gameList\s*>)", re.DOTALL)
+
+
+def _root(data: str | bytes) -> ET.Element:
+    raw = data.encode("utf-8") if isinstance(data, str) else data
+    try:
+        return ET.fromstring(raw)
+    except ET.ParseError as exc:
+        # ES-DE writes an `<alternativeEmulator>` element ahead of `<gameList>`, which makes
+        # the file two documents. Read the `<gameList>` on its own.
+        block = _GAMELIST_BLOCK.search(raw)
+        if block is None:
+            raise ArtworkError(f"not valid XML ({exc})") from exc
+        try:
+            return ET.fromstring(block.group(0))
+        except ET.ParseError as inner:
+            raise ArtworkError(f"not valid XML ({inner})") from inner
+
+
 def parse_gamelist(data: str | bytes) -> list[Entry]:
     """The entries of a gamelist file; an entry without a path is skipped."""
-    try:
-        root = ET.fromstring(data)
-    except ET.ParseError as exc:
-        raise ArtworkError(f"not valid XML ({exc})") from exc
+    root = _root(data)
     if root.tag != "gameList":
         raise ArtworkError(f"the root element is <{root.tag}>, not <gameList>")
     entries: list[Entry] = []
@@ -264,7 +280,183 @@ def same_content(fmt: Format, built: Sequence[Entry], existing_text: str | bytes
         existing = parse_gamelist(existing_text)
     except ArtworkError:
         return False
-    return _normal(fmt, built) == _normal(fmt, existing)
+    wanted = _normal(fmt, built)
+    # A frontend that saves on exit also lists the games nobody scraped. Those carry
+    # nothing of the player's, so they are not a difference.
+    seen = {
+        key: fields
+        for key, fields in _normal(fmt, existing).items()
+        if key in wanted or any(f in fields for f in fmt.user_fields)
+    }
+    return wanted == seen
+
+
+# ------------------------------------------------------------------ planning
+
+
+@dataclass(frozen=True)
+class Files:
+    """The few reads a plan makes, so a check can use its own (and a test fake ones)."""
+
+    read: Callable[[Path], bytes | None]  # None when the file is missing
+    is_file: Callable[[Path], bool]
+    exists: Callable[[Path], bool]
+
+
+def _read(path: Path) -> bytes | None:
+    try:
+        return path.read_bytes()
+    except FileNotFoundError:
+        return None
+
+
+REAL_FILES = Files(_read, Path.is_file, Path.exists)
+
+
+@dataclass(frozen=True)
+class Layout:
+    """Where things are on the device, all expanded."""
+
+    roms: Path  # <library>/roms
+    media: Path
+    metadata: Path
+    gamelists: Path
+
+
+@dataclass(frozen=True)
+class Planned:
+    """One gamelist the converter wants: for the frontend's `system`, from the hub's `hub`."""
+
+    system: str
+    hub: str
+    path: Path
+    data: bytes
+    state: str  # `current`, `missing` or `stale`
+    games: int
+
+
+@dataclass(frozen=True)
+class GamelistPlan:
+    items: tuple[Planned, ...] = ()
+    # Systems left out because another one has the same name.
+    dropped: tuple[FrontendSystem, ...] = ()
+    # Hub systems on the device, known to the frontend, with no scraped gamelist yet.
+    waiting: tuple[str, ...] = ()
+    # Scraped gamelists that cannot be read, as messages.
+    problems: tuple[str, ...] = ()
+
+    def pending(self) -> list[Planned]:
+        return [i for i in self.items if i.state != "current"]
+
+
+def plan_gamelists(
+    fmt: Format,
+    kinds: Sequence[str],
+    layout: Layout,
+    system_list: str,
+    *,
+    prefix: str,
+    renames: Mapping[str, str],
+    hubs: Collection[str],
+    files: Files = REAL_FILES,
+) -> GamelistPlan:
+    """What the gamelists of the device should be, and whether each already is.
+
+    `hubs` are the hub system folders on the device. Raises `ArtworkError` when the system
+    list is unreadable.
+    """
+    systems = frontend_systems(system_list, prefix, f"{layout.roms}/", renames)
+    chosen, dropped = assign(systems, set(hubs))
+    items: list[Planned] = []
+    waiting: list[str] = []
+    problems: list[str] = []
+    for hub in sorted(chosen):
+        scraped = layout.metadata / "gamelists" / hub / "gamelist.xml"
+        data = files.read(scraped)
+        if data is None:
+            waiting.append(hub)
+            continue
+        try:
+            source = parse_gamelist(data)
+        except ArtworkError as exc:
+            problems.append(f"{scraped}: {exc}")
+            continue
+
+        def rom_exists(rel: str, hub: str = hub) -> bool:
+            return files.exists(layout.roms / hub / rel)
+
+        def media_path(kind: str, stem: str, hub: str = hub) -> str | None:
+            path = layout.media / hub / kind / f"{stem}.png"
+            return str(path) if files.is_file(path) else None
+
+        for system in chosen[hub]:
+            path = layout.gamelists / system.name / "gamelist.xml"
+            before = files.read(path)
+            try:
+                existing = parse_gamelist(before) if before is not None else []
+            except ArtworkError:
+                existing = []
+            built = build(
+                fmt,
+                source,
+                existing,
+                kinds=kinds,
+                base=system.base,
+                rom_exists=rom_exists,
+                media_path=media_path,
+            )
+            wanted = fmt.render(built).encode("utf-8")
+            if before is None:
+                state = "missing"
+            elif before == wanted or same_content(fmt, built, before):
+                state = "current"
+            else:
+                state = "stale"
+            items.append(Planned(system.name, hub, path, wanted, state, len(built)))
+    return GamelistPlan(tuple(items), tuple(dropped), tuple(waiting), tuple(problems))
+
+
+# ------------------------------------------------------------------ the timer
+
+
+def _unit_arg(arg: str) -> str:
+    if re.fullmatch(r"[A-Za-z0-9_@+=:,./-]+", arg):
+        return arg
+    quoted = arg.replace("\\", "\\\\").replace('"', '\\"').replace("%", "%%")
+    return f'"{quoted}"'
+
+
+def render_units(
+    python: str, name: str, config_path: Path | None, interval: str
+) -> tuple[str, str]:
+    """The text of the `systemd --user` service and timer that run `frontend refresh`."""
+    command = [python, "-m", "warpzone", "frontend", "refresh", name]
+    if config_path is not None:
+        command += ["--config", str(config_path)]
+    service = (
+        "[Unit]\n"
+        "Description=warpzone: refresh the frontend gamelists\n"
+        "\n"
+        "[Service]\n"
+        "Type=oneshot\n"
+        f"ExecStart={' '.join(_unit_arg(a) for a in command)}\n"
+        "Nice=10\n"
+    )
+    timer = (
+        "[Unit]\n"
+        "Description=warpzone: refresh the frontend gamelists regularly\n"
+        "\n"
+        "[Timer]\n"
+        "OnBootSec=5min\n"
+        f"OnUnitActiveSec={interval}\n"
+        "\n"
+        "[Install]\n"
+        "WantedBy=timers.target\n"
+    )
+    return service, timer
+
+
+UNIT_NAME = "warpzone-artwork"
 
 
 # ------------------------------------------------------------------ formats

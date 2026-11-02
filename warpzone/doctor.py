@@ -36,7 +36,7 @@ from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from warpzone import __version__, esde, frontend, localst, model, ra, settings_state
+from warpzone import __version__, artwork, esde, frontend, localst, model, ra, settings_state
 from warpzone import inbox_switch as switch
 from warpzone.config import (
     INBOX_KEYS,
@@ -599,6 +599,7 @@ class SettingsDevice:
     name: str
     device_id: str
     profile: Profile
+    folders: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -618,7 +619,8 @@ class ConfigState:
     sync_paths: tuple[str, ...] = ()
     # The devices that subscribe to `settings`; empty when the config does not load.
     settings_devices: tuple[SettingsDevice, ...] = ()
-    # The devices that subscribe to `library` whose profile has `es_systems` or `retroarch`.
+    # The devices that subscribe to `library` whose profile has `es_systems` or `retroarch`,
+    # or `artwork` with the `frontend` group.
     frontend_devices: tuple[SettingsDevice, ...] = ()
 
 
@@ -713,8 +715,11 @@ def load_config_state(path: Path) -> ConfigState:
                     entry = SettingsDevice(device.name, device.device_id, profiles[device.profile])
                     settings_devices.append(entry)
                 profile = profiles[device.profile]
-                if "library" in device.folders and (profile.es_systems or profile.retroarch):
-                    frontend_devices.append(SettingsDevice(device.name, device.device_id, profile))
+                art = profile.artwork is not None and "frontend" in device.folders
+                if "library" in device.folders and (profile.es_systems or profile.retroarch or art):
+                    frontend_devices.append(
+                        SettingsDevice(device.name, device.device_id, profile, device.folders)
+                    )
         else:
             unknown = sorted(set(data) - {"hub", "devices", "inbox"})
             errors += [f"config: unknown key {key!r}" for key in unknown]
@@ -1189,6 +1194,37 @@ def judge_systems_override(
     return OK, f"{override_path} moves the ROM folders from {prefix} to {target}", ""
 
 
+def judge_artwork(
+    *, device: str, plan: artwork.GamelistPlan | None, error: str | None, scraped_path: str
+) -> tuple[str, str, str]:
+    """Verdict on the frontend's gamelists: `plan` is None when it could not be made."""
+    fix = f"quit EmulationStation, then run `warpzone frontend refresh {device}`"
+    if plan is None:
+        return WARN, error or "the gamelists could not be checked", ""
+    if plan.problems:
+        return WARN, "; ".join(plan.problems), "fix or remove the scraped gamelist on the hub"
+    if not plan.items:
+        if plan.waiting:
+            return (
+                WARN,
+                f"no scraped gamelist has arrived in {scraped_path} for the systems on the "
+                f"device ({', '.join(plan.waiting[:5])}), so EmulationStation shows no artwork",
+                "check that the wz-esde folder syncs (`warpzone status`) and that the hub has "
+                "scraped those systems",
+            )
+        return OK, "no system with games on the device has a frontend system", ""
+    missing = [i.system for i in plan.items if i.state == "missing"]
+    stale = [i.system for i in plan.items if i.state == "stale"]
+    if not missing and not stale:
+        return OK, f"{len(plan.items)} gamelists current", ""
+    parts = []
+    for word, names in (("missing", missing), ("stale", stale)):
+        if names:
+            shown = ", ".join(names[:6]) + (f" and {len(names) - 6} more" if len(names) > 6 else "")
+            parts.append(f"{len(names)} {word} ({shown})")
+    return WARN, "gamelists " + "; ".join(parts), fix
+
+
 def judge_retroarch_paths(
     *, device: str, files: Sequence[tuple[str, str | None]], wants: Mapping[str, str]
 ) -> tuple[str, str, str]:
@@ -1370,6 +1406,8 @@ def check_frontend(ctx: Context) -> list[Result]:
             target=f"{library}/roms/",
         )
         results.append(Result("ES systems override", G_FRONTEND, *verdict))
+    if profile.artwork is not None and "frontend" in device.folders:
+        results += _check_artwork(ctx, device, library)
     if (pins := profile.retroarch) is not None:
         paths = [Path(_expand(raw, p.home)) for raw in pins.cfg]
         verdict = judge_retroarch_paths(
@@ -1378,6 +1416,75 @@ def check_frontend(ctx: Context) -> list[Result]:
             wants=pins.wants(library),
         )
         results.append(Result("RetroArch paths", G_FRONTEND, *verdict))
+    return results
+
+
+def _check_artwork(ctx: Context, device: SettingsDevice, library: str) -> list[Result]:
+    """The gamelists of a device with `[artwork]`, and its refresh timer."""
+    p = ctx.probes
+    profile = device.profile
+    art, rule = profile.artwork, profile.es_systems
+    assert art is not None
+    layout = artwork.Layout(
+        Path(library) / "roms",
+        Path(_expand(art.media, p.home)),
+        Path(_expand(art.metadata, p.home)),
+        Path(_expand(art.gamelists, p.home)),
+    )
+    plan: artwork.GamelistPlan | None = None
+    error: str | None = None
+    if rule is None:
+        error = "the profile has no [es_systems], so the systems of the frontend are unknown"
+    else:
+        source = Path(_expand(rule.source, p.home))
+        if not p.is_file(source):
+            error = f"the system list {source} was not found, so the gamelists cannot be checked"
+        else:
+            hubs = [
+                n
+                for n in p.list_dir(layout.roms)
+                if artwork.is_plain(n) and p.is_dir(layout.roms / n)
+            ]
+            files = artwork.Files(
+                read=lambda path: p.read_text(path).encode("utf-8") if p.is_file(path) else None,
+                is_file=p.is_file,
+                exists=lambda path: p.is_file(path) or p.is_dir(path),
+            )
+            try:
+                plan = artwork.plan_gamelists(
+                    artwork.FORMATS[art.format],
+                    art.kinds,
+                    layout,
+                    p.read_text(source),
+                    prefix=rule.prefix,
+                    renames=rule.renames,
+                    hubs=hubs,
+                    files=files,
+                )
+            except artwork.ArtworkError as exc:
+                error = f"{source}: {exc}"
+    verdict = judge_artwork(
+        device=device.name, plan=plan, error=error, scraped_path=str(layout.metadata)
+    )
+    results = [Result("Frontend artwork", G_FRONTEND, *verdict)]
+    if art.refresh is not None:
+        unit = p.home / ".config" / "systemd" / "user" / f"{artwork.UNIT_NAME}.timer"
+        if p.is_file(unit):
+            results.append(
+                Result(
+                    "Artwork timer", G_FRONTEND, OK, f"{unit.name} installed (every {art.refresh})"
+                )
+            )
+        else:
+            results.append(
+                Result(
+                    "Artwork timer",
+                    G_FRONTEND,
+                    WARN,
+                    f"{unit} is missing, so new scrapes are applied only by hand",
+                    f"run `warpzone provision device {device.name}`",
+                )
+            )
     return results
 
 
