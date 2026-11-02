@@ -216,6 +216,16 @@ class SyncTests(Home):
         self.assertEqual(list(self.target.iterdir()), [])
         self.assertTrue(any("Vita3K is running" in line for line in self.said + self.warned))
 
+    def test_the_caller_is_told_when_the_emulator_runs(self) -> None:
+        self.game()
+        told: list[str] = []
+        self.sync()
+        self.assertEqual(told, [])
+        self.start("Vita3K")
+        (self.target / TITLE).unlink(missing_ok=True)
+        self.sync(on_busy=lambda: told.append("busy"))
+        self.assertEqual(told, ["busy"])
+
     def test_nothing_is_done_when_it_cannot_be_told(self) -> None:
         self.game()
         self.sync(proc=self.proc / "missing")
@@ -469,6 +479,19 @@ class ProvisionTests(Helpers, test_shadps4.Device, unittest.TestCase):
         rep, _ = self.prov()
         self.assertEqual(list(self.target.iterdir()), [])
         self.assertTrue(any("Vita3K is running" in w for w in rep.warnings), rep.warnings)
+
+    def test_unattended_provision_defers_while_vita3k_runs(self) -> None:
+        self.game()
+        self.start("Vita3K")
+        rep, _ = self.prov(unattended=True)
+        self.assertTrue(rep.deferred)
+        self.assertEqual(list(self.target.iterdir()), [])
+
+    def test_unattended_provision_is_not_deferred_when_it_can_link(self) -> None:
+        self.game()
+        rep, _ = self.prov(unattended=True)
+        self.assertFalse(rep.deferred)
+        self.assertTrue(self.link().is_symlink())
 
     def test_the_command_links_without_the_network(self) -> None:
         self.game()

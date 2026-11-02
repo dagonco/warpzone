@@ -40,6 +40,9 @@ class Reporter:
     out: Callable[[str], None] = print
     warnings: list[str] = field(default_factory=list)
     warn_sink: Callable[[str], None] | None = None
+    # A write was held back because the menu (or an emulator) is open: an unattended run
+    # reports it to its caller as "try again later" instead of "done".
+    deferred: bool = False
     _notes: dict[str, list[str]] = field(default_factory=dict)
 
     def note(self, folder_id: str, text: str) -> None:
@@ -49,6 +52,9 @@ class Reporter:
     def flush(self, folder_id: str) -> None:
         notes = self._notes.pop(folder_id, [])
         self.out(f"{folder_id}: {', '.join(notes) if notes else 'unchanged'}")
+
+    def defer(self) -> None:
+        self.deferred = True
 
     def warn(self, message: str) -> None:
         self.warnings.append(message)
@@ -362,8 +368,16 @@ def wait_for_files(
         )
 
 
-def _hub_precheck(hub: Client, specs: list[FolderSpec], rep: Reporter) -> None:
-    """Fail early if a whitelist is missing on the hub (skipped if the hub is unreachable)."""
+def _hub_precheck(
+    hub: Client, specs: list[FolderSpec], rep: Reporter, new: frozenset[str] = frozenset()
+) -> set[str]:
+    """Fail early if a whitelist is missing on the hub (skipped if the hub is unreachable).
+
+    A folder named in `new` (not in this device's Syncthing yet) is not an error: it is
+    warned about and its id is returned, for the caller to leave out. That is what an
+    unattended run does when the config gained a folder the hub does not have yet.
+    """
+    skipped: set[str] = set()
     for spec in specs:
         if spec.bootstrap_ignores is None:
             continue
@@ -372,17 +386,66 @@ def _hub_precheck(hub: Client, specs: list[FolderSpec], rep: Reporter) -> None:
         except SyncthingError as exc:
             if exc.status is None:
                 rep.warn(f"hub API unreachable, skipping the whitelist pre-check ({exc})")
-                return
+                return skipped
+            if spec.id in new:
+                rep.warn(
+                    f"{spec.id} is not configured on the hub (run `warpzone provision hub`), "
+                    "so the new folder was skipped"
+                )
+                skipped.add(spec.id)
+                continue
             raise ProvisionError(
                 f"{spec.id} is not configured on the hub: run `warpzone provision hub` first"
             ) from exc
         missing = [f for f in spec.required_files if f not in names]
-        if missing:
+        if missing and spec.id in new:
+            rep.warn(
+                f"{spec.id}: {', '.join(missing)} not found on the hub, so the new folder was "
+                "skipped until they are there"
+            )
+            skipped.add(spec.id)
+        elif missing:
             raise ProvisionError(
                 f"{spec.id}: {', '.join(missing)} not found on the hub. Create it in the "
                 "folder on the hub (see templates/), let the hub scan, and try again. "
                 "Nothing was changed on this device."
             )
+    return skipped
+
+
+def unattended_refusals(spec: FolderSpec, current: dict[str, Any]) -> list[str]:
+    """Why an unattended run must not touch a folder Syncthing already has (pure).
+
+    `type` decides what a folder does with changes: `receiveonly` to `sendreceive` would send
+    a console's deletions to the hub. `versioning` decides what Syncthing keeps. Neither is
+    ever changed without a person, and neither is a failure a rollback could fix.
+    """
+    problems = []
+    patch = _folder_patch(spec, current)
+    if "type" in patch:
+        problems.append(
+            f"{spec.id}: type is {current.get('type')!r}, the config says {spec.type!r}"
+        )
+    if "versioning" in patch:
+        problems.append(f"{spec.id}: versioning differs from the config")
+    if not _same_path(current.get("path", ""), spec.path):
+        problems.append(
+            f"{spec.id}: Syncthing has it at {current.get('path')!r}, not {spec.path!r}"
+        )
+    return problems
+
+
+def _missing_markers(specs: Iterable[FolderSpec], existing: dict[str, dict[str, Any]]) -> list[str]:
+    """Folders Syncthing has whose marker is not on disk: the card is not mounted."""
+    problems = []
+    for spec in specs:
+        current = existing.get(spec.id)
+        if current is None:
+            continue
+        marker = current.get("markerName") or ".stfolder"
+        if not os.path.exists(os.path.join(spec.path, marker)):
+            problems.append(f"{spec.id}: {marker} is not in {spec.path} (is the card mounted?)")
+    return problems
 
 
 def _provision_whitelisted(
@@ -395,12 +458,37 @@ def _provision_whitelisted(
     poll: float,
     rep: Reporter,
     sleep: Callable[[float], None],
+    unattended: bool = False,
 ) -> None:
+    """Bring a whitelisted device folder to its final ignores.
+
+    A new folder starts on the bootstrap ignores and waits for the whitelists. Unattended, a
+    folder that already exists never goes through the bootstrap (its `*` would hide a
+    populated library from Syncthing if the hub could not be reached to deliver the lists):
+    it takes the final ignores when the lists are on disk and is otherwise left alone. A
+    new folder whose lists do not arrive in time stays on the bootstrap, with a warning
+    instead of an error.
+    """
     assert spec.bootstrap_ignores is not None
     final, boot = list(spec.ignores), list(spec.bootstrap_ignores)
     present = [] if created else client.get_ignores(spec.id)
     if present == final:
         rep.note(spec.id, "ignores already final")
+        return
+    if unattended and not created:
+        absent = [f for f in spec.required_files if not os.path.isfile(os.path.join(spec.path, f))]
+        if absent:
+            rep.warn(
+                f"{spec.id}: its ignores differ from the final ones, but {', '.join(absent)} "
+                f"is not in {spec.path}, so the folder was left alone; the next run finishes it "
+                "once the file has arrived"
+            )
+            return
+        client.set_ignores(spec.id, final)
+        if current is not None and current.get("paused"):
+            _unpause(client, spec, rep)
+        client.scan(spec.id)
+        rep.note(spec.id, "final ignores set (whitelists on disk), rescanning")
         return
     if present != boot:
         client.set_ignores(spec.id, boot)
@@ -409,6 +497,25 @@ def _provision_whitelisted(
         _unpause(client, spec, rep)
     if client.dry_run:
         rep.note(spec.id, f"dry-run: would wait up to {timeout:.0f}s for the whitelists")
+    elif unattended:
+        pending = _wait_pending(
+            client,
+            spec.id,
+            spec.required_files,
+            in_sync,
+            timeout=timeout,
+            poll=poll,
+            rep=rep,
+            sleep=sleep,
+            clock=time.monotonic,
+        )
+        if pending:
+            rep.warn(
+                f"{spec.id}: {', '.join(pending)} did not arrive within {timeout:.0f}s; the "
+                "folder stays on the bootstrap ignores (only whitelists can arrive) and the "
+                "next run finishes it"
+            )
+            return
     else:
         wait_for_files(client, spec, timeout=timeout, poll=poll, rep=rep, sleep=sleep)
     client.set_ignores(spec.id, final)
@@ -464,13 +571,16 @@ def ensure_flatpak_access(
     *,
     dry_run: bool,
     run: FlatpakRunner = run_flatpak,
+    unattended: bool = False,
 ) -> None:
     """Grant the SyncThingy flatpak the data folders of the emulators it must sync.
 
     A flatpak cannot see `~/.var/app/<app>` of other apps, even with the `host`
     filesystem, so a save folder there looks empty to Syncthing. Does nothing unless the
     local Syncthing is that flatpak (its `config.xml` is in the flatpak's own folder).
-    Only the overrides that are missing are added, so a second run changes nothing.
+    Only the overrides that are missing are added, so a second run changes nothing. An
+    unattended run grants nothing: the grant needs a Syncthing restart that nobody is there
+    to do, so it only warns with the command.
     """
     if config_path is None or not flatpak.is_syncthingy_config(config_path, home):
         return
@@ -494,6 +604,13 @@ def ensure_flatpak_access(
         return
     names = ", ".join(flatpak.app_dir(a) for a in missing)
     command = flatpak.override_command(missing)
+    if unattended:
+        rep.warn(
+            f"Syncthing may not see the save folders of {names}: an unattended run does not "
+            f"grant access, because that needs a restart. Run `{' '.join(command)}`, then "
+            f"{RESTART_SYNCTHING}"
+        )
+        return
     if dry_run:
         rep.out(f"syncthing flatpak: dry-run: would grant {names} with: {' '.join(command)}")
         rep.out(f"syncthing flatpak: dry-run: then you would need to {RESTART_SYNCTHING}")
@@ -600,6 +717,7 @@ def _enable_event_scripts(
                 f"were not turned on: {again} on a system with /proc ({by_hand})"
             )
         elif state:
+            rep.defer()
             rep.warn(
                 f"ES-DE is running, so its custom event scripts were not turned on (it "
                 f"rewrites {path.name} when it quits): {again}"
@@ -893,6 +1011,7 @@ def _busy(
         )
         return True
     if running:
+        rep.defer()
         rep.warn(f"{label} is running, so {what} was left alone: quit {label} and {again}")
     return running
 
@@ -1109,7 +1228,16 @@ def ensure_title_links(
     while the emulator is closed. Only links are changed; see `titlelinks`."""
     if not profile.links:
         return
-    titlelinks.sync(name, profile, home, say=rep.out, warn=rep.warn, dry_run=dry_run, proc=proc)
+    titlelinks.sync(
+        name,
+        profile,
+        home,
+        say=rep.out,
+        warn=rep.warn,
+        dry_run=dry_run,
+        proc=proc,
+        on_busy=rep.defer,
+    )
 
 
 def ensure_shadps4_launch(
@@ -1183,6 +1311,7 @@ def ensure_shadps4_launch(
         if state is None:
             rep.warn(f"cannot tell whether ES-DE is running (no /proc), so {path} was left alone")
         elif state:
+            rep.defer()
             rep.warn(f"ES-DE is running, so {path} was left alone: {again}")
         return state is not False
 
@@ -1581,6 +1710,7 @@ def provision_device(
     config_path: Path | None = None,
     systemctl: SystemctlRunner = run_user_systemctl,
     systemctl_run: FlatpakRunner | None = None,
+    unattended: bool = False,
 ) -> None:
     device = cfg.devices[name]
     actual = local.my_id()
@@ -1600,10 +1730,27 @@ def provision_device(
         )
         for s in device_specs(cfg, name, profile, scope)
     ]
+    existing = {f["id"]: f for f in local.folders()}
+    if unattended:
+        present = [s for s in specs if not (s.skip_if_missing and not os.path.isdir(s.path))]
+        problems = [
+            problem
+            for spec in present
+            if spec.id in existing
+            for problem in unattended_refusals(spec, existing[spec.id])
+        ] + _missing_markers(present, existing)
+        if problems:
+            raise ProvisionError(
+                "an unattended run does not change these folders, so nothing was changed. "
+                f"Fix them and run `warpzone provision device {name}` by hand:\n  "
+                + "\n  ".join(problems)
+            )
     todo: list[FolderSpec] = []
     for spec in specs:
         if spec.skip_if_missing and not os.path.isdir(spec.path):
-            if _create_target(spec, local.dry_run, rep):
+            # An unattended run does not make the directory of a folder Syncthing already has.
+            may_create = not (unattended and spec.id in existing)
+            if may_create and _create_target(spec, local.dry_run, rep):
                 todo.append(spec)
             else:
                 rep.warn(
@@ -1614,14 +1761,23 @@ def provision_device(
             todo.append(spec)
 
     if hub is not None:
-        _hub_precheck(hub, todo, rep)
+        new = frozenset(s.id for s in todo if s.id not in existing) if unattended else frozenset()
+        skipped = _hub_precheck(hub, todo, rep, new)
+        todo = [s for s in todo if s.id not in skipped]
 
-    ensure_flatpak_access(todo, syncthing_config, home, rep, dry_run=local.dry_run, run=flatpak_run)
+    ensure_flatpak_access(
+        todo,
+        syncthing_config,
+        home,
+        rep,
+        dry_run=local.dry_run,
+        run=flatpak_run,
+        unattended=unattended,
+    )
 
     known = {d["deviceID"] for d in local.devices()}
     _ensure_device(local, cfg.hub.device_id, cfg.hub.name, cfg.hub.addresses, known, rep)
 
-    existing = {f["id"]: f for f in local.folders()}
     for spec in todo:
         current = existing.get(spec.id)
         created = _upsert_folder(local, spec, current, rep)
@@ -1637,6 +1793,7 @@ def provision_device(
                 poll=poll,
                 rep=rep,
                 sleep=sleep,
+                unattended=unattended,
             )
         rep.flush(spec.id)
 

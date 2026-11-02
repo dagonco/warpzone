@@ -36,6 +36,19 @@ Exit codes: `0` for every outcome that needs no attention (updated, up to date, 
 
 Every run except `--dry-run` appends its messages, with a UTC timestamp, to `~/.local/state/warpzone/self-update.log` (under `$XDG_STATE_HOME` when that is set). The file is cut to its last 200 lines when it passes 64 KiB. The timer's own output is in the journal: `journalctl --user -u warpzone-self-update`.
 
+## Unattended provisioning
+
+`warpzone provision device <name> --unattended` is the form of `provision device` for a run nobody watches, such as a device that has just moved to a new release. It does what `provision device` does and nothing that could lose data or fail for a reason that a person must look at:
+
+- A folder that Syncthing already has never gets the bootstrap ignores (`*`). If its ignores are not the final ones and the whitelist files are on disk, it gets the final ones; if they are not, the folder is left as it is, with a warning.
+- It refuses to change the `type` (for example `receiveonly` to `sendreceive`, which would send the console's deletions to the hub) or the `versioning` of a folder that exists, and a changed path. It lists them and changes nothing.
+- A folder whose marker (`.stfolder`) is missing, such as one on a card that is not mounted, stops the run before any change.
+- A folder that is new for the device and that the hub does not have yet (or lacks its whitelists) is skipped with a warning. A new folder whose whitelists do not arrive in 30 seconds (`--timeout` changes it) stays on the bootstrap ignores, with a warning, and the next run finishes it.
+- The SyncThingy flatpak grant is not made, because it needs a Syncthing restart: the command to run is a warning.
+- It never runs `prune --apply`, `inbox --apply` or `settings capture`.
+
+Exit codes: `0` when it finished (warnings included), `3` when something was left for later because ES-DE, an emulator or a file ES-DE rewrites was open (run it again once it is closed), and `1` or `2` for a failure.
+
 ## The timer
 
 `warpzone provision device <name>` installs two units in `~/.config/systemd/user/` and enables the timer, for every profile:

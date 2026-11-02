@@ -259,11 +259,13 @@ def sync(
     warn: Say,
     dry_run: bool = False,
     proc: Path = Path("/proc"),
+    on_busy: Callable[[], None] | None = None,
 ) -> int:
     """Make the target folder of every `[links.*]` rule hold a link per ready title.
 
     Returns how many links it made or removed (or would, with `dry_run`). Nothing is
-    changed while the emulator runs or when that cannot be told."""
+    changed while the emulator runs or when that cannot be told; `on_busy` is called when
+    the emulator runs."""
     changed = 0
     again = f"run `warpzone links sync {device}`"
     for item in resolve(profile, home):
@@ -298,6 +300,8 @@ def sync(
             )
             continue
         if busy:
+            if on_busy is not None:
+                on_busy()
             warn(
                 f"links {item.key}: {item.label} is running, so the links were left alone: "
                 f"quit {item.label} and {again}"
