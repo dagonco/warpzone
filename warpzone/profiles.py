@@ -10,6 +10,8 @@ from importlib import resources
 from pathlib import Path
 from typing import Any
 
+from warpzone.shadps4 import kind_of
+
 PATH_KEYS = ("library", "songs", "tools", "media", "esde", "settings", "play_state")
 # The handlers of the settings layer (`settings_formats.handler`); keep in step.
 SETTINGS_FORMATS = ("ini", "qt-ini", "retroarch-cfg", "yaml-flat", "json", "toml")
@@ -139,6 +141,25 @@ class RetroArchPins:
 
 
 @dataclass(frozen=True)
+class ShadPS4Dirs:
+    """Install directories that `provision device` adds to shadPS4's config files.
+
+    shadPS4 runs the extracted games it finds in its install directories. `config` lists the
+    files that can hold them (`config.json` of v0.21 and later, the older `config.toml`),
+    each edited only if it exists; existing entries are kept. A directory may contain
+    `{library}`, replaced by the profile's library path. `process` names shadPS4 and its
+    launcher: a file is edited only while none of them runs.
+    """
+
+    config: tuple[str, ...]
+    process: tuple[str, ...]
+    install_dirs: tuple[str, ...]
+
+    def wants(self, library: str) -> list[str]:
+        return [d.replace("{library}", library) for d in self.install_dirs]
+
+
+@dataclass(frozen=True)
 class Artwork:
     """Scraped artwork and metadata for a frontend that is not ES-DE.
 
@@ -186,6 +207,7 @@ class Profile:
     retroarch: RetroArchPins | None = None
     artwork: Artwork | None = None
     play_state: PlayState | None = None
+    shadps4: ShadPS4Dirs | None = None
 
     def placement_ignores(self) -> tuple[str, ...]:
         """The anchored library paths that placements deliver instead of the library."""
@@ -215,6 +237,7 @@ def parse_profile(data: dict[str, Any], source: str) -> Profile:
         "retroarch",
         "artwork",
         "play_state",
+        "shadps4",
     }
     for key in sorted(set(data) - allowed):
         err(f"unknown key {key!r}")
@@ -284,6 +307,7 @@ def parse_profile(data: dict[str, Any], source: str) -> Profile:
     retroarch = _parse_retroarch(data.get("retroarch"), "library" in paths, err)
     artwork = _parse_artwork(data.get("artwork"), paths, es_systems is not None, err)
     play_state = _parse_play_state(data.get("play_state"), paths, artwork, err)
+    shadps4 = _parse_shadps4(data.get("shadps4"), "library" in paths, err)
 
     if errors:
         raise ProfileError("\n".join(errors))
@@ -300,6 +324,7 @@ def parse_profile(data: dict[str, Any], source: str) -> Profile:
         retroarch,
         artwork,
         play_state,
+        shadps4,
     )
 
 
@@ -491,6 +516,43 @@ def _parse_retroarch(
     if problems:
         return None
     return RetroArchPins(tuple(raw["cfg"]), tuple(raw["process"]), dict(values))
+
+
+def _parse_shadps4(raw: Any, has_library: bool, err: Callable[[str], None]) -> ShadPS4Dirs | None:
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        err("`shadps4` must be a table")
+        return None
+    extras = sorted(set(raw) - {"config", "process", "install_dirs"})
+    for extra in extras:
+        err(f"shadps4.{extra}: unknown key")
+    problems = len(extras)
+    config = raw.get("config")
+    if not _names(config) or not all(kind_of(c) for c in config):
+        err("shadps4.config: required, a non-empty list of paths ending in .json or .toml")
+        problems += 1
+    if not _names(raw.get("process")):
+        err("shadps4.process: required, a non-empty list of non-empty strings")
+        problems += 1
+    dirs = raw.get("install_dirs")
+    if not _names(dirs):
+        err("shadps4.install_dirs: required, a non-empty list of non-empty strings")
+        return None
+    for d in dirs:
+        stripped = d.replace("{library}", "")
+        if "{" in stripped or '"' in d or not d.startswith(("/", "~", "{library}")):
+            err(
+                f"shadps4.install_dirs: {d!r} must be an absolute path; "
+                "{library} is the only placeholder"
+            )
+            problems += 1
+        elif "{library}" in d and not has_library:
+            err(f"shadps4.install_dirs: {d!r} uses {{library}} but there is no paths.library")
+            problems += 1
+    if problems:
+        return None
+    return ShadPS4Dirs(tuple(config), tuple(raw["process"]), tuple(dirs))
 
 
 def _parse_library(raw: Any, err: Callable[[str], None]) -> tuple[str, ...]:

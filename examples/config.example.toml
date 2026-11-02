@@ -96,11 +96,14 @@ dats_dir = "~/dats/libretro-database/metadat"
 # dolphin_tool reads compressed GameCube images (.rvz) so they can be identified
 # nsz          reads the TitleID and version of Switch .nsp/.nsz files and decompresses
 #              .nsz (uv tool install nsz)
+# orbis_pkg_util unpacks PS4 .pkg games into a folder shadPS4 can run, with a shortcut
+#              (cargo install orbis-pkg-util). Without it the .pkg is filed as it is.
 # chdman = "/opt/homebrew/bin/chdman"
 # bsdtar = "/usr/bin/bsdtar"
 # rahasher = "~/tools/RAHasher"
 # dolphin_tool = "/Applications/Dolphin.app/Contents/MacOS/dolphin-tool"
 # nsz = "~/.local/bin/nsz"
+# orbis_pkg_util = "~/.cargo/bin/orbis-pkg-util"
 
 # Optional Switch support. A local clone of blawar/titledb names the games
 # (git clone --depth 1 https://github.com/blawar/titledb; git pull updates it). nsz needs

@@ -135,8 +135,61 @@ def zarchive(body: int = 200, *, magic: int = WUA_MAGIC, size: int | None = None
 
 
 def ps4_pkg(
-    content_id: str = "EP9000-CUSA07934_00-SCES503610000001", *, magic: bytes = b"\x7fCNT"
+    content_id: str = "EP9000-CUSA07934_00-SCES503610000001",
+    *,
+    magic: bytes = b"\x7fCNT",
+    content_type: int = 0x1A,
+    flags: int = 0x0A000000,
 ) -> bytes:
-    """A synthetic PS4 `.pkg`: the magic, a big-endian header and the content id at 0x40."""
+    """A synthetic PS4 `.pkg`: the magic, a big-endian header, the content id at 0x40, and the
+    DRM type, content type and content flags at 0x70. The defaults are a base game."""
     head = magic + struct.pack(">I", 1) + bytes(0x38)
-    return head + content_id.encode("ascii").ljust(36, b"\x00") + b"\x5a" * 400
+    head += content_id.encode("ascii").ljust(36, b"\x00") + bytes(12)
+    return head + struct.pack(">III", 0x0F, content_type, flags) + b"\x5a" * 400
+
+
+def ps4_sfo(title_id: str = "CUSA07934", title: str = "Test Game", category: str = "gd") -> bytes:
+    """The `sce_sys/param.sfo` of an extracted PS4 package."""
+    return sfo(
+        {
+            "APP_VER": "01.00",
+            "CATEGORY": category,
+            "CONTENT_ID": f"EP9000-{title_id}_00-SCES503610000001",
+            "TITLE": title,
+            "TITLE_ID": title_id,
+            "VERSION": "01.00",
+        }
+    )
+
+
+# A stand-in for orbis-pkg-util: `extract [-q] -o DIR PKG` writes a small game folder.
+# The environment picks the outcome: STUB_PKG_SFO (hex of the param.sfo), STUB_PKG_FAIL,
+# STUB_PKG_NO_EBOOT, STUB_PKG_NO_SFO, STUB_PKG_LINK, STUB_PKG_LOG (a file that gets the argv).
+ORBIS_PKG_UTIL = r"""
+import os, sys
+
+args = sys.argv[1:]
+log = os.environ.get("STUB_PKG_LOG")
+if log:
+    with open(log, "a", encoding="utf-8") as f:
+        f.write(" ".join(args) + "\n")
+if not args or args[0] != "extract":
+    print("error: only extract is understood", file=sys.stderr)
+    sys.exit(2)
+if os.environ.get("STUB_PKG_FAIL"):
+    print("error: bad pkg", file=sys.stderr)
+    sys.exit(1)
+out = args[args.index("-o") + 1]
+os.makedirs(os.path.join(out, "sce_sys"))
+os.makedirs(os.path.join(out, "Content", "data"))
+if not os.environ.get("STUB_PKG_NO_EBOOT"):
+    with open(os.path.join(out, "eboot.bin"), "wb") as f:
+        f.write(b"EBOOT" * 100)
+if not os.environ.get("STUB_PKG_NO_SFO"):
+    with open(os.path.join(out, "sce_sys", "param.sfo"), "wb") as f:
+        f.write(bytes.fromhex(os.environ["STUB_PKG_SFO"]))
+with open(os.path.join(out, "Content", "data", "level.dat"), "wb") as f:
+    f.write(b"DATA" * 50)
+if os.environ.get("STUB_PKG_LINK"):
+    os.symlink("/etc/hosts", os.path.join(out, "Content", "link"))
+"""

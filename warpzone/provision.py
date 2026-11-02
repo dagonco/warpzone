@@ -19,6 +19,7 @@ from warpzone import (
     frontend,
     playstate_device,
     settings_state,
+    shadps4,
     updatetimer,
 )
 from warpzone.config import DEFAULT_WAIT_SECONDS, HUB_WAIT_SECONDS, Config
@@ -986,6 +987,80 @@ def ensure_retroarch_pins(
         rep.out(f"retroarch: set {keys} in {path} (old file backed up)")
 
 
+def ensure_shadps4_dirs(
+    name: str,
+    profile: Profile,
+    home: Path,
+    rep: Reporter,
+    *,
+    dry_run: bool,
+    proc: Path = Path("/proc"),
+    state_root: Path,
+) -> None:
+    """List the profile's install folders in shadPS4's config files, while it is closed.
+
+    Each file of `shadps4.config` that exists gets the folders it lacks, next to the entries
+    it already has; every other byte is kept. A file that is missing is never created
+    (shadPS4 writes it on its first start); one that does not read as expected is left
+    alone. The old file is backed up before each edit and a second run changes nothing.
+    """
+    rule = profile.shadps4
+    if rule is None or "library" not in profile.paths:
+        return
+    wants = rule.wants(expand_home(profile.paths["library"], home).rstrip("/"))
+    again = f"run `warpzone provision device {name}` again"
+    pending: list[tuple[Path, str, str, list[str]]] = []
+    seen = 0
+    for raw in rule.config:
+        path, kind = Path(expand_home(raw, home)), shadps4.kind_of(raw) or shadps4.JSON
+        try:
+            text = path.read_bytes().decode("utf-8")
+        except FileNotFoundError:
+            continue
+        except (OSError, UnicodeDecodeError) as exc:
+            seen += 1
+            rep.warn(f"cannot read {path} ({exc}), so it was left alone")
+            continue
+        seen += 1
+        try:
+            gap = shadps4.missing(kind, text, wants)
+        except shadps4.ConfigError as exc:
+            rep.warn(f"{path} was left alone: {exc}")
+            continue
+        if gap:
+            pending.append((path, kind, text, gap))
+        else:
+            rep.out(f"shadps4: {path} already lists the install folder")
+    if not seen:
+        shown = " or ".join(expand_home(raw, home) for raw in rule.config)
+        rep.warn(
+            f"no shadPS4 config file found ({shown}), so its install folder was not set: "
+            f"start shadPS4 once, then {again}"
+        )
+        return
+    what = "shadPS4's config files"
+    if not pending or _busy(rule.process, "shadPS4", what, again, rep, proc):
+        return
+    for path, kind, text, gap in pending:
+        folders = ", ".join(gap)
+        if dry_run:
+            rep.out(f"shadps4: dry-run: would add the install folder {folders} to {path}")
+            continue
+        before = settings_state.stamp(path)
+        settings_state.backup(path, "shadps4", path.name, root=state_root)
+        if _busy(rule.process, "shadPS4", what, again, rep, proc):  # it may have started meanwhile
+            return
+        try:
+            new = shadps4.apply(kind, text, wants)
+        except shadps4.ConfigError as exc:
+            rep.warn(f"{path} was left alone: {exc}")
+            continue
+        if not settings_state.atomic_write(path, new.encode("utf-8"), expect=before):
+            rep.warn(f"{path} changed while it was being edited, so it was left alone: {again}")
+            continue
+        rep.out(f"shadps4: added the install folder {folders} to {path} (old file backed up)")
+
+
 def _artwork_layout(profile: Profile, home: Path) -> artwork.Layout | None:
     art = profile.artwork
     if art is None or "library" not in profile.paths:
@@ -1426,7 +1501,7 @@ def provision_device(
 
     if "library" in device.folders:
         root = state_root if state_root is not None else settings_state.state_dir(home=home)
-        for ensure in (ensure_systems_override, ensure_retroarch_pins):
+        for ensure in (ensure_systems_override, ensure_retroarch_pins, ensure_shadps4_dirs):
             ensure(name, profile, home, rep, dry_run=local.dry_run, proc=proc, state_root=root)
 
     if with_artwork:

@@ -51,6 +51,12 @@ Some save folders sit inside `~/Emulation`, which is the library root. That is f
 
 The same trap exists in `~/Emulation/bios`. EmuDeck turns `eden/keys`, `eden/firmware`, `azahar/keys`, `ryujinx/keys`, `flycast/bios` and `shadps4/sys_modules` into symlinks, while the hub's `library/bios/` holds real folders at those paths. The profile therefore makes the device's library ignore those paths, ahead of your whitelist so an edit cannot bring them back. It also ignores `roms/wiiu/mlc01`, where Cemu keeps its own installs and saves (its saves sync separately).
 
+## shadPS4 install directory
+
+shadPS4 has no package installer: it runs extracted games from its install directories. `warpzone inbox` extracts PS4 `.pkg` files into `library/roms/ps4/games/<CUSAnnnnn>/` and writes a shortcut in `roms/ps4/shortcuts/` that ES-DE lists ([inbox.md](inbox.md#ps4-games)). For a console to find those folders, `~/Emulation/roms/ps4/games` must be one of shadPS4's install directories. The profile declares it (`[shadps4]`), and `warpzone provision device <name>` adds it to `~/.local/share/shadPS4/config.json` (shadPS4 v0.21 and later, `General.install_dirs`) and to `config.toml` (`GUI.installDirs`) when they exist, keeping the entries already there (EmuDeck's `~/Emulation/storage/shadps4/games` stays). It backs the file up first and skips it while shadPS4, its Qt launcher or the game is running, so close them and run `provision device` again if it says so. `warpzone doctor` flags a console whose config lacks the folder. If shadPS4 has never run there is no config yet: start it once, then provision.
+
+The shortcut and the version: EmuDeck's `shadps4.sh` takes the quoted path in the `Exec=` line and starts `Shadps4-qt.AppImage -d -g <path>`; `-d` means "the emulator version selected in the Qt launcher", so choose the version there once. Add the whitelist lines that `inbox` prints (`!/roms/ps4/games/<CUSAnnnnn>` and the shortcut) to the console's whitelist.
+
 ## EmuDeck's own files
 
 The profile ignores files EmuDeck creates that are not on the hub, so a receive-only console does not list them as local changes:

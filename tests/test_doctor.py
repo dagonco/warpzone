@@ -458,6 +458,29 @@ class ToolTests(TmpCase):
         r = check_tool(context(self.tmp, '[inbox]\nnsz = "/nope/nsz"\n'), nsz)
         self.assertEqual(r.status, FAIL)
 
+    def test_orbis_pkg_util_is_listed_and_optional_even_with_an_inbox(self) -> None:
+        spec = next(t for t in doctor.TOOLS if t.key == "orbis-pkg-util")
+        r = check_tool(context(self.tmp, INBOX_ONLY), spec)
+        self.assertEqual(r.status, OPTIONAL)
+        self.assertIn("cargo install orbis-pkg-util", r.fix)
+        self.assertIn("PS4", spec.purpose)
+
+    def test_orbis_pkg_util_in_the_cargo_folder_is_found_but_not_on_path(self) -> None:
+        spec = next(t for t in doctor.TOOLS if t.key == "orbis-pkg-util")
+        ctx = context(self.tmp, INBOX_ONLY)
+        cargo = str(ctx.probes.home / ".cargo/bin/orbis-pkg-util")
+        r = check_tool(context(self.tmp, INBOX_ONLY, executables=[cargo]), spec)
+        self.assertEqual(r.status, WARN)
+        self.assertIn(cargo, r.detail)
+        self.assertIn('orbis_pkg_util = "' + cargo + '"', r.fix)
+
+    def test_orbis_pkg_util_can_be_pointed_at_with_the_inbox_setting(self) -> None:
+        spec = next(t for t in doctor.TOOLS if t.key == "orbis-pkg-util")
+        ctx = context(self.tmp, '[inbox]\norbis_pkg_util = "/x/opu"\n', executables=["/x/opu"])
+        self.assertEqual(check_tool(ctx, spec).status, OK)
+        bad = context(self.tmp, '[inbox]\norbis_pkg_util = "/nope/opu"\n')
+        self.assertEqual(check_tool(bad, spec).status, FAIL)
+
 
 class SwitchCheckTests(TmpCase):
     def titledb(self) -> Path:
