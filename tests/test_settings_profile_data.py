@@ -623,10 +623,14 @@ class ShippedSettingsTests(unittest.TestCase):
                 self.assertTrue(entry.process)
 
     def test_process_names(self) -> None:
-        self.assertEqual(self.settings["eden"].process, ("eden",))
-        self.assertEqual(self.settings["duckstation"].process, ("duckstation-qt",))
-        self.assertEqual(self.settings["pcsx2"].process, ("pcsx2-qt",))
-        self.assertEqual(self.settings["azahar"].process, ("azahar", "azahar-qt"))
+        self.assertEqual(self.settings["eden"].process, ("eden", "Eden.AppImage"))
+        self.assertEqual(
+            self.settings["duckstation"].process, ("duckstation-qt", "DuckStation.AppImage")
+        )
+        self.assertEqual(self.settings["pcsx2"].process, ("pcsx2-qt", "pcsx2-Qt.AppImage"))
+        self.assertEqual(
+            self.settings["azahar"].process, ("azahar", "azahar-qt", "azahar.AppImage")
+        )
         self.assertEqual(self.settings["ppsspp"].process, ("PPSSPPSDL", "PPSSPPQt"))
 
     def test_retroarch_core_options_are_a_template(self) -> None:
