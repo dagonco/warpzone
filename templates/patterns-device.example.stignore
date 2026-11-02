@@ -8,8 +8,12 @@
 // Patterns are matched top to bottom and the first match wins, so list what
 // you want ("!" = keep) and finish with "*" to drop everything else.
 
-// Whole systems. EmuDeck keeps emulator files in the xbox360 and model2 system
-// folders, so name xbox360/roms and model2/roms there, not the whole system.
+// Whole systems. Xenia and Model 2 keep their own data (Xenia's content, Model
+// 2's emulator files) next to the games, in the system folder itself, and the
+// games are in its roms/ subfolder. Name xbox360/roms and model2/roms, not the
+// whole system, and the emulator data stays on the device:
+//   !/roms/xbox360/roms
+//   !/roms/model2/roms
 !/roms/nes
 !/roms/snes
 !/roms/gba

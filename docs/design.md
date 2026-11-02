@@ -1076,6 +1076,8 @@ Syncthing state. The contract:
   matching or conversion.
 - **PS3, Xbox, Xbox 360 and Wii U images.** See [Console disc images](#console-disc-images)
   below; they are identified by signature, not by DAT.
+- **3DS images.** See [3DS images](#3ds-images) below; `.3ds` and `.cci` files are
+  identified by their NCSD and NCCH headers, not by DAT.
 - **PS4 packages.** See [PS4 packages](#ps4-packages) below; with `orbis-pkg-util` they are
   extracted into a game folder with a shortcut.
 - **Out of scope.** Vita, and PS3 or Xbox content that is not a disc image (`.pkg`,
@@ -1203,6 +1205,38 @@ signature. The code is in `warpzone/inbox_console_iso.py`, which is both a kind 
   backup under `tools/logs/gamelist-backups/` before the run's first change). Report mode prints "would add". It
   is also done for a game that was already in the library. If the gamelist cannot be
   updated the item goes to review and a rerun retries it.
+
+### 3DS images
+
+A `.3ds` or `.cci` file has no DAT here, so it is identified by its headers. The code is in
+`warpzone/inbox_n3ds.py`, a kind handler in `inbox.kind_handlers()` (it is not an
+`UnmatchedHandler`).
+
+- **Claiming.** The handler claims an item (a file, a folder, or an archive listed with
+  `inbox_console_iso.names_in`) when a file name ends in `.3ds` or `.cci`, case-insensitively.
+  `.3dsx` and `.cia` are not claimed. Names alone never identify: a claimed file whose headers are
+  not valid goes to review. Other non-sidecar files of a claimed item are named in the review
+  reason.
+- **Verdict.** `judge(head, ncch, file_size)` is pure and reads nothing; `detect` reads the first
+  0x200 bytes and the 0x200 bytes at the offset of partition 0, never more.
+  - *NCSD*: the magic `NCSD` at 0x100; the image size (u32 little-endian at 0x104, in media units
+    of 0x200 bytes) must be non-zero and not bigger than the file (trailing padding is
+    allowed, a truncated dump is not); partition 0 (the offset u32 at 0x120, in media units) must
+    exist and leave room for an NCCH header inside the image.
+  - *NCCH*: the magic `NCCH` at +0x100 of partition 0; the flags byte at +0x18F must have the
+    NoCrypto bit (0x04). Without it the status is `encrypted`.
+  - Statuses are `ok`, `encrypted` and `invalid`. Both of the last two go to review with a
+    reason; an encrypted image says that Azahar opens only decrypted images.
+- **Placement.** `library/roms/n3ds/<stem>.cci`, for a `.3ds` as well as for a `.cci`: the
+  file is renamed on placement and its bytes are not changed. It uses the same copy as the console
+  images (`inbox_console_iso.place_file`: `<name>.part`, `inbox.copy_verified`, rename, a re-check
+  right before the rename), so nothing is replaced: an existing name with the same size and SHA1
+  is "already in the library" and a different one a review (`inbox.destination_verdict`). In report
+  mode an existing name is "already exists" and nothing is written, not even the folder. The
+  report shows `detected: Nintendo 3DS image (decrypted)`, the path and the whitelist line
+  (`!/roms/n3ds/<name>.cci`).
+- **One target name.** Two files of one item that would be filed under the same name (`X.3ds`
+  and `X.cci`) are not placed together: the second goes to review.
 
 ### PS4 packages
 
@@ -2111,6 +2145,7 @@ warpzone/
   inbox_ps4.py       PS4 packages: extract with orbis-pkg-util, place the game folder, shortcut
   inbox_vita.py      PS Vita game dumps: identify by param.sfo, place the folder and the .psvita file
   titlelinks.py      symlinks from the library's game folders into an emulator's own (pure plan)
+  inbox_n3ds.py      3DS images (`.3ds`, `.cci`): NCSD / NCCH header check, placed as `.cci`
   flatpak.py         the SyncThingy flatpak: app id and the unit's commands
   selfupdate.py      `self-update`: newest release tag, checkout, log (decisions pure)
   updatetimer.py     the systemd user units of the self-update timer (pure)
