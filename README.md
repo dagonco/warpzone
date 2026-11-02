@@ -143,7 +143,7 @@ Turn on filesystem snapshots for the hub's share. The full list of rules is in [
 |---|---|
 | [docs/whitelists.md](docs/whitelists.md) | How whitelists work, rescan, bootstrap, pruning. |
 | [docs/settings.md](docs/settings.md) | Sharing emulator settings across consoles: capture, apply, audit. |
-| [docs/inbox.md](docs/inbox.md) | Adding games: DAT-based discs and cartridges, Switch, PS3 and Xbox, arcade. |
+| [docs/inbox.md](docs/inbox.md) | Adding games: DAT-based discs and cartridges, Switch, 3DS, PS3 and Xbox, arcade. |
 | [docs/bios.md](docs/bios.md) | The BIOS and firmware check. |
 | [docs/doctor.md](docs/doctor.md) | Checking a machine. |
 | [docs/self-update.md](docs/self-update.md) | Updating a device: `self-update`, its daily timer, turning it off. |

@@ -378,7 +378,7 @@ def _gamelist(ctx: Context, entry: str, res: UnitResult) -> None:
     res.notes.append(f"gamelist {shown}: {action} the emulator of {entry}: {EMU_RPCS3_ISO}")
 
 
-def _same_file(a: Path, b: Path) -> bool:
+def same_file(a: Path, b: Path) -> bool:
     try:
         return a.stat().st_size == b.stat().st_size and inbox.file_sha1(a) == inbox.file_sha1(b)
     except OSError:
@@ -400,14 +400,14 @@ def place_image(ctx: Context, path: Path, rel: str, found: Detected) -> UnitResu
             if not ctx.opts.apply:
                 res.outcome = "exists"
                 res.notes.append("already in the library (content is compared with --apply)")
-            elif inbox.destination_verdict(True, _same_file(dest, path)) == "already":
+            elif inbox.destination_verdict(True, same_file(dest, path)) == "already":
                 res.outcome = "already"
             else:
                 raise ItemFailure(
                     f"{entry}: a different file with that name is already in the library"
                 )
         elif ctx.opts.apply:
-            _place(path, dest)
+            place_file(path, dest)
         if found.kind == PS3:
             try:
                 _gamelist(ctx, entry, res)
@@ -420,7 +420,7 @@ def place_image(ctx: Context, path: Path, rel: str, found: Detected) -> UnitResu
     return res
 
 
-def _place(src: Path, dest: Path) -> None:
+def place_file(src: Path, dest: Path) -> None:
     dest.parent.mkdir(parents=True, exist_ok=True)
     part = dest.with_name(dest.name + ".part")
     part.unlink(missing_ok=True)
@@ -449,7 +449,7 @@ def _file_one(ctx: Context, path: Path, rel: str, found: Detected, result: ItemR
 # ------------------------------------------------------------------ the inbox handler
 
 
-def _names_in(ctx: Context, item: Path) -> list[str]:
+def names_in(ctx: Context, item: Path) -> list[str]:
     """File names inside a folder or an archive (zip, or 7z / rar with bsdtar)."""
     if item.is_dir():
         names: list[str] = []
@@ -481,7 +481,7 @@ class ConsoleIsoHandler:
     def claims(self, ctx: Context, item: Path) -> bool:
         if item.is_symlink():
             return False
-        return any(claimed_name(n) for n in _names_in(ctx, item))
+        return any(claimed_name(n) for n in names_in(ctx, item))
 
     def process(self, ctx: Context, item: Path, work: Path, result: ItemResult) -> None:
         staged, notes, failures = inbox.stage_item(item, work, ctx.tools)
