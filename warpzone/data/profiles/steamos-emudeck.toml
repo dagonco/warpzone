@@ -188,6 +188,19 @@ hub = "bios/cemu"
 path = "~/.local/share/Cemu"
 ignore = ["!/keys.txt", "*"]
 
+# shadPS4 has no package installer: it runs the extracted games it finds in its install
+# directories. `warpzone inbox` extracts PS4 packages into library/roms/ps4/games, so
+# `provision device` adds that folder to the list, keeping the entries already there.
+# v0.21 and later keep the list in config.json (General.install_dirs); older versions in
+# config.toml (GUI.installDirs). Each file is edited only if it exists, and only while
+# shadPS4, its Qt launcher and the emulator they start are closed. The list is a nested
+# value that the settings layer below cannot write, and it follows each console's own
+# library path, so it is declared here and not layered.
+[shadps4]
+config = ["~/.local/share/shadPS4/config.json", "~/.local/share/shadPS4/config.toml"]
+process = ["shadps4", "shadPS4QtLauncher", "Shadps4-qt.AppImage", "Shadps4-sdl.AppImage"]
+install_dirs = ["{library}/roms/ps4/games"]
+
 # Emulator settings: the files whose keys `warpzone settings` layers across devices.
 # A key is common unless it is listed under `device`. Patterns match the canonical key
 # (see docs/design.md, "Format handlers"): `*` is any run of characters, `?` one, and

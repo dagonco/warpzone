@@ -424,8 +424,12 @@ folders = ["library", "saves"]
 
     def test_nothing_to_say_on_another_machine_or_another_profile(self) -> None:
         self.assertEqual(self.check(""), [])
+        # the library folder of this machine is the dArkOS one, not the Steam profile's
         other = self.CONFIG.replace("anbernic-rg351mp", "steamos-emudeck")
-        self.assertEqual(self.check(other), [])
+        ctx = context(Path(self._tmp.name), other, system="Linux")
+        probes = dataclasses.replace(ctx.probes, home=self.home)
+        results = check_frontend(Context(probes, ctx.config))
+        self.assertEqual(results, [])
 
     def test_the_frontend_check_is_part_of_the_run(self) -> None:
         self.assertIn(check_frontend, CHECKS)

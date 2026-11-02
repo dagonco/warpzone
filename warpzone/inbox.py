@@ -238,6 +238,7 @@ class Tools:
     rahasher: str | None = None
     dolphin_tool: str | None = None
     nsz: str | None = None
+    orbis_pkg_util: str | None = None
 
 
 def find_tools(settings: InboxSettings, which: Callable[[str], str | None] = shutil.which) -> Tools:
@@ -257,6 +258,7 @@ def find_tools(settings: InboxSettings, which: Callable[[str], str | None] = shu
         rahasher=pick("rahasher", settings.rahasher, None),
         dolphin_tool=pick("dolphin_tool", settings.dolphin_tool, "dolphin-tool"),
         nsz=pick("nsz", settings.nsz, "nsz"),
+        orbis_pkg_util=pick("orbis_pkg_util", settings.orbis_pkg_util, "orbis-pkg-util"),
     )
 
 
@@ -573,7 +575,8 @@ class UnitResult:
     ra: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
     reason: str = ""
-    folder: str = ""  # library folder when it is not roms/<system> (Switch updates and DLC)
+    folder: str = ""  # library folder when it is not roms/<system> (Switch updates, PS4 games)
+    lines: list[str] = field(default_factory=list)  # whitelist lines, when `whitelist` is not it
 
     @property
     def path(self) -> str:
@@ -583,6 +586,11 @@ class UnitResult:
     def whitelist(self) -> str:
         """The Syncthing line for a file in roms/; none for a folder-whitelisted extra."""
         return "" if self.folder else whitelist_line(self.system, self.entry)
+
+    @property
+    def whitelist_lines(self) -> list[str]:
+        """Every line that delivers this unit: the ones it names, else the one for its file."""
+        return self.lines or ([self.whitelist] if self.whitelist else [])
 
 
 @dataclass
@@ -1069,6 +1077,7 @@ def _describe_tools(tools: Tools) -> str:
         ("rahasher", tools.rahasher),
         ("dolphin-tool", tools.dolphin_tool),
         ("nsz", tools.nsz),
+        ("orbis-pkg-util", tools.orbis_pkg_util),
     )
     return ", ".join(f"{n} {'yes' if p else 'no'}" for n, p in items)
 
@@ -1162,8 +1171,9 @@ def _print_item(
             rep.out(f"    {line}")
         for note in u.notes:
             rep.out(f"    note: {note}")
-        if u.outcome in ("placed", "already", "planned", "exists") and u.whitelist:
-            rep.out(f"    whitelist: {u.whitelist}")
+        if u.outcome in ("placed", "already", "planned", "exists"):
+            for line in u.whitelist_lines:
+                rep.out(f"    whitelist: {line}")
     for note in result.notes:
         rep.out(f"  note: {note}")
     for reason in result.reasons:
@@ -1186,12 +1196,13 @@ def _summary(rep: Reporter, results: Sequence[ItemResult], apply: bool) -> int:
     left = [r for r in results if r.left]
     lines = sorted(
         {
-            u.whitelist
+            line
             for u in units
-            if u.outcome in ("placed", "already", "planned", "exists") and u.whitelist
+            if u.outcome in ("placed", "already", "planned", "exists")
+            for line in u.whitelist_lines
         }
     )
-    if any(u.folder and u.outcome != "review" for u in units):
+    if any(u.folder.startswith("extras/") and u.outcome != "review" for u in units):
         rep.out(
             "Switch updates and DLC are usually whitelisted by folder, for example "
             "!/extras/switch/updates and !/extras/switch/dlc"

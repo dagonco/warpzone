@@ -17,9 +17,11 @@ signature instead of by hash:
   `.iso` is never taken for a ZArchive.
 
 - PS4 `.pkg` files: the header starts with the magic `\x7fCNT` and holds a content id such
-  as `EP9000-CUSA07934_00-SCES503610000001` at 0x40 (only the first 0x60 bytes are read).
-  Filed in `roms/ps4/`, and the title id (`CUSA07934`) is reported. A PS3 `.pkg` (magic
-  `\x7fPKG`) or any other `.pkg` keeps the "not supported by inbox yet" outcome.
+  as `EP9000-CUSA07934_00-SCES503610000001` at 0x40 (only the first 0x80 bytes are read).
+  The title id (`CUSA07934`) is reported. With `orbis-pkg-util` configured the package is
+  extracted into `roms/ps4/games/<title id>/` with a shortcut in `roms/ps4/shortcuts/`
+  (see `inbox_ps4`); without it the `.pkg` is filed as it is in `roms/ps4/`. A PS3 `.pkg`
+  (magic `\x7fPKG`) or any other `.pkg` keeps the "not supported by inbox yet" outcome.
 
 A full Redump-style Xbox image (game partition at 0x18300000) is recognised but never
 placed: xemu cannot boot it, so it goes to review with the instruction to convert it with
@@ -36,7 +38,7 @@ A PS3 `.iso` needs ES-DE's alternative emulator `RPCS3 ISO (Standalone)` (the sy
 default is a shortcut launcher), which is written per game into the hub's ES-DE gamelist
 with the helpers of `inbox_mame`.
 
-The decisions (`claimed_name`, `parse_sfo`, `iso_records`, `xdvdfs_entries`, `detect`,
+The decisions (`claimed_name`, `iso_records`, `xdvdfs_entries`, `detect`,
 `destination`) are pure functions of bytes or of a binary file object that is only read in
 small bounded pieces; the rest touches the disk. See docs/design.md.
 """
@@ -53,9 +55,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import BinaryIO, TypeVar
 
-from warpzone import inbox, inbox_mame
+from warpzone import inbox, inbox_mame, inbox_ps4
 from warpzone.dat import FileInfo
 from warpzone.inbox import Context, ItemFailure, ItemResult, Options, Staged, UnitResult
+from warpzone.sfo import MAX_SFO_BYTES, parse_sfo
 
 PS3, XBOX, XBOX360, XBOX_REDUMP, WIIU, PS4 = (
     "ps3",
@@ -96,14 +99,13 @@ XDVDFS_PARTITIONS = (0, 0xFDA0000, 0x2080000, 0x18300000)
 REDUMP_PARTITION = 0x18300000
 MAX_DIR_BYTES = 1 << 20  # a directory bigger than this is not a game disc
 MAX_DIR_ENTRIES = 1 << 14
-MAX_SFO_BYTES = 1 << 16
 # The ZArchive footer: six offset/size sections (96 bytes), a SHA-256 of the archive (32 bytes),
 # then big-endian u64 total size, u32 version and u32 magic.
 ZARCHIVE_FOOTER = 144
 ZARCHIVE_VERSION, ZARCHIVE_MAGIC = 0x61BF3A01, 0x169F52D6
 # PS4 package header: the magic, and the content id (`XXnnnn-CUSAnnnnn_nn-...`) at 0x40.
 PS4_PKG_MAGIC = b"\x7fCNT"
-PS4_CONTENT_ID_AT, PS4_HEADER_BYTES = 0x40, 0x60
+PS4_CONTENT_ID_AT, PS4_HEADER_BYTES = 0x40, 0x80
 _PS4_CONTENT_ID = re.compile(rb"^[A-Z]{2}\d{4}-(CUSA\d{5})_\d\d-[A-Za-z0-9_]+")
 _VERSION_SUFFIX = re.compile(r";\d+$")
 
@@ -123,29 +125,6 @@ def sniffable_name(name: str) -> bool:
 def destination(kind: str) -> str | None:
     """The folder inside `library/roms/` for a kind, None for one that is never placed."""
     return FOLDERS.get(kind)
-
-
-def parse_sfo(data: bytes) -> dict[str, str | int]:
-    """The key/value table of a PARAM.SFO; empty when `data` is not one."""
-    if len(data) < 20 or data[:4] != b"\x00PSF":
-        return {}
-    key_start, data_start, count = struct.unpack_from("<III", data, 8)
-    if count > 512 or 20 + 16 * count > len(data):
-        return {}
-    out: dict[str, str | int] = {}
-    for n in range(count):
-        key_off, fmt, length, _max, data_off = struct.unpack_from("<HHIII", data, 20 + 16 * n)
-        key_at = key_start + key_off
-        end = data.find(b"\x00", key_at)
-        if key_at >= len(data) or end < 0:
-            continue
-        key = data[key_at:end].decode("ascii", "replace")
-        raw = data[data_start + data_off : data_start + data_off + length]
-        if fmt in (0x0004, 0x0204):
-            out[key] = " ".join(raw.split(b"\x00")[0].decode("utf-8", "replace").split())
-        elif fmt == 0x0404 and len(raw) >= 4:
-            out[key] = struct.unpack("<I", raw[:4])[0]
-    return out
 
 
 @dataclass(frozen=True)
@@ -455,7 +434,13 @@ def _place(src: Path, dest: Path) -> None:
 
 
 def _file_one(ctx: Context, path: Path, rel: str, found: Detected, result: ItemResult) -> None:
-    unit = place_image(ctx, path, rel, found)
+    tool = ctx.tools.orbis_pkg_util
+    if found.kind == PS4 and tool:
+        unit = inbox_ps4.install(ctx, path, rel, found.title_id, tool)
+    else:
+        unit = place_image(ctx, path, rel, found)
+        if found.kind == PS4:
+            unit.notes.append(inbox_ps4.NO_TOOL_NOTE)
     result.units.append(unit)
     if unit.reason:
         result.reasons.append(unit.reason)

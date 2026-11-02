@@ -58,6 +58,7 @@ INBOX_KEYS = (
     "gamelist_mame",
     "gamelist_ps3",
     "nsz",
+    "orbis_pkg_util",
     "titledb_dir",
     "switch_keys",
 )
@@ -68,7 +69,8 @@ class InboxSettings:
     """The optional `[inbox]` table: where the hub is mounted on this machine, the DATs
     and the external tools `warpzone inbox` uses. A tool left unset is looked up on PATH
     (RAHasher only when set). `titledb_dir` (a clone of blawar/titledb) and `switch_keys`
-    (the console keys file, default ~/.switch/prod.keys) are for Switch games."""
+    (the console keys file, default ~/.switch/prod.keys) are for Switch games. `orbis_pkg_util`
+    unpacks PS4 packages."""
 
     root: str | None = None
     dats_dir: str | None = None
@@ -83,6 +85,7 @@ class InboxSettings:
     gamelist_mame: str | None = None
     gamelist_ps3: str | None = None
     nsz: str | None = None
+    orbis_pkg_util: str | None = None
     titledb_dir: str | None = None
     switch_keys: str | None = None
 

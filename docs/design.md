@@ -424,6 +424,37 @@ named after the game (`<game>.srm`, `<game>.state`), and the hub folders are the
 a file; a state of one core does not load in another core or another version of it, which
 warpzone cannot check.
 
+### shadPS4 install directories
+
+shadPS4 runs the extracted games it finds in its install directories, and the PS4 games that
+`inbox` extracts land in `library/roms/ps4/games` ([PS4 packages](#ps4-packages)). A profile
+with `[shadps4]` (`config`, `process`, `install_dirs`) has `provision device` list that folder
+there, for a device that subscribes to `library`, at the end of the same step as the other
+overrides. The profile `steamos-emudeck` declares `{library}/roms/ps4/games`.
+
+- **Files.** Each path of `config` that exists is edited, chosen by its suffix. `config.json`
+  (shadPS4 v0.21 and later) holds `General.install_dirs`, a list of
+  `{"enabled": true, "path": "..."}`; `config.toml` (older versions, and still on disk after the
+  move to JSON) holds `GUI.installDirs`, a list of strings. Both are edited because either may be
+  the one a version reads. A missing file is never created (shadPS4 writes it on its first
+  start); when neither exists the run warns to start shadPS4 once and run `provision` again.
+- **Edit.** The existing entries stay and the missing folder is appended (a disabled entry for
+  it is enabled; trailing slashes do not count as a difference). `config.json` must be
+  exactly what `json.dumps(indent=2)` writes, which is shadPS4's layout, or it is left alone:
+  the edit re-serialises it. In `config.toml` only the `installDirs` value is replaced (or the key
+  or the `[GUI]` table added) and the result must read back as the original plus the new folders.
+  Anything that does not read as expected is left alone with a warning (`shadps4.apply` is pure).
+- **Safety.** Written only while none of `process` runs (the emulator, its Qt launcher and the
+  AppImages: `/proc` is read as for the other overrides, and a missing `/proc` is a warning), with
+  the old file backed up first to the settings state folder and an atomic write that is refused if
+  the file changed meanwhile. A second run changes nothing; `--dry-run` prints what it would add.
+- **Doctor.** `doctor` reports `shadPS4 install folder`: a warning naming each existing file that
+  lacks the folder (with the command to run), or none found.
+- **Why not the settings layer.** `settings apply` layers typed scalar keys from the hub, and its
+  `json` and `toml` handlers write scalars only; this list is an array (of objects, in JSON). Its
+  value is also derived from each console's own library path, not shared between consoles, so it
+  is declared in the profile like the RetroArch paths.
+
 ### Frontend artwork
 
 A frontend that is not ES-DE shows nothing of what the hub scraped: ES-DE keeps its
@@ -583,7 +614,7 @@ error messages; the RetroAchievements key is read from `RA_API_KEY`, never from 
 |---|---|---|
 | `warpzone check` | anywhere | Validates config + profiles, reports which whitelists are missing on the hub (via `GET /rest/db/browse`), never writes. Exit 1 if any are missing; `--offline` skips the hub. |
 | `warpzone provision hub` | anywhere that reaches the hub API | Adds every configured device to the hub, creates/updates every `wz-*` folder on the hub and shares it with the devices that subscribe to it, sets the hub ignores. A newly created whitelisted folder first lets only the whitelists through and waits for them (`--timeout`, default 120 s) before the full scan, see "Hub bootstrap". Idempotent. |
-| `warpzone provision device <name>` | on the device | Reads the local Syncthing API key from the local `config.xml` (searching the default locations, including the SyncThingy flatpak; `--syncthing-config PATH` overrides), adds the hub device, creates the subscribed folders with the bootstrap above (`--timeout SECONDS`). When that Syncthing is the SyncThingy flatpak it first grants it the missing `flatpak override --user --filesystem=~/.var/app/<app>` for every folder under `~/.var/app` (flatpak hides other apps' data), and asks for a Syncthing restart. When the device subscribes to `settings`, it installs the ES-DE startup script that runs `settings apply` (see [ES-DE startup script](#es-de-startup-script)). When the device subscribes to `library` and its profile has `[es_systems]` or `[retroarch]`, it also writes the frontend's system list override and pins RetroArch's paths (see [Frontend and RetroArch overrides](#frontend-and-retroarch-overrides)). When it lists `frontend` and the profile has `[artwork]`, it limits the artwork folders to the systems on the device, writes the gamelists and installs the refresh timer (see [Frontend artwork](#frontend-artwork)). Idempotent. |
+| `warpzone provision device <name>` | on the device | Reads the local Syncthing API key from the local `config.xml` (searching the default locations, including the SyncThingy flatpak; `--syncthing-config PATH` overrides), adds the hub device, creates the subscribed folders with the bootstrap above (`--timeout SECONDS`). When that Syncthing is the SyncThingy flatpak it first grants it the missing `flatpak override --user --filesystem=~/.var/app/<app>` for every folder under `~/.var/app` (flatpak hides other apps' data), and asks for a Syncthing restart. When the device subscribes to `settings`, it installs the ES-DE startup script that runs `settings apply` (see [ES-DE startup script](#es-de-startup-script)). When the device subscribes to `library` and its profile has `[es_systems]` or `[retroarch]`, it also writes the frontend's system list override and pins RetroArch's paths (see [Frontend and RetroArch overrides](#frontend-and-retroarch-overrides)). When the profile has `[shadps4]` it also lists the PS4 games folder in shadPS4's install directories (see [shadPS4 install directories](#shadps4-install-directories)). When it lists `frontend` and the profile has `[artwork]`, it limits the artwork folders to the systems on the device, writes the gamelists and installs the refresh timer (see [Frontend artwork](#frontend-artwork)). Idempotent. |
 | `warpzone frontend refresh [device]` | on the device | For a device whose profile has `[artwork]` and that lists `frontend`: widens the artwork folders' ignores to the systems that have games now (when the local Syncthing is found) and rewrites the frontend's gamelists from the synced ES-DE data, only while the frontend is closed. `--dry-run` prints what it would do. See [Frontend artwork](#frontend-artwork). |
 | `warpzone provision device <name>` | on the device | Reads the local Syncthing API key from the local `config.xml` (searching the default locations, including the SyncThingy flatpak; `--syncthing-config PATH` overrides), adds the hub device, creates the subscribed folders with the bootstrap above (`--timeout SECONDS`). When that Syncthing is the SyncThingy flatpak it first grants it the missing `flatpak override --user --filesystem=~/.var/app/<app>` for every folder under `~/.var/app` (flatpak hides other apps' data), and asks for a Syncthing restart. When the device subscribes to `settings`, it installs the ES-DE startup script that runs `settings apply` (see [ES-DE startup script](#es-de-startup-script)). When the device subscribes to `library` and its profile has `[es_systems]` or `[retroarch]`, it also writes the frontend's system list override and pins RetroArch's paths (see [Frontend and RetroArch overrides](#frontend-and-retroarch-overrides)). It then installs the self-update timer, for every profile (see [Self-update](#self-update)). Idempotent. |
 | `warpzone prune [device]` | on the device | Reports, and with `--apply` deletes, the files of the whitelisted folders that the device no longer whitelists (see [Pruning](#pruning)). Report only by default. |
@@ -875,6 +906,8 @@ Syncthing state. The contract:
   matching or conversion.
 - **PS3, Xbox, Xbox 360 and Wii U images.** See [Console disc images](#console-disc-images)
   below; they are identified by signature, not by DAT.
+- **PS4 packages.** See [PS4 packages](#ps4-packages) below; with `orbis-pkg-util` they are
+  extracted into a game folder with a shortcut.
 - **Out of scope.** Vita, and PS3 or Xbox content that is not a disc image (`.pkg`,
   `.rap`, an extracted `PS3_GAME` or `default.xbe` folder). Their files are recognised by
   extension or folder and go to review with "not supported by inbox yet". A disc image kept as a
@@ -1000,6 +1033,52 @@ signature. The code is in `warpzone/inbox_console_iso.py`, which is both a kind 
   backup under `tools/logs/gamelist-backups/` before the run's first change). Report mode prints "would add". It
   is also done for a game that was already in the library. If the gamelist cannot be
   updated the item goes to review and a rerun retries it.
+
+### PS4 packages
+
+A PS4 `.pkg` is recognised by `inbox_console_iso` (magic `\x7fCNT`, content id at 0x40,
+title id `CUSAnnnnn`) and handled by `warpzone/inbox_ps4.py`. Current shadPS4 has no package
+installer: it runs extracted game folders found in its install directories, and ES-DE
+lists only the `.desktop` files of `roms/ps4/shortcuts`, whose command on the consoles is
+`%EMULATOR_SHADPS4% %ROM%` (EmuDeck's `shadps4.sh`).
+
+- **Tool.** `[inbox] orbis_pkg_util` (PATH otherwise): `orbis-pkg-util extract -q -o <dir>
+  <pkg>`. Reported in the `tools:` line and by `doctor` as an optional inbox tool. Without it
+  the `.pkg` is placed as it is in `roms/ps4/` with a note saying so (the earlier behaviour).
+- **Kind.** The header says what the package is before anything is unpacked: the u32
+  big-endian content type at 0x74 (`0x1A` game data, `0x1B` additional content) and the
+  content flags at 0x78 (`0x100000` or `0x40000000` mark a patch). An update or DLC goes to
+  review with a message saying that updates are not merged (nothing is extracted, even when
+  the base game is in the library). After extraction the `CATEGORY` of `sce_sys/param.sfo`
+  decides again (`gd*` game, `gp` update, `ac` DLC) and its `TITLE_ID` must equal the header's.
+- **Game folder.** The extraction goes to a temporary folder in the local work folder
+  (`work_dir`), which must have the package's size free. It must hold `eboot.bin` and
+  `sce_sys/param.sfo` and no symbolic link. The folder is then copied file by file with a
+  read-back (`inbox.copy_verified`) to `library/roms/ps4/games/<CUSAxxxxx>.part/` and
+  renamed, so the destination never holds a partial game and a stale `.part` of an earlier
+  run is replaced. A game folder already in the library is reported as "already in the
+  library", not compared and never touched; the package is not unpacked.
+- **Shortcut.** `library/roms/ps4/shortcuts/<Title>.desktop`, written the same way (`.part`,
+  rename), never over another file. The name comes from the `TITLE` of `param.sfo` (trademark
+  signs and quotes dropped, `:` as ` -`, only letters, digits, marks and `-_.,()[]!+#`
+  kept, 100 characters at most). A file of that name that already runs this game is kept;
+  one that runs another game gets ` [CUSAxxxxx]` in its name. A game that was already in
+  the library gets a missing shortcut from the `TITLE` of its own `param.sfo`.
+  ```
+  [Desktop Entry]
+  Type=Application
+  Name=<Title>
+  Exec=shadps4 "/home/deck/Emulation/roms/ps4/games/<CUSAxxxxx>/eboot.bin"
+  ```
+  EmuDeck's launcher greps the `Exec=` line of the shortcut, takes the one quoted string
+  as the game and runs `Shadps4-qt.AppImage -d -g <path>`. In the Qt launcher `-d` is the
+  alias of `-e default`: the version selected in its settings. Nothing expands `~` or
+  `$HOME` on that path, so it is written out under the SteamOS home (`DEVICE_LIBRARY`).
+- **Whitelists.** Two lines per game: `!/roms/ps4/games/<CUSAxxxxx>` and
+  `!/roms/ps4/shortcuts/<Title>.desktop`. A report without `--apply` does not unpack
+  anything, so it cannot name the shortcut and prints only the first.
+- **Install directory.** The consoles must list `~/Emulation/roms/ps4/games` as an install
+  directory of shadPS4. See [shadPS4 install directories](#shadps4-install-directories).
 
 ### Arcade sets
 
