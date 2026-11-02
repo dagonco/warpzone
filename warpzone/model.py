@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
-from warpzone import ignores
+from warpzone import artwork, ignores
 from warpzone.config import Config, Device
-from warpzone.profiles import Profile
+from warpzone.profiles import Artwork, Profile
 
 # Staggered versioning keeps 30 days of history (maxAge is in seconds).
 STAGGERED: dict[str, Any] = {"type": "staggered", "params": {"maxAge": str(30 * 86400)}}
@@ -15,6 +16,8 @@ NO_VERSIONING: dict[str, Any] = {"type": ""}
 
 
 LIBRARY_ID = "wz-library"
+MEDIA_ID = "wz-media"
+ESDE_ID = "wz-esde"
 
 
 class ModelError(Exception):
@@ -94,9 +97,9 @@ _STATIC: dict[str, tuple[_Def, ...]] = {
         _Def("wz-tools", "tools", "sendonly", "receiveonly", "tools", fixed_ignores=("/logs",)),
     ),
     "frontend": (
-        _Def("wz-media", "frontend/media", "sendreceive", "sendreceive", "media"),
+        _Def(MEDIA_ID, "frontend/media", "sendreceive", "sendreceive", "media"),
         _Def(
-            "wz-esde",
+            ESDE_ID,
             "frontend/es-de",
             "sendreceive",
             "sendreceive",
@@ -155,10 +158,12 @@ def _defs_for(device: Device, profile: Profile) -> list[_Def]:
                 )
             continue
         for item in _STATIC[group]:
-            if item.path_key not in profile.paths:
+            # A profile with `[artwork]` places the frontend folders itself (`device_specs`).
+            if item.path_key not in profile.paths and not (group == "frontend" and profile.artwork):
+                hint = " or an [artwork] table" if group == "frontend" else ""
                 raise ModelError(
                     f"device {device.name!r} subscribes to {group!r} but profile "
-                    f"{profile.name!r} has no paths.{item.path_key}"
+                    f"{profile.name!r} has no paths.{item.path_key}{hint}"
                 )
             defs.append(item)
     return defs
@@ -168,11 +173,49 @@ def _versioning(item: _Def, *, hub: bool) -> dict[str, Any]:
     return dict(STAGGERED if (hub and (item.save or item.history)) else NO_VERSIONING)
 
 
-def device_specs(cfg: Config, device_name: str, profile: Profile) -> list[FolderSpec]:
-    """Folders for one device. Paths still contain `~`; the device expands them."""
+def _artwork_spec(
+    item: _Def, art: Artwork, systems: Sequence[str]
+) -> tuple[str, str, tuple[str, ...]]:
+    """Path, type and ignores of a hub frontend folder on a device that has `[artwork]`.
+
+    The device folder is receive-only and limited to the hub folders of `systems`; the hub's
+    own folder, shared with other devices, is untouched (`hub_specs` never calls this).
+    """
+    if item.id == MEDIA_ID:
+        return art.media, "receiveonly", artwork.media_ignores(systems, art.kinds)
+    return art.metadata, "receiveonly", artwork.metadata_ignores(systems)
+
+
+def device_specs(
+    cfg: Config,
+    device_name: str,
+    profile: Profile,
+    artwork_systems: Sequence[str] | None = None,
+) -> list[FolderSpec]:
+    """Folders for one device. Paths still contain `~`; the device expands them.
+
+    `artwork_systems` are the hub system folders a device with `[artwork]` receives
+    artwork for (`artwork.library_systems`); without them its artwork folders let nothing in.
+    """
     device = cfg.devices[device_name]
     specs: list[FolderSpec] = []
     for item in _defs_for(device, profile):
+        art = profile.artwork if item.id in (MEDIA_ID, ESDE_ID) else None
+        if art is not None:
+            path, kind, wanted = _artwork_spec(item, art, artwork_systems or ())
+            specs.append(
+                FolderSpec(
+                    id=item.id,
+                    label=item.id,
+                    path=path,
+                    type=kind,
+                    devices=(cfg.hub.device_id,),
+                    versioning=_versioning(item, hub=False),
+                    ignores=ignores.inline(wanted),
+                    ignore_perms=profile.ignore_perms,
+                )
+            )
+            continue
         path = item.device_path or profile.paths[item.path_key or ""]
         if item.whitelist:
             final = ignores.device_whitelist(

@@ -21,6 +21,13 @@ _SAVE_KEY_RE = re.compile(r"^([a-z0-9]+)-([a-z0-9]+)$")
 _HUB_PATH_RE = re.compile(r"^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$")
 # Emulator, file and data ids of the settings layer.
 _ID_RE = re.compile(r"^[a-z0-9-]+$")
+# The converters of `warpzone.artwork.FORMATS` and the hub's artwork folders; keep in step.
+ARTWORK_FORMATS = ("emulationstation",)
+ARTWORK_KINDS = ("covers", "screenshots", "miximages", "marquees", "3dboxes", "physicalmedia")
+# Which systems get artwork: `library` is every system folder below the library's `roms/`.
+ARTWORK_SYSTEMS = ("library",)
+# A systemd timer interval: a number and `min` or `h`.
+_INTERVAL_RE = re.compile(r"^[1-9][0-9]*(min|h)$")
 
 
 class ProfileError(Exception):
@@ -132,6 +139,26 @@ class RetroArchPins:
 
 
 @dataclass(frozen=True)
+class Artwork:
+    """Scraped artwork and metadata for a frontend that is not ES-DE.
+
+    The hub's `wz-media` and `wz-esde` folders arrive receive-only at `media` and
+    `metadata`, limited to `kinds` of the systems selected by `systems`. A converter named
+    by `format` turns the ES-DE gamelists there into the frontend's own gamelists, written
+    below `gamelists`. With `refresh`, `provision device` installs a user timer that runs
+    `warpzone frontend refresh` at that interval (systemd syntax, like `15min`).
+    """
+
+    format: str
+    kinds: tuple[str, ...]
+    media: str
+    metadata: str
+    gamelists: str
+    systems: str = "library"
+    refresh: str | None = None
+
+
+@dataclass(frozen=True)
 class Profile:
     name: str
     description: str
@@ -147,6 +174,7 @@ class Profile:
     ignore_perms: bool = False
     es_systems: EsSystems | None = None
     retroarch: RetroArchPins | None = None
+    artwork: Artwork | None = None
 
     def placement_ignores(self) -> tuple[str, ...]:
         """The anchored library paths that placements deliver instead of the library."""
@@ -174,6 +202,7 @@ def parse_profile(data: dict[str, Any], source: str) -> Profile:
         "settings",
         "es_systems",
         "retroarch",
+        "artwork",
     }
     for key in sorted(set(data) - allowed):
         err(f"unknown key {key!r}")
@@ -241,6 +270,7 @@ def parse_profile(data: dict[str, Any], source: str) -> Profile:
     settings = _parse_settings(data.get("settings", {}), err)
     es_systems = _parse_es_systems(data.get("es_systems"), "library" in paths, err)
     retroarch = _parse_retroarch(data.get("retroarch"), "library" in paths, err)
+    artwork = _parse_artwork(data.get("artwork"), paths, es_systems is not None, err)
 
     if errors:
         raise ProfileError("\n".join(errors))
@@ -255,6 +285,7 @@ def parse_profile(data: dict[str, Any], source: str) -> Profile:
         ignore_perms,
         es_systems,
         retroarch,
+        artwork,
     )
 
 
@@ -296,6 +327,91 @@ def _parse_es_systems(raw: Any, has_library: bool, err: Callable[[str], None]) -
         return None
     return EsSystems(
         raw["source"], raw["override"], raw["prefix"], tuple(raw["process"]), dict(renames)
+    )
+
+
+def _nested(a: str, b: str) -> bool:
+    """Whether folder `a` is `b` or sits inside it (literal paths, `~` unexpanded)."""
+    a, b = a.rstrip("/") + "/", b.rstrip("/") + "/"
+    return a.startswith(b)
+
+
+def _parse_artwork(
+    raw: Any, paths: dict[str, str], has_es_systems: bool, err: Callable[[str], None]
+) -> Artwork | None:
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        err("`artwork` must be a table")
+        return None
+    known = {"format", "kinds", "systems", "media", "metadata", "gamelists", "refresh"}
+    problems = 0
+    for extra in sorted(set(raw) - known):
+        err(f"artwork.{extra}: unknown key")
+        problems += 1
+    fmt = raw.get("format")
+    if fmt not in ARTWORK_FORMATS:
+        err(f"artwork.format: must be one of {', '.join(ARTWORK_FORMATS)}")
+        problems += 1
+    kinds = raw.get("kinds")
+    if (
+        not isinstance(kinds, list)
+        or not kinds
+        or len(set(map(str, kinds))) != len(kinds)
+        or not all(k in ARTWORK_KINDS for k in kinds)
+    ):
+        err(
+            "artwork.kinds: required, a non-empty list without repeats of "
+            f"{', '.join(ARTWORK_KINDS)}"
+        )
+        problems += 1
+    systems = raw.get("systems", "library")
+    if systems not in ARTWORK_SYSTEMS:
+        err(f"artwork.systems: must be one of {', '.join(ARTWORK_SYSTEMS)}")
+        problems += 1
+    folders: dict[str, str] = {}
+    for key in ("media", "metadata", "gamelists"):
+        value = raw.get(key)
+        if not isinstance(value, str) or not value:
+            err(f"artwork.{key}: must be a non-empty string")
+            problems += 1
+        else:
+            folders[key] = value
+    refresh = raw.get("refresh")
+    if refresh is not None and (not isinstance(refresh, str) or not _INTERVAL_RE.match(refresh)):
+        err("artwork.refresh: must be an interval like 15min or 6h")
+        problems += 1
+    if "library" not in paths:
+        err("artwork needs paths.library (the ROMs it decorates are there)")
+        problems += 1
+    if fmt == "emulationstation" and not has_es_systems:
+        err(
+            "artwork.format emulationstation needs [es_systems] (the system list names the systems)"
+        )
+        problems += 1
+    for key in ("media", "esde"):
+        if key in paths:
+            err(f"artwork replaces paths.{key}: remove it from `paths`")
+            problems += 1
+    if len(folders) == 3 and "library" in paths:
+        mine = [("media", folders["media"]), ("metadata", folders["metadata"])]
+        for key, value in mine:
+            if _nested(value, paths["library"]) or _nested(paths["library"], value):
+                err(f"artwork.{key}: must not be the library folder or sit inside it")
+                problems += 1
+        if _nested(mine[0][1], mine[1][1]) or _nested(mine[1][1], mine[0][1]):
+            err("artwork.media and artwork.metadata must be separate folders")
+            problems += 1
+    if problems:
+        return None
+    return Artwork(
+        raw["format"],
+        tuple(raw["kinds"]),
+        folders["media"],
+        folders["metadata"],
+        folders["gamelists"],
+        systems,
+        refresh,
     )
 
 
