@@ -1,4 +1,5 @@
 import os
+import struct
 import unittest
 from pathlib import Path
 
@@ -11,8 +12,35 @@ from warpzone.inbox import Tools
 from warpzone.provision import Reporter
 
 TITLE_ID = "PCSF00024"
+CONTENT_ID = f"EP9000-{TITLE_ID}_00-PDEUAP1648614960"
 APP = f"psvita/app/{TITLE_ID}"
-EBOOT = b"SCE\x00" + b"EBOOT" * 100
+LICENSE = f"psvita/license/{TITLE_ID}/{CONTENT_ID}.rif"
+
+
+def fself(encrypted: bool = False, self_type: int = 8, size: int = 0x400) -> bytes:
+    """A synthetic Vita SELF header: what Vita3K reads (`SCE\\0` magic, app info, the first
+    segment's encryption flag) and nothing else."""
+    data = bytearray(size)
+    data[0:4] = b"SCE\x00"
+    struct.pack_into("<I", data, 4, 3)  # version
+    struct.pack_into("<Q", data, 0x38, 0x80)  # app info offset
+    struct.pack_into("<Q", data, 0x58, 0x100)  # segment info offset
+    struct.pack_into("<I", data, 0x80 + 12, self_type)
+    struct.pack_into("<Q", data, 0x100 + 0x18, 1 if encrypted else 2)  # 2 = plain
+    return bytes(data)
+
+
+def rif(content_id: str = CONTENT_ID, size: int = 512, key: bytes = b"\x11" * 16) -> bytes:
+    """A synthetic 512-byte licence: the content id at 0x10 and a key at 0x50."""
+    data = bytearray(size)
+    data[0x10 : 0x10 + len(content_id)] = content_id.encode()
+    data[0x50:0x60] = key
+    return bytes(data)
+
+
+EBOOT = fself()
+ENCRYPTED = fself(encrypted=True)
+RIF = rif()
 
 
 def vita_sfo(title_id: str = TITLE_ID, title: str = "GRAVITY RUSH™", category: str = "gd"):
@@ -27,10 +55,10 @@ def vita_sfo(title_id: str = TITLE_ID, title: str = "GRAVITY RUSH™", category:
     )
 
 
-def game(prefix: str = "", **kw) -> dict[str, bytes]:
+def game(prefix: str = "", eboot: bytes = EBOOT, **kw) -> dict[str, bytes]:
     """The files of a decrypted Vita dump, under an optional top folder."""
     return {
-        f"{prefix}eboot.bin": EBOOT,
+        f"{prefix}eboot.bin": eboot,
         f"{prefix}sce_sys/param.sfo": vita_sfo(**kw),
         f"{prefix}sce_sys/livearea/contents/template.xml": b"<x/>",
         f"{prefix}data/level.dat": b"DATA" * 50,
@@ -95,6 +123,97 @@ class PureTests(unittest.TestCase):
         # the module of another game in the same item does not count for this root
         self.assertFalse(inbox_vita.is_vitamin([*base, "B/" + module], ""))
         self.assertFalse(inbox_vita.is_vitamin([f"A/{n}" for n in base] + ["B/" + module], "A/"))
+
+    def test_a_licence_is_512_bytes_with_its_content_id(self) -> None:
+        lic = inbox_vita.parse_license(RIF)
+        self.assertEqual((lic.content_id, lic.title_id), (CONTENT_ID, TITLE_ID))
+        for bad, word in (
+            (rif(size=511), "512"),
+            (rif(size=513), "512"),
+            (b"", "512"),
+            (rif(content_id=""), "content id"),
+            (rif(content_id="not-a-content-id"), "content id"),
+            (rif(content_id="EP9000-CUSA07934_00-PDEUAP1648614960"), "content id"),
+            (rif(content_id="../../EP9000-PCSF00024_00-PDEUAP1648614"), "content id"),
+        ):
+            with self.assertRaisesRegex(ValueError, word):
+                inbox_vita.parse_license(bad)
+
+    def test_the_content_id_stops_at_the_first_nul(self) -> None:
+        data = bytearray(RIF)
+        data[0x10 + len(CONTENT_ID) + 1 : 0x10 + len(CONTENT_ID) + 4] = b"abc"
+        self.assertEqual(inbox_vita.parse_license(bytes(data)).content_id, CONTENT_ID)
+
+    def test_an_encrypted_app_self_needs_a_licence(self) -> None:
+        # Vita3K: decrypt_fself fails with "No klic provided for encrypted App" when the first
+        # segment is not plain (encryption != 2) and the app info says self_type APP (8).
+        self.assertTrue(inbox_vita.eboot_needs_license(fself(encrypted=True)))
+        self.assertFalse(inbox_vita.eboot_needs_license(fself(encrypted=False)))
+        self.assertFalse(inbox_vita.eboot_needs_license(fself(encrypted=True, self_type=0x0D)))
+
+    def test_only_the_sce_magic_makes_it_a_self(self) -> None:
+        self.assertFalse(inbox_vita.eboot_needs_license(b"\x7fELF" + bytes(0x400)))
+        self.assertFalse(inbox_vita.eboot_needs_license(b""))
+
+    def test_a_self_header_that_cannot_be_read_is_an_error(self) -> None:
+        # the magic alone does not tell: the header has to be there and make sense
+        for bad in (b"SCE\x00" + b"EBOOT" * 100, b"SCE\x00", fself()[:0x7F], fself()[:0x108]):
+            with self.assertRaisesRegex(ValueError, "SELF"):
+                inbox_vita.eboot_needs_license(bad)
+        far = bytearray(fself(encrypted=True))
+        struct.pack_into("<Q", far, 0x58, 0xFFFFFF00)
+        with self.assertRaisesRegex(ValueError, "SELF"):
+            inbox_vita.eboot_needs_license(bytes(far))
+
+    def test_where_a_licence_may_come_from(self) -> None:
+        rel = f"license/{TITLE_ID}/{CONTENT_ID}.rif"
+        names = [
+            "eboot.bin",
+            "sce_sys/param.sfo",
+            "sce_sys/package/work.bin",
+            f"{CONTENT_ID}.rif",
+            rel,
+            f"license/PCSB00001/{CONTENT_ID}.rif",  # another game's
+            "data/x.rif",  # buried in the data
+            "license/notes.txt",
+        ]
+        self.assertEqual(
+            inbox_vita.license_sources(names, "", TITLE_ID),
+            [f"{CONTENT_ID}.rif", rel, "sce_sys/package/work.bin"],
+        )
+        top = [f"Top/{n}" for n in names[:3]] + [f"Top/{CONTENT_ID}.rif"]
+        top += [f"{CONTENT_ID}.rif", f"license/{TITLE_ID}/{CONTENT_ID}.rif", "OTHER.RIF"]
+        self.assertEqual(
+            inbox_vita.license_sources(top, "Top/", TITLE_ID),
+            [
+                f"{CONTENT_ID}.rif",
+                "OTHER.RIF",
+                f"Top/{CONTENT_ID}.rif",
+                "Top/sce_sys/package/work.bin",
+                f"license/{TITLE_ID}/{CONTENT_ID}.rif",
+            ],
+        )
+        self.assertEqual(inbox_vita.license_sources(["eboot.bin"], "", TITLE_ID), [])
+
+    def test_choosing_the_licence(self) -> None:
+        pick = inbox_vita.choose_license
+        self.assertIsNone(pick({}, TITLE_ID, CONTENT_ID))
+        self.assertEqual(pick({"a.rif": RIF}, TITLE_ID, CONTENT_ID), (CONTENT_ID, RIF))
+        # the same licence twice (work.bin and a .rif) is one licence
+        self.assertEqual(
+            pick({"a.rif": RIF, "work.bin": RIF}, TITLE_ID, CONTENT_ID), (CONTENT_ID, RIF)
+        )
+        self.assertEqual(pick({"a.rif": RIF}, TITLE_ID, None), (CONTENT_ID, RIF))
+        other = rif("EP9000-PCSF00024_00-OTHEROTHEROTHER0")
+        for found, word in (
+            ({"a.rif": rif(size=100)}, "a.rif"),
+            ({"a.rif": rif("EP9000-PCSB00001_00-PDEUAP1648614960")}, "PCSB00001"),
+            ({"a.rif": RIF, "b.rif": rif(key=b"\x22" * 16)}, "different"),
+            ({"a.rif": RIF, "b.rif": other}, "several"),
+            ({"a.rif": other}, "PDEUAP1648614960"),
+        ):
+            with self.assertRaisesRegex(ValueError, word):
+                pick(found, TITLE_ID, CONTENT_ID)
 
     def test_file_names(self) -> None:
         self.assertEqual(inbox_vita.file_name("GRAVITY RUSH™", TITLE_ID), "GRAVITY RUSH.psvita")
@@ -251,11 +370,11 @@ class ReviewTests(FlowBase):
         self.assertEqual(self.go(), 1, self.out)
         self.assert_review("ps4", "CUSA07934", "Vita title id")
 
-    def test_an_encrypted_dump_goes_to_review(self) -> None:
+    def test_a_work_bin_that_is_not_a_licence_goes_to_review(self) -> None:
         files = {**game(), "sce_sys/package/work.bin": b"x" * 16}
         self.drop("enc", files)
         self.assertEqual(self.go(), 1, self.out)
-        self.assert_review("enc", "work.bin", "install")
+        self.assert_review("enc", "work.bin", "512")
 
     def test_a_dump_with_sce_pfs_goes_to_review(self) -> None:
         self.drop("pfs", {**game(), "sce_pfs/files.db": b"x"})
@@ -324,6 +443,145 @@ class ReviewTests(FlowBase):
         self.assertIn("Vita", self.reason("game.vpk"))
         self.assertEqual(self.library(), [])
         self.assertIn("not supported by inbox yet", self.reason("game.vpk"))
+
+
+class LicenseTests(FlowBase):
+    """A dump whose eboot.bin is still encrypted runs only with its licence in ux0/license."""
+
+    def lic(self, name: str = f"{CONTENT_ID}.rif") -> Path:
+        return self.roms / "psvita" / "license" / TITLE_ID / name
+
+    def assert_review(self, item: str, *words: str) -> None:
+        self.assertEqual(self.review(), [item, f"{item}.reason.txt"])
+        for word in words:
+            self.assertIn(word, self.reason(item))
+        self.assertEqual(self.library(), [])
+
+    def test_a_licence_in_work_bin_is_filed_under_its_content_id(self) -> None:
+        self.drop("g", {**game(eboot=ENCRYPTED), "sce_sys/package/work.bin": RIF})
+        self.assertEqual(self.go(), 0, self.out)
+        self.assertEqual(self.lic().read_bytes(), RIF)
+        self.assertIn(f"{APP}/eboot.bin", self.library())
+        self.assertIn(f"{APP}/sce_sys/package/work.bin", self.library())  # the dump is as it is
+        self.assertIn(LICENSE, self.library())
+        self.assertIn(f"licence: library/roms/{LICENSE}", self.out)
+        self.assertIn("whitelist: !/roms/psvita/app/PCSF00024", self.out)
+        self.assertIn("whitelist: !/roms/psvita/license/PCSF00024", self.out)
+        self.assertIn("whitelist: !/roms/psvita/GRAVITY RUSH.psvita", self.out)
+        self.assertEqual([p.name for p in self.roms.rglob("*.part")], [])
+
+    def test_a_rif_in_the_license_folder_of_the_item(self) -> None:
+        files = {**game(eboot=ENCRYPTED), f"license/{TITLE_ID}/{CONTENT_ID}.rif": RIF}
+        self.drop("g", files)
+        self.assertEqual(self.go(), 0, self.out)
+        self.assertEqual(self.lic().read_bytes(), RIF)
+
+    def test_a_rif_next_to_the_game_folder(self) -> None:
+        self.drop("g", {**game("Top/", eboot=ENCRYPTED), "Any name.rif": RIF})
+        self.assertEqual(self.go(), 0, self.out)
+        self.assertEqual(self.lic().read_bytes(), RIF)  # filed by its content id, not its name
+
+    def test_a_rif_in_an_archive(self) -> None:
+        self.zip_of("g.zip", {**game("Top/", eboot=ENCRYPTED), f"{CONTENT_ID}.rif": RIF})
+        self.assertEqual(self.go(), 0, self.out)
+        self.assertEqual(self.lic().read_bytes(), RIF)
+
+    def test_a_game_that_needs_a_licence_and_has_none_goes_to_review(self) -> None:
+        self.drop("g", game(eboot=ENCRYPTED))
+        self.assertEqual(self.go(), 1, self.out)
+        self.assert_review("g", "licence", "klic", "work.bin", ".rif")
+
+    def test_that_review_is_also_the_report(self) -> None:
+        self.drop("g", game(eboot=ENCRYPTED))
+        self.assertEqual(self.go(apply=False), 1, self.out)
+        self.assertNotIn("would place", self.out)
+        self.assertEqual(self.library(), [])
+
+    def test_a_game_that_does_not_need_one_places_without(self) -> None:
+        self.drop("g", game())
+        self.assertEqual(self.go(), 0, self.out)
+        self.assertNotIn("licence", self.out)
+        self.assertNotIn("psvita/license", self.out)
+        self.assertFalse((self.roms / "psvita" / "license").exists())
+
+    def test_a_licence_that_comes_along_is_kept_even_if_not_needed(self) -> None:
+        self.drop("g", {**game(), f"{CONTENT_ID}.rif": RIF})
+        self.assertEqual(self.go(), 0, self.out)
+        self.assertEqual(self.lic().read_bytes(), RIF)
+
+    def test_a_licence_of_another_game_goes_to_review(self) -> None:
+        other = rif("EP9000-PCSB00360_00-PDEUAP1648614960")
+        self.drop("g", {**game(eboot=ENCRYPTED), f"{CONTENT_ID}.rif": other})
+        self.assertEqual(self.go(), 1, self.out)
+        self.assert_review("g", "PCSB00360", TITLE_ID)
+
+    def test_a_licence_for_another_build_goes_to_review(self) -> None:
+        other = rif("EP9000-PCSF00024_00-OTHEROTHEROTHER0")
+        self.drop("g", {**game(eboot=ENCRYPTED), "x.rif": other})
+        self.assertEqual(self.go(), 1, self.out)
+        self.assert_review("g", "OTHEROTHEROTHER0", CONTENT_ID)
+
+    def test_a_licence_of_the_wrong_size_goes_to_review(self) -> None:
+        self.drop("g", {**game(eboot=ENCRYPTED), "x.rif": rif(size=256)})
+        self.assertEqual(self.go(), 1, self.out)
+        self.assert_review("g", "x.rif", "512")
+
+    def test_an_eboot_header_that_cannot_be_read_goes_to_review(self) -> None:
+        self.drop("g", game(eboot=b"SCE\x00" + b"EBOOT" * 100))
+        self.assertEqual(self.go(), 1, self.out)
+        self.assert_review("g", "eboot.bin", "SELF")
+
+    def test_a_licence_already_in_the_library_is_kept(self) -> None:
+        self.lic().parent.mkdir(parents=True)
+        self.lic().write_bytes(RIF)
+        before = self.lic().stat().st_mtime_ns
+        self.drop("g", {**game(eboot=ENCRYPTED), "x.rif": RIF})
+        self.assertEqual(self.go(), 0, self.out)
+        self.assertEqual(self.lic().stat().st_mtime_ns, before)
+        self.assertIn("(already there)", self.out)
+        self.assertIn("whitelist: !/roms/psvita/license/PCSF00024", self.out)
+
+    def test_a_different_licence_in_the_library_is_never_overwritten(self) -> None:
+        mine = rif(key=b"\x99" * 16)
+        self.lic().parent.mkdir(parents=True)
+        self.lic().write_bytes(mine)
+        self.drop("g", {**game(eboot=ENCRYPTED), "x.rif": RIF})
+        self.assertEqual(self.go(), 1, self.out)
+        self.assertEqual(self.lic().read_bytes(), mine)
+        self.assertEqual(self.review(), ["g", "g.reason.txt"])
+        self.assertIn("different", self.reason("g"))
+        self.assertFalse((self.app / TITLE_ID).exists())  # nothing placed before the check
+        self.assertFalse(self.launcher().exists())
+
+    def test_a_game_in_the_library_gets_its_missing_licence(self) -> None:
+        folder = self.app / TITLE_ID
+        (folder / "sce_sys").mkdir(parents=True)
+        (folder / "eboot.bin").write_bytes(ENCRYPTED)
+        (folder / "sce_sys" / "param.sfo").write_bytes(vita_sfo())
+        self.drop("g", {**game(eboot=ENCRYPTED), "x.rif": RIF})
+        self.assertEqual(self.go(), 0, self.out)
+        self.assertEqual((folder / "eboot.bin").read_bytes(), ENCRYPTED)
+        self.assertEqual(self.lic().read_bytes(), RIF)
+
+    def test_report_only_prints_the_licence_line_and_writes_nothing(self) -> None:
+        self.drop("g", {**game(eboot=ENCRYPTED), "x.rif": RIF})
+        self.assertEqual(self.go(apply=False), 0, self.out)
+        self.assertEqual(self.library(), [])
+        self.assertIn(f"licence: library/roms/{LICENSE} (would be written)", self.out)
+        self.assertIn("whitelist: !/roms/psvita/license/PCSF00024", self.out)
+
+    def test_a_rerun_changes_nothing(self) -> None:
+        self.drop("g", {**game(eboot=ENCRYPTED), "x.rif": RIF})
+        self.assertEqual(self.go(), 0, self.out)
+        first = self.library()
+        self.drop("g2", {**game(eboot=ENCRYPTED), "x.rif": RIF})
+        self.assertEqual(self.go(), 0, self.out)
+        self.assertEqual(self.library(), first)
+
+    def test_sce_pfs_still_goes_to_review_even_with_a_licence(self) -> None:
+        self.drop("g", {**game(eboot=ENCRYPTED), "sce_pfs/files.db": b"x", "x.rif": RIF})
+        self.assertEqual(self.go(), 1, self.out)
+        self.assert_review("g", "sce_pfs")
 
 
 class ClaimTests(FlowBase):

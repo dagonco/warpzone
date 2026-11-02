@@ -485,7 +485,22 @@ target = "~/Emulation/storage/Vita3K/ux0/app"
 process = ["Vita3K"]                      # nothing changes while it runs
 match = 'PCS[A-I]\d{5}'                   # a title folder's whole name (default: any)
 require = ["eboot.bin", "sce_sys/param.sfo"]   # files a title must already hold
+noun = "game"                             # what a title is called in messages (default)
+create_target = false                     # make `target` when it is missing (default false)
 ```
+
+The shipped profile has a second rule for the licences of the games, `[links.vita3k-license]`:
+`source = "{library}/roms/psvita/license"`, `target = "~/Emulation/storage/Vita3K/ux0/license"`,
+the same `match`, no `require` (a title is a folder of `.rif` files, which have no fixed
+names), `noun = "license"` and `create_target = true`. Vita3K creates `ux0/app` when it starts
+but `ux0/license` only when it installs a licence (`io::init` makes `data`, `app`, `music`,
+`picture`, `theme`, `video` and `user`), so with `create_target` a missing `target` is made
+(one level, when its parent exists; `--dry-run` says "would create"), after the check for the
+running emulator and only when there is a title to link. When the parent is missing too, Vita3K
+has never run and the rule says so like for any other target. Vita3K reads the licence by path
+(`ux0/license/<TITLEID>/<CONTENT_ID>.rif`), which a link to the library folder satisfies; its
+"delete game" removes `ux0/license/<TITLEID>` with `remove_all`, which removes a symbolic link
+and not what it points at.
 
 `warpzone/titlelinks.py` (no network code) keeps one absolute symlink `target/<title>` ->
 `source/<title>` per title:
@@ -510,8 +525,9 @@ require = ["eboot.bin", "sce_sys/param.sfo"]   # files a title must already hold
   -m warpzone links sync '<device>' [--config ...] --quiet >/dev/null 2>&1` and `exit 0`, so
   ES-DE is never held up or stopped by a failing warpzone. The command is routed before any
   network import, like `settings apply` and `play-state sync`.
-- **Doctor.** `<process> game links` (here `Vita3K game links`): a warning for library games
-  without a link, dangling links, a missing `target`, and a missing startup script.
+- **Doctor.** `<process> <noun> links` (`Vita3K game links`, `Vita3K license links`): a warning
+  for library titles without a link, dangling links, a missing `target` (unless the rule makes
+  it and its parent exists), and a missing startup script.
 - **Vita3K.** From its public source, the app list (`apps_list.cpp`) is built from the
   directories of `ux0/app` with `std::filesystem::is_directory` (which follows symlinks) and
   is kept in `gui-configs/apps-cache.xml`, which is rebuilt when the directory names or the
@@ -1300,8 +1316,7 @@ EmuDeck's `vita3k.sh` reads the file's content as the title id (`Vita3K -Fr <id>
   fully match `PCS[A-I]\d{5}`, and `CATEGORY` decides (`gd`, `gdc` game; `gp` update; `ac`
   DLC; anything else is not a game). Anything but a game, a title id that is not a Vita one,
   several games in one item, a symbolic link inside the game, or a dump that holds
-  `sce_sys/package/work.bin` or `sce_pfs` (Vita3K has to install it) goes to review with the
-  reason. `.vpk` files and `.pkg` files keep their earlier outcome.
+  `sce_pfs` (Vita3K has to install it) goes to review with the reason. `.vpk` files and `.pkg` files keep their earlier outcome.
 - **Vitamin.** A dump whose game folder holds `sce_module/steroid.suprx` (`is_vitamin`, pure,
   case-insensitive, relative to the game root) is a Vitamin dump. Vita3K rejects that module,
   so it ALWAYS goes to review, checked before anything else about the dump (also in report
@@ -1317,10 +1332,47 @@ EmuDeck's `vita3k.sh` reads the file's content as the title id (`Vita3K -Fr <id>
   rename and never over another file. One that holds this id is kept; one that holds another
   id gets ` [<TITLEID>]` in the new name. A game already in the library gets a missing
   launcher from the `TITLE` of its own `param.sfo`.
-- **Whitelists.** Two lines per game: `!/roms/psvita/app/<TITLEID>` and
+- **Licence.** Vita3K runs the games of `ux0/app/<TITLEID>` whose `eboot.bin` is still an
+  encrypted SELF only with the licence `ux0/license/<TITLEID>/<CONTENT_ID>.rif`
+  (`get_license`, `packages/src/license.cpp`, loads that path by the content id of the game's
+  `param.sfo`; a missing or unreadable file leaves the key all zeros). Inbox files the licence
+  in `library/roms/psvita/license/<TITLEID>/<CONTENT_ID>.rif`:
+  - *Sources* (`license_sources`, pure): `sce_sys/package/work.bin` of the game (NoNpDrm,
+    the same 512-byte structure as a `.rif`), or a `*.rif` directly in the game folder or
+    beside it (the item's top), or in `license/<TITLEID>/` at either place.
+  - *Check* (`parse_license`, `choose_license`, pure): exactly 512 bytes; the content id is
+    the NUL-terminated text of the 0x30 bytes at offset 0x10 (`SceNpDrmLicense.content_id`)
+    and must be `XXnnnn-PCS[A-I]nnnnn_nn-` plus 16 characters of `[A-Z0-9]`, so it is safe as
+    a file name; its title id (characters 7 to 15, as Vita3K's `copy_license` takes it) must be
+    the game's; and, when `param.sfo` has a `CONTENT_ID`, it must be that one, because the
+    file name is what Vita3K looks up. Several candidates are fine only when they are the same
+    bytes; different licences, a symbolic link or a file that is not a licence go to review.
+    The file is filed under the content id it holds, not the name it came with.
+  - *Placement:* a `.part` write read back and renamed, never over a file. The library copy is
+    compared before anything is placed: the same bytes are "already there", other bytes make
+    the item go to review without placing the game. A game already in the library gets a
+    missing licence like it gets a missing launcher. A licence that comes along when none is
+    needed is filed too.
+  - *Does the game need one?* (`eboot_needs_license`, pure, on the first 64 KiB of
+    `eboot.bin`.) Read from Vita3K (`vita3k/packages/src/sce_utils.cpp`): `decrypt_fself`,
+    called for every module including the eboot (`modules/module_parent.cpp`, with
+    `license.rif[title_id].key`), returns the buffer untouched when `is_fself_encrypted` is
+    false, which is `seg_infos->encryption != 2` for the first segment info found at
+    `section_info_offset` (offset 0x58 of the header, `encryption` is the u64 at +0x18), and
+    fails with `LOG_ERROR("No klic provided for encrypted App")` when the self is encrypted,
+    `AppInfoHeader.self_type == SelfType::APP` (0x08, a u32 at +12 of the app info at offset
+    0x38) and the klic is all zeros (`Invalid SELF: file is either not a SELF or is still
+    encrypted` is the answer to a file without the `SCE\0` magic). The magic alone is not the
+    test: Vita3K's own "decrypt selfs" writes a SELF with the same magic and `encryption = 2`
+    (`decrypt_fself`'s output header). So a licence is needed exactly when the file starts with
+    `SCE\0`, is encrypted and is an APP. A file with another magic needs none. A SELF header
+    that is shorter than 0x80 bytes or points outside the bytes read cannot be judged and goes
+    to review. A game that needs a licence and has none goes to review, and nothing is placed.
+- **Whitelists.** Up to three lines per game: `!/roms/psvita/app/<TITLEID>`,
+  `!/roms/psvita/license/<TITLEID>` (only when there is a licence) and
   `!/roms/psvita/<Title>.psvita`. Nothing is unpacked by a tool, so the report mode prints
-  both.
-- **On the console.** The folder must be linked into Vita3K's own storage, see
+  them all.
+- **On the console.** The folders must be linked into Vita3K's own storage, see
   [Title links](#title-links).
 
 ### Arcade sets

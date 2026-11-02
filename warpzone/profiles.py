@@ -183,7 +183,10 @@ class TitleLinks:
     `source` holds a folder per title (`{library}` is replaced by the profile's library
     path); `target` is where the emulator looks for them. A title is a folder of `source`
     whose name fully matches `match` and that holds every file of `require`. `process` names
-    the emulator: nothing is changed while it runs. See docs/design.md, "Title links".
+    the emulator: nothing is changed while it runs. `noun` is what a title is called in
+    messages (`game`, `license`). With `create_target`, a missing `target` folder is made
+    when its parent exists (the emulator has run, but does not make this folder until it
+    needs it). See docs/design.md, "Title links".
     """
 
     source: str
@@ -191,6 +194,8 @@ class TitleLinks:
     process: tuple[str, ...]
     match: str = ".+"
     require: tuple[str, ...] = ()
+    noun: str = "game"
+    create_target: bool = False
 
     def source_path(self, library: str) -> str:
         return self.source.replace("{library}", library)
@@ -627,7 +632,7 @@ def _parse_shadps4_launch(raw: Any, err: Callable[[str], None]) -> ShadPS4Launch
     return ShadPS4Launch(*(raw[k] for k in _LAUNCH_KEYS))
 
 
-_LINK_KEYS = {"source", "target", "process", "match", "require"}
+_LINK_KEYS = {"source", "target", "process", "match", "require", "noun", "create_target"}
 
 
 def _parse_links(raw: Any, has_library: bool, err: Callable[[str], None]) -> dict[str, TitleLinks]:
@@ -682,6 +687,14 @@ def _parse_links(raw: Any, has_library: bool, err: Callable[[str], None]) -> dic
         ):
             err(f"{where}.require: must be a list of relative file paths")
             problems += 1
+        noun = entry.get("noun", "game")
+        if not isinstance(noun, str) or not noun.strip() or "\n" in noun:
+            err(f"{where}.noun: must be a non-empty string")
+            problems += 1
+        create = entry.get("create_target", False)
+        if not isinstance(create, bool):
+            err(f"{where}.create_target: must be true or false")
+            problems += 1
         if not problems:
             found[key] = TitleLinks(
                 entry["source"],
@@ -689,6 +702,8 @@ def _parse_links(raw: Any, has_library: bool, err: Callable[[str], None]) -> dic
                 tuple(entry["process"]),
                 pattern,
                 tuple(require),
+                noun,
+                create,
             )
     return found
 

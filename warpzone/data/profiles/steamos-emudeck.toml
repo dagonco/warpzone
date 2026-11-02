@@ -237,6 +237,18 @@ process = ["Vita3K"]
 match = 'PCS[A-I]\d{5}'
 require = ["eboot.bin", "sce_sys/param.sfo"]
 
+# A game whose `eboot.bin` is still encrypted starts only with its licence, `ux0/license/<TITLEID>/
+# <CONTENT_ID>.rif` (Vita3K logs "No klic provided for encrypted App" without it). `inbox` files
+# it in `roms/psvita/license/<TITLEID>/`, and this links the folder like the games. Vita3K makes
+# `ux0/license` only when it installs a licence, so the link rule makes it when `ux0` is there.
+[links.vita3k-license]
+source = "{library}/roms/psvita/license"
+target = "~/Emulation/storage/Vita3K/ux0/license"
+process = ["Vita3K"]
+match = 'PCS[A-I]\d{5}'
+noun = "license"
+create_target = true
+
 # Emulator settings: the files whose keys `warpzone settings` layers across devices.
 # A key is common unless it is listed under `device`. Patterns match the canonical key
 # (see docs/design.md, "Format handlers"): `*` is any run of characters, `?` one, and

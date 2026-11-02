@@ -1407,16 +1407,17 @@ def judge_title_links(
     target_exists: bool,
     todo: titlelinks.Plan,
     script: str | None,
+    noun: str = "game",
 ) -> tuple[str, str, str]:
-    """Verdict on the game links of one `[links.*]` rule; `script` names the ES-DE startup
-    script when it is missing."""
+    """Verdict on the links of one `[links.*]` rule (`noun` says what they are: games,
+    licenses); `script` names the ES-DE startup script when it is missing."""
     again = f"run `warpzone links sync {device}` (or start ES-DE) with {label} closed"
     parts: list[tuple[str, str, str]] = []
     if not target_exists:
         parts.append(
             (
                 WARN,
-                f"{target} does not exist, so {label} cannot list the library games",
+                f"{target} does not exist, so {label} cannot use the library {noun}s",
                 f"start {label} once, then run `warpzone links sync {device}`",
             )
         )
@@ -1425,8 +1426,8 @@ def judge_title_links(
             parts.append(
                 (
                     WARN,
-                    f"{len(todo.create)} library game(s) have no link in {target}, so {label} "
-                    f"does not list them: {', '.join(todo.create)}",
+                    f"{len(todo.create)} library {noun}(s) have no link in {target}, so "
+                    f"{label} does not use them: {', '.join(todo.create)}",
                     again,
                 )
             )
@@ -1437,7 +1438,7 @@ def judge_title_links(
             )
         if not parts:
             n = len(todo.ok)
-            what = f"{n} game(s) linked in {target}" if n else "no games to link yet"
+            what = f"{n} {noun}(s) linked in {target}" if n else f"no {noun}s to link yet"
             parts.append((OK, what, ""))
     if script is not None:
         parts.append(
@@ -1704,7 +1705,7 @@ def _check_links(ctx: Context, device: SettingsDevice) -> list[Result]:
         script = None if p.is_file(path) else str(path)
     results = []
     for item in titlelinks.resolve(device.profile, p.home):
-        exists = p.is_dir(item.target)
+        exists = p.is_dir(item.target) or titlelinks.creatable(item, fs)
         todo = titlelinks.inspect(item, fs)[1] if exists and p.is_dir(item.source) else None
         verdict = judge_title_links(
             device=device.name,
@@ -1713,8 +1714,9 @@ def _check_links(ctx: Context, device: SettingsDevice) -> list[Result]:
             target_exists=exists,
             todo=todo or titlelinks.Plan(),
             script=script,
+            noun=item.rule.noun,
         )
-        results.append(Result(f"{item.label} game links", G_FRONTEND, *verdict))
+        results.append(Result(f"{item.label} {item.rule.noun} links", G_FRONTEND, *verdict))
     return results
 
 

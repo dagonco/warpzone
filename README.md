@@ -116,7 +116,7 @@ python3 -m warpzone --help
 | `warpzone render-ignores <name>` | Prints the ignore lines a device folder would get. |
 | `warpzone frontend refresh` | On a console whose frontend is not ES-DE: rewrites its gamelists from the hub's scraped artwork and metadata. |
 | `warpzone play-state sync <name>` | On a console with ES-DE: shares favourites and play statistics with the other frontends. ES-DE runs it at startup, and a timer between starts. |
-| `warpzone links sync <name>` | On a console: links the library's Vita games into Vita3K's own game folder. `provision device` runs it and ES-DE runs it at startup. |
+| `warpzone links sync <name>` | On a console: links the library's Vita games and their licences into Vita3K's own storage. `provision device` runs it and ES-DE runs it at startup. |
 | `warpzone prune` | Reports (or, with `--apply`, deletes) files a device no longer whitelists. |
 | `warpzone bios` | Which BIOS and firmware files the library has, lacks or has wrong. |
 | `warpzone inbox` | Reports (or, with `--apply`, files) new games dropped in `inbox/`. |

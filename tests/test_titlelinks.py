@@ -245,7 +245,109 @@ class SyncTests(Home):
         self.assertEqual(os.readlink(self.link()), "/other")
 
 
+class LicenseSyncTests(Home):
+    """`ux0/license/<TITLEID>` links to the library's licence folder, like `ux0/app`."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.lic_source = self.home / "Emulation/roms/psvita/license"
+        self.lic_target = self.home / "Emulation/storage/Vita3K/ux0/license"
+
+    def licence(self, title_id: str = TITLE) -> Path:
+        folder = self.lic_source / title_id
+        folder.mkdir(parents=True)
+        (folder / f"EP9000-{title_id}_00-PDEUAP1648614960.rif").write_bytes(b"R" * 512)
+        return folder
+
+    def test_a_licence_folder_is_linked_and_the_target_is_made(self) -> None:
+        folder = self.licence()
+        self.assertFalse(self.lic_target.exists())  # Vita3K only makes ux0/license when needed
+        self.sync()
+        self.assertTrue((self.lic_target / TITLE).is_symlink())
+        self.assertEqual(os.readlink(self.lic_target / TITLE), str(folder))
+        self.assertEqual(len(list((self.lic_target / TITLE).glob("*.rif"))), 1)
+        self.assertEqual(self.warned, [])
+
+    def test_a_second_run_changes_nothing(self) -> None:
+        self.licence()
+        self.sync()
+        stamp = (self.lic_target / TITLE).lstat().st_mtime_ns
+        self.said.clear()
+        self.assertEqual(self.sync(), 0)
+        self.assertEqual((self.lic_target / TITLE).lstat().st_mtime_ns, stamp)
+
+    def test_dry_run_creates_nothing(self) -> None:
+        self.licence()
+        self.sync(dry_run=True)
+        self.assertFalse(self.lic_target.exists())
+        self.assertTrue(any("would link" in line and TITLE in line for line in self.said))
+
+    def test_a_real_folder_in_the_way_is_not_touched(self) -> None:
+        self.licence()
+        mine = self.lic_target / TITLE
+        mine.mkdir(parents=True)
+        (mine / "mine.rif").write_bytes(b"keep")
+        self.sync()
+        self.assertFalse(mine.is_symlink())
+        self.assertEqual((mine / "mine.rif").read_bytes(), b"keep")
+
+    def test_nothing_is_made_while_vita3k_runs(self) -> None:
+        self.licence()
+        self.start("Vita3K")
+        self.sync()
+        self.assertFalse(self.lic_target.exists())
+
+    def test_the_target_is_not_made_when_vita3k_never_ran(self) -> None:
+        self.licence()
+        os.rmdir(self.target)
+        os.rmdir(self.target.parent)  # no ux0
+        self.sync()
+        self.assertFalse(self.lic_target.exists())
+        self.assertTrue(any("Vita3K" in line for line in self.said + self.warned))
+
+    def test_no_licences_make_no_folder(self) -> None:
+        self.sync()
+        self.assertFalse(self.lic_target.exists())
+
+    def test_the_games_are_still_linked_by_their_own_rule(self) -> None:
+        self.game()
+        self.licence()
+        self.sync()
+        self.assertTrue(self.link().is_symlink())
+        self.assertTrue((self.lic_target / TITLE).is_symlink())
+
+
 class ProfileTests(unittest.TestCase):
+    def test_the_shipped_profile_links_the_vita3k_licences(self) -> None:
+        rule = PROFILE.links["vita3k-license"]
+        self.assertEqual(rule.source, "{library}/roms/psvita/license")
+        self.assertEqual(rule.target, "~/Emulation/storage/Vita3K/ux0/license")
+        self.assertEqual(rule.process, ("Vita3K",))
+        self.assertEqual(rule.match, r"PCS[A-I]\d{5}")
+        self.assertEqual((rule.require, rule.noun, rule.create_target), ((), "license", True))
+        self.assertEqual(
+            (PROFILE.links["vita3k"].noun, PROFILE.links["vita3k"].create_target), ("game", False)
+        )
+
+    def test_noun_and_create_target_are_checked(self) -> None:
+        good = {"source": "{library}/x", "target": "~/t", "process": ["P"]}
+
+        def parse(**change):
+            table = {**good, **change}
+            return parse_profile(
+                {"name": "x", "paths": {"library": "~/L"}, "links": {"a": table}}, "t"
+            )
+
+        rule = parse(noun="license", create_target=True).links["a"]
+        self.assertEqual((rule.noun, rule.create_target), ("license", True))
+        for change, message in (
+            ({"noun": ""}, "links.a.noun"),
+            ({"noun": 3}, "links.a.noun"),
+            ({"create_target": "yes"}, "links.a.create_target"),
+        ):
+            with self.assertRaisesRegex(ProfileError, message, msg=str(change)):
+                parse(**change)
+
     def test_the_shipped_profile_links_vita3k(self) -> None:
         rule = PROFILE.links["vita3k"]
         self.assertEqual(rule.source, "{library}/roms/psvita/app")
@@ -333,6 +435,20 @@ class ProvisionTests(Helpers, test_shadps4.Device, unittest.TestCase):
         self.assertTrue(os.access(self.script, os.X_OK))
         self.assertIn("links sync 'deck'", self.script.read_text())
         self.assertTrue(any("links" in line for line in lines), lines)
+
+    def test_provision_links_the_licences_too(self) -> None:
+        self.game()
+        lic = self.home / "Emulation/roms/psvita/license" / TITLE
+        lic.mkdir(parents=True)
+        (lic / "EP9000-PCSF00024_00-PDEUAP1648614960.rif").write_bytes(b"R" * 512)
+        link = self.home / "Emulation/storage/Vita3K/ux0/license" / TITLE
+        self.prov(dry_run=True)
+        self.assertFalse(link.parent.exists())
+        self.prov()
+        self.assertEqual(os.readlink(link), str(lic))
+        stamp = link.lstat().st_mtime_ns
+        self.prov()
+        self.assertEqual(link.lstat().st_mtime_ns, stamp)
 
     def test_a_second_provision_changes_nothing(self) -> None:
         self.game()
@@ -446,6 +562,42 @@ class DoctorTests(Helpers, test_shadps4.Device, unittest.TestCase):
 
     def test_no_games_is_ok(self) -> None:
         self.assertEqual(self.result().status, OK)
+
+    def licence_result(self):
+        return by_name(self.check(), "Vita3K license links")
+
+    def licence(self) -> Path:
+        folder = self.home / "Emulation/roms/psvita/license" / TITLE
+        folder.mkdir(parents=True)
+        (folder / "EP9000-PCSF00024_00-PDEUAP1648614960.rif").write_bytes(b"R" * 512)
+        return folder
+
+    def test_licences_without_a_link_warn_with_the_fix(self) -> None:
+        self.licence()  # ux0/license is not there yet: it will be made, so no "start Vita3K"
+        result = self.licence_result()
+        self.assertEqual(result.status, WARN)
+        self.assertIn("license(s) have no link", result.detail)
+        self.assertIn(TITLE, result.detail)
+        self.assertIn("warpzone links sync deck", result.fix)
+        self.assertNotIn("start Vita3K", result.fix)
+
+    def test_linked_licences_are_ok(self) -> None:
+        self.licence()
+        self.sync()
+        result = self.licence_result()
+        self.assertEqual(result.status, OK, result.detail)
+        self.assertIn("1 license", result.detail)
+
+    def test_no_licences_is_ok(self) -> None:
+        self.assertEqual(self.licence_result().status, OK)
+
+    def test_a_console_where_vita3k_never_ran_warns_to_start_it(self) -> None:
+        self.licence()
+        os.rmdir(self.target)
+        os.rmdir(self.target.parent)
+        result = self.licence_result()
+        self.assertEqual(result.status, WARN)
+        self.assertIn("start Vita3K", result.fix)
 
 
 if __name__ == "__main__":

@@ -184,6 +184,12 @@ def resolve(profile: Profile, home: Path) -> list[Resolved]:
     return out
 
 
+def creatable(item: Resolved, fs: Fs = REAL) -> bool:
+    """Whether a missing `target` is made by the rule: it asks for that and the folder above
+    it exists (the emulator has run)."""
+    return item.rule.create_target and fs.isdir(item.target.parent)
+
+
 def inspect(item: Resolved, fs: Fs = REAL) -> tuple[list[str], Plan]:
     """The ready titles of a rule and what is to be done about them."""
     ready = ready_titles(item.source, item.rule, fs)
@@ -191,6 +197,17 @@ def inspect(item: Resolved, fs: Fs = REAL) -> tuple[list[str], Plan]:
 
 
 # ------------------------------------------------------------------ doing it
+
+
+def _make_target(item: Resolved, say: Say, warn: Say) -> bool:
+    """Make the target folder (one level: its parent exists), when it is still missing."""
+    try:
+        item.target.mkdir(exist_ok=True)
+    except OSError as exc:
+        warn(f"links {item.key}: cannot create {item.target} ({exc.strerror or exc})")
+        return False
+    say(f"links {item.key}: created {item.target}")
+    return True
 
 
 def _apply(item: Resolved, todo: Plan, say: Say, warn: Say, dry_run: bool) -> int:
@@ -253,20 +270,24 @@ def sync(
         if not REAL.isdir(item.source):
             say(f"links {item.key}: {item.source} does not exist yet, nothing to link")
             continue
-        if not REAL.isdir(item.target):
+        missing = not REAL.isdir(item.target)
+        if missing and not creatable(item):
             warn(
-                f"links {item.key}: {item.target} does not exist, so the games were not linked: "
-                f"start {item.label} once, then {again}"
+                f"links {item.key}: {item.target} does not exist, so the {item.rule.noun}s were "
+                f"not linked: start {item.label} once, then {again}"
             )
             continue
         _, todo = inspect(item)
+        if missing and not todo.create:
+            say(f"links {item.key}: no {item.rule.noun}s to link yet")
+            continue
         for name in todo.kept:
             say(
                 f"links {item.key}: {name} is a real folder or points elsewhere in "
                 f"{item.target}, left alone"
             )
         if not todo.changes:
-            say(f"links {item.key}: {len(todo.ok)} game(s) linked, nothing to do")
+            say(f"links {item.key}: {len(todo.ok)} {item.rule.noun}(s) linked, nothing to do")
             continue
         try:
             busy = settings_state.running(item.rule.process, proc=proc)
@@ -282,5 +303,10 @@ def sync(
                 f"quit {item.label} and {again}"
             )
             continue
+        if missing:
+            if dry_run:
+                say(f"links {item.key}: would create {item.target}")
+            elif not _make_target(item, say, warn):
+                continue
         changed += _apply(item, todo, say, warn, dry_run)
     return changed
