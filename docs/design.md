@@ -1310,7 +1310,8 @@ device. `--key` without `--seed` is a usage error (exit 2).
    version on the hub and deletes the other.
 2. Skip, with a note, every emulator that is running (its files may not hold its latest
    changes yet) and every file that has no snapshot ("no baseline: run `settings apply`
-   first, or `capture --seed`").
+   first, or `capture --seed`"; for a system data file, whose baseline `apply` would take from
+   the current file, "run `capture --seed --key '<emulator>/data/<id>'`").
 3. Candidates (`candidates`, pure), among tracked keys: those in the snapshot with `C != S`
    and `C` different from the effective layered value. Keys new to the file (not in the
    snapshot; usually defaults written by an emulator update) are only counted, unless

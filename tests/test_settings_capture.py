@@ -558,6 +558,32 @@ class RefusalTests(CaptureBase):
         self.assertIn('"[Video]gpu" = "5"', self.layer_text("common"))
 
 
+class DataBaselineTests(CaptureBase):
+    """A data file with no snapshot: the note must name a way that really proposes it."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.put(EEPROM, b"EEPROM-v1")
+
+    def test_the_note_names_the_command_that_proposes_it(self) -> None:
+        _, out, _, _ = self.capture(yes=True, emulators=["gamma"])
+        self.assertIn("gamma/data/eeprom", out)
+        self.assertIn("capture --seed --key 'gamma/data/eeprom'", out)
+        self.assertNotIn("`settings apply` first", out)
+
+    def test_the_noted_command_proposes_it_and_apply_first_would_not(self) -> None:
+        code, *_ = self.capture(seed=True, yes=True, key=["gamma/data/*"], emulators=["gamma"])
+        self.assertEqual(code, 0)
+        self.assertEqual((self.folder / "files" / "gamma" / "eeprom").read_bytes(), b"EEPROM-v1")
+
+    def test_after_an_apply_a_plain_capture_never_proposes_it(self) -> None:
+        self.run_apply()
+        code, out, _, _ = self.capture(yes=True, emulators=["gamma"])
+        self.assertEqual(code, 0)
+        self.assertNotIn("eeprom", out)
+        self.assertFalse((self.folder / "files").exists())
+
+
 class DataFileTests(CaptureBase):
     def setUp(self) -> None:
         super().setUp()

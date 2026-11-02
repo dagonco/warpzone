@@ -1117,7 +1117,11 @@ class _Capture:
             )
             if cand is None:
                 if snap_hash is None:
-                    self.note(where, "no baseline: run `settings apply` first, or `capture --seed`")
+                    self.note(
+                        where,
+                        f"no baseline: run `capture --seed --key '{emu.id}/data/{entry.id}'` "
+                        "(not `settings apply`, which would take this file as the baseline)",
+                    )
                 continue
             self.cands.append(cand)
             self.data_states[cand.ref] = st

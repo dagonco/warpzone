@@ -57,6 +57,14 @@ warpzone settings capture --seed              # the real run
 warpzone settings capture --seed --key 'eden/qt-config/*'
 ```
 
+System data files (the xemu EEPROM, Azahar's `sysdata` config, the Vita3K user file) are not `known` keys, so `--seed` alone never proposes them; name them with `--key`. The first capture on the reference console, for the settings and all three data files, is:
+
+```bash
+warpzone settings capture --seed --key 'xemu/data/*' 'azahar/data/*' 'vita3k/data/*'
+```
+
+Run it before ES-DE has started and applied on that console: a first `settings apply` takes a data file that has no hub copy as its baseline, and a plain `capture` then proposes it only after it changes. If that already happened, the same `--seed --key` command still proposes it.
+
 On a terminal you answer one prompt per key:
 
 ```
@@ -95,7 +103,7 @@ Capture proposes keys that changed since the last sync. Keys that an emulator up
 | device | Set in `<device>.toml`; only this console gets it. |
 | discard | Nothing reaches the hub; the layer value comes back at the next apply. |
 
-Skipping a key leaves it for next time. System data files (for example the Xbox EEPROM) are shown by size and hash only, and can go to common, be discarded or be skipped.
+Skipping a key leaves it for next time. System data files (for example the Xbox EEPROM) are shown by size and hash only, and can go to common, be discarded or be skipped. A data file that has no baseline yet is proposed only by `capture --seed --key '<emulator>/data/<id>'`, for example `'xemu/data/*'`.
 
 ## Apply
 
