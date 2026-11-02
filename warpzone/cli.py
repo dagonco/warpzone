@@ -158,6 +158,20 @@ def _build_parser() -> argparse.ArgumentParser:
         help="run from ES-DE's startup script: ES-DE waits and has read no gamelist yet",
     )
 
+    ln = sub.add_parser("links", help="link library games into an emulator's own game folder")
+    ln_sub = ln.add_subparsers(dest="links_command", required=True, metavar="action")
+    ln_sync = ln_sub.add_parser(
+        "sync",
+        parents=[common],
+        help="make the folders of the profile's [links.*] rules hold a symlink per library "
+        "game (run on the device; nothing changes while the emulator runs)",
+    )
+    ln_sync.add_argument("name", help="device name")
+    ln_sync.add_argument(
+        "--dry-run", action="store_true", help="say what it would do and change nothing"
+    )
+    ln_sync.add_argument("--quiet", action="store_true", help="print nothing")
+
     chk = sub.add_parser(
         "bios",
         parents=[common],
@@ -534,6 +548,29 @@ def _play_state(args: argparse.Namespace, cfg: Config, profiles: dict[str, Profi
     return EXIT_OK
 
 
+def _links(args: argparse.Namespace, cfg: Config, profiles: dict[str, Profile]) -> int:
+    from warpzone import titlelinks
+
+    name = _device(cfg, args.name)
+    device, profile = cfg.devices[name], profiles[cfg.devices[name].profile]
+    if "library" not in device.folders:
+        raise ConfigError(f"device {name!r} does not list the 'library' folder group")
+    if not profile.links:
+        raise ConfigError(f"profile {profile.name!r} has no [links.*] table: nothing to link")
+    quiet = args.quiet
+
+    def say(text: str) -> None:
+        if not quiet:
+            print(text)
+
+    def warn(text: str) -> None:
+        if not quiet:
+            _eprint(f"warning: {text}")
+
+    titlelinks.sync(name, profile, Path.home(), say=say, warn=warn, dry_run=args.dry_run)
+    return EXIT_OK
+
+
 def _self_update(args: argparse.Namespace, rep: Reporter) -> int:
     from warpzone import selfupdate
 
@@ -551,6 +588,8 @@ def _run(args: argparse.Namespace) -> int:
         return _settings(args, *_load(args))
     if args.command == "play-state":  # ES-DE waits for it too: no network code either
         return _play_state(args, *_load(args))
+    if args.command == "links":  # and so does this one
+        return _links(args, *_load(args))
     from warpzone import doctor, provision, prune
     from warpzone.provision import Reporter
 

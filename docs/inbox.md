@@ -1,6 +1,6 @@
 # Adding new games: the inbox
 
-How `warpzone inbox` identifies, converts and files new dumps, including Switch, PS3, Xbox, Xbox 360, Wii U and arcade.
+How `warpzone inbox` identifies, converts and files new dumps, including Switch, PS3, PS4, PS Vita, Xbox, Xbox 360, Wii U and arcade.
 
 Drop new dumps (files, folders or archives) in `inbox/` on the hub's share and run `warpzone inbox` on a desktop machine that mounts it (the NAS is too weak for conversions). Without `--apply` it only reports:
 
@@ -63,7 +63,7 @@ mame2003plus_dat = "~/dats/mame2003-plus.xml"
 
 Items modified in the last 30 seconds are left alone (they may still be copying), and `_*` folders, hidden files, `@eaDir` and `.DS_Store` are never items. warpzone does not edit whitelists: add the printed lines to the device whitelists yourself ([whitelists.md](whitelists.md)). Exit code 1 when any item needs review.
 
-Vita is not supported yet, and neither are PS3 or Xbox games kept as extracted folders or PS3 `.pkg` files. Those items go to review ("not supported by inbox yet").
+A PS Vita dump kept as a game folder is filed (see [PS Vita games](#ps-vita-games)). `.vpk` files, Vita `.pkg` files that need installing, PS3 or Xbox games kept as extracted folders and PS3 `.pkg` files are not supported yet and go to review ("not supported by inbox yet").
 
 ## Switch games
 
@@ -142,6 +142,31 @@ EmuDeck's `shadps4.sh` reads the quoted path of the `Exec=` line and runs shadPS
 - An update (patch) or DLC package goes to review: they are not merged into the game yet. The header shows it before anything is unpacked, and the `CATEGORY` of `param.sfo` is checked again afterwards.
 - A shortcut with that name that runs another game is kept, and the new one gets the title id in its name.
 - Without `orbis-pkg-util` the `.pkg` is placed as it is in `library/roms/ps4/` with a note saying so; shadPS4 cannot run it from there.
+
+## PS Vita games
+
+Vita3K runs the games it finds in `ux0/app/<TITLEID>`, and ES-DE lists only `.psvita` files, whose content EmuDeck's launcher passes to Vita3K as the title to run. A decrypted game dump (what a dumper leaves: `eboot.bin`, `sce_sys/param.sfo` and the data, no `work.bin`, no `sce_pfs`, no licence), loose in a folder or inside a `.zip`, `.7z` or `.rar`, at the top level or inside one top folder, is recognised by `sce_sys/param.sfo` next to `eboot.bin`, with a Vita title id (`PCS[A-I]` and five digits) and category `gd` or `gdc`. `--apply` places:
+
+| What | Where |
+|---|---|
+| The dump as it is | `library/roms/psvita/app/<TITLEID>/` |
+| The launcher ES-DE lists | `library/roms/psvita/<Title>.psvita`, whose whole content is the title id |
+
+```
+  psvita: PCSF00024: placed
+    path: library/roms/psvita/app/PCSF00024
+    note: detected: Vita game: PCSF00024 GRAVITY RUSH
+    note: launcher: library/roms/psvita/GRAVITY RUSH.psvita
+    whitelist: !/roms/psvita/app/PCSF00024
+    whitelist: !/roms/psvita/GRAVITY RUSH.psvita
+```
+
+The folder is copied file by file with a read-back to `<TITLEID>.part` and renamed, so the library never holds a half game. Add both printed whitelist lines to the device whitelists. Unlike PS4, nothing needs extracting, so a report without `--apply` already prints both lines.
+
+- A game already in the library is reported and never replaced or compared; its launcher is written if it is missing. A launcher that already holds this title id is kept ("already there"); one with the same name that holds another id (the same title in another region) is kept, and the new one gets the title id in its name.
+- An update (`gp`) or DLC (`ac`) goes to review with a message, as does any other category. A dump with a title id that is not a Vita one (a PS4 game folder, for example) goes to review, and so does one that holds `sce_sys/package/work.bin` or an `sce_pfs` folder: Vita3K has to install those, so install them there by hand.
+- An item with several games, a symbolic link inside the game, or an unreadable `param.sfo` goes to review. A PS3 game (`PS3_GAME/PARAM.SFO`) is not this layout and keeps its "not supported by inbox yet" outcome.
+- The consoles link the folder into Vita3K's own game folder, see [emudeck.md](emudeck.md#vita3k-games).
 
 ## Arcade sets
 

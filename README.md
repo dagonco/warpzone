@@ -116,6 +116,7 @@ python3 -m warpzone --help
 | `warpzone render-ignores <name>` | Prints the ignore lines a device folder would get. |
 | `warpzone frontend refresh` | On a console whose frontend is not ES-DE: rewrites its gamelists from the hub's scraped artwork and metadata. |
 | `warpzone play-state sync <name>` | On a console with ES-DE: shares favourites and play statistics with the other frontends. ES-DE runs it at startup, and a timer between starts. |
+| `warpzone links sync <name>` | On a console: links the library's Vita games into Vita3K's own game folder. `provision device` runs it and ES-DE runs it at startup. |
 | `warpzone prune` | Reports (or, with `--apply`, deletes) files a device no longer whitelists. |
 | `warpzone bios` | Which BIOS and firmware files the library has, lacks or has wrong. |
 | `warpzone inbox` | Reports (or, with `--apply`, files) new games dropped in `inbox/`. |
@@ -125,7 +126,7 @@ python3 -m warpzone --help
 | `warpzone self-update` | On a device: moves the git clone to the newest release tag (never a downgrade). A daily timer runs it, see [docs/self-update.md](docs/self-update.md). |
 | `warpzone doctor` | Checks this machine and prints the fix for each problem. |
 
-`provision` and `frontend refresh` support `--dry-run`. `prune` and `inbox` report first and act only with `--apply`. `settings apply` and `settings capture` support `--dry-run`.
+`provision`, `frontend refresh` and `links sync` support `--dry-run`. `prune` and `inbox` report first and act only with `--apply`. `settings apply` and `settings capture` support `--dry-run`.
 `provision` and `self-update` support `--dry-run`. `prune` and `inbox` report first and act only with `--apply`. `settings apply` and `settings capture` support `--dry-run`.
 
 ## Safety
@@ -143,7 +144,7 @@ Turn on filesystem snapshots for the hub's share. The full list of rules is in [
 |---|---|
 | [docs/whitelists.md](docs/whitelists.md) | How whitelists work, rescan, bootstrap, pruning. |
 | [docs/settings.md](docs/settings.md) | Sharing emulator settings across consoles: capture, apply, audit. |
-| [docs/inbox.md](docs/inbox.md) | Adding games: DAT-based discs and cartridges, Switch, PS3 and Xbox, arcade. |
+| [docs/inbox.md](docs/inbox.md) | Adding games: DAT-based discs and cartridges, Switch, PS3, PS4, PS Vita and Xbox, arcade. |
 | [docs/bios.md](docs/bios.md) | The BIOS and firmware check. |
 | [docs/doctor.md](docs/doctor.md) | Checking a machine. |
 | [docs/self-update.md](docs/self-update.md) | Updating a device: `self-update`, its daily timer, turning it off. |

@@ -177,6 +177,29 @@ class ShadPS4Dirs:
 
 
 @dataclass(frozen=True)
+class TitleLinks:
+    """One symlink per game folder of the library, inside an emulator's own game folder.
+
+    `source` holds a folder per title (`{library}` is replaced by the profile's library
+    path); `target` is where the emulator looks for them. A title is a folder of `source`
+    whose name fully matches `match` and that holds every file of `require`. `process` names
+    the emulator: nothing is changed while it runs. See docs/design.md, "Title links".
+    """
+
+    source: str
+    target: str
+    process: tuple[str, ...]
+    match: str = ".+"
+    require: tuple[str, ...] = ()
+
+    def source_path(self, library: str) -> str:
+        return self.source.replace("{library}", library)
+
+    def target_path(self, library: str) -> str:
+        return self.target.replace("{library}", library)
+
+
+@dataclass(frozen=True)
 class Artwork:
     """Scraped artwork and metadata for a frontend that is not ES-DE.
 
@@ -225,6 +248,7 @@ class Profile:
     artwork: Artwork | None = None
     play_state: PlayState | None = None
     shadps4: ShadPS4Dirs | None = None
+    links: dict[str, TitleLinks] = field(default_factory=dict)
 
     def placement_ignores(self) -> tuple[str, ...]:
         """The anchored library paths that placements deliver instead of the library."""
@@ -255,6 +279,7 @@ def parse_profile(data: dict[str, Any], source: str) -> Profile:
         "artwork",
         "play_state",
         "shadps4",
+        "links",
     }
     for key in sorted(set(data) - allowed):
         err(f"unknown key {key!r}")
@@ -325,6 +350,7 @@ def parse_profile(data: dict[str, Any], source: str) -> Profile:
     artwork = _parse_artwork(data.get("artwork"), paths, es_systems is not None, err)
     play_state = _parse_play_state(data.get("play_state"), paths, artwork, err)
     shadps4 = _parse_shadps4(data.get("shadps4"), "library" in paths, err)
+    links = _parse_links(data.get("links"), "library" in paths, err)
 
     if errors:
         raise ProfileError("\n".join(errors))
@@ -342,6 +368,7 @@ def parse_profile(data: dict[str, Any], source: str) -> Profile:
         artwork,
         play_state,
         shadps4,
+        links,
     )
 
 
@@ -598,6 +625,72 @@ def _parse_shadps4_launch(raw: Any, err: Callable[[str], None]) -> ShadPS4Launch
     if problems:
         return None
     return ShadPS4Launch(*(raw[k] for k in _LAUNCH_KEYS))
+
+
+_LINK_KEYS = {"source", "target", "process", "match", "require"}
+
+
+def _parse_links(raw: Any, has_library: bool, err: Callable[[str], None]) -> dict[str, TitleLinks]:
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        err("`links` must be a table")
+        return {}
+    found: dict[str, TitleLinks] = {}
+    for key, entry in raw.items():
+        where = f"links.{key}"
+        if not isinstance(entry, dict):
+            err(f"{where}: must be a table")
+            continue
+        problems = 0
+        for extra in sorted(set(entry) - _LINK_KEYS):
+            err(f"{where}: unknown key {extra!r}")
+            problems += 1
+        for name in ("source", "target"):
+            value = entry.get(name)
+            stripped = value.replace("{library}", "") if isinstance(value, str) else ""
+            if (
+                not isinstance(value, str)
+                or "{" in stripped
+                or not value.startswith(("/", "~/", "{library}"))
+                or '"' in value
+                or "\n" in value
+            ):
+                err(
+                    f"{where}.{name}: required, an absolute path or one starting with ~/ "
+                    "({library} is the only placeholder)"
+                )
+                problems += 1
+            elif "{library}" in value and not has_library:
+                err(f"{where}.{name}: uses {{library}} but there is no paths.library")
+                problems += 1
+        if not _names(entry.get("process")):
+            err(f"{where}.process: required, a non-empty list of non-empty strings")
+            problems += 1
+        pattern = entry.get("match", ".+")
+        try:
+            if not isinstance(pattern, str) or not pattern:
+                raise re.error("not a string")
+            re.compile(pattern)
+        except re.error:
+            err(f"{where}.match: must be a regular expression")
+            problems += 1
+        require = entry.get("require", [])
+        if not isinstance(require, list) or not all(
+            isinstance(r, str) and r and not r.startswith("/") and ".." not in r.split("/")
+            for r in require
+        ):
+            err(f"{where}.require: must be a list of relative file paths")
+            problems += 1
+        if not problems:
+            found[key] = TitleLinks(
+                entry["source"],
+                entry["target"],
+                tuple(entry["process"]),
+                pattern,
+                tuple(require),
+            )
+    return found
 
 
 def _parse_library(raw: Any, err: Callable[[str], None]) -> tuple[str, ...]:

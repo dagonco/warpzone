@@ -645,9 +645,14 @@ class KindHandler(Protocol):
 
 def kind_handlers() -> list[KindHandler]:
     """The registry: one line per handler (imported late, they import this module)."""
-    from warpzone import inbox_console_iso, inbox_mame, inbox_switch
+    from warpzone import inbox_console_iso, inbox_mame, inbox_switch, inbox_vita
 
-    return [inbox_mame.HANDLER, inbox_switch.HANDLER, inbox_console_iso.HANDLER]
+    return [
+        inbox_mame.HANDLER,
+        inbox_switch.HANDLER,
+        inbox_console_iso.HANDLER,
+        inbox_vita.HANDLER,
+    ]
 
 
 class UnmatchedHandler(Protocol):

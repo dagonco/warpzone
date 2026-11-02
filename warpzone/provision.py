@@ -20,6 +20,7 @@ from warpzone import (
     playstate_device,
     settings_state,
     shadps4,
+    titlelinks,
     updatetimer,
 )
 from warpzone.config import DEFAULT_WAIT_SECONDS, HUB_WAIT_SECONDS, Config
@@ -706,6 +707,39 @@ def ensure_play_state_script(
     )
 
 
+def ensure_links_script(
+    name: str,
+    profile: Profile,
+    home: Path,
+    rep: Reporter,
+    *,
+    dry_run: bool,
+    python: str | None = None,
+    import_check: ImportCheck = run_import_check,
+    proc: Path = Path("/proc"),
+    state_root: Path | None = None,
+    config_path: Path | None = None,
+) -> None:
+    """Install ES-DE's startup script for `links sync`, as `ensure_esde_script` does."""
+    if "esde" not in profile.paths or not profile.links:
+        return
+    python = python or sys.executable
+    text = esde.render_links_script(python, name, _script_config(config_path, home))
+    _install_startup_script(
+        name,
+        profile,
+        home,
+        rep,
+        esde.LINKS_SCRIPT,
+        text,
+        dry_run=dry_run,
+        python=python,
+        import_check=import_check,
+        proc=proc,
+        state_root=state_root,
+    )
+
+
 def _install_startup_script(
     name: str,
     profile: Profile,
@@ -1059,6 +1093,23 @@ def ensure_shadps4_dirs(
             rep.warn(f"{path} changed while it was being edited, so it was left alone: {again}")
             continue
         rep.out(f"shadps4: added the install folder {folders} to {path} (old file backed up)")
+
+
+def ensure_title_links(
+    name: str,
+    profile: Profile,
+    home: Path,
+    rep: Reporter,
+    *,
+    dry_run: bool,
+    proc: Path = Path("/proc"),
+    state_root: Path | None = None,
+) -> None:
+    """Link every library game of each `[links.*]` rule into the emulator's game folder,
+    while the emulator is closed. Only links are changed; see `titlelinks`."""
+    if not profile.links:
+        return
+    titlelinks.sync(name, profile, home, say=rep.out, warn=rep.warn, dry_run=dry_run, proc=proc)
 
 
 def ensure_shadps4_launch(
@@ -1596,6 +1647,7 @@ def provision_device(
             ensure_retroarch_pins,
             ensure_shadps4_dirs,
             ensure_shadps4_launch,
+            ensure_title_links,
         ):
             ensure(name, profile, home, rep, dry_run=local.dry_run, proc=proc, state_root=root)
 
@@ -1626,6 +1678,20 @@ def provision_device(
 
     if "settings" in device.folders:
         ensure_esde_script(
+            name,
+            profile,
+            home,
+            rep,
+            dry_run=local.dry_run,
+            python=python,
+            import_check=import_check,
+            proc=proc,
+            state_root=state_root,
+            config_path=config_path,
+        )
+
+    if "library" in device.folders:
+        ensure_links_script(
             name,
             profile,
             home,
