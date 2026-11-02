@@ -46,6 +46,7 @@ from warpzone import (
     ra,
     settings_state,
     shadps4,
+    titlelinks,
     updatetimer,
 )
 from warpzone import inbox_switch as switch
@@ -549,6 +550,14 @@ def _mtime(path: Path) -> float:
     return path.stat().st_mtime
 
 
+def _read_link(path: Path) -> str | None:
+    """Where the symlink `path` points, None when it is not one."""
+    try:
+        return os.readlink(path)
+    except OSError:
+        return None
+
+
 def _list_dir(path: Path) -> list[str]:
     """Names inside `path` (broken symlinks included); empty when it cannot be listed."""
     try:
@@ -599,6 +608,7 @@ class Probes:
     is_executable: Callable[[str], bool] = _is_executable
     mtime: Callable[[Path], float] = _mtime
     list_dir: Callable[[Path], list[str]] = _list_dir
+    read_link: Callable[[Path], str | None] = _read_link
     read_text: Callable[[Path], str] = _read_text
     list_tree: Callable[[Path], list[str]] = _list_tree
     disk_free: Callable[[Path], tuple[int, int]] = _disk_free
@@ -748,7 +758,11 @@ def load_config_state(path: Path) -> ConfigState:
                 profile = profiles[device.profile]
                 art = profile.artwork is not None and "frontend" in device.folders
                 if "library" in device.folders and (
-                    profile.es_systems or profile.retroarch or profile.shadps4 or art
+                    profile.es_systems
+                    or profile.retroarch
+                    or profile.shadps4
+                    or profile.links
+                    or art
                 ):
                     frontend_devices.append(
                         SettingsDevice(device.name, device.device_id, profile, device.folders)
@@ -1385,6 +1399,59 @@ def judge_shadps4_launch(
     return OK, f"ES-DE starts shadPS4 through {script}", ""
 
 
+def judge_title_links(
+    *,
+    device: str,
+    label: str,
+    target: str,
+    target_exists: bool,
+    todo: titlelinks.Plan,
+    script: str | None,
+    noun: str = "game",
+) -> tuple[str, str, str]:
+    """Verdict on the links of one `[links.*]` rule (`noun` says what they are: games,
+    licenses); `script` names the ES-DE startup script when it is missing."""
+    again = f"run `warpzone links sync {device}` (or start ES-DE) with {label} closed"
+    parts: list[tuple[str, str, str]] = []
+    if not target_exists:
+        parts.append(
+            (
+                WARN,
+                f"{target} does not exist, so {label} cannot use the library {noun}s",
+                f"start {label} once, then run `warpzone links sync {device}`",
+            )
+        )
+    else:
+        if todo.create:
+            parts.append(
+                (
+                    WARN,
+                    f"{len(todo.create)} library {noun}(s) have no link in {target}, so "
+                    f"{label} does not use them: {', '.join(todo.create)}",
+                    again,
+                )
+            )
+        stale = [name for name in todo.remove if name not in todo.create]
+        if stale:
+            parts.append(
+                (WARN, f"dangling links in {target}: {', '.join(stale)}", again),
+            )
+        if not parts:
+            n = len(todo.ok)
+            what = f"{n} {noun}(s) linked in {target}" if n else f"no {noun}s to link yet"
+            parts.append((OK, what, ""))
+    if script is not None:
+        parts.append(
+            (
+                WARN,
+                f"the startup script {script} is missing, so new games are not linked when "
+                "ES-DE starts",
+                f"run `warpzone provision device {device}`",
+            )
+        )
+    return _merge(parts)
+
+
 def judge_last_apply(info: Mapping[str, object] | None, log_path: str) -> tuple[str, str, str]:
     """Verdict on the summary of the last `settings apply` (`None` when there is none)."""
     if info is None:
@@ -1615,6 +1682,41 @@ def check_frontend(ctx: Context) -> list[Result]:
                 emulator=launch.emulator,
             )
             results.append(Result("shadPS4 launcher", G_FRONTEND, *verdict))
+    if profile.links:
+        results += _check_links(ctx, device)
+    return results
+
+
+def _check_links(ctx: Context, device: SettingsDevice) -> list[Result]:
+    """The game links of each `[links.*]` rule, and the ES-DE script that keeps them."""
+    p = ctx.probes
+    fs = titlelinks.Fs(
+        listdir=p.list_dir,
+        readlink=p.read_link,
+        isdir=p.is_dir,
+        isfile=p.is_file,
+        exists=lambda path: p.is_dir(path) or p.is_file(path),
+    )
+    script = None
+    if "esde" in device.profile.paths:
+        path = esde.script_path(
+            Path(_expand(device.profile.paths["esde"], p.home)), esde.LINKS_SCRIPT
+        )
+        script = None if p.is_file(path) else str(path)
+    results = []
+    for item in titlelinks.resolve(device.profile, p.home):
+        exists = p.is_dir(item.target) or titlelinks.creatable(item, fs)
+        todo = titlelinks.inspect(item, fs)[1] if exists and p.is_dir(item.source) else None
+        verdict = judge_title_links(
+            device=device.name,
+            label=item.label,
+            target=str(item.target),
+            target_exists=exists,
+            todo=todo or titlelinks.Plan(),
+            script=script,
+            noun=item.rule.noun,
+        )
+        results.append(Result(f"{item.label} {item.rule.noun} links", G_FRONTEND, *verdict))
     return results
 
 

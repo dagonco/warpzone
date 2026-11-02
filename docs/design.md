@@ -472,6 +472,69 @@ write that fails if the file changed meanwhile. `doctor` compares the script wit
 `provision` would write and reads the rule. The ES-DE startup scripts do not depend on any of
 this: if EmuDeck puts its entry back, only PS4 launching goes back to the Qt launcher.
 
+### Title links
+
+Vita3K reads games from `~/Emulation/storage/Vita3K/ux0/app/<TITLEID>`, while the library
+delivers each title to `~/Emulation/roms/psvita/app/<TITLEID>` (the `inbox` placement, see
+[PS Vita games](#ps-vita-games)). A profile declares the bridge with `[links.<id>]`:
+
+```toml
+[links.vita3k]
+source = "{library}/roms/psvita/app"     # a folder per title (the library path is expanded)
+target = "~/Emulation/storage/Vita3K/ux0/app"
+process = ["Vita3K"]                      # nothing changes while it runs
+match = 'PCS[A-I]\d{5}'                   # a title folder's whole name (default: any)
+require = ["eboot.bin", "sce_sys/param.sfo"]   # files a title must already hold
+noun = "game"                             # what a title is called in messages (default)
+create_target = false                     # make `target` when it is missing (default false)
+```
+
+The shipped profile has a second rule for the licences of the games, `[links.vita3k-license]`:
+`source = "{library}/roms/psvita/license"`, `target = "~/Emulation/storage/Vita3K/ux0/license"`,
+the same `match`, no `require` (a title is a folder of `.rif` files, which have no fixed
+names), `noun = "license"` and `create_target = true`. Vita3K creates `ux0/app` when it starts
+but `ux0/license` only when it installs a licence (`io::init` makes `data`, `app`, `music`,
+`picture`, `theme`, `video` and `user`), so with `create_target` a missing `target` is made
+(one level, when its parent exists; `--dry-run` says "would create"), after the check for the
+running emulator and only when there is a title to link. When the parent is missing too, Vita3K
+has never run and the rule says so like for any other target. Vita3K reads the licence by path
+(`ux0/license/<TITLEID>/<CONTENT_ID>.rif`), which a link to the library folder satisfies; its
+"delete game" removes `ux0/license/<TITLEID>` with `remove_all`, which removes a symbolic link
+and not what it points at.
+
+`warpzone/titlelinks.py` (no network code) keeps one absolute symlink `target/<title>` ->
+`source/<title>` per title:
+
+- A title is a real folder (not a symlink) of `source` whose name fully matches `match` and that
+  holds every `require` file. A game that is still syncing has no link until it is complete.
+- `plan(source, ready, current)` is pure. A title without an entry is created. A real folder
+  or file under that name, or a link that points elsewhere, is kept and reported. An entry that
+  is a link to `source/<title>` is correct. The only thing removed is a dangling link whose
+  parent is `source` (one that this module made for a game that is gone); a dangling link
+  pointing anywhere else is not ours. Both lists are re-checked right before each change
+  (`readlink` and `exists`), and a link that appears meanwhile (`FileExistsError`) is not an
+  error.
+- Nothing is changed while a process of `process` runs (`settings_state.running`) or when that
+  cannot be told (no `/proc`); the run says so. A missing `source` is "nothing to link"; a
+  missing `target` means the emulator has not run yet, and it is not created. `--dry-run`
+  prints "would link" and "would remove" and changes nothing. A second run changes nothing.
+- It runs from `provision device` (for a device that lists `library`; `ensure_title_links`),
+  from `warpzone links sync <device> [--dry-run] [--quiet]` and from an ES-DE startup script.
+  The script, `<esde>/scripts/startup/warpzone-links.sh`, is written like the other two
+  (see [ES-DE startup script](#es-de-startup-script)): the same `env -u ... timeout 15 <python>
+  -m warpzone links sync '<device>' [--config ...] --quiet >/dev/null 2>&1` and `exit 0`, so
+  ES-DE is never held up or stopped by a failing warpzone. The command is routed before any
+  network import, like `settings apply` and `play-state sync`.
+- **Doctor.** `<process> <noun> links` (`Vita3K game links`, `Vita3K license links`): a warning
+  for library titles without a link, dangling links, a missing `target` (unless the rule makes
+  it and its parent exists), and a missing startup script.
+- **Vita3K.** From its public source, the app list (`apps_list.cpp`) is built from the
+  directories of `ux0/app` with `std::filesystem::is_directory` (which follows symlinks) and
+  is kept in `gui-configs/apps-cache.xml`, which is rebuilt when the directory names or the
+  write times of `sce_sys/param.sfo` and `icon0.png` differ; `-r <TITLEID>` needs the title in
+  that list. No cache entry or `ux0/temp` content has to be written. Running a game through a
+  symlink on a real console is untested.
+
 ### Frontend artwork
 
 A frontend that is not ES-DE shows nothing of what the hub scraped: ES-DE keeps its
@@ -735,10 +798,11 @@ error messages; the RetroAchievements key is read from `RA_API_KEY`, never from 
 |---|---|---|
 | `warpzone check` | anywhere | Validates config + profiles, reports which whitelists are missing on the hub (via `GET /rest/db/browse`), never writes. Exit 1 if any are missing; `--offline` skips the hub. |
 | `warpzone provision hub` | anywhere that reaches the hub API | Adds every configured device to the hub, creates/updates every `wz-*` folder on the hub and shares it with the devices that subscribe to it, sets the hub ignores. A newly created whitelisted folder first lets only the whitelists through and waits for them (`--timeout`, default 120 s) before the full scan, see "Hub bootstrap". Idempotent. |
-| `warpzone provision device <name>` | on the device | Reads the local Syncthing API key from the local `config.xml` (searching the default locations, including the SyncThingy flatpak; `--syncthing-config PATH` overrides), adds the hub device, creates the subscribed folders with the bootstrap above (`--timeout SECONDS`). When that Syncthing is the SyncThingy flatpak it first grants it the missing `flatpak override --user --filesystem=~/.var/app/<app>` for every folder under `~/.var/app` (flatpak hides other apps' data), and asks for a Syncthing restart. When the device subscribes to `settings`, it installs the ES-DE startup script that runs `settings apply` (see [ES-DE startup script](#es-de-startup-script)). When the device subscribes to `library` and its profile has `[es_systems]` or `[retroarch]`, it also writes the frontend's system list override and pins RetroArch's paths (see [Frontend and RetroArch overrides](#frontend-and-retroarch-overrides)). When the profile has `[shadps4]` it also lists the PS4 games folder in shadPS4's install directories (see [shadPS4 install directories](#shadps4-install-directories)). When it lists `frontend` and the profile has `[artwork]`, it limits the artwork folders to the systems on the device, writes the gamelists and installs the refresh timer (see [Frontend artwork](#frontend-artwork)). Idempotent. |
+| `warpzone provision device <name>` | on the device | Reads the local Syncthing API key from the local `config.xml` (searching the default locations, including the SyncThingy flatpak; `--syncthing-config PATH` overrides), adds the hub device, creates the subscribed folders with the bootstrap above (`--timeout SECONDS`). When that Syncthing is the SyncThingy flatpak it first grants it the missing `flatpak override --user --filesystem=~/.var/app/<app>` for every folder under `~/.var/app` (flatpak hides other apps' data), and asks for a Syncthing restart. When the device subscribes to `settings`, it installs the ES-DE startup script that runs `settings apply` (see [ES-DE startup script](#es-de-startup-script)). When the device subscribes to `library` and its profile has `[es_systems]` or `[retroarch]`, it also writes the frontend's system list override and pins RetroArch's paths (see [Frontend and RetroArch overrides](#frontend-and-retroarch-overrides)). When the profile has `[shadps4]` it also lists the PS4 games folder in shadPS4's install directories (see [shadPS4 install directories](#shadps4-install-directories)). When the profile has `[links.*]` and the device lists `library`, it links the library games into the emulator's game folder and installs the ES-DE startup script that keeps them linked (see [Title links](#title-links)). When it lists `frontend` and the profile has `[artwork]`, it limits the artwork folders to the systems on the device, writes the gamelists and installs the refresh timer (see [Frontend artwork](#frontend-artwork)). Idempotent. |
 | `warpzone frontend refresh [device]` | on the device | For a device whose profile has `[artwork]` and that lists `frontend`: widens the artwork folders' ignores to the systems that have games now (when the local Syncthing is found) and rewrites the frontend's gamelists from the synced ES-DE data, only while the frontend is closed. `--dry-run` prints what it would do. See [Frontend artwork](#frontend-artwork). |
 | `warpzone play-state sync <device>` | on the device | For a device with ES-DE that lists `play-state`: publishes what its gamelists say and merges the other devices' ledgers into them, only while ES-DE is closed or starting (`--frontend-starting`, which its startup script passes). `--dry-run`, `--quiet`. Needs no network. See [Play state](#play-state). |
 | `warpzone provision device <name>` | on the device | Reads the local Syncthing API key from the local `config.xml` (searching the default locations, including the SyncThingy flatpak; `--syncthing-config PATH` overrides), adds the hub device, creates the subscribed folders with the bootstrap above (`--timeout SECONDS`). When that Syncthing is the SyncThingy flatpak it first grants it the missing `flatpak override --user --filesystem=~/.var/app/<app>` for every folder under `~/.var/app` (flatpak hides other apps' data), and asks for a Syncthing restart. When the device subscribes to `settings`, it installs the ES-DE startup script that runs `settings apply` (see [ES-DE startup script](#es-de-startup-script)). When the device subscribes to `library` and its profile has `[es_systems]` or `[retroarch]`, it also writes the frontend's system list override and pins RetroArch's paths (see [Frontend and RetroArch overrides](#frontend-and-retroarch-overrides)). It then installs the self-update timer, for every profile (see [Self-update](#self-update)). Idempotent. |
+| `warpzone links sync <device>` | on the device | For a profile with `[links.*]` and a device that lists `library`: makes each rule's `target` hold a symlink per library title, never while the emulator runs (see [Title links](#title-links)). `--dry-run` only says what it would do, `--quiet` prints nothing. ES-DE runs it at startup. |
 | `warpzone prune [device]` | on the device | Reports, and with `--apply` deletes, the files of the whitelisted folders that the device no longer whitelists (see [Pruning](#pruning)). Report only by default. |
 | `warpzone bios` | on a device or the hub | Reports which BIOS and firmware files a library has, lacks or has wrong (see [BIOS check](#bios-check)). Read-only. Exit 1 if a required item is missing or wrong. |
 | `warpzone inbox` | a desktop that mounts the hub's share | Identifies, converts and files new games dropped in `inbox/` (see [Inbox](#inbox)). Report only by default, `--apply` acts. Exit 1 if any item needs review. |
@@ -1236,6 +1300,81 @@ lists only the `.desktop` files of `roms/ps4/shortcuts`, whose command on the co
 - **Install directory.** The consoles must list `~/Emulation/roms/ps4/games` as an install
   directory of shadPS4. See [shadPS4 install directories](#shadps4-install-directories).
 
+### PS Vita games
+
+A decrypted Vita dump is recognised and filed by `warpzone/inbox_vita.py`, a kind handler
+registered after the console image handler (so a `.pkg` or anything that handler claims keeps
+its outcome). Vita3K runs games from `ux0/app/<TITLEID>`; ES-DE lists only `.psvita` files,
+whose system definition launches `%EMULATOR_VITA3K% -r %INJECT%=%BASENAME%.psvita`, and
+EmuDeck's `vita3k.sh` reads the file's content as the title id (`Vita3K -Fr <id>`).
+
+- **Claim.** A folder or archive (`.zip`, or `.7z` and `.rar` with `bsdtar`) whose file list
+  has `sce_sys/param.sfo` and `eboot.bin` in the same folder, either at the top or one folder
+  below it (`game_roots`, pure). Other layouts (`PS3_GAME/PARAM.SFO`, `PSP_GAME/PARAM.SFO`) are
+  not claimed. A folder holding archives is not opened.
+- **Identify.** `parse_sfo` (shared with PS3 and PS4) on `sce_sys/param.sfo`: `TITLE_ID` must
+  fully match `PCS[A-I]\d{5}`, and `CATEGORY` decides (`gd`, `gdc` game; `gp` update; `ac`
+  DLC; anything else is not a game). Anything but a game, a title id that is not a Vita one,
+  several games in one item, a symbolic link inside the game, or a dump that holds
+  `sce_pfs` (Vita3K has to install it) goes to review with the reason. `.vpk` files and `.pkg` files keep their earlier outcome.
+- **Vitamin.** A dump whose game folder holds `sce_module/steroid.suprx` (`is_vitamin`, pure,
+  case-insensitive, relative to the game root) is a Vitamin dump. Vita3K rejects that module,
+  so it ALWAYS goes to review, checked before anything else about the dump (also in report
+  mode), with a reason that says so and suggests a clean dump (a `.pkg` with its `work.bin`, or
+  NoNpDrm). It is never placed even if the game might start, and nothing already in the
+  library is touched: no game folder, no launcher.
+- **Game folder.** The dump (the top folder of an archive is dropped) is copied file by file
+  with a read-back (`inbox.copy_verified`; hidden and junk names are skipped) to
+  `library/roms/psvita/app/<TITLEID>.part/` and renamed, as for PS4. A folder already in the
+  library is reported as "already in the library", not compared and never touched.
+- **Launcher.** `library/roms/psvita/<Title>.psvita`, named like the PS4 shortcut
+  (`shortcut_name`), holding only the title id with no newline, written through `.part` and a
+  rename and never over another file. One that holds this id is kept; one that holds another
+  id gets ` [<TITLEID>]` in the new name. A game already in the library gets a missing
+  launcher from the `TITLE` of its own `param.sfo`.
+- **Licence.** Vita3K runs the games of `ux0/app/<TITLEID>` whose `eboot.bin` is still an
+  encrypted SELF only with the licence `ux0/license/<TITLEID>/<CONTENT_ID>.rif`
+  (`get_license`, `packages/src/license.cpp`, loads that path by the content id of the game's
+  `param.sfo`; a missing or unreadable file leaves the key all zeros). Inbox files the licence
+  in `library/roms/psvita/license/<TITLEID>/<CONTENT_ID>.rif`:
+  - *Sources* (`license_sources`, pure): `sce_sys/package/work.bin` of the game (NoNpDrm,
+    the same 512-byte structure as a `.rif`), or a `*.rif` directly in the game folder or
+    beside it (the item's top), or in `license/<TITLEID>/` at either place.
+  - *Check* (`parse_license`, `choose_license`, pure): exactly 512 bytes; the content id is
+    the NUL-terminated text of the 0x30 bytes at offset 0x10 (`SceNpDrmLicense.content_id`)
+    and must be `XXnnnn-PCS[A-I]nnnnn_nn-` plus 16 characters of `[A-Z0-9]`, so it is safe as
+    a file name; its title id (characters 7 to 15, as Vita3K's `copy_license` takes it) must be
+    the game's; and, when `param.sfo` has a `CONTENT_ID`, it must be that one, because the
+    file name is what Vita3K looks up. Several candidates are fine only when they are the same
+    bytes; different licences, a symbolic link or a file that is not a licence go to review.
+    The file is filed under the content id it holds, not the name it came with.
+  - *Placement:* a `.part` write read back and renamed, never over a file. The library copy is
+    compared before anything is placed: the same bytes are "already there", other bytes make
+    the item go to review without placing the game. A game already in the library gets a
+    missing licence like it gets a missing launcher. A licence that comes along when none is
+    needed is filed too.
+  - *Does the game need one?* (`eboot_needs_license`, pure, on the first 64 KiB of
+    `eboot.bin`.) Read from Vita3K (`vita3k/packages/src/sce_utils.cpp`): `decrypt_fself`,
+    called for every module including the eboot (`modules/module_parent.cpp`, with
+    `license.rif[title_id].key`), returns the buffer untouched when `is_fself_encrypted` is
+    false, which is `seg_infos->encryption != 2` for the first segment info found at
+    `section_info_offset` (offset 0x58 of the header, `encryption` is the u64 at +0x18), and
+    fails with `LOG_ERROR("No klic provided for encrypted App")` when the self is encrypted,
+    `AppInfoHeader.self_type == SelfType::APP` (0x08, a u32 at +12 of the app info at offset
+    0x38) and the klic is all zeros (`Invalid SELF: file is either not a SELF or is still
+    encrypted` is the answer to a file without the `SCE\0` magic). The magic alone is not the
+    test: Vita3K's own "decrypt selfs" writes a SELF with the same magic and `encryption = 2`
+    (`decrypt_fself`'s output header). So a licence is needed exactly when the file starts with
+    `SCE\0`, is encrypted and is an APP. A file with another magic needs none. A SELF header
+    that is shorter than 0x80 bytes or points outside the bytes read cannot be judged and goes
+    to review. A game that needs a licence and has none goes to review, and nothing is placed.
+- **Whitelists.** Up to three lines per game: `!/roms/psvita/app/<TITLEID>`,
+  `!/roms/psvita/license/<TITLEID>` (only when there is a licence) and
+  `!/roms/psvita/<Title>.psvita`. Nothing is unpacked by a tool, so the report mode prints
+  them all.
+- **On the console.** The folders must be linked into Vita3K's own storage, see
+  [Title links](#title-links).
+
 ### Arcade sets
 
 Arcade zips are not unpacked or converted: a MAME set is a zip whose name and members
@@ -1701,6 +1840,7 @@ find the config. Provisioning again with another config rewrites the script.
   change. `doctor` still checks the setting.
 - Other files in `scripts/` are never touched. A device that stops subscribing to
   `settings` keeps the script, which then finds no settings folder and does nothing.
+- The same mechanism installs `warpzone-links.sh` (for a device that lists `library` and whose profile has `[links.*]`), which runs `links sync` and so links the games that arrived since the last start before ES-DE lists them (see [Title links](#title-links)).
 - Apply runs once per ES-DE start, possibly before Syncthing has pulled the newest layers.
   What arrives later applies at the next start, or at once with `warpzone settings apply`.
 
@@ -2054,6 +2194,9 @@ warpzone/
   inbox_switch.py    Switch games: identify with nsz, titledb names, decompress, place
   inbox_mame.py      arcade sets: MAME / FBNeo / 2003-Plus fit, emulator choice, ES-DE gamelist
   inbox_console_iso.py  PS3, Xbox, Xbox 360 and Wii U images: identify by signature, place
+  inbox_ps4.py       PS4 packages: extract with orbis-pkg-util, place the game folder, shortcut
+  inbox_vita.py      PS Vita game dumps: identify by param.sfo, place the folder and the .psvita file
+  titlelinks.py      symlinks from the library's game folders into an emulator's own (pure plan)
   inbox_n3ds.py      3DS images (`.3ds`, `.cci`): NCSD / NCCH header check, placed as `.cci`
   flatpak.py         the SyncThingy flatpak: app id and the unit's commands
   selfupdate.py      `self-update`: newest release tag, checkout, log (decisions pure)

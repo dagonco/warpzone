@@ -15,6 +15,7 @@ from pathlib import Path
 
 SCRIPT_NAME = "warpzone-settings.sh"
 PLAY_STATE_SCRIPT = "warpzone-play-state.sh"
+LINKS_SCRIPT = "warpzone-links.sh"
 SETTING = "CustomEventScripts"
 MENU_PATH = "Main menu > Other settings > Enable custom event scripts"
 # What the process list shows for ES-DE: `comm` of the unpacked binary, and `argv[0]` of the
@@ -73,6 +74,21 @@ def render_play_state_script(python: str, device: str, config: Path | None = Non
         "env -u LD_LIBRARY_PATH -u LD_PRELOAD -u PYTHONHOME -u PYTHONPATH \\\n"
         f"  timeout 15 {_quote(python)} -m warpzone \\\n"
         f"  play-state sync {_quote(device)}{where} --frontend-starting --quiet >/dev/null 2>&1\n"
+        "exit 0\n"
+    )
+
+
+def render_links_script(python: str, device: str, config: Path | None = None) -> str:
+    """The script that links new library games into the emulators' game folders."""
+    where = f" --config {_quote(str(config))}" if config is not None else ""
+    return (
+        "#!/bin/sh\n"
+        "# Written by warpzone provision device, which rewrites it. Links the games the library\n"
+        "# delivered into the emulators' own game folders. ES-DE waits for it, so it is bounded\n"
+        "# and never fails.\n"
+        "env -u LD_LIBRARY_PATH -u LD_PRELOAD -u PYTHONHOME -u PYTHONPATH \\\n"
+        f"  timeout 15 {_quote(python)} -m warpzone \\\n"
+        f"  links sync {_quote(device)}{where} --quiet >/dev/null 2>&1\n"
         "exit 0\n"
     )
 
