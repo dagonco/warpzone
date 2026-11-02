@@ -1,6 +1,8 @@
 import contextlib
 import io
 import os
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -147,6 +149,40 @@ class CliTests(unittest.TestCase):
         self.assertIn("no Syncthing config", err)
 
 
+class ApplyPathImportTests(unittest.TestCase):
+    """The ES-DE startup run must stay fast: it imports no network code (docs/design.md)."""
+
+    def test_settings_apply_loads_no_network_module(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config = write_config(tmp, "http://127.0.0.1:1")
+            home = Path(tmp) / "home"
+            home.mkdir()
+            code = (
+                "import sys\n"
+                f"sys.path.insert(0, {str(Path(__file__).resolve().parent.parent)!r})\n"
+                "from warpzone.cli import main\n"
+                "argv = ['settings', 'apply', '--device', 'deck', '--quiet']\n"
+                f"argv += ['--config', {config!r}]\n"
+                "rc = main(argv)\n"
+                "net = sorted(m for m in ('ssl', 'socket', 'http.client', 'urllib.request')"
+                " if m in sys.modules)\n"
+                "print(rc, net)\n"
+            )  # fmt: skip
+            env = {
+                **os.environ,
+                "HOME": str(home),
+                "XDG_STATE_HOME": str(Path(tmp) / "state"),
+            }
+            result = subprocess.run(
+                [sys.executable, "-I", "-c", code],
+                capture_output=True,
+                text=True,
+                env=env,
+                check=False,
+            )
+        self.assertEqual(result.stdout.strip(), "0 []", result.stderr)
+
+
 class ProvisionConfigPathTests(unittest.TestCase):
     def test_provision_device_passes_the_config_path_on(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -155,7 +191,7 @@ class ProvisionConfigPathTests(unittest.TestCase):
             with (
                 mock.patch("warpzone.cli.localst.find_config"),
                 mock.patch("warpzone.cli.localst.parse_config", return_value=local),
-                mock.patch("warpzone.cli.provision.provision_device") as provision_device,
+                mock.patch("warpzone.provision.provision_device") as provision_device,
             ):
                 code, _, err = run("provision", "device", "deck", "--config", path)
             self.assertEqual(code, 0, err)

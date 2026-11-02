@@ -92,6 +92,13 @@ class Config:
     inbox: InboxSettings = field(default_factory=InboxSettings)
 
 
+# Defaults of the command line, kept here so that building the parser imports no command.
+DEFAULT_WAIT_SECONDS = 600.0  # `provision device`: how long to wait for the whitelists
+HUB_WAIT_SECONDS = 120.0  # `provision hub`: how long a new folder waits for its whitelists
+DEFAULT_MAX_GIB = 50.0  # `prune`: the most it deletes in one run
+DEFAULT_RESCAN_TIMEOUT = 600.0  # `prune`: how long it waits for the rescan
+
+
 def default_config_path(env: dict[str, str] | None = None) -> Path:
     env = os.environ if env is None else env
     base = env.get("XDG_CONFIG_HOME")

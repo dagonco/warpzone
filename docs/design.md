@@ -1228,8 +1228,9 @@ emulators are ordinary host processes with the same names. Without `/proc` (macO
 commands refuse with an error.
 
 **Speed.** At ES-DE startup a run has to stay well under a second on a Steam Deck: it
-imports no network code, reads only the declared files that exist, and writes nothing when
-nothing changed.
+imports no network code (`cli` imports `provision`, `prune`, `doctor`, `inbox` and the
+Syncthing client only inside the commands that use them, and a test checks it), reads only
+the declared files that exist, and writes nothing when nothing changed.
 
 ### ES-DE startup script
 

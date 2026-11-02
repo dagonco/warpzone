@@ -13,13 +13,11 @@ from pathlib import Path
 from typing import Any
 
 from warpzone import esde, flatpak, settings_state
-from warpzone.config import Config
+from warpzone.config import DEFAULT_WAIT_SECONDS, HUB_WAIT_SECONDS, Config
 from warpzone.model import FolderSpec, device_specs, hub_specs
 from warpzone.profiles import Profile
 from warpzone.syncthing import Client, SyncthingError
 
-DEFAULT_WAIT_SECONDS = 600.0
-HUB_WAIT_SECONDS = 120.0  # `provision hub`: how long a new folder waits for its whitelists
 PREFIX = "wz-"
 
 

@@ -8,34 +8,29 @@ import sys
 import urllib.parse
 from collections.abc import Sequence
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-from warpzone import (
-    __version__,
-    bios,
-    doctor,
-    inbox,
-    localst,
-    model,
-    provision,
-    prune,
-    ra,
-    settings,
-    settings_state,
-)
-from warpzone.bios import BiosError
+from warpzone import __version__, localst, model, settings, settings_state
 from warpzone.config import (
+    DEFAULT_MAX_GIB,
+    DEFAULT_RESCAN_TIMEOUT,
+    DEFAULT_WAIT_SECONDS,
+    HUB_WAIT_SECONDS,
     Config,
     ConfigError,
     default_config_path,
     load_config,
     load_inbox_settings,
 )
-from warpzone.inbox import InboxError
 from warpzone.model import ModelError
 from warpzone.profiles import Profile, ProfileError, available_profiles, load_profile
-from warpzone.provision import ProvisionError, Reporter
-from warpzone.prune import PruneError
-from warpzone.syncthing import Client, SyncthingError
+
+# Everything that talks to the network (provision, prune, doctor, the inbox, the Syncthing
+# client) is imported inside the command that needs it, so `settings apply`, which ES-DE runs
+# at every start, loads none of it (see "Speed" in docs/design.md).
+if TYPE_CHECKING:
+    from warpzone.provision import Reporter
+    from warpzone.syncthing import Client
 
 EXIT_OK, EXIT_RUNTIME, EXIT_USAGE = 0, 1, 2
 
@@ -79,7 +74,7 @@ def _build_parser() -> argparse.ArgumentParser:
     hub.add_argument(
         "--timeout",
         type=float,
-        default=provision.HUB_WAIT_SECONDS,
+        default=HUB_WAIT_SECONDS,
         help="seconds a new whitelisted folder waits for its whitelists to be indexed "
         "before the full scan starts (default: %(default)s)",
     )
@@ -93,7 +88,7 @@ def _build_parser() -> argparse.ArgumentParser:
     dev.add_argument(
         "--timeout",
         type=float,
-        default=provision.DEFAULT_WAIT_SECONDS,
+        default=DEFAULT_WAIT_SECONDS,
         help="seconds to wait for the whitelists to arrive (default: %(default)s)",
     )
 
@@ -112,7 +107,7 @@ def _build_parser() -> argparse.ArgumentParser:
     pr.add_argument(
         "--max-gib",
         type=float,
-        default=prune.DEFAULT_MAX_GIB,
+        default=DEFAULT_MAX_GIB,
         help="refuse to delete more than this in one run (default: %(default)s)",
     )
     pr.add_argument("--force", action="store_true", help="ignore --max-gib")
@@ -125,7 +120,7 @@ def _build_parser() -> argparse.ArgumentParser:
     pr.add_argument(
         "--timeout",
         type=float,
-        default=prune.DEFAULT_RESCAN_TIMEOUT,
+        default=DEFAULT_RESCAN_TIMEOUT,
         help="seconds to wait for the rescan (default: %(default)s)",
     )
 
@@ -313,8 +308,14 @@ def _eprint(message: str) -> None:
     print(message, file=sys.stderr)
 
 
+def _client(base_url: str, api_key: str, *, label: str, dry_run: bool = False) -> Client:
+    from warpzone.syncthing import Client
+
+    return Client(base_url, api_key, label=label, dry_run=dry_run)
+
+
 def _hub_client(cfg: Config, *, dry_run: bool = False) -> Client:
-    return Client(cfg.hub.api_url, cfg.hub.api_key, label="hub", dry_run=dry_run)
+    return _client(cfg.hub.api_url, cfg.hub.api_key, label="hub", dry_run=dry_run)
 
 
 def _config_path(args: argparse.Namespace) -> Path:
@@ -322,6 +323,9 @@ def _config_path(args: argparse.Namespace) -> Path:
 
 
 def _bios(args: argparse.Namespace, rep: Reporter) -> int:
+    from warpzone import bios
+    from warpzone.bios import BiosError
+
     manifest = bios.load_manifest()
     overrides = bios.load_overrides(
         args.overrides or bios.default_overrides_path(_config_path(args)),
@@ -348,6 +352,9 @@ def _bios(args: argparse.Namespace, rep: Reporter) -> int:
 
 
 def _inbox(args: argparse.Namespace, rep: Reporter) -> int:
+    from warpzone import inbox, ra
+    from warpzone.inbox import InboxError
+
     settings = load_inbox_settings(_config_path(args))
     root = args.root or (Path(settings.root) if settings.root else None)
     dats = args.dats or (Path(settings.dats_dir) if settings.dats_dir else None)
@@ -382,7 +389,7 @@ def _settings(args: argparse.Namespace, cfg: Config, profiles: dict[str, Profile
     client: Client | None = None
     if not args.device or (capturing and not args.offline):
         local = localst.parse_config(localst.find_config(getattr(args, "syncthing_config", None)))
-        client = Client(local.base_url, local.api_key, label="local")
+        client = _client(local.base_url, local.api_key, label="local")
     if not args.device:
         assert client is not None
         name = _this_device(cfg, client)
@@ -422,6 +429,11 @@ def _settings(args: argparse.Namespace, cfg: Config, profiles: dict[str, Profile
 
 
 def _run(args: argparse.Namespace) -> int:
+    if args.command == "settings":  # the apply path: no network code
+        return _settings(args, *_load(args))
+    from warpzone import doctor, provision, prune
+    from warpzone.provision import Reporter
+
     rep = Reporter(print, warn_sink=_eprint)
     if args.command == "doctor":  # offline, read-only, needs no valid config
         return doctor.run_doctor(doctor.Probes(config_path=_config_path(args)), rep.out)
@@ -430,9 +442,6 @@ def _run(args: argparse.Namespace) -> int:
     if args.command == "inbox":  # needs at most the [inbox] table
         return _inbox(args, rep)
     cfg, profiles = _load(args)
-
-    if args.command == "settings":
-        return _settings(args, cfg, profiles)
 
     if args.command == "check":
         rep.out(f"config ok: {len(cfg.devices)} device(s), profiles: {', '.join(profiles)}")
@@ -461,13 +470,13 @@ def _run(args: argparse.Namespace) -> int:
             local = localst.parse_config(localst.find_config())
         except localst.LocalSyncthingError:
             return EXIT_OK  # no Syncthing on this machine: hub status is enough
-        client = Client(local.base_url, local.api_key, label="local")
+        client = _client(local.base_url, local.api_key, label="local")
         provision.folder_status(client, "this machine", rep)
         return EXIT_OK
 
     if args.command == "prune":
         local = localst.parse_config(localst.find_config(args.syncthing_config))
-        client = Client(local.base_url, local.api_key, label="local")
+        client = _client(local.base_url, local.api_key, label="local")
         name = args.name or _this_device(cfg, client)
         problems = prune.prune_device(
             cfg,
@@ -497,7 +506,7 @@ def _run(args: argparse.Namespace) -> int:
 
     name = _device(cfg, args.name)
     local = localst.parse_config(localst.find_config(args.syncthing_config))
-    client = Client(local.base_url, local.api_key, label="local", dry_run=args.dry_run)
+    client = _client(local.base_url, local.api_key, label="local", dry_run=args.dry_run)
     provision.provision_device(
         cfg,
         name,
@@ -513,6 +522,21 @@ def _run(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def _late_error_code(exc: Exception) -> int | None:
+    """Exit code for an error of a module that is imported on demand, None for any other."""
+    from warpzone.bios import BiosError
+    from warpzone.inbox import InboxError
+    from warpzone.provision import ProvisionError
+    from warpzone.prune import PruneError
+    from warpzone.syncthing import SyncthingError
+
+    if isinstance(exc, (BiosError, InboxError)):
+        return EXIT_USAGE
+    if isinstance(exc, (SyncthingError, ProvisionError, PruneError)):
+        return EXIT_RUNTIME
+    return None
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
     try:
@@ -522,18 +546,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.command == "settings" and args.settings_command == "apply" and not args.dry_run:
             settings.record_refused_apply(settings_state.state_dir(), EXIT_USAGE)
         return EXIT_USAGE
-    except (BiosError, InboxError) as exc:
-        _eprint(f"warpzone: error: {exc}")
-        return EXIT_USAGE
-    except (
-        SyncthingError,
-        ProvisionError,
-        PruneError,
-        localst.LocalSyncthingError,
-        settings.SettingsError,
-    ) as exc:
+    except (localst.LocalSyncthingError, settings.SettingsError) as exc:
         _eprint(f"warpzone: error: {exc}")
         return EXIT_RUNTIME
+    except Exception as exc:
+        code = _late_error_code(exc)  # the errors of the modules imported on demand
+        if code is None:
+            raise
+        _eprint(f"warpzone: error: {exc}")
+        return code
     except KeyboardInterrupt:
         _eprint("warpzone: interrupted")
         return 130
