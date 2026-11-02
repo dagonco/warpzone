@@ -1289,10 +1289,13 @@ exit 0
 
 `warpzone settings capture [--device NAME] [--emulator ID ...] [--seed] [--key PATTERN
 ...] [--include-new] [--yes] [--to-common PATTERN ...] [--to-device PATTERN ...]
-[--discard PATTERN ...] [--offline] [--dry-run]` runs on the device.
+[--discard PATTERN ...] [--offline] [--syncthing-config PATH] [--dry-run]` runs on the
+device. `--key` without `--seed` is a usage error (exit 2).
 
-1. Take the lock. Unless `--offline`, ask the local Syncthing (API key from its
-   `config.xml`, as `prune` does) whether `wz-settings` is idle with nothing to pull and
+1. Refuse (exit 1) when the device has no settings folder. Take the lock (a run that finds it
+   held refuses with exit 1; a report and `--dry-run` take none). Unless `--offline`, ask the
+   local Syncthing (API key from its `config.xml`, as `prune` does; `--syncthing-config`
+   points at it) whether `wz-settings` is idle with nothing to pull and
    whether the local record of each layer file equals the global one (`GET /rest/db/status`,
    `GET /rest/db/file`); otherwise refuse with exit 1, since the layers may be about to
    change. Refuse as well while a layer has a conflict copy, naming it: the user keeps one
@@ -1323,8 +1326,9 @@ exit 0
    never its content, and offers only common, discard, skip and quit. Without a terminal,
    keys are decided by the `--to-common`, `--to-device` and `--discard` patterns (the first
    that matches, in that order), the rest by `--yes` (take the pre-selection) or not at all;
-   with no decision flag the run is a report. `--dry-run` asks or decides, prints the result
-   and writes nothing.
+   with no decision flag the run is a report, which writes nothing, snapshots included. The
+   flags also apply on a terminal: a key they decide is not asked about. `--dry-run` asks or
+   decides, prints the result and writes nothing.
 6. Effects, applied once every key is decided:
    - common: the key is set in `common.toml` and removed from this device's layer, where it
      would keep winning. A note names any other device layer that overrides it.
@@ -1334,9 +1338,10 @@ exit 0
    - skip: nothing; the key is proposed again next time.
 
    Right before writing, each layer file is read again and must equal what was loaded
-   (otherwise nothing is written and capture exits 1). Files are written as
-   `<name>.wz-tmp` and renamed. A data file chosen for common is copied to
-   `files/<emulator>/<id>` the same way.
+   (otherwise nothing is written and capture exits 1); the same goes for a hub copy of a data
+   file and for the local data file, which must still hash as it did when proposed. Files are
+   written to a `.<name>.wz-tmp` beside them and renamed. A data file chosen for common is
+   copied to `files/<emulator>/<id>` the same way; one over 1 MiB is left out with a note.
 7. Snapshot: `S := C` for every key decided common, device or discard and for every new key
    counted; a skipped key keeps `S`. A file that had no snapshot (`--seed`) gets one for all
    its tracked keys, as a first apply would make it. Nothing is written with `--dry-run`.
