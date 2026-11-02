@@ -36,7 +36,7 @@ from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from warpzone import __version__, esde, frontend, localst, model, ra, settings_state
+from warpzone import __version__, esde, frontend, localst, model, ra, settings_state, updatetimer
 from warpzone import inbox_switch as switch
 from warpzone.config import (
     INBOX_KEYS,
@@ -87,6 +87,7 @@ G_HUB = "Hub folder"
 G_SETTINGS = "Emulator settings"
 G_FRONTEND = "Frontend"
 G_RA = "RetroAchievements"
+G_UPDATE = "Updates"
 G_INBOX = "Inbox"
 # The groups whose items only matter to the desktop that runs `warpzone inbox`.
 INBOX_GROUPS = (G_TOOLS, G_SWITCH, G_DATS, G_HUB, G_RA)
@@ -620,6 +621,8 @@ class ConfigState:
     settings_devices: tuple[SettingsDevice, ...] = ()
     # The devices that subscribe to `library` whose profile has `es_systems` or `retroarch`.
     frontend_devices: tuple[SettingsDevice, ...] = ()
+    # The devices that subscribe to `library` and have not turned `self_update` off.
+    update_devices: tuple[SettingsDevice, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -700,6 +703,7 @@ def load_config_state(path: Path) -> ConfigState:
     sync_paths: dict[str, None] = {}
     settings_devices: list[SettingsDevice] = []
     frontend_devices: list[SettingsDevice] = []
+    update_devices: list[SettingsDevice] = []
     try:
         if "hub" in data or "devices" in data:
             cfg = parse_config(data, set(available_profiles()))
@@ -715,6 +719,8 @@ def load_config_state(path: Path) -> ConfigState:
                 profile = profiles[device.profile]
                 if "library" in device.folders and (profile.es_systems or profile.retroarch):
                     frontend_devices.append(SettingsDevice(device.name, device.device_id, profile))
+                if "library" in device.folders and device.self_update:
+                    update_devices.append(SettingsDevice(device.name, device.device_id, profile))
         else:
             unknown = sorted(set(data) - {"hub", "devices", "inbox"})
             errors += [f"config: unknown key {key!r}" for key in unknown]
@@ -729,8 +735,19 @@ def load_config_state(path: Path) -> ConfigState:
     paths = tuple(sync_paths) if error is None else ()
     subscribed = tuple(settings_devices) if error is None else ()
     frontends = tuple(frontend_devices) if error is None else ()
+    updating = tuple(update_devices) if error is None else ()
     return ConfigState(
-        path, True, error, sections, devices, settings, hub_root, paths, subscribed, frontends
+        path,
+        True,
+        error,
+        sections,
+        devices,
+        settings,
+        hub_root,
+        paths,
+        subscribed,
+        frontends,
+        updating,
     )
 
 
@@ -1381,6 +1398,60 @@ def check_frontend(ctx: Context) -> list[Result]:
     return results
 
 
+def judge_update_timer(
+    *, device: str, files: bool, enabled: bool | None, active: bool | None
+) -> tuple[str, str, str]:
+    """(status, detail, fix) for the `warpzone self-update` timer. `enabled` and `active` are
+    None when systemd could not be asked."""
+    timer = updatetimer.TIMER
+    if not files:
+        return (
+            WARN,
+            "not installed: this device is only updated by hand",
+            f"run `warpzone provision device {device}` (it installs and enables the timer). "
+            "Without systemd, schedule `warpzone self-update` with cron; to keep it off, set "
+            f"`self_update = false` under [devices.{device}] in the config",
+        )
+    if enabled is None or active is None:
+        return (
+            WARN,
+            "the units are installed, but cannot ask systemd whether the timer is enabled",
+            f"check it with `systemctl --user status {timer}`",
+        )
+    if not enabled or not active:
+        state = "not enabled" if not enabled else "enabled but not running"
+        return (
+            WARN,
+            f"installed, but the timer is {state}: this device is only updated by hand",
+            f"run: systemctl --user enable --now {timer}",
+        )
+    return OK, "installed and enabled: looks for a new release daily and after boot", ""
+
+
+def check_update_timer(ctx: Context) -> list[Result]:
+    """On a Linux device that has not turned self-update off: is the timer installed?"""
+    p = ctx.probes
+    if p.system != "Linux":
+        return []
+    device = _local_device(ctx, ctx.config.update_devices, "wz-library", "library")
+    if device is None:
+        return []
+    units = p.home / updatetimer.UNIT_DIR
+    files = all(p.is_file(units / name) for name in (updatetimer.SERVICE, updatetimer.TIMER))
+    enabled: bool | None = False
+    active: bool | None = False
+    if files:
+        try:
+            enabled = (
+                p.run(("systemctl", "--user", "is-enabled", updatetimer.TIMER)).returncode == 0
+            )
+            active = p.run(("systemctl", "--user", "is-active", updatetimer.TIMER)).returncode == 0
+        except (OSError, subprocess.SubprocessError):
+            enabled = active = None
+    verdict = judge_update_timer(device=device.name, files=files, enabled=enabled, active=active)
+    return [Result("Self-update timer", G_UPDATE, *verdict)]
+
+
 def _scrub(text: str, key: str) -> str:
     return text.replace(key, "***") if key else text
 
@@ -1784,6 +1855,7 @@ CHECKS: tuple[Callable[[Context], list[Result]], ...] = (
     check_vita3k,
     check_settings,
     check_frontend,
+    check_update_timer,
     check_tools,
     check_switch,
     check_dats,

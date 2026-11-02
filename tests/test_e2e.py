@@ -9,6 +9,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 import xml.etree.ElementTree as ET
@@ -16,6 +17,9 @@ from collections.abc import Callable
 from pathlib import Path
 
 from support import API_KEY
+from warpzone.config import load_config
+from warpzone.model import hub_specs
+from warpzone.profiles import available_profiles, load_profile
 from warpzone.syncthing import Client
 
 REPO = Path(__file__).resolve().parent.parent
@@ -160,14 +164,20 @@ class EndToEndTests(unittest.TestCase):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content)
 
-    def test_library_and_saves(self) -> None:
+    def run_logged(self, scenario: Callable[[], None]) -> None:
         try:
-            self.scenario()
+            scenario()
         except BaseException:
             self.dump_logs()
             raise
         if os.environ.get("WARPZONE_E2E_VERBOSE"):
             self.dump_logs()
+
+    def test_library_and_saves(self) -> None:
+        self.run_logged(self.scenario)
+
+    def test_bootstrap_from_an_empty_hub(self) -> None:
+        self.run_logged(self.empty_hub_scenario)
 
     def scenario(self) -> None:
         self.hub.start()
@@ -301,6 +311,105 @@ rescan_seconds = 10
         self.settings_scenario(root)
 
         self.wz("status", *cfg)
+
+    def empty_hub_scenario(self) -> None:
+        """A hub with nothing in its library folder: provision it, add the whitelists and a
+        game while the bootstrap waits, then provision a device that receives the game."""
+        self.hub.start()
+        self.deck.start()
+        hub_id, deck_id = self.hub.client().my_id(), self.deck.client().my_id()
+        root = self.base / "hub-root"
+        library = root / "library"
+        self.home = self.base / "home"
+        emulation = self.home / "Emulation"
+        emulation.mkdir(parents=True)
+        config = self.base / "config.toml"
+        config.write_text(
+            f"""
+[hub]
+name = "nas"
+device_id = "{hub_id}"
+root = "{root}"
+api_url = "{self.hub.url}"
+api_key = "{self.hub.api_key}"
+addresses = ["{self.hub.address}"]
+
+[devices.deck]
+device_id = "{deck_id}"
+profile = "steamos-emudeck"
+folders = ["library"]
+addresses = ["{self.deck.address}"]
+rescan_seconds = 10
+"""
+        )
+        cfg = ["--config", str(config)]
+        # The folders of a new hub exist and are empty: no whitelist, no ROM, no BIOS.
+        specs = hub_specs(
+            load_config(config, set(available_profiles())),
+            {"steamos-emudeck": load_profile("steamos-emudeck")},
+        )
+        for spec in specs:
+            Path(spec.path).mkdir(parents=True)
+            self.assertEqual(list(Path(spec.path).iterdir()), [], spec.id)
+        self.assertEqual(self.hub.client().folders(), [])
+
+        # The bootstrap of a new whitelisted folder waits for the whitelists, so a person
+        # (here a thread) can add them while `provision hub` runs.
+        added: list[BaseException] = []
+
+        def add_library_content() -> None:
+            try:
+                wait_for(
+                    lambda: "wz-library" in {f["id"] for f in self.hub.client().folders()},
+                    "wz-library on the hub",
+                    60,
+                )
+                for which in ("common", "deck"):
+                    source = "patterns-common" if which == "common" else "patterns-device.example"
+                    shutil.copy(
+                        REPO / "templates" / f"{source}.stignore", library_file(library, which)
+                    )
+                self.write(library / "roms/nes/mario.nes", "nes rom")
+                self.write(library / "roms/n64/other.z64", "not whitelisted")
+                # What a person does after copying files in: ask for a rescan.
+                self.hub.client().scan("wz-library")
+            except BaseException as exc:  # reported by the test thread
+                added.append(exc)
+
+        adder = threading.Thread(target=add_library_content)
+        adder.start()
+        try:
+            out = self.wz("provision", "hub", "--timeout", "120", *cfg)
+        finally:
+            adder.join()
+        self.assertEqual(added, [])
+        self.assertIn("wz-library: created", out)
+        self.assertIn("bootstrap ignores set", out)
+        self.assertIn("final ignores set, full scan started", out)
+        self.assertNotIn("not in the hub's index", self.output[-1])  # the wait ended in time
+
+        # Folders created, running, and on their final ignores.
+        hub_folders = {f["id"]: f for f in self.hub.client().folders()}
+        self.assertEqual(set(hub_folders), {spec.id for spec in specs})
+        self.assertFalse(hub_folders["wz-library"]["paused"])
+        self.assertEqual(
+            self.hub.client().get_ignores("wz-library")[-1], "#include patterns-common.stignore"
+        )
+        self.assertTrue(self.wz_ok("check", *cfg))
+        self.wz("provision", "hub", *cfg)  # idempotent
+
+        # A device now receives what its whitelist allows, and nothing else.
+        device_args = [*cfg, "--syncthing-config", str(self.deck.config_xml), "--timeout", "150"]
+        out = self.wz("provision", "device", "deck", *device_args)
+        self.assertIn("whitelist active", out)
+        stignore = (emulation / ".stignore").read_text().splitlines()
+        self.assertEqual(stignore[-1], "#include patterns-deck.stignore")
+        wait_for(
+            lambda: (emulation / "roms/nes/mario.nes").exists(), "whitelisted ROM on the device"
+        )
+        wait_for(lambda: self.settled(self.deck, "wz-library"), "device library to settle")
+        self.assertEqual((emulation / "roms/nes/mario.nes").read_text(), "nes rom")
+        self.assertFalse((emulation / "roms/n64").exists())
 
     def settings_scenario(self, root: Path) -> None:
         """The settings folder is two-way: a hub layer reaches the device and a capture the hub."""
