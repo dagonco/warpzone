@@ -1,0 +1,67 @@
+name = "anbernic-rg351mp"
+description = "Anbernic RG351MP running dArkOS (EmulationStation and RetroArch, ROMs on an exFAT card)"
+
+# /roms is exFAT: no POSIX permissions and no symlinks. Every folder of the device ignores
+# permissions (the hub's would otherwise show up as local changes on every file), and
+# nothing below depends on a symlink.
+ignore_perms = true
+
+# Only the library has a place on this device. There is no ES-DE, no downloaded media, no
+# songs folder and no emulator settings layer, so a device of this profile that lists
+# `tools`, `songs`, `frontend` or `settings` in its folders is refused with a clear error.
+#
+# The library goes in its own folder next to dArkOS's own: games land in
+# /roms/library/roms/<system> and BIOS files in /roms/library/bios.
+[paths]
+library = "/roms/library"
+
+# EmulationStation reads ~/.emulationstation/es_systems.cfg before the system list in /etc, so
+# `provision device` writes a copy of that list with every ROM folder moved into the library.
+# The copy is made only while EmulationStation is not running. Systems the hub has no
+# games for point into the library too and stay empty (and hidden by EmulationStation);
+# dArkOS's own /roms/<system> folders are not listed any more. `prefix` is the folder the
+# system list uses; entries outside it (`/opt/cmds/`) are not touched.
+# EmulationStation's process name is cut to 15 characters by the kernel.
+[es_systems]
+source = "/etc/emulationstation/es_systems.cfg"
+override = "~/.emulationstation/es_systems.cfg"
+prefix = "/roms/"
+process = ["emulationstatio", "emulationstation"]
+# Systems dArkOS and the hub name differently: list folder = hub folder.
+[es_systems.rename]
+pokemonmini = "pokemini"
+segacd = "megacd"
+pico-8 = "pico8"
+coleco = "colecovision"
+atarixegs = "atarixe"
+
+# dArkOS has two RetroArch builds (64-bit and 32-bit), each with its own config. Both
+# take BIOS files from the library and keep saves and save states in the two folders
+# below (the `[saves.*]` entries) instead of next to the ROMs, so they can sync.
+# RetroArch is not running while the files are edited.
+[retroarch]
+cfg = ["~/.config/retroarch/retroarch.cfg", "~/.config/retroarch32/retroarch.cfg"]
+process = ["retroarch", "retroarch32"]
+[retroarch.set]
+system_directory = "{library}/bios"
+savefiles_in_content_dir = "false"
+savestates_in_content_dir = "false"
+savefile_directory = "~/.config/retroarch/saves"
+savestate_directory = "~/.config/retroarch/states"
+
+# Same hub folders as the Steam Deck and Steam Machine (`saves/retroarch/saves` and
+# `saves/retroarch/states`). Both are real directories on the card's root filesystem. They
+# are created once ~/.config/retroarch exists.
+[saves.retroarch-saves]
+path = "~/.config/retroarch/saves"
+create_when = "~/.config/retroarch"
+[saves.retroarch-states]
+path = "~/.config/retroarch/states"
+create_when = "~/.config/retroarch"
+
+# Paths in the library folder that the device never receives from the hub. EmulationStation
+# writes a gamelist.xml next to the ROMs of a system when it saves its metadata; it is
+# per-device data and not on the hub, so a receive-only folder would list it as a local
+# change. `(?d)` lets Syncthing remove a ROM folder that the hub deleted anyway.
+[library]
+ignore = ["(?d)/roms/*/gamelist.xml"]

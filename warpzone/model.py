@@ -45,6 +45,9 @@ class FolderSpec:
     # Only whitelisted device folders set it: it bounds how long a whitelist
     # edited on the hub takes to apply. None leaves Syncthing's default.
     rescan_interval_s: int | None = None
+    # The folder is on a filesystem without POSIX permissions (exFAT): Syncthing neither
+    # syncs nor sets them. Only device folders of a profile with `ignore_perms` carry it.
+    ignore_perms: bool = False
 
     def body(self) -> dict[str, Any]:
         """The folder keys warpzone owns, in Syncthing's REST shape."""
@@ -59,6 +62,8 @@ class FolderSpec:
         }
         if self.rescan_interval_s is not None:
             body["rescanIntervalS"] = self.rescan_interval_s
+        if self.ignore_perms:
+            body["ignorePerms"] = True
         return body
 
 
@@ -130,6 +135,7 @@ def _defs_for(device: Device, profile: Profile) -> list[_Def]:
                         fixed_ignores=save.ignore,
                         save=True,
                         skip_if_missing=True,
+                        create_when=save.create_when,
                     )
                 )
             continue
@@ -192,6 +198,7 @@ def device_specs(cfg: Config, device_name: str, profile: Profile) -> list[Folder
                 skip_if_missing=item.skip_if_missing,
                 create_when=item.create_when,
                 rescan_interval_s=device.rescan_seconds if item.whitelist else None,
+                ignore_perms=profile.ignore_perms,
             )
         )
     return specs

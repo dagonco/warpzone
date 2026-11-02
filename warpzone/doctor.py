@@ -36,7 +36,7 @@ from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from warpzone import __version__, esde, localst, model, ra, settings_state
+from warpzone import __version__, esde, frontend, localst, model, ra, settings_state
 from warpzone import inbox_switch as switch
 from warpzone.config import (
     INBOX_KEYS,
@@ -85,6 +85,7 @@ G_SWITCH = "Switch"
 G_DATS = "DATs"
 G_HUB = "Hub folder"
 G_SETTINGS = "Emulator settings"
+G_FRONTEND = "Frontend"
 G_RA = "RetroAchievements"
 G_INBOX = "Inbox"
 # The groups whose items only matter to the desktop that runs `warpzone inbox`.
@@ -593,7 +594,7 @@ class Result:
 
 @dataclass(frozen=True)
 class SettingsDevice:
-    """A configured device that subscribes to `settings`, with its profile."""
+    """A configured device with its profile (see `ConfigState`)."""
 
     name: str
     device_id: str
@@ -617,6 +618,8 @@ class ConfigState:
     sync_paths: tuple[str, ...] = ()
     # The devices that subscribe to `settings`; empty when the config does not load.
     settings_devices: tuple[SettingsDevice, ...] = ()
+    # The devices that subscribe to `library` whose profile has `es_systems` or `retroarch`.
+    frontend_devices: tuple[SettingsDevice, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -696,6 +699,7 @@ def load_config_state(path: Path) -> ConfigState:
     errors: list[str] = []
     sync_paths: dict[str, None] = {}
     settings_devices: list[SettingsDevice] = []
+    frontend_devices: list[SettingsDevice] = []
     try:
         if "hub" in data or "devices" in data:
             cfg = parse_config(data, set(available_profiles()))
@@ -708,6 +712,9 @@ def load_config_state(path: Path) -> ConfigState:
                 if "settings" in device.folders:
                     entry = SettingsDevice(device.name, device.device_id, profiles[device.profile])
                     settings_devices.append(entry)
+                profile = profiles[device.profile]
+                if "library" in device.folders and (profile.es_systems or profile.retroarch):
+                    frontend_devices.append(SettingsDevice(device.name, device.device_id, profile))
         else:
             unknown = sorted(set(data) - {"hub", "devices", "inbox"})
             errors += [f"config: unknown key {key!r}" for key in unknown]
@@ -721,7 +728,10 @@ def load_config_state(path: Path) -> ConfigState:
         hub_root = None
     paths = tuple(sync_paths) if error is None else ()
     subscribed = tuple(settings_devices) if error is None else ()
-    return ConfigState(path, True, error, sections, devices, settings, hub_root, paths, subscribed)
+    frontends = tuple(frontend_devices) if error is None else ()
+    return ConfigState(
+        path, True, error, sections, devices, settings, hub_root, paths, subscribed, frontends
+    )
 
 
 def check_config(ctx: Context) -> list[Result]:
@@ -1142,6 +1152,76 @@ def judge_event_scripts(xml_text: str | None, device: str) -> tuple[str, str, st
     )
 
 
+def judge_systems_override(
+    *,
+    device: str,
+    source: str | None,
+    override: str | None,
+    source_path: str,
+    override_path: str,
+    prefix: str,
+    renames: Mapping[str, str] | None = None,
+    target: str,
+) -> tuple[str, str, str]:
+    """Verdict on the frontend's system list copy (`None`: the file is absent)."""
+    fix = f"quit EmulationStation, then run `warpzone provision device {device}`"
+    if source is None:
+        return (
+            WARN,
+            f"the system list {source_path} was not found, so there is nothing to copy "
+            f"into {override_path}",
+            "",
+        )
+    if override is None:
+        return (
+            WARN,
+            f"{override_path} is missing, so EmulationStation lists the games in {prefix}, "
+            "not the library",
+            fix,
+        )
+    if not frontend.systems_current(source, override, prefix, target, renames):
+        return (
+            WARN,
+            f"{override_path} is out of date: it no longer matches {source_path} with the "
+            f"ROM folders moved below {target}",
+            fix,
+        )
+    return OK, f"{override_path} moves the ROM folders from {prefix} to {target}", ""
+
+
+def judge_retroarch_paths(
+    *, device: str, files: Sequence[tuple[str, str | None]], wants: Mapping[str, str]
+) -> tuple[str, str, str]:
+    """Verdict on the RetroArch config files: `files` holds (path, text or None if absent)."""
+    parts: list[tuple[str, str, str]] = []
+    again = f"run `warpzone provision device {device}` with RetroArch closed"
+    for path, text in files:
+        if text is None:
+            parts.append((WARN, f"{path} not found", f"start RetroArch once, then {again}"))
+            continue
+        gap = frontend.retroarch_gap(text, wants)
+        if gap.unwritable:
+            keys = ", ".join(sorted(gap.unwritable))
+            parts.append(
+                (WARN, f"{path}: {keys} appears more than once", "fix the duplicate by hand")
+            )
+        elif gap.differs:
+            keys = ", ".join(
+                f"{k} is {v!r}" if v is not None else f"{k} is unset"
+                for k, v in gap.differs.items()
+            )
+            parts.append(
+                (
+                    WARN,
+                    f"{path}: {keys}, so BIOS files or saves are not where the library syncs them",
+                    again,
+                )
+            )
+        else:
+            parts.append((OK, f"{path} is set", ""))
+    return _merge(parts)
+
+
 def judge_last_apply(info: Mapping[str, object] | None, log_path: str) -> tuple[str, str, str]:
     """Verdict on the summary of the last `settings apply` (`None` when there is none)."""
     if info is None:
@@ -1173,16 +1253,18 @@ def judge_last_apply(info: Mapping[str, object] | None, log_path: str) -> tuple[
     return OK, f"the last run ({when_text}) succeeded{done}", ""
 
 
-def _local_settings_device(ctx: Context) -> SettingsDevice | None:
-    """The configured settings device this machine is, or None.
+def _local_device(
+    ctx: Context, candidates: Sequence[SettingsDevice], folder_id: str, path_key: str
+) -> SettingsDevice | None:
+    """The configured device among `candidates` this machine is, or None.
 
     Doctor is offline, so it reads the local Syncthing `config.xml`: this machine is the
-    device whose ID is listed there and whose `settings` path is where Syncthing keeps the
-    `wz-settings` folder. The hub lists the same device IDs but keeps that folder under its
+    device whose ID is listed there and whose `path_key` path is where Syncthing keeps the
+    `folder_id` folder. The hub lists the same device IDs but keeps that folder under its
     own root, so it is not mistaken for a console.
     """
     p = ctx.probes
-    if not ctx.config.settings_devices:
+    if not candidates:
         return None
     platform_name = "darwin" if p.system == "Darwin" else p.system.lower() or "linux"
     try:
@@ -1191,15 +1273,19 @@ def _local_settings_device(ctx: Context) -> SettingsDevice | None:
     except (localst.LocalSyncthingError, ET.ParseError):
         return None
     ids = {d.get("id") for d in root.findall("device")}
-    folder = next((f for f in root.findall("folder") if f.get("id") == "wz-settings"), None)
+    folder = next((f for f in root.findall("folder") if f.get("id") == folder_id), None)
     if folder is None:
         return None
     here = (folder.get("path") or "").rstrip("/")
-    for device in ctx.config.settings_devices:
-        wanted = _expand(device.profile.paths["settings"], p.home).rstrip("/")
+    for device in candidates:
+        wanted = _expand(device.profile.paths[path_key], p.home).rstrip("/")
         if device.device_id in ids and wanted == here:
             return device
     return None
+
+
+def _local_settings_device(ctx: Context) -> SettingsDevice | None:
+    return _local_device(ctx, ctx.config.settings_devices, "wz-settings", "settings")
 
 
 def _merge(parts: Sequence[tuple[str, str, str]]) -> tuple[str, str, str]:
@@ -1259,6 +1345,39 @@ def check_settings(ctx: Context) -> list[Result]:
     state = settings_state.state_dir(p.env, p.home)
     verdict = judge_last_apply(settings_state.read_last_apply(state), str(state / "log"))
     results.append(Result("Last settings apply", G_SETTINGS, *verdict))
+    return results
+
+
+def check_frontend(ctx: Context) -> list[Result]:
+    """On a device whose profile moves the frontend and RetroArch to the library."""
+    device = _local_device(ctx, ctx.config.frontend_devices, "wz-library", "library")
+    if device is None:
+        return []
+    p = ctx.probes
+    profile = device.profile
+    library = _expand(profile.paths["library"], p.home).rstrip("/")
+    results: list[Result] = []
+    if (rule := profile.es_systems) is not None:
+        source, override = (Path(_expand(x, p.home)) for x in (rule.source, rule.override))
+        verdict = judge_systems_override(
+            device=device.name,
+            source=p.read_text(source) if p.is_file(source) else None,
+            override=p.read_text(override) if p.is_file(override) else None,
+            source_path=str(source),
+            override_path=str(override),
+            prefix=rule.prefix,
+            renames=rule.renames,
+            target=f"{library}/roms/",
+        )
+        results.append(Result("ES systems override", G_FRONTEND, *verdict))
+    if (pins := profile.retroarch) is not None:
+        paths = [Path(_expand(raw, p.home)) for raw in pins.cfg]
+        verdict = judge_retroarch_paths(
+            device=device.name,
+            files=[(str(x), p.read_text(x) if p.is_file(x) else None) for x in paths],
+            wants=pins.wants(library),
+        )
+        results.append(Result("RetroArch paths", G_FRONTEND, *verdict))
     return results
 
 
@@ -1664,6 +1783,7 @@ CHECKS: tuple[Callable[[Context], list[Result]], ...] = (
     check_flycast,
     check_vita3k,
     check_settings,
+    check_frontend,
     check_tools,
     check_switch,
     check_dats,

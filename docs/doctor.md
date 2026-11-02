@@ -33,6 +33,7 @@ Inbox tools
 - RetroArch's Flycast option for per-game VMUs, when the core has run.
 - Vita3K's active user, when Vita3K has a config.
 - The emulator settings layers, the ES-DE startup script and the last `settings apply`, on a device that subscribes to `settings`.
+- The frontend's system list override and RetroArch's paths, on a device whose profile sets them (`anbernic-rg351mp`).
 - The inbox tools (`chdman`, `bsdtar`, `RAHasher`, `dolphin-tool`, `nsz`), the Switch titledb folder and keys file (presence only).
 - The DAT folder and how old the newest DAT is, and the optional arcade DAT files.
 - The hub folder and its free space.
@@ -73,5 +74,12 @@ On a console that subscribes to the `settings` group, `doctor` finds the device 
 - **Settings layers.** The local `wz-settings` folder and its marker exist, and `common.toml` and the device's layer parse and validate. A missing folder, an invalid layer, a conflict copy or a secret key in a layer is a problem; an emulator or file id the profile does not know is a warning.
 - **ES-DE startup script.** The script is installed, executable and its Python exists, and ES-DE's custom event scripts are on (`CustomEventScripts` in `es_settings.xml`). Otherwise it warns and the fix is `warpzone provision device <name>`, run with ES-DE closed, or the menu path in ES-DE.
 - **Last settings apply.** Read from `last-apply.json`: a failed run warns and names the log; keys held back warn and the fix is `warpzone settings capture`; no run yet is optional.
+
+## Frontend
+
+On a device that subscribes to `library` with a profile that moves the frontend and RetroArch to the library (`anbernic-rg351mp`), `doctor` finds the device the same way, through the local Syncthing's `config.xml`, and adds two lines. See [anbernic.md](anbernic.md).
+
+- **ES systems override.** `~/.emulationstation/es_systems.cfg` is exactly the system list of the OS with the ROM folders moved into the library. Missing or out of date (dArkOS updated its list) is a warning, and the fix is `warpzone provision device <name>` with EmulationStation closed.
+- **RetroArch paths.** Each RetroArch config has the BIOS folder and the save and state settings the profile wants. A key that differs is named with its current value; a missing config or a key present twice is a warning.
 
 Details in [design.md](design.md#doctor).

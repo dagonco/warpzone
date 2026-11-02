@@ -2,7 +2,7 @@
 
 What the shipped profile covers, why save folders point at real directories, and the few steps that stay manual.
 
-A profile says where things live on one kind of device: [`warpzone/data/profiles/`](../warpzone/data/profiles). warpzone ships `steamos-emudeck` (Steam Deck, Steam Machine). Profiles are plain TOML, so adding a setup is a small pull request. A save entry like `[saves.dolphin-gc]` maps to the folder ID `wz-save-dolphin-gc` and the hub path `saves/dolphin/gc`. A `[bios.cemu-keys]` placement maps to `wz-bios-cemu-keys`.
+A profile says where things live on one kind of device: [`warpzone/data/profiles/`](../warpzone/data/profiles). warpzone ships `steamos-emudeck` (Steam Deck, Steam Machine) and `anbernic-rg351mp` (see [anbernic.md](anbernic.md)). Profiles are plain TOML, so adding a setup is a small pull request. A save entry like `[saves.dolphin-gc]` maps to the folder ID `wz-save-dolphin-gc` and the hub path `saves/dolphin/gc`. A `[bios.cemu-keys]` placement maps to `wz-bios-cemu-keys`.
 
 ## Saves covered
 

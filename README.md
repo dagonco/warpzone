@@ -142,6 +142,7 @@ Turn on filesystem snapshots for the hub's share. The full list of rules is in [
 | [docs/bios.md](docs/bios.md) | The BIOS and firmware check. |
 | [docs/doctor.md](docs/doctor.md) | Checking a machine. |
 | [docs/emudeck.md](docs/emudeck.md) | The EmuDeck profile, the symlink gotcha, manual steps. |
+| [docs/anbernic.md](docs/anbernic.md) | The Anbernic RG351MP (dArkOS) profile: exFAT card, system list override, RetroArch paths. |
 | [docs/safety.md](docs/safety.md) | Safety rules and hub snapshots. |
 | [docs/design.md](docs/design.md) | The implementation contract. |
 | [CONTRIBUTING.md](CONTRIBUTING.md), [docs/releasing.md](docs/releasing.md), [CHANGELOG.md](CHANGELOG.md) | Contributing, releasing, history. |

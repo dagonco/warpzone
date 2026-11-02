@@ -58,6 +58,13 @@ device_id = "CCCCCCC-CCCCCCC-CCCCCCC-CCCCCCC-CCCCCCC-CCCCCCC-CCCCCCC-CCCCCCC"
 profile = "steamos-emudeck"
 folders = ["library", "tools", "saves", "frontend", "songs", "bios"]
 
+# A device with another profile. The Anbernic RG351MP (dArkOS) has no tools, songs, ES-DE or
+# emulator settings, so it subscribes to the library and the saves only.
+[devices.rg351mp]
+device_id = "DDDDDDD-DDDDDDD-DDDDDDD-DDDDDDD-DDDDDDD-DDDDDDD-DDDDDDD-DDDDDDD"
+profile = "anbernic-rg351mp"
+folders = ["library", "saves"]
+
 # Optional. Only `warpzone inbox` reads this table, and it works with just this table
 # (no [hub] or [devices]) on a desktop machine that mounts the hub's games share.
 [inbox]
