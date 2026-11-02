@@ -15,6 +15,9 @@ ignore_perms = true
 # /roms/library/roms/<system> and BIOS files in /roms/library/bios.
 [paths]
 library = "/roms/library"
+# A device that lists `play-state` shares favourites and play statistics here, on the card.
+# This frontend needs no `[play_state]` table: the `[artwork]` timer below does the work.
+play_state = "/roms/warpzone/play-state"
 
 # EmulationStation reads ~/.emulationstation/es_systems.cfg before the system list in /etc, so
 # `provision device` writes a copy of that list with every ROM folder moved into the library.

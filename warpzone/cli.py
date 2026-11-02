@@ -139,6 +139,25 @@ def _build_parser() -> argparse.ArgumentParser:
         "--syncthing-config", type=Path, help="local Syncthing config.xml or its folder"
     )
 
+    ps = sub.add_parser("play-state", help="favourites and play statistics across the frontends")
+    ps_sub = ps.add_subparsers(dest="play_state_command", required=True, metavar="action")
+    ps_sync = ps_sub.add_parser(
+        "sync",
+        parents=[common],
+        help="publish this device's favourites and play statistics and merge the others' into "
+        "ES-DE's gamelists (run on the device; gamelists wait until ES-DE is closed)",
+    )
+    ps_sync.add_argument("name", help="device name")
+    ps_sync.add_argument(
+        "--dry-run", action="store_true", help="say what it would do and write nothing"
+    )
+    ps_sync.add_argument("--quiet", action="store_true", help="print nothing")
+    ps_sync.add_argument(
+        "--frontend-starting",
+        action="store_true",
+        help="run from ES-DE's startup script: ES-DE waits and has read no gamelist yet",
+    )
+
     chk = sub.add_parser(
         "bios",
         parents=[common],
@@ -484,6 +503,37 @@ def _frontend(args: argparse.Namespace, cfg: Config, profiles: dict[str, Profile
     return EXIT_OK
 
 
+def _play_state(args: argparse.Namespace, cfg: Config, profiles: dict[str, Profile]) -> int:
+    from warpzone import playstate_device
+
+    name = _device(cfg, args.name)
+    device, profile = cfg.devices[name], profiles[cfg.devices[name].profile]
+    if "play-state" not in device.folders:
+        raise ConfigError(f"device {name!r} does not list the 'play-state' folder group")
+    if profile.artwork is not None:
+        raise ConfigError(f"device {name!r} merges with `warpzone frontend refresh {name}`")
+    quiet = args.quiet
+
+    def say(text: str) -> None:
+        if not quiet:
+            print(text)
+
+    def warn(text: str) -> None:
+        if not quiet:
+            _eprint(f"warning: {text}")
+
+    playstate_device.sync_shared(
+        name,
+        profile,
+        Path.home(),
+        say=say,
+        warn=warn,
+        dry_run=args.dry_run,
+        starting=args.frontend_starting,
+    )
+    return EXIT_OK
+
+
 def _self_update(args: argparse.Namespace, rep: Reporter) -> int:
     from warpzone import selfupdate
 
@@ -499,6 +549,8 @@ def _self_update(args: argparse.Namespace, rep: Reporter) -> int:
 def _run(args: argparse.Namespace) -> int:
     if args.command == "settings":  # the apply path: no network code
         return _settings(args, *_load(args))
+    if args.command == "play-state":  # ES-DE waits for it too: no network code either
+        return _play_state(args, *_load(args))
     from warpzone import doctor, provision, prune
     from warpzone.provision import Reporter
 

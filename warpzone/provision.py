@@ -12,7 +12,15 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from warpzone import artwork, esde, flatpak, frontend, settings_state, updatetimer
+from warpzone import (
+    artwork,
+    esde,
+    flatpak,
+    frontend,
+    playstate_device,
+    settings_state,
+    updatetimer,
+)
 from warpzone.config import DEFAULT_WAIT_SECONDS, HUB_WAIT_SECONDS, Config
 from warpzone.model import ESDE_ID, MEDIA_ID, FolderSpec, device_specs, hub_specs
 from warpzone.profiles import Profile
@@ -648,6 +656,69 @@ def ensure_esde_script(
     if "esde" not in profile.paths:
         return
     python = python or sys.executable
+    text = esde.render_startup_script(python, name, _script_config(config_path, home))
+    _install_startup_script(
+        name,
+        profile,
+        home,
+        rep,
+        esde.SCRIPT_NAME,
+        text,
+        dry_run=dry_run,
+        python=python,
+        import_check=import_check,
+        proc=proc,
+        state_root=state_root,
+    )
+
+
+def ensure_play_state_script(
+    name: str,
+    profile: Profile,
+    home: Path,
+    rep: Reporter,
+    *,
+    dry_run: bool,
+    python: str | None = None,
+    import_check: ImportCheck = run_import_check,
+    proc: Path = Path("/proc"),
+    state_root: Path | None = None,
+    config_path: Path | None = None,
+) -> None:
+    """Install ES-DE's startup script for `play-state sync`, as `ensure_esde_script` does."""
+    if "esde" not in profile.paths:
+        return
+    python = python or sys.executable
+    text = esde.render_play_state_script(python, name, _script_config(config_path, home))
+    _install_startup_script(
+        name,
+        profile,
+        home,
+        rep,
+        esde.PLAY_STATE_SCRIPT,
+        text,
+        dry_run=dry_run,
+        python=python,
+        import_check=import_check,
+        proc=proc,
+        state_root=state_root,
+    )
+
+
+def _install_startup_script(
+    name: str,
+    profile: Profile,
+    home: Path,
+    rep: Reporter,
+    script: str,
+    text: str,
+    *,
+    dry_run: bool,
+    python: str,
+    import_check: ImportCheck,
+    proc: Path,
+    state_root: Path | None,
+) -> None:
     esde_dir = Path(expand_home(profile.paths["esde"], home))
     if not import_check(python):
         rep.warn(
@@ -656,8 +727,7 @@ def ensure_esde_script(
             f"(for example with pipx), then run `warpzone provision device {name}` from there"
         )
         return
-    path = esde.script_path(esde_dir)
-    text = esde.render_startup_script(python, name, _script_config(config_path, home))
+    path = esde.script_path(esde_dir, script)
     try:
         current: str | None = path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
@@ -982,6 +1052,7 @@ def ensure_gamelists(
     *,
     dry_run: bool,
     proc: Path = Path("/proc"),
+    play_state: bool = False,
 ) -> None:
     """Write the frontend's gamelists from the scraped data that Syncthing delivered.
 
@@ -991,7 +1062,8 @@ def ensure_gamelists(
     is open and has nothing to change, do nothing. A file is written only while the frontend
     is not running, atomically, and refused when it changed after it was read. The user
     data the frontend saved in a gamelist is carried over; see docs/design.md, "Frontend
-    artwork".
+    artwork". With `play_state` that data also goes to the other devices and theirs is merged
+    in; see docs/design.md, "Play state".
     """
     art, rule = profile.artwork, profile.es_systems
     layout = _artwork_layout(profile, home)
@@ -1021,7 +1093,20 @@ def ensure_gamelists(
         return data
 
     files = dataclasses.replace(artwork.REAL_FILES, read=read)
+    state: playstate_device.Generated | None = None
     try:
+        if play_state:
+            state = playstate_device.prepare_generated(
+                name,
+                profile,
+                home,
+                layout,
+                artwork.gamelist_systems(
+                    layout, system_list, prefix=rule.prefix, renames=rule.renames, hubs=hubs
+                ),
+                files,
+                warn=rep.warn,
+            )
         plan = artwork.plan_gamelists(
             fmt,
             art.kinds,
@@ -1031,6 +1116,7 @@ def ensure_gamelists(
             renames=rule.renames,
             hubs=hubs,
             files=files,
+            overlay=state.overlay() if state is not None else None,
         )
     except artwork.ArtworkError as exc:
         rep.warn(f"{source}: {exc}, so no gamelist was written")
@@ -1043,15 +1129,26 @@ def ensure_gamelists(
             "so no gamelist was written for this one"
         )
     pending = plan.pending()
+
+    def publish(*, applied: bool) -> None:
+        if state is not None and not dry_run and state.publish(applied=applied):
+            rep.out(f"play state: published {state.where}")
+
     if not plan.items:
         rep.out("gamelists: no scraped gamelist for the systems on the device yet")
+        publish(applied=False)
         return
     if not pending:
         rep.out(f"gamelists: {len(plan.items)} current")
+        publish(applied=True)
         return
     label, what = "EmulationStation", "its gamelists"
     if _busy(rule.process, label, what, again, rep, proc):
+        publish(applied=False)
         return
+    # First the ledger: a run cut short between the two loses at worst the plays made in that
+    # moment, where the other order would count every merged play as played here.
+    publish(applied=True)
     for item in pending:
         if dry_run:
             rep.out(f"gamelists: dry-run: would write {item.path} ({item.games} games)")
@@ -1117,8 +1214,69 @@ def ensure_artwork_timer(
     service, timer = artwork.render_units(
         python, name, _script_config(config_path, home), art.refresh
     )
+    _install_timer(
+        artwork.UNIT_NAME, service, timer, art.refresh, "artwork", home, rep, dry_run, systemctl
+    )
+
+
+def ensure_play_state_timer(
+    name: str,
+    profile: Profile,
+    home: Path,
+    rep: Reporter,
+    *,
+    dry_run: bool,
+    python: str | None = None,
+    import_check: ImportCheck = run_import_check,
+    config_path: Path | None = None,
+    systemctl: SystemctlRunner = run_user_systemctl,
+) -> None:
+    """Install and start the `systemd --user` timer that runs `play-state sync`.
+
+    Only for a profile whose `[play_state]` sets `refresh`; a device with `[artwork]` has its
+    own timer. Between ES-DE starts it publishes what ES-DE saved, so the other devices get it
+    without waiting for the next start.
+    """
+    rule = profile.play_state
+    if rule is None or rule.refresh is None:
+        return
+    python = python or sys.executable
+    if not import_check(python):
+        rep.warn(
+            f"the play state timer was not installed: {python} cannot import warpzone from "
+            "outside the current folder (run from a clone?). Install warpzone for it (for "
+            f"example with pipx), then run `warpzone provision device {name}` from there"
+        )
+        return
+    service, timer = artwork.render_play_state_units(
+        python, name, _script_config(config_path, home), rule.refresh
+    )
+    _install_timer(
+        artwork.PLAY_STATE_UNIT,
+        service,
+        timer,
+        rule.refresh,
+        "play state",
+        home,
+        rep,
+        dry_run,
+        systemctl,
+    )
+
+
+def _install_timer(
+    unit_name: str,
+    service: str,
+    timer: str,
+    interval: str,
+    label: str,
+    home: Path,
+    rep: Reporter,
+    dry_run: bool,
+    systemctl: SystemctlRunner,
+) -> None:
     folder = home / ".config" / "systemd" / "user"
-    wanted = {f"{artwork.UNIT_NAME}.service": service, f"{artwork.UNIT_NAME}.timer": timer}
+    wanted = {f"{unit_name}.service": service, f"{unit_name}.timer": timer}
     changed = False
     for filename, text in wanted.items():
         path = folder / filename
@@ -1128,7 +1286,7 @@ def ensure_artwork_timer(
         except FileNotFoundError:
             before, current = None, None
         except (OSError, UnicodeDecodeError) as exc:
-            rep.warn(f"cannot read {path} ({exc}), so the artwork timer was left alone")
+            rep.warn(f"cannot read {path} ({exc}), so the {label} timer was left alone")
             return
         if current == text:
             continue
@@ -1141,19 +1299,19 @@ def ensure_artwork_timer(
         else:
             rep.out(f"timer: wrote {path}")
     if not changed:
-        rep.out(f"timer: {artwork.UNIT_NAME} unchanged (every {art.refresh})")
+        rep.out(f"timer: {unit_name} unchanged (every {interval})")
         return
     if dry_run:
         return
-    unit = f"{artwork.UNIT_NAME}.timer"
+    unit = f"{unit_name}.timer"
     for args in (("daemon-reload",), ("enable", "--now", unit), ("restart", unit)):
         if not systemctl(args):
             rep.warn(
-                f"`systemctl --user {' '.join(args)}` failed, so the artwork timer may not "
+                f"`systemctl --user {' '.join(args)}` failed, so the {label} timer may not "
                 f"run: run it by hand (is a user session running? `loginctl enable-linger`)"
             )
             return
-    rep.out(f"timer: {unit} runs every {art.refresh}, skipping while the frontend is open")
+    rep.out(f"timer: {unit} runs every {interval}, skipping while the frontend is open")
 
 
 def refresh_artwork(
@@ -1175,7 +1333,15 @@ def refresh_artwork(
         rep.warn("local Syncthing not found, so which systems receive artwork was not checked")
     else:
         sync_artwork_scope(cfg, name, profile, home, local, rep)
-    ensure_gamelists(name, profile, home, rep, dry_run=dry_run, proc=proc)
+    ensure_gamelists(
+        name,
+        profile,
+        home,
+        rep,
+        dry_run=dry_run,
+        proc=proc,
+        play_state="play-state" in cfg.devices[name].folders,
+    )
 
 
 def provision_device(
@@ -1267,7 +1433,15 @@ def provision_device(
         layout = _artwork_layout(profile, home)
         if layout is not None and not scope:
             rep.warn(_no_scope_warning(name, layout))
-        ensure_gamelists(name, profile, home, rep, dry_run=local.dry_run, proc=proc)
+        ensure_gamelists(
+            name,
+            profile,
+            home,
+            rep,
+            dry_run=local.dry_run,
+            proc=proc,
+            play_state="play-state" in device.folders,
+        )
         ensure_artwork_timer(
             name,
             profile,
@@ -1292,6 +1466,31 @@ def provision_device(
             proc=proc,
             state_root=state_root,
             config_path=config_path,
+        )
+
+    if "play-state" in device.folders:
+        ensure_play_state_script(
+            name,
+            profile,
+            home,
+            rep,
+            dry_run=local.dry_run,
+            python=python,
+            import_check=import_check,
+            proc=proc,
+            state_root=state_root,
+            config_path=config_path,
+        )
+        ensure_play_state_timer(
+            name,
+            profile,
+            home,
+            rep,
+            dry_run=local.dry_run,
+            python=python,
+            import_check=import_check,
+            config_path=config_path,
+            systemctl=systemctl,
         )
 
     if device.self_update:

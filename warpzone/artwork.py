@@ -25,6 +25,9 @@ _PLAIN = re.compile(r"^[A-Za-z0-9_-][A-Za-z0-9._-]*$")
 _ILLEGAL = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f\ud800-\udfff￾￿]")
 
 
+STATE_TAGS = {"favorite": "favorite", "playcount": "playcount", "lastplayed": "lastplayed"}
+
+
 class ArtworkError(Exception):
     pass
 
@@ -54,6 +57,9 @@ class Format:
     media_tags: Mapping[str, str]
     render: Callable[[Sequence[Entry]], str]
     order: tuple[str, ...] = ()
+    # The tags that hold the favourite, the play count and the last played time, for
+    # `playstate`, which needs `true`, a number and `YYYYMMDDTHHMMSS` in local time.
+    state_tags: Mapping[str, str] = field(default_factory=lambda: dict(STATE_TAGS))
 
     def image_tags(self) -> tuple[str, ...]:
         return tuple(dict.fromkeys(self.media_tags.values()))
@@ -222,6 +228,7 @@ def build(
     base: str,
     rom_exists: Callable[[str], bool],
     media_path: Callable[[str, str], str | None],
+    overlay: Mapping[str, Mapping[str, str]] | None = None,
 ) -> list[Entry]:
     """The frontend's entries for one system.
 
@@ -231,7 +238,17 @@ def build(
     come from `existing` (the file the frontend has been saving to), never from `source`.
     Entries of `existing` that the hub does not know, with user data on a ROM that is still
     there, are kept with just that data. The order is the hub's, then those, by path.
+
+    `overlay` holds, by hub-relative path, user fields merged from the other devices: they
+    replace the saved ones (an empty value removes the field). A game it names that has no
+    entry gets one when its ROM is here, after the rest.
     """
+    extra = overlay or {}
+
+    def merged(rel: str, fields: dict[str, str]) -> dict[str, str]:
+        changes = extra.get(rel, {})
+        return {k: v for k, v in {**fields, **changes}.items() if v}
+
     saved = {(e.tag, e.path): e for e in existing}
     built: list[Entry] = []
     seen: set[tuple[str, str]] = set()
@@ -255,7 +272,7 @@ def build(
         old = saved.get(key)
         if old is not None:
             fields.update({k: old.fields[k] for k in fmt.user_fields if old.fields.get(k)})
-        built.append(Entry(entry.tag, emitted, fields))
+        built.append(Entry(entry.tag, emitted, merged(rel, fields)))
     for old in sorted(existing, key=lambda e: (e.path, e.tag)):
         key = (old.tag, old.path)
         rel = relative(old.path)
@@ -263,7 +280,14 @@ def build(
         if key in seen or rel is None or not mine or not rom_exists(base + rel):
             continue
         seen.add(key)
-        built.append(Entry(old.tag, "./" + rel, mine))
+        built.append(Entry(old.tag, "./" + rel, merged(base + rel, mine)))
+    for rel in sorted(extra):
+        emitted = rel[len(base) :] if rel.startswith(base) else None
+        key = ("game", f"./{emitted}")
+        fields = merged(rel, {})
+        if emitted and key not in seen and fields and rom_exists(rel):
+            seen.add(key)
+            built.append(Entry("game", f"./{emitted}", fields))
     return built
 
 
@@ -353,6 +377,26 @@ class GamelistPlan:
         return [i for i in self.items if i.state != "current"]
 
 
+def gamelist_path(layout: Layout, system: FrontendSystem) -> Path:
+    """Where the frontend keeps the gamelist of `system`."""
+    if str(layout.gamelists) == ROMPATH:
+        return layout.roms / system.hub / "gamelist.xml"
+    return layout.gamelists / system.name / "gamelist.xml"
+
+
+def gamelist_systems(
+    layout: Layout,
+    system_list: str,
+    *,
+    prefix: str,
+    renames: Mapping[str, str],
+    hubs: Collection[str],
+) -> dict[str, list[FrontendSystem]]:
+    """The frontend's systems that get a gamelist, by hub folder, as `plan_gamelists` picks them."""
+    systems = frontend_systems(system_list, prefix, f"{layout.roms}/", renames)
+    return assign(systems, set(hubs))[0]
+
+
 def plan_gamelists(
     fmt: Format,
     kinds: Sequence[str],
@@ -363,11 +407,12 @@ def plan_gamelists(
     renames: Mapping[str, str],
     hubs: Collection[str],
     files: Files = REAL_FILES,
+    overlay: Mapping[str, Mapping[str, str]] | None = None,
 ) -> GamelistPlan:
     """What the gamelists of the device should be, and whether each already is.
 
-    `hubs` are the hub system folders on the device. Raises `ArtworkError` when the system
-    list is unreadable.
+    `hubs` are the hub system folders on the device; `overlay` is `build`'s, by hub-relative
+    path prefixed with `<hub>/`. Raises `ArtworkError` when the system list is unreadable.
     """
     systems = frontend_systems(system_list, prefix, f"{layout.roms}/", renames)
     chosen, dropped = assign(systems, set(hubs))
@@ -393,11 +438,10 @@ def plan_gamelists(
             path = layout.media / hub / kind / f"{stem}.png"
             return str(path) if files.is_file(path) else None
 
+        folder = f"{hub}/"
+        mine = {k[len(folder) :]: v for k, v in (overlay or {}).items() if k.startswith(folder)}
         for system in chosen[hub]:
-            if str(layout.gamelists) == ROMPATH:
-                path = layout.roms / hub / "gamelist.xml"
-            else:
-                path = layout.gamelists / system.name / "gamelist.xml"
+            path = gamelist_path(layout, system)
             before = files.read(path)
             try:
                 existing = parse_gamelist(before) if before is not None else []
@@ -411,6 +455,7 @@ def plan_gamelists(
                 base=system.base,
                 rom_exists=rom_exists,
                 media_path=media_path,
+                overlay=mine,
             )
             wanted = fmt.render(built).encode("utf-8")
             if before is None:
@@ -433,16 +478,14 @@ def _unit_arg(arg: str) -> str:
     return f'"{quoted}"'
 
 
-def render_units(
-    python: str, name: str, config_path: Path | None, interval: str
+def _units(
+    command: list[str], config_path: Path | None, interval: str, what: str
 ) -> tuple[str, str]:
-    """The text of the `systemd --user` service and timer that run `frontend refresh`."""
-    command = [python, "-m", "warpzone", "frontend", "refresh", name]
     if config_path is not None:
-        command += ["--config", str(config_path)]
+        command = [*command, "--config", str(config_path)]
     service = (
         "[Unit]\n"
-        "Description=warpzone: refresh the frontend gamelists\n"
+        f"Description=warpzone: {what}\n"
         "\n"
         "[Service]\n"
         "Type=oneshot\n"
@@ -451,7 +494,7 @@ def render_units(
     )
     timer = (
         "[Unit]\n"
-        "Description=warpzone: refresh the frontend gamelists regularly\n"
+        f"Description=warpzone: {what} regularly\n"
         "\n"
         "[Timer]\n"
         "OnBootSec=5min\n"
@@ -463,7 +506,24 @@ def render_units(
     return service, timer
 
 
+def render_units(
+    python: str, name: str, config_path: Path | None, interval: str
+) -> tuple[str, str]:
+    """The text of the `systemd --user` service and timer that run `frontend refresh`."""
+    command = [python, "-m", "warpzone", "frontend", "refresh", name]
+    return _units(command, config_path, interval, "refresh the frontend gamelists")
+
+
+def render_play_state_units(
+    python: str, name: str, config_path: Path | None, interval: str
+) -> tuple[str, str]:
+    """The text of the `systemd --user` service and timer that run `play-state sync`."""
+    command = [python, "-m", "warpzone", "play-state", "sync", name, "--quiet"]
+    return _units(command, config_path, interval, "merge favourites and play statistics")
+
+
 UNIT_NAME = "warpzone-artwork"
+PLAY_STATE_UNIT = "warpzone-play-state"
 
 
 # ------------------------------------------------------------------ formats

@@ -8,6 +8,13 @@ tools = "~/.local/share/warpzone/tools"
 media = "~/Emulation/tools/downloaded_media"
 esde = "~/ES-DE"
 settings = "~/.local/share/warpzone/settings"
+play_state = "~/.local/share/warpzone/play-state"
+
+# Between ES-DE starts a timer publishes what ES-DE saved, so favourites and play statistics
+# reach the other devices without waiting for the next start. A device that lists
+# `play-state` merges into the gamelists at ES-DE's startup, before ES-DE reads them.
+[play_state]
+refresh = "15min"
 
 # Paths in the library folder that the device never receives from the hub, whatever
 # its whitelist says. These lines go ahead of the whitelist. The folders that the

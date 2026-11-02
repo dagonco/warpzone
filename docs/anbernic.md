@@ -66,7 +66,7 @@ What happens:
 
 - **Only what is needed arrives.** The two folders are receive-only here, with ignore lines that let in only the covers (`<system>/covers`) and the gamelists of the systems on the device. The Steam Deck and Steam Machine receive the same hub folders in full and nothing about them changes. After you add a system to a whitelist, its artwork follows once its games have arrived (the next `frontend refresh`, or the timer). Covers of a whole system arrive even when only a few of its games are on the device.
 - **The gamelist is rebuilt from it.** For each system, `<image>` is the absolute path of the cover that exists (`<media>/<system>/covers/<game>.png`, subfolders kept), the descriptions, ratings, dates, developer, publisher, genre and player count are copied, and a game whose ROM is not on the device is left out. The file goes under the name EmulationStation gives the system, not the folder: hub `pokemini` becomes `pokemonmini` (`[es_systems.rename]`), hub `mame` becomes `mame2010` and hub `psp` becomes `ppsspp`. If two systems share a name, one is chosen and the other is reported.
-- **Your own data stays.** EmulationStation saves favourites, play counts and last played time in that same file (on exit). A rebuild carries them over; only the scraped fields are replaced, so edit a description on the hub, not on the device. ES-DE's own play statistics are not copied.
+- **Your own data stays.** EmulationStation saves favourites, play counts and last played time in that same file (on exit). A rebuild carries them over; only the scraped fields are replaced, so edit a description on the hub, not on the device. To share them with the other consoles, see [Favourites and play statistics](#favourites-and-play-statistics).
 - **Only while EmulationStation is closed.** Like the system list override, the files are written only when it is not running (it rewrites them when it quits). A rebuild that would change nothing leaves the files alone.
 - **New scrapes apply by themselves.** `provision device` installs a `systemd --user` timer (`warpzone-artwork.timer`) that runs `warpzone frontend refresh` every 15 minutes. If EmulationStation is open the run changes nothing and the next one tries again. It uses the Python that runs `provision`, which must be able to import warpzone from outside a clone (install it with pipx).
 
@@ -80,6 +80,23 @@ It first brings the ignore lines up to date with the systems on the device (if i
 
 To set this up on an existing device: add `"frontend"` to its `folders`, run `warpzone provision hub` (it adds the device to `wz-media` and `wz-esde` and changes nothing else), then `warpzone provision device rg351mp` on the device. Covers alone are a few hundred MB for fifteen classic systems; more `kinds` mean more space.
 
+## Favourites and play statistics
+
+With `play-state` in `folders`, favourites, play counts and last played times travel between this device and the others, in both directions. The profile already says where: `paths.play_state` is `/roms/warpzone/play-state`, and the `[artwork]` timer does the work, so this device needs no table of its own and no SSH.
+
+```toml
+[devices.rg351mp]
+folders = ["library", "saves", "frontend", "play-state"]
+```
+
+Add it to every device that takes part, run `warpzone provision hub`, then `warpzone provision device <name>` on each, with the frontend closed.
+
+- **What you see.** A favourite follows the latest change on any device, and removing one sticks. The play count is the sum of this device and the ES-DE consoles. Last played is the latest, shown in this device's time zone.
+- **When.** Each `frontend refresh` publishes what EmulationStation saved (on exit) and merges the others, every 15 minutes while it is closed. While it is open only publishing happens, and the merge waits.
+- **Games that are not here.** Their state waits in the files and applies if the game arrives. `hidden` and `kidgame` stay on this device.
+
+See [design.md](design.md#play-state) for the rules.
+
 ## Doctor
 
-On the device, `warpzone doctor` adds two lines under "Frontend": `ES systems override` and `RetroArch paths`; with `frontend` in the folders it adds `Frontend artwork` (gamelists missing or stale) and `Artwork timer`. See [doctor.md](doctor.md#frontend).
+On the device, `warpzone doctor` adds two lines under "Frontend": `ES systems override` and `RetroArch paths`; with `frontend` in the folders it adds `Frontend artwork` (gamelists missing or stale) and `Artwork timer`, and with `play-state` it adds `Play state`. See [doctor.md](doctor.md#frontend).

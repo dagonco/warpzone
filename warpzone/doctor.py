@@ -633,6 +633,8 @@ class ConfigState:
     # The devices that subscribe to `library` whose profile has `es_systems` or `retroarch`,
     # or `artwork` with the `frontend` group.
     frontend_devices: tuple[SettingsDevice, ...] = ()
+    # The devices that subscribe to `play-state`; empty when the config does not load.
+    play_state_devices: tuple[SettingsDevice, ...] = ()
     # The devices that subscribe to `library` and have not turned `self_update` off.
     update_devices: tuple[SettingsDevice, ...] = ()
 
@@ -715,6 +717,7 @@ def load_config_state(path: Path) -> ConfigState:
     sync_paths: dict[str, None] = {}
     settings_devices: list[SettingsDevice] = []
     frontend_devices: list[SettingsDevice] = []
+    play_state_devices: list[SettingsDevice] = []
     update_devices: list[SettingsDevice] = []
     try:
         if "hub" in data or "devices" in data:
@@ -732,6 +735,10 @@ def load_config_state(path: Path) -> ConfigState:
                 art = profile.artwork is not None and "frontend" in device.folders
                 if "library" in device.folders and (profile.es_systems or profile.retroarch or art):
                     frontend_devices.append(
+                        SettingsDevice(device.name, device.device_id, profile, device.folders)
+                    )
+                if "play-state" in device.folders:
+                    play_state_devices.append(
                         SettingsDevice(device.name, device.device_id, profile, device.folders)
                     )
                 if "library" in device.folders and device.self_update:
@@ -752,6 +759,7 @@ def load_config_state(path: Path) -> ConfigState:
     paths = tuple(sync_paths) if error is None else ()
     subscribed = tuple(settings_devices) if error is None else ()
     frontends = tuple(frontend_devices) if error is None else ()
+    sharing = tuple(play_state_devices) if error is None else ()
     updating = tuple(update_devices) if error is None else ()
     return ConfigState(
         path,
@@ -764,6 +772,7 @@ def load_config_state(path: Path) -> ConfigState:
         paths,
         subscribed,
         frontends,
+        sharing,
         updating,
     )
 
@@ -1413,6 +1422,51 @@ def check_settings(ctx: Context) -> list[Result]:
     return results
 
 
+def judge_play_state(
+    *, device: str, folder: str, ready: bool, ledger: bool, script: str | None, timer: str | None
+) -> tuple[str, str, str]:
+    """Verdict on a device's play state; `script` and `timer` name what is missing, if anything."""
+    again = f"run `warpzone provision device {device}`"
+    if not ready:
+        return WARN, f"the folder {folder} is not set up", again
+    if script is not None:
+        return WARN, f"the startup script {script} is missing", again
+    if timer is not None:
+        return WARN, f"the timer {timer} is missing", again
+    if not ledger:
+        return OK, f"{folder} is set up; this device has nothing to publish yet", ""
+    return OK, f"this device publishes to {folder}", ""
+
+
+def check_play_state(ctx: Context) -> list[Result]:
+    """On a device that shares favourites and play statistics."""
+    devices = ctx.config.play_state_devices
+    device = _local_device(ctx, devices, "wz-play-state", "play_state")
+    if device is None:
+        return []
+    p, profile = ctx.probes, device.profile
+    folder = Path(_expand(profile.paths["play_state"], p.home))
+    units = p.home / ".config" / "systemd" / "user"
+    script = timer = None
+    if "esde" in profile.paths:
+        path = esde.script_path(
+            Path(_expand(profile.paths["esde"], p.home)), esde.PLAY_STATE_SCRIPT
+        )
+        script = None if p.is_file(path) else str(path)
+    if profile.play_state is not None and profile.play_state.refresh is not None:
+        unit = units / f"{artwork.PLAY_STATE_UNIT}.timer"
+        timer = None if p.is_file(unit) else unit.name
+    verdict = judge_play_state(
+        device=device.name,
+        folder=str(folder),
+        ready=p.is_dir(folder / ".stfolder") or p.is_file(folder / ".stfolder"),
+        ledger=p.is_file(folder / f"{device.name}.jsonl"),
+        script=script,
+        timer=timer,
+    )
+    return [Result("Play state", G_FRONTEND, *verdict)]
+
+
 def check_frontend(ctx: Context) -> list[Result]:
     """On a device whose profile moves the frontend and RetroArch to the library."""
     device = _local_device(ctx, ctx.config.frontend_devices, "wz-library", "library")
@@ -1974,6 +2028,7 @@ CHECKS: tuple[Callable[[Context], list[Result]], ...] = (
     check_vita3k,
     check_settings,
     check_frontend,
+    check_play_state,
     check_update_timer,
     check_tools,
     check_switch,
