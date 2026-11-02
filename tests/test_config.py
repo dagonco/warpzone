@@ -87,6 +87,17 @@ class ConfigTests(unittest.TestCase):
                 "rescan_seconds: must be an integer >= 5",
             )
 
+    def test_self_update_defaults_to_on_and_must_be_a_boolean(self) -> None:
+        self.assertTrue(parse_config(config_data()).devices["deck"].self_update)
+        data = copy.deepcopy(config_data())
+        data["devices"]["deck"]["self_update"] = False
+        self.assertFalse(parse_config(data).devices["deck"].self_update)
+        for bad in ("false", 0, 1, None):
+            self.assert_error(
+                lambda d, bad=bad: d["devices"]["deck"].update(self_update=bad),
+                "self_update: must be true or false",
+            )
+
     def test_all_errors_are_reported_together(self) -> None:
         data = copy.deepcopy(config_data())
         data["hub"]["device_id"] = "x"

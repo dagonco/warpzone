@@ -383,3 +383,33 @@ class SettingsCliTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SelfUpdateCommandTests(unittest.TestCase):
+    def test_runs_on_the_package_checkout_and_needs_no_config(self) -> None:
+        with (
+            mock.patch("warpzone.selfupdate.run_self_update", return_value=0) as update,
+            mock.patch.dict(os.environ, {"WARPZONE_CONFIG": "/nonexistent/config.toml"}),
+        ):
+            code, _, err = run("self-update")
+        self.assertEqual(code, 0, err)
+        args, kwargs = update.call_args
+        self.assertEqual(args[0], Path(__file__).resolve().parent.parent)
+        self.assertEqual(args[1], __version__)
+        self.assertFalse(kwargs["dry_run"])
+        self.assertEqual(kwargs["log"].name, "self-update.log")
+
+    def test_dry_run_flag_and_exit_code_are_passed_through(self) -> None:
+        with mock.patch("warpzone.selfupdate.run_self_update", return_value=1) as update:
+            code, _, _ = run("self-update", "--dry-run")
+        self.assertEqual(code, 1)
+        self.assertTrue(update.call_args.kwargs["dry_run"])
+
+    def test_log_goes_to_the_state_folder(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp}),
+            mock.patch("warpzone.selfupdate.run_self_update", return_value=0) as update,
+        ):
+            run("self-update")
+        self.assertEqual(update.call_args.kwargs["log"], Path(tmp) / "warpzone" / "self-update.log")

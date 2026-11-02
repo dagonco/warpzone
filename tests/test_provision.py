@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from typing import Any
-from unittest import mock
+from unittest import addModuleCleanup, mock
 
 from support import (
     API_KEY,
@@ -36,6 +36,13 @@ from warpzone.provision import (
 from warpzone.syncthing import Client
 
 PROFILES = {"steamos-emudeck": load_profile("steamos-emudeck")}
+
+
+def setUpModule() -> None:
+    """provision_device would install a systemd timer: tests/test_update_timer.py covers that."""
+    patcher = mock.patch.object(provision_mod, "ensure_update_timer")
+    patcher.start()
+    addModuleCleanup(patcher.stop)
 
 
 def reporter() -> tuple[Reporter, list[str]]:

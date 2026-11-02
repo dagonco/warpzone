@@ -281,6 +281,13 @@ def _build_parser() -> argparse.ArgumentParser:
     )
 
     sub.add_parser(
+        "self-update",
+        parents=[st_dry_run],
+        help="on a device: move this git checkout to the newest release tag "
+        "(never a downgrade; offline is not an error)",
+    )
+
+    sub.add_parser(
         "doctor",
         parents=[common],
         help="check this machine (tools, config, Syncthing, DATs, hub) and say how to fix it",
@@ -477,6 +484,18 @@ def _frontend(args: argparse.Namespace, cfg: Config, profiles: dict[str, Profile
     return EXIT_OK
 
 
+def _self_update(args: argparse.Namespace, rep: Reporter) -> int:
+    from warpzone import selfupdate
+
+    return selfupdate.run_self_update(
+        selfupdate.package_root(),
+        __version__,
+        rep.out,
+        dry_run=args.dry_run,
+        log=selfupdate.log_path(settings_state.state_dir().parent),
+    )
+
+
 def _run(args: argparse.Namespace) -> int:
     if args.command == "settings":  # the apply path: no network code
         return _settings(args, *_load(args))
@@ -484,6 +503,8 @@ def _run(args: argparse.Namespace) -> int:
     from warpzone.provision import Reporter
 
     rep = Reporter(print, warn_sink=_eprint)
+    if args.command == "self-update":  # needs no config
+        return _self_update(args, rep)
     if args.command == "doctor":  # offline, read-only, needs no valid config
         return doctor.run_doctor(doctor.Probes(config_path=_config_path(args)), rep.out)
     if args.command == "bios":  # works without a config when --root is given

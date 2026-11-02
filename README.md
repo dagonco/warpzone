@@ -102,7 +102,7 @@ python3 -m warpzone --help
    warpzone provision device deck
    ```
 
-   It finds the local Syncthing's API key in its `config.xml` (including the SyncThingy flatpak), adds the hub, and creates the subscribed folders. Save folders whose directory does not exist yet are skipped with a warning and picked up by the next run. With the SyncThingy flatpak it also grants it access to the emulators' `~/.var/app` folders (flatpak hides them) and asks you to restart Syncthing. Use `--syncthing-config PATH` if your `config.xml` is somewhere unusual.
+   It finds the local Syncthing's API key in its `config.xml` (including the SyncThingy flatpak), adds the hub, and creates the subscribed folders. Save folders whose directory does not exist yet are skipped with a warning and picked up by the next run. With the SyncThingy flatpak it also grants it access to the emulators' `~/.var/app` folders (flatpak hides them) and asks you to restart Syncthing. Use `--syncthing-config PATH` if your `config.xml` is somewhere unusual. On a device with systemd it also installs a daily timer that runs `warpzone self-update` (see [docs/self-update.md](docs/self-update.md); `self_update = false` in the device's config turns it off).
 
 ## Commands
 
@@ -120,9 +120,11 @@ python3 -m warpzone --help
 | `warpzone settings apply` | On a console: writes the emulator settings from the hub's layers. ES-DE runs it at startup. |
 | `warpzone settings capture` | On a console: takes settings changed in an emulator to the hub's layers. |
 | `warpzone settings audit` | Reports drift between the layers and this console (read only). |
+| `warpzone self-update` | On a device: moves the git clone to the newest release tag (never a downgrade). A daily timer runs it, see [docs/self-update.md](docs/self-update.md). |
 | `warpzone doctor` | Checks this machine and prints the fix for each problem. |
 
 `provision` and `frontend refresh` support `--dry-run`. `prune` and `inbox` report first and act only with `--apply`. `settings apply` and `settings capture` support `--dry-run`.
+`provision` and `self-update` support `--dry-run`. `prune` and `inbox` report first and act only with `--apply`. `settings apply` and `settings capture` support `--dry-run`.
 
 ## Safety
 
@@ -142,6 +144,7 @@ Turn on filesystem snapshots for the hub's share. The full list of rules is in [
 | [docs/inbox.md](docs/inbox.md) | Adding games: DAT-based discs and cartridges, Switch, PS3 and Xbox, arcade. |
 | [docs/bios.md](docs/bios.md) | The BIOS and firmware check. |
 | [docs/doctor.md](docs/doctor.md) | Checking a machine. |
+| [docs/self-update.md](docs/self-update.md) | Updating a device: `self-update`, its daily timer, turning it off. |
 | [docs/emudeck.md](docs/emudeck.md) | The EmuDeck profile, the symlink gotcha, manual steps. |
 | [docs/anbernic.md](docs/anbernic.md) | The Anbernic RG351MP (dArkOS) profile: exFAT card, system list override, RetroArch paths. |
 | [docs/safety.md](docs/safety.md) | Safety rules and hub snapshots. |

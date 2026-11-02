@@ -40,6 +40,8 @@ class Device:
     folders: tuple[str, ...]
     addresses: tuple[str, ...] = ("dynamic",)
     rescan_seconds: int = DEFAULT_RESCAN_SECONDS
+    # Whether `provision device` installs the timer that runs `warpzone self-update`.
+    self_update: bool = True
 
 
 INBOX_KEYS = (
@@ -238,7 +240,7 @@ def parse_config(data: dict[str, Any], known_profiles: set[str] | None = None) -
             continue
         _check_keys(
             entry,
-            {"device_id", "profile", "folders", "addresses", "rescan_seconds"},
+            {"device_id", "profile", "folders", "addresses", "rescan_seconds", "self_update"},
             where,
             errors,
         )
@@ -272,6 +274,10 @@ def parse_config(data: dict[str, Any], known_profiles: set[str] | None = None) -
         if not isinstance(rescan, int) or isinstance(rescan, bool) or rescan < MIN_RESCAN_SECONDS:
             errors.append(f"{where}.rescan_seconds: must be an integer >= {MIN_RESCAN_SECONDS}")
             rescan = DEFAULT_RESCAN_SECONDS
+        self_update = entry.get("self_update", True)
+        if not isinstance(self_update, bool):
+            errors.append(f"{where}.self_update: must be true or false")
+            self_update = True
         devices[dev_name] = Device(
             dev_name,
             device_id,
@@ -279,6 +285,7 @@ def parse_config(data: dict[str, Any], known_profiles: set[str] | None = None) -
             tuple(dict.fromkeys(folders)),
             _addresses(entry, where, errors),
             rescan,
+            self_update,
         )
 
     if errors:

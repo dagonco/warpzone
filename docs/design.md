@@ -549,6 +549,7 @@ device_id = "YYYYYYY-..."
 profile = "steamos-emudeck"
 folders = ["library", "tools", "saves", "frontend"]
 addresses = ["tcp://deck.local:22000"]       # optional, default ["dynamic"]
+self_update = true                           # optional: install the self-update timer (default true)
 
 [devices.machine]
 device_id = "ZZZZZZZ-..."
@@ -584,9 +585,11 @@ error messages; the RetroAchievements key is read from `RA_API_KEY`, never from 
 | `warpzone provision hub` | anywhere that reaches the hub API | Adds every configured device to the hub, creates/updates every `wz-*` folder on the hub and shares it with the devices that subscribe to it, sets the hub ignores. A newly created whitelisted folder first lets only the whitelists through and waits for them (`--timeout`, default 120 s) before the full scan, see "Hub bootstrap". Idempotent. |
 | `warpzone provision device <name>` | on the device | Reads the local Syncthing API key from the local `config.xml` (searching the default locations, including the SyncThingy flatpak; `--syncthing-config PATH` overrides), adds the hub device, creates the subscribed folders with the bootstrap above (`--timeout SECONDS`). When that Syncthing is the SyncThingy flatpak it first grants it the missing `flatpak override --user --filesystem=~/.var/app/<app>` for every folder under `~/.var/app` (flatpak hides other apps' data), and asks for a Syncthing restart. When the device subscribes to `settings`, it installs the ES-DE startup script that runs `settings apply` (see [ES-DE startup script](#es-de-startup-script)). When the device subscribes to `library` and its profile has `[es_systems]` or `[retroarch]`, it also writes the frontend's system list override and pins RetroArch's paths (see [Frontend and RetroArch overrides](#frontend-and-retroarch-overrides)). When it lists `frontend` and the profile has `[artwork]`, it limits the artwork folders to the systems on the device, writes the gamelists and installs the refresh timer (see [Frontend artwork](#frontend-artwork)). Idempotent. |
 | `warpzone frontend refresh [device]` | on the device | For a device whose profile has `[artwork]` and that lists `frontend`: widens the artwork folders' ignores to the systems that have games now (when the local Syncthing is found) and rewrites the frontend's gamelists from the synced ES-DE data, only while the frontend is closed. `--dry-run` prints what it would do. See [Frontend artwork](#frontend-artwork). |
+| `warpzone provision device <name>` | on the device | Reads the local Syncthing API key from the local `config.xml` (searching the default locations, including the SyncThingy flatpak; `--syncthing-config PATH` overrides), adds the hub device, creates the subscribed folders with the bootstrap above (`--timeout SECONDS`). When that Syncthing is the SyncThingy flatpak it first grants it the missing `flatpak override --user --filesystem=~/.var/app/<app>` for every folder under `~/.var/app` (flatpak hides other apps' data), and asks for a Syncthing restart. When the device subscribes to `settings`, it installs the ES-DE startup script that runs `settings apply` (see [ES-DE startup script](#es-de-startup-script)). When the device subscribes to `library` and its profile has `[es_systems]` or `[retroarch]`, it also writes the frontend's system list override and pins RetroArch's paths (see [Frontend and RetroArch overrides](#frontend-and-retroarch-overrides)). It then installs the self-update timer, for every profile (see [Self-update](#self-update)). Idempotent. |
 | `warpzone prune [device]` | on the device | Reports, and with `--apply` deletes, the files of the whitelisted folders that the device no longer whitelists (see [Pruning](#pruning)). Report only by default. |
 | `warpzone bios` | on a device or the hub | Reports which BIOS and firmware files a library has, lacks or has wrong (see [BIOS check](#bios-check)). Read-only. Exit 1 if a required item is missing or wrong. |
 | `warpzone inbox` | a desktop that mounts the hub's share | Identifies, converts and files new games dropped in `inbox/` (see [Inbox](#inbox)). Report only by default, `--apply` acts. Exit 1 if any item needs review. |
+| `warpzone self-update` | on the device | Moves the git checkout warpzone runs from to the newest `vX.Y.Z` tag when it is newer than `__version__` (see [Self-update](#self-update)). Needs no config. `--dry-run` reports only. Exit 0 for every outcome that needs no attention (including no network and not a checkout), 1 when a due update was refused or failed. |
 | `warpzone doctor` | any machine | Checklist of this machine: tools, config, local Syncthing, DATs, hub folder (see [Doctor](#doctor)). Offline, never changes anything. Exit 1 if a required check fails. |
 | `warpzone settings apply` | on the device | Writes the layered emulator settings into each emulator's config file: only the layered keys, with a backup, never while the emulator runs (see [Emulator settings](#emulator-settings)). Run by ES-DE at startup and by hand. |
 | `warpzone settings capture` | on the device | Shows what changed in the emulators' settings since the last sync and writes the keys the user chooses to the common or the device layer on the hub. |
@@ -1718,6 +1721,56 @@ for every problem, the exact fix for this platform.
   and a word longer than the line (a path, a URL) is never cut. The config is read as far as it can be: the `[inbox]` values are
   used by the other checks even when another table is invalid.
 
+## Self-update
+
+Devices run warpzone from a git clone with an editable install, so updating is moving the
+clone to a release tag. `selfupdate.py` holds the decisions as pure functions (`parse_tag`,
+`newest_tag`, `version_key`, `decide`) and a runner-based `run_self_update`, so the tests use
+a real repository on disk (a bare repository as the remote) and no network.
+
+- **Checkout.** The root is the folder that holds the `warpzone` package. It must be the
+  top level of a git work tree (`git rev-parse --show-toplevel`); otherwise (a wheel, a
+  package folder inside another repository, no git) the command says so and exits 0.
+- **Which tag.** `git fetch --tags`, then the highest tag matching `vX.Y.Z` exactly,
+  compared as numbers. Pre-release tags are ignored. A pre-release running version
+  (`0.3.0rc1`) sorts before its release. A fetch that fails or times out (300 s) is "could
+  not reach the remote": a message and exit 0.
+- **Never a downgrade.** If the running `__version__` is the same as or newer than the
+  newest tag, nothing happens.
+- **Dirty tree.** Only when an update is due: local changes to tracked files
+  (`git status --porcelain --untracked-files=no`) make it refuse with exit 1.
+- **Update.** `git checkout --detach refs/tags/<tag>`. The editable install follows the
+  clone, so `warpzone --version` (which prints `__version__`) shows the new version in the
+  next process. `python -m pip install -e <root>` with the running interpreter is run only
+  when `pyproject.toml` differs between the old and the new commit (entry points and the
+  package list are the only install metadata that can go stale); a failure prints that
+  command and exits 1. The command ends by asking the interpreter which version it imports.
+- **Log.** Each message, with a UTC timestamp, is appended to
+  `~/.local/state/warpzone/self-update.log` (`$XDG_STATE_HOME` when set), cut to its last 200
+  lines past 64 KiB. `--dry-run` writes none.
+
+### Timer
+
+`provision device` calls `ensure_update_timer` for every device, whatever its profile and
+folders. `updatetimer.py` renders the two units (pure): `warpzone-self-update.service`
+(`Type=oneshot`, `ExecStart=<python> -m warpzone self-update`, the interpreter that ran
+`provision device`, quoted for systemd) and `warpzone-self-update.timer` (`OnCalendar=daily`,
+`Persistent=true`, `OnBootSec=5min`, `RandomizedDelaySec=30min`, `WantedBy=timers.target`)
+in `~/.config/systemd/user/`. The units are rewritten only when their content differs
+(mode 0644, atomically); `daemon-reload`, `enable --now` and, when the timer was already
+running with other units, `restart` follow only when something changed or the timer is not
+enabled and active. It installs nothing, with a warning, when the interpreter cannot import
+warpzone from outside the current folder or `systemctl --user show-environment` fails (no
+user manager); `--dry-run` runs only the read-only `systemctl` queries and prints what it
+would do. `self_update = false` under `[devices.<name>]` skips it (and `doctor` stays
+silent); an installed timer is never removed by `provision`.
+
+`doctor` has `Self-update timer` (group `Updates`): on a Linux machine that is a configured
+device subscribed to `library` without `self_update = false` (found through the local
+`wz-library` folder, as for the frontend), `judge_update_timer` is `[ok]` when both units
+exist and the timer is enabled and active, and `[! ]` when the units are missing, the timer
+is not enabled or not active, or systemd cannot be asked.
+
 ## Syncthing API surface used
 
 All calls send `X-API-Key`. Base URL from config (hub) or the local
@@ -1767,6 +1820,8 @@ warpzone/
   inbox_mame.py      arcade sets: MAME / FBNeo / 2003-Plus fit, emulator choice, ES-DE gamelist
   inbox_console_iso.py  PS3, Xbox, Xbox 360 and Wii U images: identify by signature, place
   flatpak.py         the SyncThingy flatpak: app id and the unit's commands
+  selfupdate.py      `self-update`: newest release tag, checkout, log (decisions pure)
+  updatetimer.py     the systemd user units of the self-update timer (pure)
   settings.py        `settings apply`, `capture`, `audit`: loading, prompts, output
   settings_formats.py  format handlers ini, qt-ini, retroarch-cfg, yaml-flat (pure)
   settings_tree.py   format handlers json, toml (pure)
@@ -1883,6 +1938,17 @@ logic is unit-tested without a network.
   setting with a backup, leaving it alone while a fake `/proc` shows ES-DE running, and
   their dry run. The e2e test subscribes the device to `settings` and checks that a layer file
   travels both ways.
+- A second e2e test starts from an empty hub: its folders exist and hold nothing. `provision
+  hub` runs while the whitelists and a game are copied in, so the bootstrap waits for them;
+  the test then checks the created `wz-*` folders, the final ignores, `check`, and that
+  `provision device` makes a device receive the whitelisted game and not the other one.
+- Self-update tests (`test_selfupdate.py`, `test_update_timer.py`): tag and version
+  comparison as pure functions; whole runs against a bare repository used as the remote
+  (update, up to date, ahead, dirty tree, untracked files, dry-run, remote gone, timeout,
+  not a checkout, `pyproject.toml` changed or not, the log); the units' rendering and
+  `ensure_update_timer` with a fake `systemctl` (first run, second run, changed unit,
+  switched off, dry-run, no user manager, failed enable); `provision device` for both shipped
+  profiles and with `self_update = false`; the doctor judge and check.
 - `doctor` tests: the renderer and exit code as pure functions; every check with fake
   probes (tool present, missing per platform, unrunnable, unrecognizable version; config
   missing, partial or invalid; Syncthing absent, answering, refusing, not on loopback;

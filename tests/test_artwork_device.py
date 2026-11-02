@@ -265,7 +265,7 @@ class ProvisionArtTests(Art, unittest.TestCase):
         self.assertEqual(media[-3:], ["!/gba/covers", "!/pokemini/covers", "*"])
         meta = self.syncthing.ignores["wz-esde"]
         self.assertIn("!/gamelists/gba/gamelist.xml", meta)
-        self.assertEqual(rep.warnings, [])
+        self.assertEqual([w for w in rep.warnings if "self-update" not in w], [])
 
     def test_provision_writes_the_gamelists_when_the_data_is_already_there(self) -> None:
         self.provision()
