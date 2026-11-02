@@ -563,7 +563,7 @@ FIXTURES: dict[tuple[str, str], tuple[str, dict[str, str | set[str]]]] = {
             "docked_mode": "device",
             "res_scale": "device",
             "max_anisotropy": "device",
-            "preferred_gpu": {"noise", "device"},
+            "preferred_gpu": "noise",
             "multiplayer_ldn_passphrase": "secret",
             "hotkeys.toggle_vsync": "noise",
             "window_startup.window_size_width": "noise",
@@ -738,6 +738,12 @@ class ClassificationTests(unittest.TestCase):
     def test_flycast_per_game_vmus_option_is_shared(self) -> None:
         self.assertIn("reicast_per_content_vmus", self.settings["retroarch"].files["opt"].known)
 
+    def test_retroarch_stream_keys_are_secret_by_one_pattern(self) -> None:
+        cfg = self.settings["retroarch"].files["cfg"]
+        for key in ("facebook_stream_key", "twitch_stream_key", "youtube_stream_key"):
+            self.assertEqual(categories(cfg, key), {"secret"})
+        self.assertEqual([p for p in cfg.secret if "stream_key" in p], ["*_stream_key"])
+
     def test_per_device_keys_the_trial_found(self) -> None:
         eden = self.settings["eden"].files["qt-config"]
         for key in (
@@ -748,8 +754,8 @@ class ClassificationTests(unittest.TestCase):
             "[Renderer]fullscreen_mode",
         ):
             self.assertIn("device", categories(eden, key))
-        self.assertIn(
-            "device", categories(self.settings["ryujinx"].files["config"], "preferred_gpu")
+        self.assertEqual(
+            categories(self.settings["ryujinx"].files["config"], "preferred_gpu"), {"noise"}
         )
         self.assertIn(
             "device",

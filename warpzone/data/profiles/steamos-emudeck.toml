@@ -320,9 +320,7 @@ secret = [
   'webdav_*',
   'kiosk_mode_password',
   'content_show_settings_password',
-  'facebook_stream_key',
-  'twitch_stream_key',
-  'youtube_stream_key',
+  '*_stream_key',
 ]
 device = [
   'run_ahead_*',
@@ -736,7 +734,6 @@ device = [
   'scaling_filter',
   'scaling_filter_level',
   'anti_aliasing',
-  'preferred_gpu',
 ]
 known = [
   'system_language',
