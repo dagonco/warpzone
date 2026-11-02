@@ -360,8 +360,11 @@ rescan_seconds = 10
         def add_library_content() -> None:
             try:
                 wait_for(
-                    lambda: "wz-library" in {f["id"] for f in self.hub.client().folders()},
-                    "wz-library on the hub",
+                    lambda: any(
+                        f["id"] == "wz-library" and not f["paused"]
+                        for f in self.hub.client().folders()
+                    ),
+                    "wz-library running on the hub",
                     60,
                 )
                 for which in ("common", "deck"):
