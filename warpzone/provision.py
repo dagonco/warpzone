@@ -1061,6 +1061,96 @@ def ensure_shadps4_dirs(
         rep.out(f"shadps4: added the install folder {folders} to {path} (old file backed up)")
 
 
+def ensure_shadps4_launch(
+    name: str,
+    profile: Profile,
+    home: Path,
+    rep: Reporter,
+    *,
+    dry_run: bool,
+    proc: Path = Path("/proc"),
+    state_root: Path,
+) -> None:
+    """Install the shadPS4 launch script and point ES-DE's find rule at it.
+
+    The script is rewritten only when its text differs. The rule is edited in
+    `es_find_rules.xml` (that entry only, every other byte kept, old file backed up) while
+    ES-DE is closed; a missing file is never created. A second run changes nothing.
+    """
+    rule = profile.shadps4
+    launch = rule.launch if rule is not None else None
+    if launch is None:
+        return
+    again = f"quit ES-DE and run `warpzone provision device {name}` again"
+    script = Path(expand_home(launch.script, home))
+    text = shadps4.render_launch_script(
+        expand_home(launch.qt_ini, home), expand_home(launch.versions, home)
+    )
+    path = Path(expand_home(launch.find_rules, home))
+    try:
+        before = settings_state.stamp(path)
+        rules = path.read_bytes().decode("utf-8")
+    except FileNotFoundError:
+        rep.warn(
+            f"{path} does not exist, so ES-DE still starts shadPS4 through EmuDeck's launcher: "
+            f"start ES-DE once, then {again}"
+        )
+        return
+    except (OSError, UnicodeDecodeError) as exc:
+        rep.warn(f"cannot read {path} ({exc}), so it was left alone")
+        return
+    try:
+        current: str | None = script.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        current = None
+    if current == text:
+        if not dry_run and not os.access(script, os.X_OK):
+            script.chmod(0o755)
+        rep.out(f"shadps4: launch script unchanged ({script})")
+    elif dry_run:
+        rep.out(f"shadps4: dry-run: would write the launch script {script}")
+    else:
+        _write_script(script, text)
+        rep.out(f"shadps4: wrote the launch script {script}")
+    try:
+        new = shadps4.point_find_rule(rules, launch.emulator, str(script))
+    except shadps4.ConfigError as exc:
+        rep.warn(f"{path} was left alone: {exc}")
+        return
+    if new == rules:
+        rep.out(f"shadps4: {path} already runs the launch script")
+        return
+
+    def running() -> bool | None:
+        try:
+            return settings_state.running(esde.ESDE_PROCESSES, proc=proc)
+        except settings_state.NoProc:
+            return None
+
+    def refuse() -> bool:
+        state = running()
+        if state is None:
+            rep.warn(f"cannot tell whether ES-DE is running (no /proc), so {path} was left alone")
+        elif state:
+            rep.warn(f"ES-DE is running, so {path} was left alone: {again}")
+        return state is not False
+
+    if refuse():
+        return
+    if dry_run:
+        rep.out(f"shadps4: dry-run: would point the {launch.emulator} rule of {path} at {script}")
+        return
+    settings_state.backup(path, "shadps4", path.name, root=state_root)
+    if refuse():  # ES-DE may have started while the backup was made
+        return
+    if not settings_state.atomic_write(path, new.encode("utf-8"), expect=before):
+        rep.warn(f"{path} changed while it was being edited, so it was left alone: {again}")
+        return
+    rep.out(
+        f"shadps4: pointed the {launch.emulator} rule of {path} at {script} (old file backed up)"
+    )
+
+
 def _artwork_layout(profile: Profile, home: Path) -> artwork.Layout | None:
     art = profile.artwork
     if art is None or "library" not in profile.paths:
@@ -1501,7 +1591,12 @@ def provision_device(
 
     if "library" in device.folders:
         root = state_root if state_root is not None else settings_state.state_dir(home=home)
-        for ensure in (ensure_systems_override, ensure_retroarch_pins, ensure_shadps4_dirs):
+        for ensure in (
+            ensure_systems_override,
+            ensure_retroarch_pins,
+            ensure_shadps4_dirs,
+            ensure_shadps4_launch,
+        ):
             ensure(name, profile, home, rep, dry_run=local.dry_run, proc=proc, state_root=root)
 
     if with_artwork:

@@ -1,4 +1,4 @@
-"""Pure edits of shadPS4's list of install directories.
+"""Pure edits for shadPS4: its install directories and the launch script ES-DE runs.
 
 shadPS4 runs extracted games it finds in its install directories. Two config files can hold
 them, depending on the version: `config.json` (v0.21 and later: `General.install_dirs`, a
@@ -14,6 +14,7 @@ import copy
 import json
 import re
 import tomllib
+import xml.etree.ElementTree as ET
 from collections.abc import Sequence
 from typing import Any
 
@@ -191,3 +192,107 @@ def missing(kind: str, text: str, wants: Sequence[str]) -> list[str]:
 def apply(kind: str, text: str, wants: Sequence[str]) -> str:
     """`text` with every folder of `wants` listed; every other byte is kept."""
     return _json_apply(text, wants) if kind == JSON else _toml_apply(text, wants)
+
+
+# ------------------------------------------------------------------ launch script
+
+_LAUNCH_TEMPLATE = r"""#!/bin/bash
+# Written by warpzone provision device, which rewrites it. ES-DE runs it with the path of a
+# .desktop shortcut: it starts the selected shadPS4 emulator directly, which does not go
+# through the Qt launcher.
+ini=__INI__
+versions=__VERSIONS__
+sdl=Shadps4-sdl.AppImage
+
+die() { echo "shadps4-launch: $*" >&2; exit 1; }
+
+arg=$1
+[ -n "$arg" ] || die "usage: $0 <shortcut.desktop>"
+if [[ $arg == *.desktop ]]; then
+  [ -r "$arg" ] || die "cannot read $arg"
+  eboot=$(sed -n 's/^Exec=[^"]*"\(.*\)"[^"]*$/\1/p' "$arg" | head -n 1)
+  [ -n "$eboot" ] || die "no quoted path in the Exec= line of $arg"
+else
+  eboot=$arg
+fi
+
+# A version is an AppImage, or the folder that holds one.
+resolve() {
+  local p=$1
+  p=${p%$'\r'}
+  p=${p#\"}
+  p=${p%\"}
+  [ -d "$p" ] && p=$p/$sdl
+  [ -f "$p" ] && [ -x "$p" ] && printf '%s\n' "$p"
+}
+
+emu=
+if [ -r "$ini" ]; then
+  sel=$(sed -n 's/^versionSelected=//p' "$ini" | head -n 1)
+  [ -n "$sel" ] && emu=$(resolve "$sel")
+fi
+if [ -z "$emu" ] && [ -r "$versions" ]; then
+  while IFS= read -r entry; do
+    emu=$(resolve "$entry") && [ -n "$emu" ] && break
+    emu=
+  done < <(grep -o '"path"[[:space:]]*:[[:space:]]*"[^"]*"' "$versions" |
+    sed 's/^[^:]*:[[:space:]]*"//; s/"$//')
+fi
+[ -n "$emu" ] || die "no shadPS4 version found: open the shadPS4 launcher once and download one"
+
+exec "$emu" -f true -g "$eboot"
+"""
+
+
+def _sh_quote(value: str) -> str:
+    return "'" + value.replace("'", "'\\''") + "'"
+
+
+def render_launch_script(qt_ini: str, versions: str) -> str:
+    """The bash script text; `qt_ini` and `versions` are absolute paths of the Qt launcher."""
+    return _LAUNCH_TEMPLATE.replace("__INI__", _sh_quote(qt_ini)).replace(
+        "__VERSIONS__", _sh_quote(versions)
+    )
+
+
+def _find_entry(text: str, emulator: str) -> re.Match[str]:
+    """The first `<entry>` of the first staticpath rule of the emulator's element."""
+    try:
+        root = ET.fromstring(text.encode())
+    except ET.ParseError as exc:
+        raise ConfigError(f"not well-formed XML ({exc})") from exc
+    blocks = [e for e in root.iter("emulator") if e.get("name") == emulator]
+    rule = next((r for b in blocks for r in b.iter("rule") if r.get("type") == "staticpath"), None)
+    if rule is None or rule.find("entry") is None:
+        raise ConfigError(f"it has no staticpath rule for {emulator}")
+    block = re.search(
+        rf'<emulator\b[^>]*\bname\s*=\s*["\']{re.escape(emulator)}["\'][^>]*>.*?</emulator\s*>',
+        text,
+        re.DOTALL,
+    )
+    if block is None:
+        raise ConfigError(f"it has no staticpath rule for {emulator}")
+    entry = re.compile(
+        r'(<rule\b[^>]*\btype\s*=\s*["\']staticpath["\'][^>]*>.*?<entry>)([^<]*)(</entry>)',
+        re.DOTALL,
+    ).search(text, block.start(), block.end())
+    if entry is None:
+        raise ConfigError(f"it has no staticpath rule for {emulator}")
+    return entry
+
+
+def find_rule_target(text: str, emulator: str) -> str:
+    """The path in the emulator's first staticpath entry of ES-DE's `es_find_rules.xml`."""
+    return ET.fromstring(f"<x>{_find_entry(text, emulator).group(2)}</x>").text or ""
+
+
+def point_find_rule(text: str, emulator: str, target: str) -> str:
+    """`text` with that entry set to `target`; every other byte is kept."""
+    entry = _find_entry(text, emulator)
+    if find_rule_target(text, emulator) == target:
+        return text
+    escaped = target.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    new = text[: entry.start(2)] + escaped + text[entry.end(2) :]
+    if find_rule_target(new, emulator) != target:
+        raise ConfigError("the edit would change more than the entry, so it was not made")
+    return new

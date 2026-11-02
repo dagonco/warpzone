@@ -35,6 +35,7 @@ Inbox tools
 - The emulator settings layers, the ES-DE startup script and the last `settings apply`, on a device that subscribes to `settings`.
 - The frontend's system list override and RetroArch's paths, and the generated artwork gamelists and their timer, on a device whose profile sets them (`anbernic-rg351mp`).
 - shadPS4's install folder (`~/Emulation/roms/ps4/games` in its config files), on a device whose profile declares it (`steamos-emudeck`).
+- The shadPS4 launcher: warpzone's launch script exists, is executable and is the text `provision device` writes, and ES-DE's `SHADPS4` find rule runs it (EmuDeck can put its own entry back). The fix is `warpzone provision device <name>` with ES-DE closed.
 - The `warpzone self-update` timer, on a Linux device (a warning when it is not installed or not enabled).
 - The frontend's system list override and RetroArch's paths, on a device whose profile sets them (`anbernic-rg351mp`).
 - The inbox tools (`chdman`, `bsdtar`, `RAHasher`, `dolphin-tool`, `nsz`, `orbis-pkg-util`), the Switch titledb folder and keys file (presence only).

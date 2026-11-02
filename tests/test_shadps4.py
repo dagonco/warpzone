@@ -2,6 +2,7 @@
 
 import dataclasses
 import json
+import os
 import shutil
 import tempfile
 import tomllib
@@ -389,7 +390,11 @@ folders = ["library", "saves"]
     def check(self, config_text=None):
         tmp = Path(self._tmp.name)
         ctx = context(tmp, self.CONFIG if config_text is None else config_text, system="Linux")
-        probes = dataclasses.replace(ctx.probes, home=self.home)
+        probes = dataclasses.replace(
+            ctx.probes,
+            home=self.home,
+            is_executable=lambda x: os.path.isfile(x) and os.access(x, os.X_OK),
+        )
         devices = tuple(
             dataclasses.replace(d, profile=self.profile) for d in ctx.config.frontend_devices
         )
