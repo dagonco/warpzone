@@ -233,6 +233,73 @@ class SettingsCliTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn("no settings folder", out)
 
+    def test_capture_flags_are_accepted(self) -> None:
+        argv = [
+            "settings", "capture", "--device", "deck", "--emulator", "eden", "--seed",
+            "--key", "eden/qt-config/[System]*", "eden/qt-config/[Audio]*", "--key", "a/b/c",
+            "--include-new", "--yes", "--to-common", "a/*", "--to-device", "b/*",
+            "--discard", "c/*", "--offline", "--dry-run", "--config", self.config,
+        ]  # fmt: skip
+        args = _build_parser().parse_args(argv)
+        self.assertEqual(args.key, ["eden/qt-config/[System]*", "eden/qt-config/[Audio]*", "a/b/c"])
+        self.assertTrue(args.seed and args.include_new and args.yes and args.offline)
+        self.assertEqual(
+            (args.to_common, args.to_device, args.discard), (["a/*"], ["b/*"], ["c/*"])
+        )
+        self.assertTrue(args.dry_run)
+
+    def test_capture_key_without_seed_is_exit_2(self) -> None:
+        code, _, err = run(
+            "settings", "capture", "--device", "deck", "--key", "a/b/c", "--config", self.config
+        )
+        self.assertEqual(code, 2)
+        self.assertIn("--seed", err)
+
+    def test_capture_unknown_emulator_is_exit_2(self) -> None:
+        code, _, err = run(
+            "settings", "capture", "--device", "deck", "--emulator", "nope", "--offline",
+            "--config", self.config,
+        )  # fmt: skip
+        self.assertEqual(code, 2)
+        self.assertIn("unknown emulator 'nope'", err)
+
+    def test_capture_without_a_settings_folder_is_exit_1(self) -> None:
+        code, _, err = run(
+            "settings", "capture", "--device", "deck", "--offline", "--config", self.config
+        )
+        self.assertEqual(code, 1)
+        self.assertIn("no settings folder", err)
+
+    def test_capture_asks_the_local_syncthing_unless_offline(self) -> None:
+        self.subscribe()
+        (self.folder / "common.toml").write_text("format = 1\n")
+        with FakeSyncthing(DECK_ID) as fake:
+            conf = self.tmp / "syncthing" / "config.xml"
+            conf.parent.mkdir()
+            host, _, port = fake.url.removeprefix("http://").partition(":")
+            conf.write_text(
+                f"<configuration><gui><address>{host}:{port}</address>"
+                f"<apikey>{API_KEY}</apikey></gui></configuration>"
+            )
+            with (
+                mock.patch("warpzone.settings.require_proc"),
+                mock.patch("warpzone.settings.is_running", return_value=False),
+            ):
+                code, out, _ = run(
+                    "settings", "capture", "--syncthing-config", str(conf), "--config", self.config
+                )
+                self.assertEqual(code, 0)
+                self.assertIn("report only", out)
+                asked = [path for _, path, _ in fake.requests]
+                self.assertTrue(any("/rest/db/status?folder=wz-settings" in p for p in asked))
+                self.assertTrue(any("file=common.toml" in p for p in asked))
+                seen = len(fake.requests)
+                code, *_ = run(
+                    "settings", "capture", "--device", "deck", "--offline", "--config", self.config
+                )
+                self.assertEqual(code, 0)
+                self.assertEqual(len(fake.requests), seen)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -181,7 +181,9 @@ def _build_parser() -> argparse.ArgumentParser:
         "else the system temp folder)",
     )
 
-    st = sub.add_parser("settings", help="emulator settings: apply the layers, audit drift")
+    st = sub.add_parser(
+        "settings", help="emulator settings: apply the layers, capture changes, audit drift"
+    )
     st_sub = st.add_subparsers(dest="settings_command", required=True, metavar="action")
     st_common = argparse.ArgumentParser(add_help=False)
     st_common.add_argument(
@@ -205,6 +207,55 @@ def _build_parser() -> argparse.ArgumentParser:
         "--overwrite-local",
         action="store_true",
         help="also write keys changed in an emulator and not captured yet",
+    )
+    st_capture = st_sub.add_parser(
+        "capture",
+        parents=[common, st_common, writing],
+        help="take settings changed in an emulator's own interface to the layers on the hub",
+    )
+    st_capture.add_argument(
+        "--syncthing-config", type=Path, help="local Syncthing config.xml or its folder"
+    )
+    st_capture.add_argument(
+        "--seed",
+        action="store_true",
+        help="also propose the known keys (and --key ones) of files with no baseline yet",
+    )
+    st_capture.add_argument(
+        "--key",
+        nargs="+",
+        action="extend",
+        metavar="PATTERN",
+        default=[],
+        help="with --seed, also propose keys matching <emulator>/<file>/<key>",
+    )
+    st_capture.add_argument(
+        "--include-new", action="store_true", help="also propose keys new to a file"
+    )
+    st_capture.add_argument(
+        "--yes", action="store_true", help="without a terminal, take every pre-selection"
+    )
+    for flag, what in (("to-common", "common"), ("to-device", "this device's layer")):
+        st_capture.add_argument(
+            f"--{flag}",
+            nargs="+",
+            action="extend",
+            metavar="PATTERN",
+            default=[],
+            help=f"without a terminal, send matching <emulator>/<file>/<key> to {what}",
+        )
+    st_capture.add_argument(
+        "--discard",
+        nargs="+",
+        action="extend",
+        metavar="PATTERN",
+        default=[],
+        help="without a terminal, discard matching keys (the layer value returns at apply)",
+    )
+    st_capture.add_argument(
+        "--offline",
+        action="store_true",
+        help="do not ask Syncthing whether wz-settings is up to date",
     )
     st_audit = st_sub.add_parser(
         "audit",
@@ -319,11 +370,18 @@ def _inbox(args: argparse.Namespace, rep: Reporter) -> int:
 
 
 def _settings(args: argparse.Namespace, cfg: Config, profiles: dict[str, Profile]) -> int:
+    capturing = args.settings_command == "capture"
+    if capturing and args.key and not args.seed:
+        raise ConfigError("--key only works together with --seed")
     if args.device:
         name = _device(cfg, args.device)
-    else:
-        local = localst.parse_config(localst.find_config())
-        name = _this_device(cfg, Client(local.base_url, local.api_key, label="local"))
+    client: Client | None = None
+    if not args.device or (capturing and not args.offline):
+        local = localst.parse_config(localst.find_config(getattr(args, "syncthing_config", None)))
+        client = Client(local.base_url, local.api_key, label="local")
+    if not args.device:
+        assert client is not None
+        name = _this_device(cfg, client)
     ctx = settings.make_context(
         name,
         profiles[cfg.devices[name].profile],
@@ -331,6 +389,23 @@ def _settings(args: argparse.Namespace, cfg: Config, profiles: dict[str, Profile
     )
     if args.settings_command == "audit":
         return settings.audit(ctx, emulators=args.emulator, all_keys=args.all_keys)
+    if capturing:
+        return settings.capture(
+            ctx,
+            None if args.offline else client,
+            emulators=args.emulator,
+            seed=args.seed,
+            key=args.key,
+            include_new=args.include_new,
+            yes=args.yes,
+            to_common=args.to_common,
+            to_device=args.to_device,
+            discard=args.discard,
+            offline=args.offline,
+            dry_run=args.dry_run,
+            out=print,
+            err=_eprint,
+        )
     return settings.apply(
         ctx,
         emulators=args.emulator,
