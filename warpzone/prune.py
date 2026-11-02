@@ -3,8 +3,9 @@
 When a pattern leaves a device's whitelist, Syncthing stops syncing the files but
 leaves the copies on disk. A file is a leftover only when Syncthing itself has
 flagged it as ignored in the folder database after a full rescan (`local.ignored`
-in `GET /rest/db/file`) AND the hub still has the same file (`global`). Nothing
-here re-implements Syncthing's ignore matcher; see docs/design.md.
+in `GET /rest/db/file`) AND the hub either still has the same file or deleted it
+(`global`). Nothing here re-implements Syncthing's ignore matcher; see
+docs/design.md.
 """
 
 from __future__ import annotations
@@ -42,6 +43,7 @@ SCANNING = ("scanning", "scan-waiting")
 SHOWN_GROUPS = 30
 SHOWN_KEPT = 20
 
+DELETED_ON_HUB = "deleted on the hub"
 _TYPE_FILE = "FILE_INFO_TYPE_FILE"
 _TYPE_SYMLINK = "FILE_INFO_TYPE_SYMLINK"
 _TIME = re.compile(r"^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(?:\.(\d+))?(Z|[+-]\d\d:\d\d)$")
@@ -54,7 +56,7 @@ class PruneError(Exception):
 class Verdict(enum.Enum):
     UNTRACKED = "untracked"  # Syncthing has no record: ignored or created since the rescan
     WANTED = "wanted"  # Syncthing syncs it
-    LEFTOVER = "leftover"
+    LEFTOVER = "leftover"  # the hub has it unchanged, or deleted it (see Entry.reason)
     LOCAL_ONLY = "local-only"  # ignored, but the hub does not have it
     DIFFERS = "differs"  # ignored, but not the hub's copy
 
@@ -65,6 +67,7 @@ class Entry:
     kind: str  # "file" or "symlink"
     size: int
     mtime: float
+    reason: str = ""  # why it is a leftover, when that is not "the hub has it unchanged"
 
 
 @dataclass
@@ -106,9 +109,20 @@ def classify(entry: Entry, info: dict[str, Any] | None) -> tuple[Verdict, str]:
         return Verdict.WANTED, ""
     hub = info.get("global") or {}
     # A local-only file that was scanned before it got ignored shows up in `global`
-    # too, flagged invalid or ignored. That is not the hub's copy.
-    if not hub or hub.get("deleted") or hub.get("ignored") or hub.get("invalid"):
+    # too, flagged invalid or ignored. That is not the hub's copy, nor its deletion.
+    if not hub or hub.get("ignored") or hub.get("invalid"):
         return Verdict.LOCAL_ONLY, "the hub does not have it"
+    if hub.get("deleted"):
+        # The hub had it and deleted it, which Syncthing does not carry out for a file
+        # it ignores. A deletion has no size or kind to compare; its time is the
+        # hub's clock when it noticed, so a file written later is not the deleted one.
+        if entry.kind == "file":
+            deleted_at = parse_time(hub.get("modified"))
+            if deleted_at is None:
+                return Verdict.DIFFERS, "it cannot be told when the hub deleted it"
+            if entry.mtime > deleted_at + MTIME_TOLERANCE_S:
+                return Verdict.DIFFERS, "it changed after the hub deleted it"
+        return Verdict.LEFTOVER, DELETED_ON_HUB
     if hub.get("type") != (_TYPE_SYMLINK if entry.kind == "symlink" else _TYPE_FILE):
         return Verdict.DIFFERS, "the hub has a different kind of object"
     if entry.kind == "file":
@@ -249,7 +263,7 @@ def inspect_folder(
     for entry in walk(root, skip, marker):
         verdict, reason = classify(entry, client.db_file(spec.id, entry.path))
         if verdict is Verdict.LEFTOVER:
-            report.leftovers.append(entry)
+            report.leftovers.append(dataclasses.replace(entry, reason=reason))
         elif verdict is Verdict.UNTRACKED:
             report.untracked += 1
         elif verdict is not Verdict.WANTED:
@@ -322,10 +336,12 @@ def _group(path: str) -> str:
 
 def print_report(report: FolderReport, rep: Reporter, *, list_all: bool) -> None:
     n = len(report.leftovers)
-    rep.out(f"{report.folder_id}: {n} leftover file(s), {human(report.bytes)}")
+    gone = sum(1 for e in report.leftovers if e.reason == DELETED_ON_HUB)
+    note = f" ({gone} {DELETED_ON_HUB})" if gone else ""
+    rep.out(f"{report.folder_id}: {n} leftover file(s), {human(report.bytes)}{note}")
     if list_all:
         for entry in report.leftovers:
-            rep.out(f"  {entry.path}")
+            rep.out(f"  {entry.path} ({entry.reason})" if entry.reason else f"  {entry.path}")
     else:
         groups: dict[str, list[int]] = {}
         for entry in report.leftovers:

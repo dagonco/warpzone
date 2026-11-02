@@ -739,7 +739,7 @@ error messages; the RetroAchievements key is read from `RA_API_KEY`, never from 
 | `warpzone frontend refresh [device]` | on the device | For a device whose profile has `[artwork]` and that lists `frontend`: widens the artwork folders' ignores to the systems that have games now (when the local Syncthing is found) and rewrites the frontend's gamelists from the synced ES-DE data, only while the frontend is closed. `--dry-run` prints what it would do. See [Frontend artwork](#frontend-artwork). |
 | `warpzone play-state sync <device>` | on the device | For a device with ES-DE that lists `play-state`: publishes what its gamelists say and merges the other devices' ledgers into them, only while ES-DE is closed or starting (`--frontend-starting`, which its startup script passes). `--dry-run`, `--quiet`. Needs no network. See [Play state](#play-state). |
 | `warpzone provision device <name>` | on the device | Reads the local Syncthing API key from the local `config.xml` (searching the default locations, including the SyncThingy flatpak; `--syncthing-config PATH` overrides), adds the hub device, creates the subscribed folders with the bootstrap above (`--timeout SECONDS`). When that Syncthing is the SyncThingy flatpak it first grants it the missing `flatpak override --user --filesystem=~/.var/app/<app>` for every folder under `~/.var/app` (flatpak hides other apps' data), and asks for a Syncthing restart. When the device subscribes to `settings`, it installs the ES-DE startup script that runs `settings apply` (see [ES-DE startup script](#es-de-startup-script)). When the device subscribes to `library` and its profile has `[es_systems]` or `[retroarch]`, it also writes the frontend's system list override and pins RetroArch's paths (see [Frontend and RetroArch overrides](#frontend-and-retroarch-overrides)). It then installs the self-update timer, for every profile (see [Self-update](#self-update)). Idempotent. |
-| `warpzone prune [device]` | on the device | Reports, and with `--apply` deletes, the files of the whitelisted folders that the device no longer whitelists (see [Pruning](#pruning)). Report only by default. |
+| `warpzone prune [device]` | on the device | Reports, and with `--apply` deletes, the files of the whitelisted folders that the device no longer whitelists and that the hub still has unchanged or has deleted (see [Pruning](#pruning)). Report only by default. |
 | `warpzone bios` | on a device or the hub | Reports which BIOS and firmware files a library has, lacks or has wrong (see [BIOS check](#bios-check)). Read-only. Exit 1 if a required item is missing or wrong. |
 | `warpzone inbox` | a desktop that mounts the hub's share | Identifies, converts and files new games dropped in `inbox/` (see [Inbox](#inbox)). Report only by default, `--apply` acts. Exit 1 if any item needs review. |
 | `warpzone self-update` | on the device | Moves the git checkout warpzone runs from to the newest `vX.Y.Z` tag when it is newer than `__version__` (see [Self-update](#self-update)). Needs no config. `--dry-run` reports only. Exit 0 for every outcome that needs no attention (including no network and not a checkout), 1 when a due update was refused or failed. |
@@ -778,8 +778,9 @@ Idempotency rules for `provision`:
 ## Pruning
 
 Removing a pattern from a device's whitelist stops Syncthing from syncing those
-files but leaves the copies on the device. `warpzone prune` deletes them,
-safely. It runs on the device against the local Syncthing, and only ever looks
+files but leaves the copies on the device. The same goes for a file the hub
+deletes after it left the whitelist: Syncthing carries out deletions only for
+files it syncs, so the copy stays. `warpzone prune` deletes both, safely. It runs on the device against the local Syncthing, and only ever looks
 at the folders warpzone manages **and** whitelists (`wz-library`, `wz-songs`).
 
 ### How a leftover is detected
@@ -809,8 +810,15 @@ Syncthing v2.1.7 with two real instances (hub send-only, device receive-only):
   left alone, never listed as a leftover.
 - A device-only file that was scanned **before** it became ignored is mirrored
   into `global` with `invalid`/`ignored` set, so `global` existing does not
-  prove the hub has it. The hub's copy counts only when `global` is not
-  `deleted`, `ignored` nor `invalid`.
+  prove the hub has it. `global` is the hub's own record only when it is not
+  `ignored` nor `invalid`.
+- When `global` is the hub's record and has `deleted: true`, the hub had the
+  file and deleted it. A deletion carries no content (`size` 0) and its
+  `modified` is the hub's time when it recorded the deletion, so it says
+  nothing to compare except that time. This is a leftover reported as
+  "deleted on the hub". A `global` that is missing, `ignored` or `invalid` is
+  not that: the file only ever existed on the device, so it is kept ("the hub
+  does not have it").
 - Not usable: `GET /rest/db/browse` lists the global tree, ignored or not, with
   no flag; `GET /rest/db/need` and `GET /rest/db/localchanged` came back empty
   for ignored files (they list what is outstanding or locally changed, not what
@@ -832,18 +840,28 @@ delete:
    (the bootstrap ignores, `*`, would mark the whole library as ignored), they
    load without error, and the whitelist files are in sync with the hub.
 3. Syncthing flags it `local.ignored` after the full scan.
-4. The hub has it: `global` is not deleted, ignored or invalid, and has the same
-   kind (file or symlink).
-5. For regular files, the size equals the hub's and the modification time is
-   within 2 s of the hub's (FAT stores 2 s steps). A file edited on the device
-   after it was synced is reported, not deleted.
+4. The hub has it, or deleted it: `global` exists and is not ignored or invalid.
+   If it is not a deletion, it has the same kind (file or symlink) as the local
+   object; a deletion has no kind to compare.
+5. For regular files the hub still has, the size equals the hub's and the
+   modification time is within 2 s of the hub's (FAT stores 2 s steps). For
+   regular files the hub deleted, the modification time is not later than the
+   hub's deletion time plus 2 s, so a file written after the deletion (a new
+   file under the same name) is not taken for the deleted one; an unreadable
+   deletion time keeps the file too. A file edited on the device after it was
+   synced is reported, not deleted. Symlinks have no content to compare.
 6. It is not `.stfolder`, `.stignore`, `.stversions` or `patterns-*.stignore` at
    the folder root, nor a Syncthing temp file, and it lives in a directory
    whose real path is inside the folder root. Symlinks are unlinked, never
    followed. The subtree of any other Syncthing folder nested in the root (the
    save folders under `~/Emulation`) is skipped.
 
-Files that are ignored but fail 4 or 5 are listed as kept, with the reason. After
+Files that are ignored but fail 4 or 5 are listed as kept, with the reason. The
+size cap, the report-only default and the re-check right before each delete
+apply to hub deletions as to any leftover (the re-check calls the same pure
+decision again). Directories need no special case: only directories that held a
+deleted file, that Syncthing flags ignored (a deleted directory is) and that
+are now empty are removed. After
 deleting, directories that held deleted files, that Syncthing flags ignored, and
 that are now empty are removed (`rmdir`, so a non-empty one is never touched).
 
@@ -851,8 +869,9 @@ The default is report only. `--apply` deletes. A run that would delete more than
 `--max-gib` (default 50) refuses to delete anything, exits 1, and needs
 `--force` or a higher cap; the cap counts the total over all folders.
 
-Output is a per-folder summary (leftover files and bytes, grouped by the first
-two path levels; `--list` prints every file), the files kept and why, and the
+Output is a per-folder summary (leftover files and bytes, with how many of them
+were deleted on the hub, grouped by the first two path levels; `--list` prints
+every file and marks those deleted on the hub), the files kept and why, and the
 count of files Syncthing does not know. Exit codes are those of the other
 commands: `0` ok (a report with leftovers is still `0`), `1` for a runtime
 error, a folder that was skipped as unsafe, a refused cap or files that could not
@@ -2127,7 +2146,8 @@ logic is unit-tested without a network.
   second run, frontend or RetroArch running, no `/proc`, dry-run) and the doctor lines.
 - `prune` unit tests with the fake Syncthing: the pure decision (`classify`),
   every refusal (bootstrap ignores, wrong type, missing marker, size cap),
-  protected names, nested folders, symlinks, re-check before delete, webhook.
+  protected names, nested folders, symlinks, files the hub deleted (including
+  the size cap and the re-check), webhook.
 - `bios` tests: the pure judgements, manifest and override validation, and tmpdir
   libraries with tiny fake files and a test-only manifest (no real BIOS hashes):
   hashing only files of the expected size, content matches, local acceptance,

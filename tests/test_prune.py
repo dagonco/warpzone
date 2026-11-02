@@ -1,3 +1,4 @@
+import dataclasses
 import json
 import os
 import tempfile
@@ -30,6 +31,7 @@ PROFILE = load_profile("steamos-emudeck")
 FILE, DIR, LINK = "FILE_INFO_TYPE_FILE", "FILE_INFO_TYPE_DIRECTORY", "FILE_INFO_TYPE_SYMLINK"
 MTIME = 1_700_000_000
 SYNCED_AT = "2023-11-14T22:13:20.123456789+00:00"  # == MTIME
+DELETED_AT = "2023-11-15T08:00:00.5Z"  # the hub deleted the file a few hours after the sync
 
 
 def hub_copy(size: int = 5, kind: str = FILE, modified: str = SYNCED_AT) -> dict[str, Any]:
@@ -39,6 +41,18 @@ def hub_copy(size: int = 5, kind: str = FILE, modified: str = SYNCED_AT) -> dict
 def ignored_info(hub: dict[str, Any] | None) -> dict[str, Any]:
     """What db/file says once the whitelist stops matching a file the hub still has."""
     return {"global": hub, "local": {"ignored": True, "invalid": True, "size": 0}}
+
+
+def hub_deleted(modified: str = DELETED_AT, **extra: Any) -> dict[str, Any]:
+    """The hub's record after it deleted the file: no content, the deletion time."""
+    return {
+        "type": FILE,
+        "size": 0,
+        "modified": modified,
+        "deleted": True,
+        "ignored": False,
+        **extra,
+    }
 
 
 def entry(size: int = 5, kind: str = "file", mtime: float = MTIME) -> Entry:
@@ -78,12 +92,46 @@ class ClassifyTests(unittest.TestCase):
     def test_hub_lacking_the_file_keeps_it(self) -> None:
         for hub in (
             None,
-            {**hub_copy(), "deleted": True},
             # A local-only file scanned before it was ignored is mirrored into `global`.
             {**hub_copy(), "invalid": True},
             {**hub_copy(), "ignored": True},
+            # Deleted, but the record is not the hub's own.
+            {**hub_deleted(), "invalid": True},
+            {**hub_deleted(), "ignored": True},
         ):
-            self.assertIs(self.verdict(ignored_info(hub)), Verdict.LOCAL_ONLY, hub)
+            verdict, reason = classify(entry(), ignored_info(hub))
+            self.assertIs(verdict, Verdict.LOCAL_ONLY, hub)
+            self.assertEqual(reason, "the hub does not have it")
+
+    def test_file_the_hub_deleted_is_a_leftover_with_its_reason(self) -> None:
+        verdict, reason = classify(entry(), ignored_info(hub_deleted()))
+        self.assertIs(verdict, Verdict.LEFTOVER)
+        self.assertEqual(reason, "deleted on the hub")
+
+    def test_a_deletion_has_no_content_to_compare(self) -> None:
+        info = ignored_info(hub_deleted(size=0))
+        self.assertIs(self.verdict(info, size=12345), Verdict.LEFTOVER)
+        self.assertIs(self.verdict(info, kind="symlink"), Verdict.LEFTOVER)
+        info = ignored_info(hub_deleted(kind=DIR))
+        self.assertIs(self.verdict(info), Verdict.LEFTOVER)
+
+    def test_file_changed_after_the_hub_deleted_it_is_kept(self) -> None:
+        deleted = parse_time(DELETED_AT)
+        assert deleted is not None
+        info = ignored_info(hub_deleted())
+        self.assertIs(self.verdict(info, mtime=deleted + 1.5), Verdict.LEFTOVER)
+        self.assertIs(self.verdict(info, mtime=deleted + 3), Verdict.DIFFERS)
+        # A symlink's own time says nothing about its target.
+        self.assertIs(self.verdict(info, kind="symlink", mtime=deleted + 3), Verdict.LEFTOVER)
+
+    def test_unknown_deletion_time_keeps_the_file(self) -> None:
+        for modified in ("?", None):
+            info = ignored_info(hub_deleted(modified=modified))
+            self.assertIs(self.verdict(info), Verdict.DIFFERS, modified)
+
+    def test_deleted_on_the_hub_but_not_ignored_is_left_to_syncthing(self) -> None:
+        info = {"global": hub_deleted(), "local": {"ignored": False}}
+        self.assertIs(self.verdict(info), Verdict.WANTED)
 
     def test_modified_copy_is_kept(self) -> None:
         self.assertIs(self.verdict(ignored_info(hub_copy()), size=6), Verdict.DIFFERS)
@@ -193,6 +241,55 @@ class PruneDeviceTests(unittest.TestCase):
         self.assertIn("roms/n64/mine.txt (the hub does not have it)", out)
         self.assertIn("roms/n64/patched.z64 (its size differs from the hub copy)", out)
         self.assertIn("1 file(s) not known to Syncthing", out)
+
+    def test_apply_deletes_what_the_hub_deleted_after_it_left_the_whitelist(self) -> None:
+        d = self.dev
+        gone = d.put("roms/n64/old.z64", info=ignored_info(hub_deleted()))
+        deep = d.put("roms/n64/sub/old2.z64", info=ignored_info(hub_deleted()))
+        link = d.root / "roms/n64/link"
+        link.symlink_to(d.home)
+        d.fake.file_info[("wz-library", "roms/n64/link")] = ignored_info(hub_deleted(kind=LINK))
+        mine = d.put("roms/n64/mine.txt", info=ignored_info(None))
+        # The hub deleted a file and a different one now sits under the same name.
+        newer = d.put("roms/n64/newer.z64", info=ignored_info(hub_deleted()))
+        later = parse_time(DELETED_AT)
+        assert later is not None
+        os.utime(newer, (later + 60, later + 60))
+        d.fake.file_info[("wz-library", "roms/n64/sub")] = ignored_info(hub_deleted(kind=DIR))
+
+        out_before = len(d.lines)
+        self.assertEqual(d.prune(), 0)
+        report = "\n".join(d.lines[out_before:])
+        self.assertIn("wz-library: 3 leftover file(s), ", report)
+        self.assertIn("(3 deleted on the hub)", report)
+        self.assertIn("roms/n64/mine.txt (the hub does not have it)", report)
+        self.assertIn("roms/n64/newer.z64 (it changed after the hub deleted it)", report)
+        self.assertTrue(gone.exists())  # report only
+
+        self.assertEqual(d.prune(apply=True), 0)
+        self.assertFalse(gone.exists())
+        self.assertFalse(deep.exists())
+        self.assertFalse(link.is_symlink())
+        self.assertTrue(d.home.is_dir())
+        self.assertTrue(mine.exists())
+        self.assertTrue(newer.exists())
+        self.assertFalse(deep.parent.exists())  # the emptied folder is ignored too
+
+    def test_list_marks_the_files_the_hub_deleted(self) -> None:
+        self.dev.put("roms/n64/old.z64", info=ignored_info(hub_deleted()))
+        self.dev.put("roms/n64/moved.z64")
+        self.dev.prune(list_all=True)
+        self.assertIn("  roms/n64/old.z64 (deleted on the hub)", self.dev.lines)
+        self.assertIn("  roms/n64/moved.z64", self.dev.lines)
+
+    def test_size_cap_applies_to_what_the_hub_deleted(self) -> None:
+        d = self.dev
+        path = d.put("a.z64", "x" * 600_000, info=ignored_info(hub_deleted()))
+        self.assertEqual(d.prune(apply=True, max_gib=0.5 / 1024), 1)
+        self.assertTrue(path.exists())
+        self.assertIn("refusing to delete", d.warnings[0])
+        self.assertEqual(d.prune(apply=True, max_gib=0.5 / 1024, force=True), 0)
+        self.assertFalse(path.exists())
 
     def test_directory_flagged_ignored_only_by_its_own_scan_is_removed(self) -> None:
         d = self.dev
@@ -382,6 +479,50 @@ class ApplyRecheckTests(unittest.TestCase):
         path.write_text("edited meanwhile")
         apply_folder(d.client, report)
         self.assertTrue(path.exists())
+
+
+class HubDeletionRecheckTests(unittest.TestCase):
+    def report_for(self, d: Device, rel: str) -> FolderReport:
+        deleted = dataclasses.replace(Entry(rel, "file", 5, MTIME), reason="deleted on the hub")
+        return FolderReport("wz-library", str(d.root), leftovers=[deleted])
+
+    def test_a_file_the_hub_restored_is_not_deleted(self) -> None:
+        d = Device(self)
+        path = d.put("roms/n64/a.z64", info=ignored_info(hub_deleted()))
+        report = self.report_for(d, "roms/n64/a.z64")
+        d.fake.file_info[("wz-library", "roms/n64/a.z64")] = ignored_info(hub_copy(99))
+        apply_folder(d.client, report)
+        self.assertTrue(path.exists())
+        self.assertEqual(report.deleted_files, 0)
+
+    def test_a_file_that_became_wanted_again_is_not_deleted(self) -> None:
+        d = Device(self)
+        path = d.put("roms/n64/a.z64", info=ignored_info(hub_deleted()))
+        report = self.report_for(d, "roms/n64/a.z64")
+        d.fake.file_info[("wz-library", "roms/n64/a.z64")] = {
+            "global": hub_deleted(),
+            "local": {"ignored": False},
+        }
+        apply_folder(d.client, report)
+        self.assertTrue(path.exists())
+
+    def test_a_file_edited_after_the_report_is_not_deleted(self) -> None:
+        d = Device(self)
+        path = d.put("roms/n64/a.z64", info=ignored_info(hub_deleted()))
+        report = self.report_for(d, "roms/n64/a.z64")
+        later = parse_time(DELETED_AT)
+        assert later is not None
+        os.utime(path, (later + 60, later + 60))
+        apply_folder(d.client, report)
+        self.assertTrue(path.exists())
+
+    def test_a_file_the_hub_deleted_is_removed(self) -> None:
+        d = Device(self)
+        path = d.put("roms/n64/a.z64", info=ignored_info(hub_deleted()))
+        report = self.report_for(d, "roms/n64/a.z64")
+        apply_folder(d.client, report)
+        self.assertFalse(path.exists())
+        self.assertEqual(report.deleted_files, 1)
 
 
 class RescanTests(unittest.TestCase):

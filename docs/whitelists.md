@@ -48,11 +48,11 @@ If the device's whitelist is missing on the hub, the command stops before touchi
 
 ## Pruning what a device no longer whitelists
 
-When you take something off a device's whitelist, Syncthing stops syncing it but leaves the files on the device. Run `prune` on the device to clean up. It only reports unless you add `--apply`:
+When you take something off a device's whitelist, Syncthing stops syncing it but leaves the files on the device. The same happens to a game you delete from the hub after taking it off the list: Syncthing only carries out deletions for files it still syncs. Run `prune` on the device to clean up both. It only reports unless you add `--apply`:
 
 ```
 $ warpzone prune
-wz-library: 412 leftover file(s), 38.2 GiB
+wz-library: 412 leftover file(s), 38.2 GiB (3 deleted on the hub)
   roms/n64: 380 file(s), 36.9 GiB
   roms/psx: 32 file(s), 1.3 GiB
 wz-library: kept 1 ignored file(s) the hub cannot restore
@@ -65,7 +65,9 @@ $ warpzone prune --apply
 wz-library: deleted 412 file(s), 38.2 GiB, removed 9 empty folder(s)
 ```
 
-It asks Syncthing which files it ignores (after a full rescan) instead of guessing from the patterns, and it deletes a file only if the hub also has it, unchanged. Anything that exists only on the device, or that you edited, is reported and kept.
+It asks Syncthing which files it ignores (after a full rescan) instead of guessing from the patterns, and it deletes a file only if the hub also has it, unchanged, or if the hub had it and deleted it (`--list` marks those "deleted on the hub"). Anything that exists only on the device, or that you edited (or wrote again after the hub deleted it), is reported and kept.
+
+`prune` never runs by itself: run it by hand, with `--apply` once the report looks right.
 
 | Guard or option | Effect |
 |---|---|
