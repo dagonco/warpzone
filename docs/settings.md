@@ -40,7 +40,15 @@ Eleven emulators are covered by the `steamos-emudeck` profile: Eden, RetroArch (
 
 `provision device` also installs the ES-DE startup script (`~/ES-DE/scripts/startup/warpzone-settings.sh`), which runs `settings apply` each time ES-DE starts and never blocks it for more than 15 seconds. ES-DE only runs scripts when *Enable custom event scripts* is on (Main menu > Other settings). `provision` turns it on in `es_settings.xml`, but only while ES-DE is closed, because ES-DE rewrites that file when it quits. If ES-DE is running, `provision` warns and leaves the file alone: quit ES-DE and run `provision device` again, or turn the option on in ES-DE yourself. `warpzone doctor` reminds you while it is off.
 
-The script uses the Python that ran `provision`. Install warpzone (for example with pipx) before provisioning; from a clone `provision` warns and installs nothing.
+The script uses the Python that ran `provision`. Install warpzone (for example with pipx) before provisioning; from a clone `provision` warns and installs nothing. SteamOS ships neither pip nor pipx, so use a virtual environment:
+
+```bash
+python3 -m venv ~/.local/share/warpzone/venv
+~/.local/share/warpzone/venv/bin/pip install <wheel URL from the release>
+~/.local/share/warpzone/venv/bin/python -m warpzone provision device <name>
+```
+
+A SteamOS update that replaces Python can break the environment. The startup script then fails without blocking ES-DE, and `warpzone doctor` reports the last apply; recreate the environment to fix it.
 
 ## First capture, on the reference console
 
@@ -162,6 +170,7 @@ xemu's hard disk image stays per console and is not synced. A console that alrea
 | Apply did nothing and printed nothing | Check `~/.local/state/warpzone/settings/log`: a running emulator, a missing file (the emulator never ran) or an invalid layer shows up there. |
 | Apply says a key cannot be written | The key appears twice in the file, or the handler cannot add it. Set it once in the emulator's interface. |
 | The startup script does not run | `warpzone doctor` shows the script, `CustomEventScripts` and the last apply. Fix with `warpzone provision device <name>` while ES-DE is closed. |
+| A change made in RetroArch never shows up in `capture` | EmuDeck turns `config_save_on_exit` off, so RetroArch forgets menu changes on exit. Use Main Menu > Configuration File > Save Current Configuration before you quit. |
 | `capture` or `apply` refuses on macOS | Both need `/proc` to detect running emulators, so they run on Linux consoles only. |
 
 `warpzone doctor` checks the layers, the startup script and the last apply ([doctor.md](doctor.md)).

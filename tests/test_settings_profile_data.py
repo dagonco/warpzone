@@ -616,10 +616,10 @@ class ShippedSettingsTests(unittest.TestCase):
         }
         self.assertEqual(declared, EXPECTED_FILES)
 
-    def test_every_process_name_is_unconfirmed(self) -> None:
+    def test_every_emulator_names_a_confirmed_process(self) -> None:
         for emu, entry in self.settings.items():
             with self.subTest(emulator=emu):
-                self.assertTrue(entry.verify)
+                self.assertFalse(entry.verify)
                 self.assertTrue(entry.process)
 
     def test_process_names(self) -> None:

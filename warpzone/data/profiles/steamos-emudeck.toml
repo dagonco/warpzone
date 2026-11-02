@@ -205,7 +205,6 @@ ignore = ["!/keys.txt", "*"]
 # companion says true; the qt-ini handler writes the companion when it writes a key.
 [settings.eden]
 process = ["eden", "Eden.AppImage"]
-verify = true
 [settings.eden.files.qt-config]
 path = "~/.config/eden/qt-config.ini"
 format = "qt-ini"
@@ -267,7 +266,6 @@ known = [
 # must still be there when it first starts.
 [settings.retroarch]
 process = ["retroarch"]
-verify = true
 [settings.retroarch.files.cfg]
 path = "~/.var/app/org.libretro.RetroArch/config/retroarch/retroarch.cfg"
 format = "retroarch-cfg"
@@ -350,7 +348,6 @@ known = ['reicast_region', 'reicast_language', 'reicast_per_content_vmus']
 # DuckStation.
 [settings.duckstation]
 process = ["duckstation-qt", "DuckStation.AppImage"]
-verify = true
 [settings.duckstation.files.settings]
 path = "~/.local/share/duckstation/settings.ini"
 format = "ini"
@@ -388,7 +385,6 @@ known = [
 # reports a duplicated key as not writable, and the whole `[Folders]` section is noise.
 [settings.pcsx2]
 process = ["pcsx2-qt", "pcsx2-Qt.AppImage"]
-verify = true
 [settings.pcsx2.files.ini]
 path = "~/.config/PCSX2/inis/PCSX2.ini"
 format = "ini"
@@ -435,7 +431,6 @@ known = [
 # that is not declared.
 [settings.dolphin]
 process = ["dolphin-emu"]
-verify = true
 [settings.dolphin.files.dolphin]
 path = "~/.var/app/org.DolphinEmu.dolphin-emu/config/dolphin-emu/Dolphin.ini"
 format = "ini"
@@ -477,7 +472,6 @@ known = [
 # region, user name, birthday) is not in this file; it is the `sysdata-config` data file.
 [settings.azahar]
 process = ["azahar", "azahar-qt", "azahar.AppImage"]
-verify = true
 [settings.azahar.files.qt-config]
 path = "~/.config/azahar-emu/qt-config.ini"
 format = "qt-ini"
@@ -529,11 +523,10 @@ known = [
 path = "~/Emulation/storage/azahar/nand/data/00000000000000000000000000000000/sysdata/00010017/00000000/config"
 create_when = "~/Emulation/storage/azahar/nand"
 
-# melonDS (Flatpak). The path of melonDS.toml and the process name are guesses.
+# melonDS (Flatpak).
 # `Instance0.Firmware.Username` is the DS nickname, not a login, so it is common.
 [settings.melonds]
 process = ["melonDS"]
-verify = true
 [settings.melonds.files.config]
 path = "~/.var/app/net.kuribo64.melonDS/config/melonDS/melonDS.toml"
 format = "toml"
@@ -577,7 +570,6 @@ known = [
 # PPSSPP (Flatpak). The file starts with a UTF-8 BOM, which the ini handler keeps.
 [settings.ppsspp]
 process = ["PPSSPPSDL", "PPSSPPQt"]
-verify = true
 [settings.ppsspp.files.ini]
 path = "~/.var/app/org.ppsspp.PPSSPP/config/ppsspp/PSP/SYSTEM/ppsspp.ini"
 format = "ini"
@@ -627,7 +619,6 @@ known = [
 # avatar and settings are the `user-00` data file.
 [settings.vita3k]
 process = ["Vita3K"]
-verify = true
 [settings.vita3k.files.config]
 path = "~/.config/Vita3K/config.yml"
 format = "yaml-flat"
@@ -674,7 +665,6 @@ create_when = "~/Emulation/storage/Vita3K/ux0/user/00"
 # The EEPROM holds the Xbox language and video mode (and the console's identity).
 [settings.xemu]
 process = ["xemu"]
-verify = true
 [settings.xemu.files.config]
 path = "~/.var/app/app.xemu.xemu/data/xemu/xemu/xemu.toml"
 format = "toml"
@@ -689,7 +679,6 @@ create_when = "~/Emulation/storage/xemu"
 # value is not writable.
 [settings.ryujinx]
 process = ["Ryujinx"]
-verify = true
 [settings.ryujinx.files.config]
 path = "~/.config/Ryujinx/Config.json"
 format = "json"
