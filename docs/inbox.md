@@ -165,6 +165,7 @@ The folder is copied file by file with a read-back to `<TITLEID>.part` and renam
 
 - A game already in the library is reported and never replaced or compared; its launcher is written if it is missing. A launcher that already holds this title id is kept ("already there"); one with the same name that holds another id (the same title in another region) is kept, and the new one gets the title id in its name.
 - An update (`gp`) or DLC (`ac`) goes to review with a message, as does any other category. A dump with a title id that is not a Vita one (a PS4 game folder, for example) goes to review, and so does one that holds `sce_sys/package/work.bin` or an `sce_pfs` folder: Vita3K has to install those, so install them there by hand.
+- A Vitamin dump always goes to review, whether it is a loose folder or inside an archive. It is recognised by `sce_module/steroid.suprx` inside the game folder; Vita3K rejects that module, so the dump is never placed, even if the game might start, and the reason suggests a clean dump instead (a `.pkg` with its `work.bin`, or a NoNpDrm dump). What is already in the library is not touched.
 - An item with several games, a symbolic link inside the game, or an unreadable `param.sfo` goes to review. A PS3 game (`PS3_GAME/PARAM.SFO`) is not this layout and keeps its "not supported by inbox yet" outcome.
 - The consoles link the folder into Vita3K's own game folder, see [emudeck.md](emudeck.md#vita3k-games).
 

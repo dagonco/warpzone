@@ -14,11 +14,13 @@ at its root or inside one top folder, becomes:
 A dump is recognised by `sce_sys/param.sfo` next to `eboot.bin` with a Vita title id
 (`PCS[A-I]nnnnn`). Category `gd` and `gdc` are games; updates (`gp`) and DLC (`ac`) go to
 review, and so does a dump that Vita3K would have to install (a `work.bin` licence or an
-`sce_pfs` folder). A PS3 `PS3_GAME/PARAM.SFO` is not this layout. A game already in the
-library is reported and never overwritten. `.vpk` and `.pkg` files keep their outcome.
+`sce_pfs` folder). A Vitamin dump (it holds `sce_module/steroid.suprx`) always goes to review:
+Vita3K rejects that module, so it is never placed even if the game might start. A PS3
+`PS3_GAME/PARAM.SFO` is not this layout. A game already in the library is reported and never
+overwritten. `.vpk` and `.pkg` files keep their outcome.
 
-The decisions (`is_title_id`, `category_kind`, `game_roots`, `file_name`) are pure; `install`
-touches the disk. See docs/design.md.
+The decisions (`is_title_id`, `category_kind`, `game_roots`, `is_vitamin`, `file_name`) are
+pure; `install` touches the disk. See docs/design.md.
 """
 
 from __future__ import annotations
@@ -41,6 +43,8 @@ SFO = "sce_sys/param.sfo"
 # What a dump that Vita3K must install (a NoNpDrm / encrypted one) carries.
 LICENCE = "sce_sys/package/work.bin"
 PFS = "sce_pfs"
+# The module a Vitamin dump carries; Vita3K refuses to load it.
+VITAMIN_MODULE = "sce_module/steroid.suprx"
 _GAME = {"gd", "gdc"}
 _NOT_VITA = (
     "{rel}: its param.sfo names {found}, which is not a Vita title id (PCSA00000 to PCSI99999)"
@@ -80,9 +84,24 @@ def game_roots(names: list[str] | tuple[str, ...]) -> list[str]:
     return sorted(roots)
 
 
+def is_vitamin(names: list[str] | tuple[str, ...], root: str) -> bool:
+    """Whether the dump under `root` (`""` or `Top/`) holds `sce_module/steroid.suprx`, the
+    module of a Vitamin dump, among file names with `/` separators (case does not matter)."""
+    wanted = (root + VITAMIN_MODULE).lower()
+    return any((n[2:] if n.startswith("./") else n).lower() == wanted for n in names)
+
+
 def file_name(title: str, title_id: str) -> str:
     """The launcher file name for a game title (`.psvita` included)."""
     return inbox_ps4.shortcut_name(title, title_id) + SUFFIX
+
+
+def _vitamin_reason(rel: str) -> str:
+    return (
+        f"{rel}: this is a Vitamin dump (it holds {VITAMIN_MODULE}), and Vita3K does not support "
+        "it (it rejects that module), so it is not placed even if the game might start; get a "
+        "clean dump instead (a .pkg with its work.bin, or a NoNpDrm dump)"
+    )
 
 
 def _fail_kind(rel: str, kind: str, title_id: str) -> str:
@@ -227,7 +246,8 @@ class VitaHandler:
             return
         lead = "" if item.is_dir() else item.name + "/"  # an archive's files sit under its name
         by_rel = {s.rel: s for s in staged}
-        roots = game_roots([s.rel[len(lead) :] for s in staged if s.rel.startswith(lead)])
+        names = [s.rel[len(lead) :] for s in staged if s.rel.startswith(lead)]
+        roots = game_roots(names)
         if not roots:
             result.reasons.append(
                 f"{item.name}: no Vita game found (eboot.bin next to sce_sys/param.sfo)"
@@ -244,7 +264,9 @@ class VitaHandler:
         root, rel = eboot.parent, item.name
         values = inbox_ps4.read_sfo(root / SFO)
         title_id, title = values.get("TITLE_ID"), values.get("TITLE")
-        if not values:
+        if is_vitamin(names, roots[0]):
+            reason = _vitamin_reason(rel)
+        elif not values:
             reason = f"{rel}: sce_sys/param.sfo cannot be read"
         elif not is_title_id(title_id):
             reason = _NOT_VITA.format(rel=rel, found=title_id or "no title id")

@@ -1268,6 +1268,12 @@ EmuDeck's `vita3k.sh` reads the file's content as the title id (`Vita3K -Fr <id>
   several games in one item, a symbolic link inside the game, or a dump that holds
   `sce_sys/package/work.bin` or `sce_pfs` (Vita3K has to install it) goes to review with the
   reason. `.vpk` files and `.pkg` files keep their earlier outcome.
+- **Vitamin.** A dump whose game folder holds `sce_module/steroid.suprx` (`is_vitamin`, pure,
+  case-insensitive, relative to the game root) is a Vitamin dump. Vita3K rejects that module,
+  so it ALWAYS goes to review, checked before anything else about the dump (also in report
+  mode), with a reason that says so and suggests a clean dump (a `.pkg` with its `work.bin`, or
+  NoNpDrm). It is never placed even if the game might start, and nothing already in the
+  library is touched: no game folder, no launcher.
 - **Game folder.** The dump (the top folder of an archive is dropped) is copied file by file
   with a read-back (`inbox.copy_verified`; hidden and junk names are skipped) to
   `library/roms/psvita/app/<TITLEID>.part/` and renamed, as for PS4. A folder already in the

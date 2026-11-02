@@ -82,6 +82,20 @@ class PureTests(unittest.TestCase):
         )
         self.assertEqual(inbox_vita.game_roots(["PSP_GAME/PARAM.SFO", "eboot.bin"]), [])
 
+    def test_a_vitamin_dump_carries_the_steroid_module(self) -> None:
+        base = ["eboot.bin", "sce_sys/param.sfo"]
+        module = "sce_module/steroid.suprx"
+        self.assertTrue(inbox_vita.is_vitamin([*base, module], ""))
+        self.assertTrue(inbox_vita.is_vitamin([f"Top/{n}" for n in [*base, module]], "Top/"))
+        self.assertTrue(inbox_vita.is_vitamin(["./" + n for n in [*base, module]], ""))
+        self.assertTrue(inbox_vita.is_vitamin([*base, "sce_module/STEROID.SUPRX"], ""))
+        self.assertFalse(inbox_vita.is_vitamin(base, ""))
+        self.assertFalse(inbox_vita.is_vitamin([*base, "sce_module/other.suprx"], ""))
+        self.assertFalse(inbox_vita.is_vitamin([*base, "data/sce_module/steroid.suprx"], ""))
+        # the module of another game in the same item does not count for this root
+        self.assertFalse(inbox_vita.is_vitamin([*base, "B/" + module], ""))
+        self.assertFalse(inbox_vita.is_vitamin([f"A/{n}" for n in base] + ["B/" + module], "A/"))
+
     def test_file_names(self) -> None:
         self.assertEqual(inbox_vita.file_name("GRAVITY RUSH™", TITLE_ID), "GRAVITY RUSH.psvita")
         self.assertEqual(inbox_vita.file_name("", TITLE_ID), f"{TITLE_ID}.psvita")
@@ -247,6 +261,35 @@ class ReviewTests(FlowBase):
         self.drop("pfs", {**game(), "sce_pfs/files.db": b"x"})
         self.assertEqual(self.go(), 1, self.out)
         self.assert_review("pfs", "sce_pfs")
+
+    def test_a_vitamin_dump_goes_to_review_in_a_folder(self) -> None:
+        self.drop("vitamin", {**game(), "sce_module/steroid.suprx": b"x" * 16})
+        self.assertEqual(self.go(), 1, self.out)
+        self.assert_review("vitamin", "Vitamin", "steroid.suprx", "Vita3K", "work.bin", "NoNpDrm")
+
+    def test_a_vitamin_dump_goes_to_review_in_an_archive(self) -> None:
+        self.zip_of("vitamin.zip", {**game("Top/"), "Top/sce_module/steroid.suprx": b"x" * 16})
+        self.assertEqual(self.go(), 1, self.out)
+        self.assert_review("vitamin.zip", "Vitamin", "steroid.suprx")
+
+    def test_a_vitamin_dump_is_never_placed_in_report_mode_either(self) -> None:
+        self.drop("vitamin", {**game(), "sce_module/steroid.suprx": b"x" * 16})
+        self.assertEqual(self.go(apply=False), 1, self.out)
+        self.assertEqual(self.library(), [])
+        self.assertNotIn("would place", self.out)
+
+    def test_a_vitamin_dump_leaves_what_the_library_holds_untouched(self) -> None:
+        folder = self.app / TITLE_ID
+        (folder / "sce_sys").mkdir(parents=True)
+        (folder / "eboot.bin").write_bytes(b"MINE")
+        (folder / "sce_sys" / "param.sfo").write_bytes(vita_sfo())
+        before = self.library()
+        self.drop("vitamin", {**game(), "sce_module/steroid.suprx": b"x" * 16})
+        self.assertEqual(self.go(), 1, self.out)
+        self.assertEqual(self.library(), before)
+        self.assertEqual((folder / "eboot.bin").read_bytes(), b"MINE")
+        self.assertFalse(self.launcher().exists())
+        self.assertIn("Vitamin", self.reason("vitamin"))
 
     def test_two_games_in_one_item_go_to_review(self) -> None:
         files = {**game("A/"), **game("B/", title_id="PCSF00025", title="Other")}
