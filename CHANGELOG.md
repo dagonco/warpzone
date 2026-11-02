@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-02
+
 ### Added
 
 - Emulator settings layer. The hub keeps key-level layers (`settings/common.toml`, `settings/<device>.toml`) in a new two-way folder `wz-settings` that a device joins with the `settings` group, and the `steamos-emudeck` profile declares the settings files of eleven emulators (Eden, RetroArch, DuckStation, PCSX2, Dolphin, Azahar, melonDS, PPSSPP, Vita3K, xemu, Ryujinx). `warpzone settings capture` takes a setting changed in an emulator's own interface to the layers (`--seed` fills them from a console that is already configured), `warpzone settings apply` writes the layers into the emulators' files and `warpzone settings audit` reports the drift. Apply never writes while the emulator runs, never overwrites a change that was not captured (unless `--overwrite-local`), changes only the layered keys, backs up each file first and touches nothing when a layer is invalid. Logins never reach the hub. See [docs/settings.md](docs/settings.md).
@@ -37,5 +39,6 @@ First public release. warpzone keeps one game library on a home server and deliv
 - `warpzone doctor` checks the tools, config, Syncthing, DATs and hub folder of a machine and prints the fix for each problem.
 - `warpzone status`, `check` and `render-ignores` to inspect folder state, validate the config and preview a device's ignore lines. `provision` supports `--dry-run`.
 
-[Unreleased]: https://github.com/dagonco/warpzone/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/dagonco/warpzone/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/dagonco/warpzone/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/dagonco/warpzone/releases/tag/v0.1.0

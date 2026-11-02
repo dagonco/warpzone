@@ -65,12 +65,12 @@ Each `library/` and `songs/` folder holds one `patterns-<device>.stignore` per d
 
 ## Install
 
-From the [v0.1.0 release](https://github.com/dagonco/warpzone/releases/tag/v0.1.0):
+From the [v0.2.0 release](https://github.com/dagonco/warpzone/releases/tag/v0.2.0):
 
 ```bash
-pipx install https://github.com/dagonco/warpzone/releases/download/v0.1.0/warpzone-0.1.0-py3-none-any.whl
+pipx install https://github.com/dagonco/warpzone/releases/download/v0.2.0/warpzone-0.2.0-py3-none-any.whl
 # or, without pipx:
-python3 -m pip install --user https://github.com/dagonco/warpzone/releases/download/v0.1.0/warpzone-0.1.0-py3-none-any.whl
+python3 -m pip install --user https://github.com/dagonco/warpzone/releases/download/v0.2.0/warpzone-0.2.0-py3-none-any.whl
 warpzone --version
 ```
 
