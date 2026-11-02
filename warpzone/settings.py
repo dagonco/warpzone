@@ -3,8 +3,10 @@
 The decisions live in `settings_plan`, the file formats in `settings_formats` and
 `settings_tree`, the layers in `settings_layers` and the device state in `settings_state`.
 This module reads the layers and the emulators' files, asks the plan what to do, and writes
-with a backup and an atomic replace. It never calls Syncthing and imports no network code.
-Messages, log lines and output name keys and ids, never values. See "Emulator settings" in
+with a backup and an atomic replace. It imports no network code: `capture` is handed a client
+with two read calls and asks it whether the `wz-settings` folder is up to date. Messages, log
+lines and output name keys and ids, never values (a prompt shows a value, cut, for the keys the
+user is asked about; secret keys are never asked about). See "Emulator settings" in
 docs/design.md.
 """
 
@@ -14,11 +16,12 @@ import hashlib
 import json
 import os
 import re
+import sys
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 from warpzone import settings_formats as formats
 from warpzone import settings_layers as layers_mod
@@ -31,6 +34,7 @@ from warpzone.settings_layers import Layer, LayerError
 
 MAX_DATA_BYTES = 1024 * 1024  # a system data file on the hub is at most 1 MiB
 FOLDER_MARKER = ".stfolder"
+SETTINGS_FOLDER = "wz-settings"  # the Syncthing folder id
 COMMON_FILE = "common.toml"
 DATA_DIR = "files"
 _SKIP_DIRS = (FOLDER_MARKER, ".stversions")
@@ -817,3 +821,537 @@ def audit(
         out(f"warning: {message}")
     out(plan.render_audit(rows, all_keys=all_keys))
     return plan.audit_exit_code(rows)
+
+
+# ---------------------------------------------------------------------------------------------
+# Capture
+# ---------------------------------------------------------------------------------------------
+
+
+class SyncClient(Protocol):
+    """The two read calls of the Syncthing client that `capture` needs."""
+
+    def db_status(self, folder_id: str) -> dict[str, Any]: ...
+
+    def db_file(self, folder_id: str, name: str) -> dict[str, Any] | None: ...
+
+
+def _items_needed(status: Mapping[str, Any]) -> int:
+    total = status.get("needTotalItems")
+    if isinstance(total, int):
+        return total
+    return sum(int(status.get(k) or 0) for k in ("needFiles", "needDirectories", "needDeletes"))
+
+
+def _record_differs(info: Mapping[str, Any]) -> bool:
+    local, global_ = info.get("local"), info.get("global")
+    if local is None and global_ is None:
+        return False
+    if local is None or global_ is None or local.get("invalid"):
+        return True
+    if local.get("deleted") and global_.get("deleted"):
+        return False
+    return bool(local.get("deleted")) != bool(global_.get("deleted")) or local.get(
+        "version"
+    ) != global_.get("version")
+
+
+def sync_problems(
+    status: Mapping[str, Any], infos: Mapping[str, Mapping[str, Any] | None]
+) -> list[str]:
+    """Why the local copy of `wz-settings` cannot be trusted to be current (pure).
+
+    `status` is `GET /rest/db/status`, `infos` the `GET /rest/db/file` answer per layer file
+    (None: Syncthing has no such object yet, which is fine for a layer not written so far).
+    """
+    problems: list[str] = []
+    state_name = status.get("state")
+    if state_name != "idle":
+        problems.append(f"{SETTINGS_FOLDER} is {state_name or 'in an unknown state'}, not idle")
+    need = _items_needed(status)
+    if need:
+        problems.append(f"{SETTINGS_FOLDER} still has {need} item(s) to sync")
+    if status.get("error"):
+        problems.append(f"{SETTINGS_FOLDER} reports an error")
+    for name, info in infos.items():
+        if info is not None and _record_differs(info):
+            problems.append(f"{name}: the local copy is not the one on the hub yet")
+    return problems
+
+
+def check_sync(ctx: Context, client: SyncClient) -> list[str]:
+    names = (COMMON_FILE, f"{ctx.device}.toml")
+    status = client.db_status(SETTINGS_FOLDER)
+    return sync_problems(status, {name: client.db_file(SETTINGS_FOLDER, name) for name in names})
+
+
+_ANSWERS = {"c": "common", "d": "device", "x": "discard", "s": "skip", "q": "quit"}
+
+
+def _short(value: Value | None) -> str:
+    return plan._cell(value)
+
+
+def _digest(value: Value | None) -> str:
+    return "-" if value is None else str(value)[:12]
+
+
+def describe(cand: plan.Candidate, device: str) -> str:
+    """The values line of a candidate: cut values for a key, size and hash prefixes (never the
+    content) for a system data file."""
+    if cand.kind == "data":
+        return (
+            f"here {_digest(cand.here)} ({cand.size} bytes)   before {_digest(cand.before)}"
+            f"   hub {_digest(cand.common)}"
+        )
+    return (
+        f"here {_short(cand.here)}   before {_short(cand.before)}   "
+        f"common {_short(cand.common)}   {device} {_short(cand.device)}"
+    )
+
+
+def _choices(cand: plan.Candidate, device: str) -> str:
+    common = "[C]ommon" if cand.preselect == "common" else "[c]ommon"
+    parts = [common]
+    if cand.kind == "key":
+        parts.append(
+            f"[D]evice ({device})" if cand.preselect == "device" else f"[d]evice ({device})"
+        )
+    parts += ["[x] discard", "[s]kip", "[q]uit"]
+    return "  ".join(parts) + " > "
+
+
+def _read_answer(
+    cand: plan.Candidate, device: str, ask: Callable[[str], str], out: Callable[[str], None]
+) -> str:
+    """One decision; an empty answer takes the pre-selection, end of input quits."""
+    allowed = {k: v for k, v in _ANSWERS.items() if cand.kind == "key" or v != "device"}
+    while True:
+        try:
+            raw = ask("  " + _choices(cand, device)).strip().lower()
+        except EOFError:
+            return "quit"
+        if not raw:
+            return cand.preselect
+        if raw in allowed:
+            return allowed[raw]
+        out("  answer " + ", ".join(allowed) + " or press Enter")
+
+
+def prompt_decisions(
+    cands: Iterable[plan.Candidate],
+    device: str,
+    ask: Callable[[str], str],
+    out: Callable[[str], None],
+) -> dict[str, str]:
+    """Ask for every candidate, in order; `q` (or end of input) leaves the rest undecided."""
+    decisions: dict[str, str] = {}
+    for cand in cands:
+        out(f"{cand.emulator}  {cand.file}  {cand.key}")
+        out("  " + describe(cand, device))
+        answer = _read_answer(cand, device, ask, out)
+        if answer == "quit":
+            break
+        decisions[cand.ref] = answer
+    return decisions
+
+
+@dataclass
+class _Scanned:
+    """A file read by capture, kept for the snapshot written afterwards."""
+
+    emulator: str
+    id: str
+    spec: SettingsFile
+    loaded: Loaded
+    snapshot: dict[str, Value] | None
+    proposed: list[str]
+
+
+class _Capture:
+    def __init__(
+        self,
+        ctx: Context,
+        layers: Layers,
+        *,
+        seed: bool,
+        key_patterns: tuple[str, ...],
+        include_new: bool,
+        log: state.Log | _NullLog,
+        say: Callable[[str], None],
+        err: Callable[[str], None],
+    ) -> None:
+        self.ctx = ctx
+        self.env = ctx.env
+        self.layers = layers
+        self.seed = seed
+        self.key_patterns = key_patterns
+        self.include_new = include_new
+        self.log = log
+        self.say = say
+        self.err = err
+        self.snapshots = state.Snapshots(ctx.env.state)
+        self.cands: list[plan.Candidate] = []
+        self.scanned: list[_Scanned] = []
+        self.data_states: dict[str, DataState] = {}
+        self.data_old: dict[str, dict[str, str]] = {}
+        self.fresh = 0
+        self.errors = 0
+
+    def note(self, where: str, text: str) -> None:
+        self.say(f"note: {where}: {text}")
+        self.log.line(f"note {where}: {text}")
+
+    def problem(self, where: str, message: str) -> None:
+        self.errors += 1
+        self.err(f"error: {where}: {message}")
+        self.log.line(f"error {where}: {message}")
+
+    # -- reading --------------------------------------------------------------------------
+
+    def scan(self, emu: EmulatorSettings) -> None:
+        if is_running(self.env, emu.process):
+            self.note(emu.id, "running, its files may not hold its latest changes; skipped")
+            return
+        for target in targets_for(emu, {}, self.env.home):
+            try:
+                self.scan_file(emu, target)
+            except (SettingsError, OSError, ValueError) as exc:
+                self.problem(f"{emu.id}/{target.id}", str(exc))
+        if emu.data:
+            self.scan_data(emu)
+
+    def scan_file(self, emu: EmulatorSettings, target: Target) -> None:
+        where = f"{emu.id}/{target.id}"
+        loaded = read_target(target)
+        if loaded is None:
+            return
+        try:
+            snap = self.snapshots.load(emu.id, target.id)
+        except (state.StateError, ValueError):
+            raise SettingsError("snapshot is corrupt: delete it to start again") from None
+        if snap is None and not self.seed:
+            self.note(where, "no baseline: run `settings apply` first, or `capture --seed`")
+            return
+        table = (emu.id, target.id)
+        found, fresh = plan.candidates(
+            emu.id,
+            target.id,
+            target.spec,
+            loaded.values,
+            loaded.fixed,
+            snap,
+            self.layers.common.entries.get(table, {}),
+            self.layers.device.entries.get(table, {}),
+            seed=self.seed,
+            key_patterns=self.key_patterns,
+            include_new=self.include_new,
+        )
+        self.cands += found
+        self.fresh += fresh
+        self.scanned.append(
+            _Scanned(emu.id, target.id, target.spec, loaded, snap, [c.key for c in found])
+        )
+
+    def scan_data(self, emu: EmulatorSettings) -> None:
+        try:
+            old = self.snapshots.load_data(emu.id)
+        except (state.StateError, ValueError):
+            self.problem(f"{emu.id}/data", "data snapshot is corrupt: delete it to start again")
+            return
+        self.data_old[emu.id] = dict(old or {})
+        for entry in emu.data.values():
+            where = f"{emu.id}/data/{entry.id}"
+            try:
+                st = read_data(self.ctx, emu.id, entry)
+            except (SettingsError, OSError) as exc:
+                self.problem(where, str(exc))
+                continue
+            if st.data is None or st.hash == st.hub_hash:
+                continue
+            if len(st.data) > MAX_DATA_BYTES:
+                self.note(where, "larger than 1 MiB; it cannot go to the hub")
+                continue
+            snap_hash = self.data_old[emu.id].get(entry.id)
+            cand = plan.data_candidate(
+                emu.id,
+                entry.id,
+                st.hash,
+                len(st.data),
+                snap_hash,
+                st.hub_hash,
+                seed=self.seed,
+                key_patterns=self.key_patterns,
+            )
+            if cand is None:
+                if snap_hash is None:
+                    self.note(where, "no baseline: run `settings apply` first, or `capture --seed`")
+                continue
+            self.cands.append(cand)
+            self.data_states[cand.ref] = st
+
+    def other_layers(self) -> dict[str, plan.Entries]:
+        """The layers of the other devices, for the notes only; unreadable ones are left out."""
+        own = {COMMON_FILE, f"{self.ctx.device}.toml"}
+        found: dict[str, plan.Entries] = {}
+        try:
+            names = sorted(os.listdir(self.ctx.folder))
+        except OSError:
+            return found
+        for name in names:
+            if not name.endswith(".toml") or name in own or ".sync-conflict-" in name:
+                continue
+            try:
+                text = formats.decode((self.ctx.folder / name).read_bytes())
+                found[name.removesuffix(".toml")] = layers_mod.parse_layer(text, name)[0].entries
+            except (OSError, formats.FormatError, LayerError):
+                continue
+        return found
+
+    # -- writing --------------------------------------------------------------------------
+
+    def verify_and_write(
+        self,
+        changes: list[tuple[str, dict[tuple[str, str], dict[str, Value]]]],
+        copies: list[plan.Candidate],
+    ) -> bool:
+        """Check that nothing on the hub moved since it was read, then write it all; False
+        (with an error shown) means nothing was written."""
+        todo: list[tuple[Path, bytes, state.FileStamp | None]] = []
+        for cand in copies:
+            st = self.data_states[cand.ref]
+            where = f"{cand.emulator}/data/{cand.key}"
+            try:
+                data = st.path.read_bytes()
+            except OSError:
+                self.problem(where, "the file changed while it was being processed")
+                return False
+            if sha256(data) != cand.here:
+                self.problem(where, "the file changed while it was being processed")
+                return False
+            hub_stamp = None
+            try:
+                hub_stamp = state.stamp(st.hub_path)
+                hub = st.hub_path.read_bytes()
+            except FileNotFoundError:
+                hub = None
+            if (None if hub is None else sha256(hub)) != st.hub_hash:
+                self.problem(where, "the hub copy changed while it was being processed")
+                return False
+            todo.append((st.hub_path, data, hub_stamp if hub is not None else None))
+        for name, entries in changes:
+            path = self.ctx.folder / name
+            try:
+                stamp = state.stamp(path)
+                current: str | None = formats.decode(path.read_bytes())
+            except FileNotFoundError:
+                stamp, current = None, None
+            except (OSError, formats.FormatError) as exc:
+                self.problem(name, f"cannot be read again ({exc})")
+                return False
+            if current != self.layers.texts.get(name):
+                self.problem(
+                    name, "changed on the hub while it was being processed; nothing written"
+                )
+                return False
+            todo.append((path, layers_mod.render(Layer(entries)).encode("utf-8"), stamp))
+        for path, data, stamp in todo:
+            if not state.atomic_write(path, data, expect=stamp):
+                self.problem(path.name, "changed while it was being written; stopped")
+                return False
+        return True
+
+    def save_snapshots(self, updates: Mapping[tuple[str, str], Mapping[str, Value]]) -> None:
+        for sc in self.scanned:
+            new = plan.capture_snapshot(
+                sc.snapshot,
+                sc.loaded.values,
+                sc.loaded.fixed,
+                sc.spec,
+                updates.get((sc.emulator, sc.id), {}),
+                proposed=sc.proposed,
+            )
+            if not _same_snapshot(sc.snapshot, new):
+                self.snapshots.save(sc.emulator, sc.id, new)
+        for emulator, old in self.data_old.items():
+            new_hashes = {
+                **old,
+                **{k: str(v) for k, v in updates.get((emulator, "data"), {}).items()},
+            }
+            if new_hashes != old:
+                self.snapshots.save_data(emulator, new_hashes)
+
+
+def _report(run: _Capture, device: str) -> None:
+    for cand in run.cands:
+        run.say(cand.ref)
+        run.say("  " + describe(cand, device))
+    run.say(
+        f"settings capture: report only, {len(run.cands)} key(s) would be proposed, "
+        f"{run.fresh} new key(s) not shown. Run on a terminal, or pass --yes, --to-common, "
+        "--to-device or --discard to decide"
+    )
+
+
+def capture(
+    ctx: Context,
+    client: SyncClient | None,
+    *,
+    emulators: Iterable[str] = (),
+    seed: bool = False,
+    key: Iterable[str] = (),
+    include_new: bool = False,
+    yes: bool = False,
+    to_common: Iterable[str] = (),
+    to_device: Iterable[str] = (),
+    discard: Iterable[str] = (),
+    offline: bool = False,
+    dry_run: bool = False,
+    interactive: bool | None = None,
+    ask: Callable[[str], str] = input,
+    out: Callable[[str], None] = print,
+    err: Callable[[str], None] = print,
+) -> int:
+    """Take the keys changed in the emulators' own interface to the layers on the hub.
+
+    Exit code: 0 ok (also for a report), 1 for a refusal (Syncthing not in sync, a conflict copy,
+    an invalid layer, a layer that changed meanwhile) or an error on a file. `interactive`
+    defaults to whether stdin is a terminal; `ask` reads one answer.
+    """
+    selected = select_emulators(ctx.profile, emulators)
+    patterns = tuple(key)
+    if patterns and not seed:
+        raise ConfigError("--key only works together with --seed")
+    if client is None and not offline:
+        raise SettingsError(
+            "no Syncthing to ask whether wz-settings is up to date (--offline skips it)"
+        )
+    flags = (tuple(to_common), tuple(to_device), tuple(discard))
+    if interactive is None:
+        interactive = sys.stdin.isatty()
+    report = not interactive and not (yes or any(flags))
+    if dry_run or report:
+        return _capture_locked(
+            ctx, client, selected, _NullLog(), out, err, patterns=patterns, flags=flags,
+            seed=seed, include_new=include_new, yes=yes, offline=offline, dry_run=dry_run,
+            report=report, interactive=interactive, ask=ask,
+        )  # fmt: skip
+    with state.lock(root=ctx.env.state) as got:
+        log = state.Log(ctx.env.state / "log", clock=ctx.env.clock)
+        if not got:
+            log.line("capture: another run holds the lock, nothing done")
+            err("settings: another run is in progress, nothing done")
+            return 1
+        return _capture_locked(
+            ctx, client, selected, log, out, err, patterns=patterns, flags=flags,
+            seed=seed, include_new=include_new, yes=yes, offline=offline, dry_run=dry_run,
+            report=report, interactive=interactive, ask=ask,
+        )  # fmt: skip
+
+
+def _capture_locked(
+    ctx: Context,
+    client: SyncClient | None,
+    selected: list[EmulatorSettings],
+    log: state.Log | _NullLog,
+    out: Callable[[str], None],
+    err: Callable[[str], None],
+    *,
+    patterns: tuple[str, ...],
+    flags: tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]],
+    seed: bool,
+    include_new: bool,
+    yes: bool,
+    offline: bool,
+    dry_run: bool,
+    report: bool,
+    interactive: bool,
+    ask: Callable[[str], str],
+) -> int:
+    def refuse(message: str) -> int:
+        err(f"error: {message}")
+        log.line(f"capture: refused: {message}")
+        return 1
+
+    if not settings_folder_ready(ctx):
+        return refuse("no settings folder: this device does not subscribe to settings")
+    require_proc(ctx.env)
+    log.line(f"capture: device {ctx.device}")
+    if not offline:
+        assert client is not None
+        problems = check_sync(ctx, client)
+        if problems:
+            for message in problems:
+                err(f"error: {message}")
+            return refuse(
+                "the settings folder is not up to date; try again when Syncthing has finished "
+                "(--offline skips this check)"
+            )
+    try:
+        layers = load_layers(ctx)
+    except LayerError as exc:
+        for message in exc.errors:
+            err(f"error: {message}")
+        return refuse("a layer is invalid, nothing was changed")
+    if layers.conflicts:
+        for name in layers.conflicts:
+            err(f"error: conflict copy {name}")
+        return refuse(
+            "a layer has a conflict copy: keep one version on the hub and delete the other"
+        )
+    for message in layers.warnings:
+        out(f"warning: {message}")
+    run = _Capture(
+        ctx, layers, seed=seed, key_patterns=patterns, include_new=include_new,
+        log=log, say=out, err=err,
+    )  # fmt: skip
+    for emu in selected:
+        run.scan(emu)
+    if report:
+        _report(run, ctx.device)
+        return 1 if run.errors else 0
+    to_common, to_device, discard = flags
+    decisions = plan.decide(
+        run.cands, to_common=to_common, to_device=to_device, discard=discard, yes=yes
+    )
+    pending = [c for c in run.cands if c.ref not in decisions]
+    if interactive and pending:
+        decisions.update(prompt_decisions(pending, ctx.device, ask, out))
+    others = run.other_layers() if "common" in decisions.values() else {}
+    common_after, device_after, updates, notes = plan.apply_decisions(
+        layers.common.entries, layers.device.entries, decisions, run.cands, others=others
+    )
+    for message in notes:
+        out(f"note: {message}")
+    prefix = "would " if dry_run else ""
+    device_name = f"{ctx.device}.toml"
+    changes: list[tuple[str, dict[tuple[str, str], dict[str, Value]]]] = []
+    n_set = n_removed = 0
+    for name, before, after in (
+        (COMMON_FILE, layers.common.entries, common_after),
+        (device_name, layers.device.entries, device_after),
+    ):
+        set_refs, removed = plan.layer_diff(before, after)
+        if set_refs or removed:
+            changes.append((name, after))
+        n_set, n_removed = n_set + len(set_refs), n_removed + len(removed)
+        for ref in set_refs:
+            out(f"{prefix}set      {name}  {ref}")
+        for ref in removed:
+            out(f"{prefix}removed  {name}  {ref}")
+    copies = [c for c in run.cands if c.kind == "data" and decisions.get(c.ref) == "common"]
+    for cand in copies:
+        out(f"{prefix}copy     {DATA_DIR}/{cand.emulator}/{cand.key}  ({cand.size} bytes)")
+    values = list(decisions.values())
+    summary = (
+        f"settings capture: {n_set} set, {n_removed} removed, {len(copies)} data file(s) copied, "
+        f"{values.count('discard')} discarded, {len(run.cands) - len(decisions)} skipped, "
+        f"{run.fresh} new key(s) not shown"
+    )
+    if not dry_run:
+        if not run.verify_and_write(changes, copies):
+            return refuse("nothing more was written")
+        run.save_snapshots(updates)
+    out(("(dry run) " if dry_run else "") + summary)
+    log.line(summary)
+    return 1 if run.errors else 0
