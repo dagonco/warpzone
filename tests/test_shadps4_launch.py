@@ -216,6 +216,12 @@ class ProvisionTests(LaunchDevice, unittest.TestCase):
         self.assertEqual(self.rules.read_text(), RULES)
         self.assertTrue(any("ES-DE is running" in w for w in rep.warnings), rep.warnings)
 
+    def test_unattended_defers_while_es_de_runs(self) -> None:
+        self.start("es-de")
+        rep, _ = self.provision(unattended=True)
+        self.assertTrue(rep.deferred)
+        self.assertEqual(self.rules.read_text(), RULES)
+
     def test_dry_run_writes_nothing(self) -> None:
         self.provision(dry_run=True)
         self.assertFalse(self.script_path.exists())

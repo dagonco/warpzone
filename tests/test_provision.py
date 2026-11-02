@@ -355,7 +355,9 @@ def _device_specs():
     return {s.id: s for s in device_specs(make_config(), "deck", PROFILES["steamos-emudeck"])}
 
 
-class DeviceTests(unittest.TestCase):
+class DeviceFixture(unittest.TestCase):
+    """A temporary home and `provision_device` against two fake Syncthing instances."""
+
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
@@ -399,6 +401,8 @@ class DeviceTests(unittest.TestCase):
     def hub_with_whitelists(self, hub: FakeSyncthing) -> None:
         hub.browse["wz-library"] = ["patterns-common.stignore", "patterns-deck.stignore"]
 
+
+class DeviceTests(DeviceFixture):
     def test_full_flow_with_bootstrap(self) -> None:
         with FakeSyncthing(DECK_ID) as local, FakeSyncthing(HUB_ID) as hub:
             self.hub_with_whitelists(hub)
@@ -623,6 +627,157 @@ class DeviceTests(unittest.TestCase):
             self.assertNotIn(API_KEY, "\n".join(lines))
 
 
+LIBRARY_LISTS = ("patterns-common.stignore", "patterns-deck.stignore")
+
+
+class UnattendedTests(DeviceFixture):
+    """`provision device --unattended`: nothing that could lose data or fail for no reason."""
+
+    def established(self, local: FakeSyncthing, hub: FakeSyncthing) -> None:
+        """A device provisioned by hand once, with the markers Syncthing writes in each folder."""
+        self.hub_with_whitelists(hub)
+        for name in LIBRARY_LISTS:
+            local.arrives_after[("wz-library", name)] = 0
+        self.run_device(local, hub)
+        for folder in local.folders.values():
+            (Path(folder["path"]) / ".stfolder").mkdir(parents=True, exist_ok=True)
+        local.requests.clear()
+
+    def lists_on_disk(self, local: FakeSyncthing) -> None:
+        for name in LIBRARY_LISTS:
+            (Path(local.folders["wz-library"]["path"]) / name).write_text("# fake\n")
+
+    def ignore_writes(self, local: FakeSyncthing) -> list[list[str]]:
+        return [b["ignore"] for m, p, b in local.writes() if p.startswith("/rest/db/ignores")]
+
+    def test_an_existing_whitelisted_folder_never_gets_the_bootstrap_ignores(self) -> None:
+        with FakeSyncthing(DECK_ID) as local, FakeSyncthing(HUB_ID) as hub:
+            self.established(local, hub)
+            local.ignores["wz-library"] = ["/stale"]  # differs from the final ignores
+            local.arrives_after.clear()  # the hub is out of reach: nothing would arrive
+            rep, _ = self.run_device(local, hub, unattended=True, timeout=0.0)
+            self.assertEqual(local.ignores["wz-library"], ["/stale"])
+            self.assertEqual(local.writes(), [])
+            self.assertTrue(any("wz-library" in w and "left alone" in w for w in rep.warnings))
+
+    def test_an_existing_whitelisted_folder_takes_the_final_ignores_when_the_lists_are_on_disk(
+        self,
+    ) -> None:
+        with FakeSyncthing(DECK_ID) as local, FakeSyncthing(HUB_ID) as hub:
+            self.established(local, hub)
+            local.ignores["wz-library"] = ["!/patterns-*.stignore", "*"]  # an old bootstrap
+            local.arrives_after.clear()
+            self.lists_on_disk(local)
+            self.run_device(local, hub, unattended=True, timeout=0.0)
+            self.assertEqual(self.ignore_writes(local), [DECK_LIBRARY_IGNORES])
+            self.assertEqual(local.ignores["wz-library"], DECK_LIBRARY_IGNORES)
+
+    def test_a_second_unattended_run_writes_nothing(self) -> None:
+        with FakeSyncthing(DECK_ID) as local, FakeSyncthing(HUB_ID) as hub:
+            self.established(local, hub)
+            self.run_device(local, hub, unattended=True, timeout=0.0)
+            self.assertEqual(local.writes(), [])
+
+    def test_a_type_change_is_refused_before_anything_is_written(self) -> None:
+        with FakeSyncthing(DECK_ID) as local, FakeSyncthing(HUB_ID) as hub:
+            self.established(local, hub)
+            local.folders["wz-library"]["type"] = "sendreceive"
+            local.folders["wz-tools"]["label"] = "renamed"  # would be patched otherwise
+            with self.assertRaises(ProvisionError) as ctx:
+                self.run_device(local, hub, unattended=True)
+            self.assertIn("wz-library", str(ctx.exception))
+            self.assertIn("type", str(ctx.exception))
+            self.assertEqual(local.writes(), [])
+            self.assertEqual(local.folders["wz-library"]["type"], "sendreceive")
+
+    def test_a_versioning_change_is_refused(self) -> None:
+        with FakeSyncthing(DECK_ID) as local, FakeSyncthing(HUB_ID) as hub:
+            self.established(local, hub)
+            local.folders["wz-tools"]["versioning"] = {"type": "simple"}
+            with self.assertRaises(ProvisionError) as ctx:
+                self.run_device(local, hub, unattended=True)
+            self.assertIn("versioning", str(ctx.exception))
+            self.assertEqual(local.writes(), [])
+
+    def test_the_manual_mode_still_changes_type_and_versioning(self) -> None:
+        with FakeSyncthing(DECK_ID) as local, FakeSyncthing(HUB_ID) as hub:
+            self.established(local, hub)
+            local.folders["wz-library"]["type"] = "sendreceive"
+            self.run_device(local, hub)
+            self.assertEqual(local.folders["wz-library"]["type"], "receiveonly")
+
+    def test_a_folder_without_its_marker_aborts_without_changes(self) -> None:
+        with FakeSyncthing(DECK_ID) as local, FakeSyncthing(HUB_ID) as hub:
+            self.established(local, hub)
+            (Path(local.folders["wz-library"]["path"]) / ".stfolder").rmdir()  # card not mounted
+            local.folders["wz-tools"]["label"] = "renamed"
+            with self.assertRaises(ProvisionError) as ctx:
+                self.run_device(local, hub, unattended=True)
+            self.assertIn("wz-library", str(ctx.exception))
+            self.assertIn(".stfolder", str(ctx.exception))
+            self.assertEqual(local.writes(), [])
+
+    def test_the_marker_name_of_the_folder_is_the_one_that_counts(self) -> None:
+        with FakeSyncthing(DECK_ID) as local, FakeSyncthing(HUB_ID) as hub:
+            self.established(local, hub)
+            local.folders["wz-tools"]["markerName"] = ".stfolder-custom"
+            with self.assertRaises(ProvisionError):
+                self.run_device(local, hub, unattended=True)
+            (Path(local.folders["wz-tools"]["path"]) / ".stfolder-custom").mkdir()
+            self.run_device(local, hub, unattended=True)
+
+    def test_a_new_folder_unknown_to_the_hub_is_skipped_with_a_warning(self) -> None:
+        with FakeSyncthing(DECK_ID) as local, FakeSyncthing(HUB_ID) as hub:
+            rep, _ = self.run_device(local, hub, unattended=True, timeout=0.0)
+            self.assertNotIn("wz-library", local.folders)
+            self.assertIn("wz-tools", local.folders)
+            self.assertTrue(any("wz-library" in w and "provision hub" in w for w in rep.warnings))
+
+    def test_a_new_folder_whose_whitelist_is_missing_on_the_hub_is_skipped(self) -> None:
+        with FakeSyncthing(DECK_ID) as local, FakeSyncthing(HUB_ID) as hub:
+            hub.browse["wz-library"] = ["patterns-common.stignore"]
+            rep, _ = self.run_device(local, hub, unattended=True, timeout=0.0)
+            self.assertNotIn("wz-library", local.folders)
+            self.assertTrue(
+                any("patterns-deck.stignore" in w and "wz-library" in w for w in rep.warnings)
+            )
+
+    def test_an_existing_folder_the_hub_lost_is_still_an_error(self) -> None:
+        with FakeSyncthing(DECK_ID) as local, FakeSyncthing(HUB_ID) as hub:
+            self.established(local, hub)
+            hub.browse.clear()
+            with self.assertRaises(ProvisionError):
+                self.run_device(local, hub, unattended=True)
+
+    def test_a_new_folder_whose_whitelists_do_not_arrive_is_a_warning_not_a_failure(self) -> None:
+        with FakeSyncthing(DECK_ID) as local, FakeSyncthing(HUB_ID) as hub:
+            self.hub_with_whitelists(hub)
+            rep, _ = self.run_device(local, hub, unattended=True, timeout=0.0)
+            # Still on the safe bootstrap ignores; the next run finishes the job.
+            self.assertEqual(local.ignores["wz-library"], ["!/patterns-*.stignore", "*"])
+            self.assertTrue(any("wz-library" in w and "did not arrive" in w for w in rep.warnings))
+            self.assertFalse(rep.deferred)
+
+    def test_the_wait_of_an_unattended_run_is_short_by_default(self) -> None:
+        from warpzone.config import DEFAULT_WAIT_SECONDS, UNATTENDED_WAIT_SECONDS
+
+        self.assertLess(UNATTENDED_WAIT_SECONDS, DEFAULT_WAIT_SECONDS)
+
+    def test_the_manual_mode_still_raises_when_the_whitelists_do_not_arrive(self) -> None:
+        with FakeSyncthing(DECK_ID) as local, FakeSyncthing(HUB_ID) as hub:
+            self.hub_with_whitelists(hub)
+            with self.assertRaises(ProvisionError):
+                self.run_device(local, hub, timeout=0.0)
+
+    def test_a_dry_run_unattended_writes_nothing(self) -> None:
+        with FakeSyncthing(DECK_ID) as local, FakeSyncthing(HUB_ID) as hub:
+            self.established(local, hub)
+            local.ignores["wz-library"] = ["/stale"]
+            self.lists_on_disk(local)
+            self.run_device(local, hub, unattended=True, dry_run=True)
+            self.assertEqual(local.writes(), [])
+
+
 RA_APP = "org.libretro.RetroArch"
 DOLPHIN_APP = "org.DolphinEmu.dolphin-emu"
 SYNCTHINGY = "com.github.zocker_160.SyncThingy"
@@ -669,7 +824,7 @@ class FlatpakAccessTests(unittest.TestCase):
     def flatpak_warnings(rep: Reporter) -> list[str]:
         return [w for w in rep.warnings if "skipped" not in w]
 
-    def provision(self, flatpak, *, config="flatpak", dry_run=False):
+    def provision(self, flatpak, *, config="flatpak", dry_run=False, unattended=False):
         rep, lines = reporter()
         path = {"flatpak": self.config, "native": self.home / ".local/state/syncthing/config.xml"}
         with FakeSyncthing(DECK_ID) as local:
@@ -687,8 +842,24 @@ class FlatpakAccessTests(unittest.TestCase):
                 sleep=lambda s: None,
                 syncthing_config=path.get(config),
                 flatpak_run=flatpak,
+                unattended=unattended,
             )
         return rep, lines
+
+    def test_unattended_grants_nothing_and_warns_with_the_command(self) -> None:
+        flatpak = FlatpakRun()
+        rep, _ = self.provision(flatpak, unattended=True)
+        self.assertEqual(flatpak.writes, [])
+        (warning,) = self.flatpak_warnings(rep)
+        self.assertIn("flatpak override --user", warning)
+        self.assertIn("restart Syncthing", warning)
+
+    def test_unattended_with_everything_granted_stays_quiet(self) -> None:
+        granted = (f"~/.var/app/{RA_APP}", f"~/.var/app/{DOLPHIN_APP}")
+        flatpak = FlatpakRun(granted=granted)
+        rep, _ = self.provision(flatpak, unattended=True)
+        self.assertEqual(flatpak.writes, [])
+        self.assertEqual(self.flatpak_warnings(rep), [])
 
     def test_grants_every_app_folder_the_profile_uses_in_one_override(self) -> None:
         flatpak = FlatpakRun()
@@ -1058,6 +1229,53 @@ class EsdeScriptTests(unittest.TestCase):
             rep, _ = self.provision()
         self.assertEqual(self.settings.read_text(), ES_SETTINGS)
         self.assertIn("quit ES-DE", rep.warnings[0])
+
+    def test_unattended_defers_while_esde_runs(self) -> None:
+        self.write_settings()
+        self.start_esde()
+        rep, _ = self.provision(unattended=True)
+        self.assertTrue(rep.deferred)
+        self.assertEqual(self.settings.read_text(), ES_SETTINGS)
+
+    def test_a_run_that_could_write_everything_is_not_deferred(self) -> None:
+        self.write_settings()
+        rep, _ = self.provision(unattended=True)
+        self.assertFalse(rep.deferred)
+        self.assertIn('name="CustomEventScripts" value="true"', self.settings.read_text())
+
+    def test_without_proc_the_run_is_not_deferred(self) -> None:
+        self.write_settings()
+        rep, _ = self.provision(unattended=True, proc=self.proc / "missing")
+        self.assertFalse(rep.deferred)
+        self.assertTrue(rep.warnings)
+
+    def test_esde_started_just_before_the_write_defers_too(self) -> None:
+        self.write_settings()
+        real = provision_mod.settings_state.backup
+
+        def backup_then_start(*args, **kw):
+            result = real(*args, **kw)
+            self.start_esde()
+            return result
+
+        with mock.patch("warpzone.provision.settings_state.backup", backup_then_start):
+            rep, _ = self.provision(unattended=True)
+        self.assertTrue(rep.deferred)
+
+    def test_busy_marks_the_run_as_deferred(self) -> None:
+        self.start_esde()
+        rep, _ = reporter()
+        self.assertTrue(
+            provision_mod._busy(esde.ESDE_PROCESSES, "ES-DE", "a file", "run again", rep, self.proc)
+        )
+        self.assertTrue(rep.deferred)
+        rep, _ = reporter()
+        shutil.rmtree(self.proc)
+        self.proc.mkdir()
+        self.assertFalse(
+            provision_mod._busy(esde.ESDE_PROCESSES, "ES-DE", "a file", "run again", rep, self.proc)
+        )
+        self.assertFalse(rep.deferred)
 
 
 class ExpandHomeTests(unittest.TestCase):

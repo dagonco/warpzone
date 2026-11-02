@@ -197,6 +197,59 @@ class ProvisionConfigPathTests(unittest.TestCase):
             self.assertEqual(code, 0, err)
             self.assertEqual(provision_device.call_args.kwargs["config_path"], Path(path))
 
+    def run_device(self, *flags: str, deferred: bool = False, error: Exception | None = None):
+        """`provision device deck <flags>` with `provision_device` replaced; returns the call."""
+
+        def fake(cfg, name, profile, local, hub, rep, **kw):
+            if error is not None:
+                raise error
+            rep.deferred = deferred
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = write_config(tmp, "http://127.0.0.1:1")
+            local = mock.Mock(base_url="http://127.0.0.1:1", api_key=API_KEY)
+            with (
+                mock.patch("warpzone.cli.localst.find_config"),
+                mock.patch("warpzone.cli.localst.parse_config", return_value=local),
+                mock.patch("warpzone.provision.provision_device", side_effect=fake) as call,
+            ):
+                code, _, err = run("provision", "device", "deck", "--config", path, *flags)
+        return code, err, call
+
+    def test_unattended_exits_3_when_the_run_was_deferred(self) -> None:
+        code, _, call = self.run_device("--unattended", deferred=True)
+        self.assertEqual(code, 3)
+        self.assertIs(call.call_args.kwargs["unattended"], True)
+
+    def test_unattended_exits_0_when_nothing_was_deferred(self) -> None:
+        code, _, _ = self.run_device("--unattended")
+        self.assertEqual(code, 0)
+
+    def test_unattended_failure_is_not_3(self) -> None:
+        from warpzone.provision import ProvisionError
+
+        code, err, _ = self.run_device("--unattended", deferred=True, error=ProvisionError("no"))
+        self.assertEqual(code, 1)
+        self.assertIn("no", err)
+
+    def test_the_manual_mode_never_exits_3(self) -> None:
+        code, _, call = self.run_device(deferred=True)
+        self.assertEqual(code, 0)
+        self.assertIs(call.call_args.kwargs["unattended"], False)
+
+    def test_unattended_waits_less_than_the_manual_mode_unless_told(self) -> None:
+        from warpzone.config import DEFAULT_WAIT_SECONDS, UNATTENDED_WAIT_SECONDS
+
+        _, _, call = self.run_device()
+        self.assertEqual(call.call_args.kwargs["wait_timeout"], DEFAULT_WAIT_SECONDS)
+        _, _, call = self.run_device("--unattended")
+        self.assertEqual(call.call_args.kwargs["wait_timeout"], UNATTENDED_WAIT_SECONDS)
+        _, _, call = self.run_device("--unattended", "--timeout", "7")
+        self.assertEqual(call.call_args.kwargs["wait_timeout"], 7.0)
+
+    def test_unattended_is_only_for_provision_device(self) -> None:
+        self.assertEqual(run("provision", "hub", "--unattended")[0], 2)
+
 
 class SettingsCliTests(unittest.TestCase):
     def setUp(self) -> None:

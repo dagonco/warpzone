@@ -800,7 +800,7 @@ error messages; the RetroAchievements key is read from `RA_API_KEY`, never from 
 |---|---|---|
 | `warpzone check` | anywhere | Validates config + profiles, reports which whitelists are missing on the hub (via `GET /rest/db/browse`), never writes. Exit 1 if any are missing; `--offline` skips the hub. |
 | `warpzone provision hub` | anywhere that reaches the hub API | Adds every configured device to the hub, creates/updates every `wz-*` folder on the hub and shares it with the devices that subscribe to it, sets the hub ignores. A newly created whitelisted folder first lets only the whitelists through and waits for them (`--timeout`, default 120 s) before the full scan, see "Hub bootstrap". Idempotent. |
-| `warpzone provision device <name>` | on the device | Reads the local Syncthing API key from the local `config.xml` (searching the default locations, including the SyncThingy flatpak; `--syncthing-config PATH` overrides), adds the hub device, creates the subscribed folders with the bootstrap above (`--timeout SECONDS`). When that Syncthing is the SyncThingy flatpak it first grants it the missing `flatpak override --user --filesystem=~/.var/app/<app>` for every folder under `~/.var/app` (flatpak hides other apps' data), and asks for a Syncthing restart. When the device subscribes to `settings`, it installs the ES-DE startup script that runs `settings apply` (see [ES-DE startup script](#es-de-startup-script)). When the device subscribes to `library` and its profile has `[es_systems]` or `[retroarch]`, it also writes the frontend's system list override and pins RetroArch's paths (see [Frontend and RetroArch overrides](#frontend-and-retroarch-overrides)). When the profile has `[shadps4]` it also lists the PS4 games folder in shadPS4's install directories (see [shadPS4 install directories](#shadps4-install-directories)). When the profile has `[links.*]` and the device lists `library`, it links the library games into the emulator's game folder and installs the ES-DE startup script that keeps them linked (see [Title links](#title-links)). When it lists `frontend` and the profile has `[artwork]`, it limits the artwork folders to the systems on the device, writes the gamelists and installs the refresh timer (see [Frontend artwork](#frontend-artwork)). Idempotent. |
+| `warpzone provision device <name>` | on the device | Reads the local Syncthing API key from the local `config.xml` (searching the default locations, including the SyncThingy flatpak; `--syncthing-config PATH` overrides), adds the hub device, creates the subscribed folders with the bootstrap above (`--timeout SECONDS`). `--unattended` is for a run nobody watches and changes the rules as described in [Autonomous updates](#autonomous-updates-contract); it exits `3` when a write waits for the menu to close. When that Syncthing is the SyncThingy flatpak it first grants it the missing `flatpak override --user --filesystem=~/.var/app/<app>` for every folder under `~/.var/app` (flatpak hides other apps' data), and asks for a Syncthing restart. When the device subscribes to `settings`, it installs the ES-DE startup script that runs `settings apply` (see [ES-DE startup script](#es-de-startup-script)). When the device subscribes to `library` and its profile has `[es_systems]` or `[retroarch]`, it also writes the frontend's system list override and pins RetroArch's paths (see [Frontend and RetroArch overrides](#frontend-and-retroarch-overrides)). When the profile has `[shadps4]` it also lists the PS4 games folder in shadPS4's install directories (see [shadPS4 install directories](#shadps4-install-directories)). When the profile has `[links.*]` and the device lists `library`, it links the library games into the emulator's game folder and installs the ES-DE startup script that keeps them linked (see [Title links](#title-links)). When it lists `frontend` and the profile has `[artwork]`, it limits the artwork folders to the systems on the device, writes the gamelists and installs the refresh timer (see [Frontend artwork](#frontend-artwork)). Idempotent. |
 | `warpzone frontend refresh [device]` | on the device | For a device whose profile has `[artwork]` and that lists `frontend`: widens the artwork folders' ignores to the systems that have games now (when the local Syncthing is found) and rewrites the frontend's gamelists from the synced ES-DE data, only while the frontend is closed. `--dry-run` prints what it would do. See [Frontend artwork](#frontend-artwork). |
 | `warpzone play-state sync <device>` | on the device | For a device with ES-DE that lists `play-state`: publishes what its gamelists say and merges the other devices' ledgers into them, only while ES-DE is closed or starting (`--frontend-starting`, which its startup script passes). `--dry-run`, `--quiet`. Needs no network. See [Play state](#play-state). |
 | `warpzone provision device <name>` | on the device | Reads the local Syncthing API key from the local `config.xml` (searching the default locations, including the SyncThingy flatpak; `--syncthing-config PATH` overrides), adds the hub device, creates the subscribed folders with the bootstrap above (`--timeout SECONDS`). When that Syncthing is the SyncThingy flatpak it first grants it the missing `flatpak override --user --filesystem=~/.var/app/<app>` for every folder under `~/.var/app` (flatpak hides other apps' data), and asks for a Syncthing restart. When the device subscribes to `settings`, it installs the ES-DE startup script that runs `settings apply` (see [ES-DE startup script](#es-de-startup-script)). When the device subscribes to `library` and its profile has `[es_systems]` or `[retroarch]`, it also writes the frontend's system list override and pins RetroArch's paths (see [Frontend and RetroArch overrides](#frontend-and-retroarch-overrides)). It then installs the self-update timer, for every profile (see [Self-update](#self-update)). Idempotent. |
@@ -821,7 +821,7 @@ would make (method, path, JSON body with secrets redacted) and sends no write.
 It still sends the GET requests it needs to compute the diff. Every command
 takes `--config PATH` (default `$WARPZONE_CONFIG`, then the XDG path).
 
-Exit codes: `0` ok, `1` runtime error, `2` usage or config error.
+Exit codes: `0` ok, `1` runtime error, `2` usage or config error, and `3` only for `provision device --unattended` (deferred).
 
 `prune` has its own flags: `--apply`, `--max-gib N` (default 50), `--force`,
 `--list`, `--notify-url URL`, `--timeout SECONDS` (wait for the rescan),
@@ -2160,6 +2160,7 @@ do. Until then `warpzone self-update` behaves as described above.
 | --- | --- |
 | `channel` and `pin` in the device config, validated | Implemented |
 | Ordering of release candidates (`tag_key`, `version_key`) | Implemented |
+| `provision device --unattended` and its exit code `3` | Implemented |
 | Everything else in this section | Not implemented |
 
 **Tag spelling.** A release is `vX.Y.Z` and a release candidate is `vX.Y.ZrcN`: the tag is
@@ -2223,6 +2224,37 @@ or `versioning` of an existing folder, it turns a new folder in an existing grou
 `wait_for_files` into warnings, and it aborts without changes when a folder that should
 exist has no `.stfolder` (a card that is not mounted). It never runs `prune --apply`,
 `inbox --apply` or `settings capture`.
+
+How `provision device --unattended` does that, and what it leaves as it was:
+
+- **Existing whitelisted folder.** `_provision_whitelisted` never puts the bootstrap
+  ignores (`*`) on a folder Syncthing already has. If its ignores are not the final ones, it
+  checks that every whitelist file is on disk in the folder: when they are, it sets the final
+  ignores and rescans; when one is not, it warns and changes nothing. (Done by hand, the
+  bootstrap would leave a populated library ignored if the hub could not deliver the lists.)
+  A folder that is new in this run still goes through the bootstrap.
+- **`type`, `versioning`, path.** Before any write, every existing folder is compared with the
+  config. A `type` or `versioning` that `_folder_patch` would change, or a path that
+  differs, raises `ProvisionError` listing every folder, and nothing is changed.
+- **Marker.** Before any write, each folder Syncthing has must hold its marker (`markerName`
+  of the folder, `.stfolder` by default) on disk. A missing one raises `ProvisionError` and
+  changes nothing. A folder with `skip_if_missing` whose directory is gone is skipped as
+  before, and an unattended run does not create that directory for a folder Syncthing
+  already has.
+- **New folders.** A folder that is not in the device's Syncthing yet and fails the hub
+  pre-check (the folder is not on the hub, or its whitelists are not) is warned about and
+  left out; the same failure for an existing folder is still an error. The wait for the
+  whitelists of a new folder is `UNATTENDED_WAIT_SECONDS` (30 s) unless `--timeout` is
+  given, and running out of time is a warning: the folder stays on the bootstrap ignores
+  and the next run finishes it.
+- **Flatpak.** `ensure_flatpak_access` grants nothing and warns with the `flatpak override`
+  command and the restart it needs.
+- **Exit code.** `0` ok (warnings do not change it), `3` deferred, any other value failed.
+  The run does all it can, then exits `3` when any write was held back because the menu
+  (or an emulator, or the ES-DE settings file) was open, which is what `Reporter.deferred`
+  records: `_busy`, the ES-DE settings and find-rule checks, and `titlelinks.sync`. Not being
+  able to tell (no `/proc`) is a warning, not a deferral, because waiting would never help.
+  An error exits `1`, also when something was deferred before it.
 
 **Differential verdict.** The script does not trust the exit codes of a version that may be
 broken. It knows three outcomes: 0 passed, 3 deferred (the menu opened during the check),

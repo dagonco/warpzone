@@ -111,7 +111,7 @@ python3 -m warpzone --help
 |---|---|
 | `warpzone check` | Validates the config and lists missing whitelists. |
 | `warpzone provision hub` | Sets up the hub's Syncthing through its REST API. Once, then whenever you add a device. |
-| `warpzone provision device <name>` | On a console: adds the hub and creates the subscribed folders. |
+| `warpzone provision device <name>` | On a console: adds the hub and creates the subscribed folders. `--unattended` is the variant for a run nobody watches (see [docs/self-update.md](docs/self-update.md#unattended-provisioning)). |
 | `warpzone status` | Folder state, outstanding items and receive-only local changes. |
 | `warpzone render-ignores <name>` | Prints the ignore lines a device folder would get. |
 | `warpzone frontend refresh` | On a console whose frontend is not ES-DE: rewrites its gamelists from the hub's scraped artwork and metadata. |

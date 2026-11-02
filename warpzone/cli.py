@@ -16,6 +16,7 @@ from warpzone.config import (
     DEFAULT_RESCAN_TIMEOUT,
     DEFAULT_WAIT_SECONDS,
     HUB_WAIT_SECONDS,
+    UNATTENDED_WAIT_SECONDS,
     Config,
     ConfigError,
     default_config_path,
@@ -33,6 +34,8 @@ if TYPE_CHECKING:
     from warpzone.syncthing import Client
 
 EXIT_OK, EXIT_RUNTIME, EXIT_USAGE = 0, 1, 2
+# `provision device --unattended`: a write waits for the menu to close; try again later.
+EXIT_DEFERRED = 3
 
 
 def _webhook_url(value: str) -> str:
@@ -88,8 +91,16 @@ def _build_parser() -> argparse.ArgumentParser:
     dev.add_argument(
         "--timeout",
         type=float,
-        default=DEFAULT_WAIT_SECONDS,
-        help="seconds to wait for the whitelists to arrive (default: %(default)s)",
+        help="seconds to wait for the whitelists to arrive "
+        f"(default: {DEFAULT_WAIT_SECONDS:g}, or {UNATTENDED_WAIT_SECONDS:g} with --unattended)",
+    )
+    dev.add_argument(
+        "--unattended",
+        action="store_true",
+        help="for a run nobody watches: never change the type or versioning of a folder, never "
+        "put the bootstrap ignores on an existing folder, skip new folders the hub lacks, "
+        "abort when a folder's marker is missing, and only warn about the flatpak grant. "
+        f"Exits {EXIT_DEFERRED} when a write waits for the menu to close",
     )
 
     pr = sub.add_parser(
@@ -674,6 +685,9 @@ def _run(args: argparse.Namespace) -> int:
     name = _device(cfg, args.name)
     local = localst.parse_config(localst.find_config(args.syncthing_config))
     client = _client(local.base_url, local.api_key, label="local", dry_run=args.dry_run)
+    wait = args.timeout
+    if wait is None:
+        wait = UNATTENDED_WAIT_SECONDS if args.unattended else DEFAULT_WAIT_SECONDS
     provision.provision_device(
         cfg,
         name,
@@ -682,11 +696,12 @@ def _run(args: argparse.Namespace) -> int:
         _hub_client(cfg),
         rep,
         home=Path.home(),
-        wait_timeout=args.timeout,
+        wait_timeout=wait,
         syncthing_config=local.config_path,
         config_path=_config_path(args),
+        unattended=args.unattended,
     )
-    return EXIT_OK
+    return EXIT_DEFERRED if args.unattended and rep.deferred else EXIT_OK
 
 
 def _late_error_code(exc: Exception) -> int | None:
