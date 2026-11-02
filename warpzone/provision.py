@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from warpzone import esde, flatpak, settings_state
+from warpzone import esde, flatpak, frontend, settings_state
 from warpzone.config import DEFAULT_WAIT_SECONDS, HUB_WAIT_SECONDS, Config
 from warpzone.model import FolderSpec, device_specs, hub_specs
 from warpzone.profiles import Profile
@@ -70,7 +70,7 @@ def _subset(wanted: Any, actual: Any) -> bool:
 def _folder_patch(spec: FolderSpec, current: dict[str, Any]) -> dict[str, Any]:
     """The owned keys that differ. Devices are only ever added, never removed."""
     body = spec.body()
-    owned = ("label", "type", "fsWatcherEnabled", "rescanIntervalS")
+    owned = ("label", "type", "fsWatcherEnabled", "rescanIntervalS", "ignorePerms")
     patch: dict[str, Any] = {
         key: body[key] for key in owned if key in body and current.get(key) != body[key]
     }
@@ -679,6 +679,151 @@ def ensure_esde_script(
     _enable_event_scripts(name, esde_dir, rep, dry_run=dry_run, proc=proc, state_root=root)
 
 
+def _busy(
+    names: Sequence[str], label: str, what: str, again: str, rep: Reporter, proc: Path
+) -> bool:
+    """True, with a warning, when `what` must not be written now.
+
+    That is when a process of `names` runs (the program rewrites or keeps in memory the
+    file) and when there is no /proc to tell.
+    """
+    try:
+        running = settings_state.running(names, proc=proc)
+    except settings_state.NoProc:
+        rep.warn(
+            f"cannot tell whether {label} is running (no /proc), so {what} was left alone: "
+            f"{again} on a system with /proc"
+        )
+        return True
+    if running:
+        rep.warn(f"{label} is running, so {what} was left alone: quit {label} and {again}")
+    return running
+
+
+def ensure_systems_override(
+    name: str,
+    profile: Profile,
+    home: Path,
+    rep: Reporter,
+    *,
+    dry_run: bool,
+    proc: Path = Path("/proc"),
+    state_root: Path,
+) -> None:
+    """Write the frontend's system list with the ROM folders moved into the library.
+
+    The copy is `profile.es_systems.source` with `<path>` elements below `prefix` moved to
+    `<library>/roms/`, every other byte kept. It is written only while the frontend is not
+    running, replacing a different copy only after backing that one up. A second run
+    changes nothing.
+    """
+    rule = profile.es_systems
+    if rule is None or "library" not in profile.paths:
+        return
+    source, override = Path(expand_home(rule.source, home)), Path(expand_home(rule.override, home))
+    again = f"run `warpzone provision device {name}` again"
+    target = expand_home(profile.paths["library"], home).rstrip("/") + "/roms/"
+    try:
+        text = source.read_bytes().decode("utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        rep.warn(f"cannot read the system list {source} ({exc}), so {override} was not written")
+        return
+    new = frontend.rewrite_system_paths(text, rule.prefix, target)
+    if new == text:
+        rep.warn(f"{source} has no <path> below {rule.prefix}, so {override} was not written")
+        return
+    try:
+        before: settings_state.FileStamp | None = settings_state.stamp(override)
+        current: bytes | None = override.read_bytes()
+    except FileNotFoundError:
+        before, current = None, None
+    except OSError as exc:
+        rep.warn(f"cannot read {override} ({exc}), so it was left alone")
+        return
+    wanted = new.encode("utf-8")
+    if current == wanted:
+        rep.out(f"es_systems.cfg: already current ({override})")
+        return
+    label, what = "EmulationStation", f"{override}"
+    if _busy(rule.process, label, what, again, rep, proc):
+        return
+    if dry_run:
+        rep.out(f"es_systems.cfg: dry-run: would write {override} (ROM folders below {target})")
+        return
+    if before is not None:
+        settings_state.backup(override, "emulationstation", "es_systems", root=state_root)
+        if _busy(rule.process, label, what, again, rep, proc):  # it may have started meanwhile
+            return
+    if not settings_state.atomic_write(override, wanted, expect=before):
+        rep.warn(f"{override} changed while it was being written, so it was left alone: {again}")
+        return
+    rep.out(f"es_systems.cfg: wrote {override}" + (" (old file backed up)" if before else ""))
+
+
+def ensure_retroarch_pins(
+    name: str,
+    profile: Profile,
+    home: Path,
+    rep: Reporter,
+    *,
+    dry_run: bool,
+    proc: Path = Path("/proc"),
+    state_root: Path,
+) -> None:
+    """Set the profile's keys in each `retroarch.cfg`, only while RetroArch is not running.
+
+    Every other byte of the file is kept. A file that is missing is not created (RetroArch
+    writes it on its first start); one with a wanted key present twice is left alone. The
+    old file is backed up before each edit and a second run changes nothing.
+    """
+    rule = profile.retroarch
+    if rule is None or "library" not in profile.paths:
+        return
+    wants = rule.wants(expand_home(profile.paths["library"], home).rstrip("/"))
+    again = f"run `warpzone provision device {name}` again"
+    pending: list[tuple[Path, str, frontend.RetroArchGap]] = []
+    for raw in rule.cfg:
+        path = Path(expand_home(raw, home))
+        try:
+            text = path.read_bytes().decode("utf-8")
+        except FileNotFoundError:
+            rep.warn(
+                f"{path} does not exist, so RetroArch's paths were not set: start RetroArch "
+                f"once, then {again}"
+            )
+            continue
+        except (OSError, UnicodeDecodeError) as exc:
+            rep.warn(f"cannot read {path} ({exc}), so it was left alone")
+            continue
+        gap = frontend.retroarch_gap(text, wants)
+        if gap.unwritable:
+            keys = ", ".join(sorted(gap.unwritable))
+            rep.warn(f"{path} was left alone: {keys} appears more than once; fix it by hand")
+        elif gap.differs:
+            pending.append((path, text, gap))
+        else:
+            rep.out(f"retroarch: {path} already set")
+    if not pending:
+        return
+    what = "RetroArch's config files"
+    if _busy(rule.process, "RetroArch", what, again, rep, proc):
+        return
+    for path, text, gap in pending:
+        keys = ", ".join(sorted(gap.differs))
+        if dry_run:
+            rep.out(f"retroarch: dry-run: would set {keys} in {path}")
+            continue
+        before = settings_state.stamp(path)
+        settings_state.backup(path, "retroarch", path.parent.name, root=state_root)
+        if _busy(rule.process, "RetroArch", what, again, rep, proc):
+            return
+        new = frontend.retroarch_apply(text, wants)
+        if not settings_state.atomic_write(path, new.encode("utf-8"), expect=before):
+            rep.warn(f"{path} changed while it was being edited, so it was left alone: {again}")
+            continue
+        rep.out(f"retroarch: set {keys} in {path} (old file backed up)")
+
+
 def provision_device(
     cfg: Config,
     name: str,
@@ -754,6 +899,11 @@ def provision_device(
                 sleep=sleep,
             )
         rep.flush(spec.id)
+
+    if "library" in device.folders:
+        root = state_root if state_root is not None else settings_state.state_dir(home=home)
+        for ensure in (ensure_systems_override, ensure_retroarch_pins):
+            ensure(name, profile, home, rep, dry_run=local.dry_run, proc=proc, state_root=root)
 
     if "settings" in device.folders:
         ensure_esde_script(

@@ -1,0 +1,54 @@
+# Anbernic RG351MP (dArkOS)
+
+The `anbernic-rg351mp` profile is for an Anbernic RG351MP that runs dArkOS: EmulationStation as the frontend, RetroArch for most systems, and a games partition (`/roms`) formatted as exFAT. It is a plain TOML file in [`warpzone/data/profiles/`](../warpzone/data/profiles).
+
+## What it does differently
+
+- **The library has its own folder, `/roms/library`.** Games land in `/roms/library/roms/<system>` and BIOS files in `/roms/library/bios`, the same layout as on the hub, and dArkOS's own `/roms/<system>` folders are left alone.
+- **No symlinks, no permissions.** exFAT has neither. Every folder of the device is created with Syncthing's `ignorePerms` on (the profile sets `ignore_perms = true`), so the hub's file modes do not show up as local changes. Nothing in the profile relies on a symlink: the save folders are real directories on the root filesystem, outside the card.
+- **No ES-DE, EmuDeck, flatpak, downloaded media, songs or emulator settings layer.** The profile has no path for `tools`, `songs`, `frontend` or `settings`, so a device that lists one of them is refused with a clear message.
+
+## Config
+
+```toml
+[devices.rg351mp]
+device_id = "XXXXXXX-XXXXXXX-XXXXXXX-XXXXXXX-XXXXXXX-XXXXXXX-XXXXXXX-XXXXXXX"
+profile = "anbernic-rg351mp"
+folders = ["library", "saves"]
+```
+
+`library` and `saves` are the folders that make sense here. `bios` is accepted but empty (the profile has no BIOS placements; BIOS files arrive through the library, from `bios/` in your whitelist). Whitelist systems by the folder names dArkOS uses; a name on the hub that dArkOS spells differently (for example `megacd` and `segacd`) needs the hub folder renamed or a copy under the other name.
+
+Then, on the device (the user that runs Syncthing), with EmulationStation and RetroArch closed:
+
+```bash
+warpzone provision device rg351mp
+```
+
+## The system list override
+
+EmulationStation reads `~/.emulationstation/es_systems.cfg` before `/etc/emulationstation/es_systems.cfg`. `provision device` writes the first as a copy of the second in which every `<path>/roms/X</path>` becomes `<path>/roms/library/roms/X</path>`. Everything else in the file is kept byte for byte, including the entries outside `/roms/` such as `/opt/cmds/`.
+
+Every system moves, also those the hub has no games for: they point at empty folders. Moving only the systems the hub has would tie the override to your whitelist and make it stale at every edit. The side effect is that the device's own `/roms/<system>` folders (for example `ports`) are not listed any more; keep that in mind before you put anything there.
+
+The file is written only while EmulationStation is not running, a different existing file is backed up first, and a second run changes nothing. If dArkOS updates its system list, `warpzone doctor` reports the override as out of date; run `provision device` again.
+
+## RetroArch
+
+dArkOS ships two RetroArch builds, each with its own config (`~/.config/retroarch/retroarch.cfg` and `~/.config/retroarch32/retroarch.cfg`). `provision device` sets in both:
+
+| Key | Value |
+|---|---|
+| `system_directory` | `/roms/library/bios` |
+| `savefiles_in_content_dir` | `false` |
+| `savestates_in_content_dir` | `false` |
+| `savefile_directory` | `~/.config/retroarch/saves` |
+| `savestate_directory` | `~/.config/retroarch/states` |
+
+With the first two off, saves and states stop being written next to the ROMs and go to the two folders that sync, which are the same hub folders (`saves/retroarch/saves` and `saves/retroarch/states`) that the Steam Deck and Steam Machine use. Both builds write to the same two folders. Only the value of those keys changes; the old file is backed up first, nothing is edited while RetroArch runs, and a file that RetroArch has not created yet is never created. Saves that already sit next to the ROMs are not moved.
+
+The save layout matches the Steam devices: all `sort_*` options are off on every device, so each save is one file named after the game in one folder. A save only loads in the same core (and a state in the same core version), which depends on the games you play and which core each device uses for them.
+
+## Doctor
+
+On the device, `warpzone doctor` adds two lines under "Frontend": `ES systems override` and `RetroArch paths`. See [doctor.md](doctor.md#frontend).

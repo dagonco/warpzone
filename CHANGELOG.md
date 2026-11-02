@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ### Added
 
+- A second shipped profile, `anbernic-rg351mp`, for an Anbernic RG351MP running dArkOS with its games on an exFAT card. The library goes in `/roms/library`; the folders of the device ignore permissions (`ignore_perms` in a profile sets Syncthing's `ignorePerms`); and `provision device` writes `~/.emulationstation/es_systems.cfg` as a copy of the OS's system list with the ROM folders moved into the library, and points both RetroArch configs at the library's BIOS folder and at the save and state folders that sync (the same hub folders as the Steam Deck). Both files are written only while EmulationStation or RetroArch is closed, backed up before an edit, and left unchanged by a second run. `warpzone doctor` flags a missing or outdated override and RetroArch keys that are not set. Profiles gain the tables `[es_systems]` and `[retroarch]`, and a save entry may set `create_when`. See [docs/anbernic.md](docs/anbernic.md).
 - `warpzone inbox` recognises Wii U `.wua` files (Cemu's ZArchive) by the footer at the end of the file, reading only its last 16 bytes, and files them in `library/roms/wiiu/roms/` under their own name, also when they arrive inside a `.zip`, `.7z` or `.rar`. A `.wua` with a wrong or truncated footer goes to review. See [docs/inbox.md](docs/inbox.md).
 
 ## [0.2.0] - 2026-11-02

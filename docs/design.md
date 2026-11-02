@@ -96,6 +96,10 @@ Folder-level settings:
 - Everything else: no versioning (the hub is the authority; filesystem
   snapshots on the hub are recommended in [safety.md](safety.md) instead).
 - `fsWatcherEnabled: true` everywhere.
+- `ignorePerms: true` on every folder of a device whose profile sets `ignore_perms`
+  (the library sits on exFAT, which has no POSIX permissions). It is set on the device's
+  folders only; other profiles never get the key, and a folder that already exists is
+  patched when it is missing.
 
 A device subscribes to a subset of folders, set in the private config
 (`folders = ["library", "tools", "saves", "frontend", "songs", "bios", "settings"]`).
@@ -197,7 +201,9 @@ A profile describes where things live on one kind of device. Profiles are data
 files shipped in the repo (`warpzone/data/profiles/<name>.toml`), because they are
 the part other people can reuse and improve.
 
-v0.1 ships `steamos-emudeck`. Paths use `~` and are expanded on the device.
+warpzone ships `steamos-emudeck` and `anbernic-rg351mp` (see
+[Frontend and RetroArch overrides](#frontend-and-retroarch-overrides)). Paths use `~` and
+are expanded on the device.
 It has five kinds of entry; the shipped file is the reference, this is the shape of
 the first four (the fifth, `[settings.*]`, is described in
 [Emulator settings](#profile-entries)):
@@ -363,6 +369,60 @@ the PS3 firmware in RPCS3.
 `warpzone bios` run on a device looks in the library folder, where the placed
 files no longer are; run it on the hub (`--root`) for keys and firmware.
 
+### Frontend and RetroArch overrides
+
+The `anbernic-rg351mp` profile (an Anbernic RG351MP running dArkOS, with the ROMs on an
+exFAT card at `/roms`) needs three things that `steamos-emudeck` does not. All three are
+profile data, not code that tests the profile name.
+
+- **`ignore_perms = true`** (top level). exFAT has no POSIX permissions (and no symlinks),
+  so a receive-only library would list every file as a local change and the puller would
+  try to `chmod`. Every folder of such a device is created with `ignorePerms: true`. The
+  profile depends on no symlink: its save folders are real directories on the root
+  filesystem, and its library exclusions name no EmuDeck link. exFAT also compares file names
+  without regard to case and forbids a few characters (`: * ? " < > |`); Syncthing reports
+  a hub file that does not fit as an error on that file, so such names stay a matter for
+  the hub's library.
+- **`create_when`** on a `[saves.*]` entry, with the meaning it has for `[bios.*]`: create
+  the folder when that directory exists. RetroArch writes `saves/` and `states/` only on
+  the first save, so without it the two folders would stay skipped until then.
+- **`[es_systems]`** (`source`, `override`, `prefix`, `process`; needs `paths.library`).
+  The frontend reads `override` before `source`. `provision device` writes the override as
+  the source with every `<path>` element that starts with `prefix` moved to
+  `<library>/roms/`, so `<path>/roms/nes/</path>` becomes
+  `<path>/roms/library/roms/nes/</path>`; every other byte (line endings, the commands,
+  entries outside `prefix` such as `/opt/cmds/`) is kept (`frontend.rewrite_system_paths`,
+  pure). Every system under `prefix` moves, including those the hub has no games for: the
+  alternative of moving only the systems the hub has would make the override depend on the
+  whitelist and go stale with every edit of it. Such a system points at a folder that stays
+  empty, and the device's own `/roms/<system>` folders are not listed any more (an
+  entry like `ports` also moves). The copy is made only while no process in `process`
+  runs; when `/proc` is missing or the frontend runs it warns, names the command to rerun
+  and writes nothing. A different existing override is backed up first (to the settings
+  state folder, as for `settings apply`); a fresh one has nothing to back up; the write is
+  atomic and refused when the file changed in between. A second run changes nothing.
+- **`[retroarch]`** (`cfg`, `process`, `set`). Each file of `cfg` (a device may have two
+  RetroArch builds with a config each) gets the keys of `set` with their values, `{library}`
+  replaced by the library path: `system_directory` for BIOS files, and
+  `savefiles_in_content_dir` and `savestates_in_content_dir` off with
+  `savefile_directory` and `savestate_directory` pinned to the `[saves.*]` folders, so
+  saves and states leave the ROM folders and can sync. The edit uses the `retroarch-cfg`
+  handler of the settings layer (only the value changes, every other byte is kept), only
+  while no process in `process` runs, with a backup before each edit. A missing file is
+  never created (RetroArch writes it on its first start); a file where a wanted key is
+  present twice or malformed is left alone with a warning. Saves already next to the ROMs
+  are not moved.
+
+Both overrides run at the end of `provision device`, for a device that subscribes to
+`library`. `--dry-run` prints what would be written.
+
+The RetroArch save layout is the same as on the Steam Deck and Steam Machine: all the
+`sort_*` options are off on all three, so saves and states are flat files in one folder
+named after the game (`<game>.srm`, `<game>.state`), and the hub folders are the same
+`saves/retroarch/saves` and `saves/retroarch/states`. What differs is only which core wrote
+a file; a state of one core does not load in another core or another version of it, which
+warpzone cannot check.
+
 ## Private configuration
 
 Lives outside the repo, at `$XDG_CONFIG_HOME/warpzone/config.toml`
@@ -416,7 +476,7 @@ error messages; the RetroAchievements key is read from `RA_API_KEY`, never from 
 |---|---|---|
 | `warpzone check` | anywhere | Validates config + profiles, reports which whitelists are missing on the hub (via `GET /rest/db/browse`), never writes. Exit 1 if any are missing; `--offline` skips the hub. |
 | `warpzone provision hub` | anywhere that reaches the hub API | Adds every configured device to the hub, creates/updates every `wz-*` folder on the hub and shares it with the devices that subscribe to it, sets the hub ignores. A newly created whitelisted folder first lets only the whitelists through and waits for them (`--timeout`, default 120 s) before the full scan, see "Hub bootstrap". Idempotent. |
-| `warpzone provision device <name>` | on the device | Reads the local Syncthing API key from the local `config.xml` (searching the default locations, including the SyncThingy flatpak; `--syncthing-config PATH` overrides), adds the hub device, creates the subscribed folders with the bootstrap above (`--timeout SECONDS`). When that Syncthing is the SyncThingy flatpak it first grants it the missing `flatpak override --user --filesystem=~/.var/app/<app>` for every folder under `~/.var/app` (flatpak hides other apps' data), and asks for a Syncthing restart. When the device subscribes to `settings`, it installs the ES-DE startup script that runs `settings apply` (see [ES-DE startup script](#es-de-startup-script)). Idempotent. |
+| `warpzone provision device <name>` | on the device | Reads the local Syncthing API key from the local `config.xml` (searching the default locations, including the SyncThingy flatpak; `--syncthing-config PATH` overrides), adds the hub device, creates the subscribed folders with the bootstrap above (`--timeout SECONDS`). When that Syncthing is the SyncThingy flatpak it first grants it the missing `flatpak override --user --filesystem=~/.var/app/<app>` for every folder under `~/.var/app` (flatpak hides other apps' data), and asks for a Syncthing restart. When the device subscribes to `settings`, it installs the ES-DE startup script that runs `settings apply` (see [ES-DE startup script](#es-de-startup-script)). When the device subscribes to `library` and its profile has `[es_systems]` or `[retroarch]`, it also writes the frontend's system list override and pins RetroArch's paths (see [Frontend and RetroArch overrides](#frontend-and-retroarch-overrides)). Idempotent. |
 | `warpzone prune [device]` | on the device | Reports, and with `--apply` deletes, the files of the whitelisted folders that the device no longer whitelists (see [Pruning](#pruning)). Report only by default. |
 | `warpzone bios` | on a device or the hub | Reports which BIOS and firmware files a library has, lacks or has wrong (see [BIOS check](#bios-check)). Read-only. Exit 1 if a required item is missing or wrong. |
 | `warpzone inbox` | a desktop that mounts the hub's share | Identifies, converts and files new games dropped in `inbox/` (see [Inbox](#inbox)). Report only by default, `--apply` acts. Exit 1 if any item needs review. |
@@ -1516,6 +1576,17 @@ for every problem, the exact fix for this platform.
   which shows the text of whichever is not `[ok]`; a missing `es_settings.xml` is `[! ]` too
   (start ES-DE once). `judge_settings_layers`, `judge_esde_script`,
   `judge_event_scripts` and `judge_last_apply` are pure.
+- **Frontend.** On a device whose config subscribes it to `library` and whose profile has
+  `[es_systems]` or `[retroarch]`. The device is found as for `settings`, through the
+  `wz-library` folder in the local Syncthing `config.xml` (its path is `paths.library`);
+  any other machine, and a profile without those tables, gets no line. `ES systems
+  override` is `[ok]` when the override is exactly `rewrite_system_paths` of the source;
+  missing or out of date (the source changed, or someone edited it) is `[! ]`, and so is a
+  missing source. `RetroArch paths` reads each file of `cfg` and is `[ok]` when every
+  wanted key has its value; a key that differs is named with its current value, a missing
+  file or a key present twice is `[! ]`. The fix is `warpzone provision device <name>` with
+  the frontend or RetroArch closed. `judge_systems_override` and `judge_retroarch_paths`
+  are pure.
 - **Exit codes.** `0` when no check is a problem, `1` otherwise.
 - **Install hints** live in one table in `warpzone/doctor.py` (`TOOLS` and the `*_HINTS`
   dicts), keyed by platform family: `macos`, `debian`, `fedora`, `arch`, `steamos`,
@@ -1588,12 +1659,14 @@ warpzone/
   settings_plan.py   apply plan, capture candidates and pre-selection, audit rows (pure)
   settings_state.py  device state: snapshots, backups, log, lock, atomic write, processes
   esde.py            ES-DE startup script, `es_settings.xml` check and edit (pure)
+  frontend.py        frontend system list rewrite, RetroArch key gap (pure)
   tomlw.py           TOML scalar and key writer (tomllib only reads)
   doctor.py          machine checklist (`warpzone doctor`): checks, install hints, renderer
   ra.py              RetroAchievements: RAHasher wrapper, game list lookup
   localst.py         find and parse the local Syncthing config.xml
   data/bios.toml     BIOS manifest (names, sizes, hashes, signatures only)
   data/profiles/steamos-emudeck.toml
+  data/profiles/anbernic-rg351mp.toml
 templates/
   patterns-common.stignore
   patterns-device.example.stignore
@@ -1629,6 +1702,9 @@ logic is unit-tested without a network.
 - Profile and model unit tests cover the placement and library-exclusion tables
   (validation, overlaps, rendering order on the device and the hub); the provision
   tests cover skipped, created (`create_when`) and dry-run targets.
+- `anbernic-rg351mp` tests: the shipped profile and its parsing, `ignorePerms` in the folder
+  specs, the pure rewrite and key gap, `provision device` in a temporary home (backups,
+  second run, frontend or RetroArch running, no `/proc`, dry-run) and the doctor lines.
 - `prune` unit tests with the fake Syncthing: the pure decision (`classify`),
   every refusal (bootstrap ignores, wrong type, missing marker, size cap),
   protected names, nested folders, symlinks, re-check before delete, webhook.

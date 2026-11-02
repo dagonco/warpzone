@@ -34,6 +34,10 @@ class SaveFolder:
     kind: str
     path: str
     ignore: tuple[str, ...] = ()
+    # Create `path` when it is missing and this directory exists (the emulator is
+    # installed but has not written its save folder yet). Without it a missing `path`
+    # is skipped.
+    create_when: str | None = None
 
 
 @dataclass(frozen=True)
@@ -95,6 +99,38 @@ class EmulatorSettings:
 
 
 @dataclass(frozen=True)
+class EsSystems:
+    """The frontend's system list, copied with the ROM folders moved into the library.
+
+    `source` is the list that ships with the OS and `override` the copy the frontend
+    reads first. Every `<path>` element that starts with `prefix` moves below the
+    profile's library folder (`<library>/roms/`). `process` names the frontend: the copy
+    is written only while it is not running.
+    """
+
+    source: str
+    override: str
+    prefix: str
+    process: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class RetroArchPins:
+    """Keys of `retroarch.cfg` (one file per build) that `provision device` sets.
+
+    A value may contain `{library}`, replaced by the profile's library path. `process`
+    names RetroArch: a file is edited only while none of them runs.
+    """
+
+    cfg: tuple[str, ...]
+    process: tuple[str, ...]
+    set: dict[str, str]
+
+    def wants(self, library: str) -> dict[str, str]:
+        return {k: v.replace("{library}", library) for k, v in self.set.items()}
+
+
+@dataclass(frozen=True)
 class Profile:
     name: str
     description: str
@@ -105,6 +141,11 @@ class Profile:
     library_ignore: tuple[str, ...] = ()
     bios: dict[str, BiosPlacement] = field(default_factory=dict)
     settings: dict[str, EmulatorSettings] = field(default_factory=dict)
+    # The device's folders sit on a filesystem without POSIX permissions (exFAT): its
+    # Syncthing folders ignore permissions.
+    ignore_perms: bool = False
+    es_systems: EsSystems | None = None
+    retroarch: RetroArchPins | None = None
 
     def placement_ignores(self) -> tuple[str, ...]:
         """The anchored library paths that placements deliver instead of the library."""
@@ -121,7 +162,18 @@ def parse_profile(data: dict[str, Any], source: str) -> Profile:
     def err(msg: str) -> None:
         errors.append(f"{source}: {msg}")
 
-    allowed = {"name", "description", "paths", "saves", "library", "bios", "settings"}
+    allowed = {
+        "name",
+        "description",
+        "ignore_perms",
+        "paths",
+        "saves",
+        "library",
+        "bios",
+        "settings",
+        "es_systems",
+        "retroarch",
+    }
     for key in sorted(set(data) - allowed):
         err(f"unknown key {key!r}")
 
@@ -133,6 +185,11 @@ def parse_profile(data: dict[str, Any], source: str) -> Profile:
     if not isinstance(description, str):
         err("`description` must be a string")
         description = ""
+
+    ignore_perms = data.get("ignore_perms", False)
+    if not isinstance(ignore_perms, bool):
+        err("`ignore_perms` must be true or false")
+        ignore_perms = False
 
     paths: dict[str, str] = {}
     raw_paths = data.get("paths", {})
@@ -160,7 +217,7 @@ def parse_profile(data: dict[str, Any], source: str) -> Profile:
         if not isinstance(entry, dict):
             err(f"saves.{key}: must be a table")
             continue
-        for extra in sorted(set(entry) - {"path", "ignore"}):
+        for extra in sorted(set(entry) - {"path", "ignore", "create_when"}):
             err(f"saves.{key}: unknown key {extra!r}")
         path = entry.get("path")
         if not isinstance(path, str) or not path:
@@ -170,15 +227,102 @@ def parse_profile(data: dict[str, Any], source: str) -> Profile:
         if not isinstance(ignore, list) or not all(isinstance(i, str) for i in ignore):
             err(f"saves.{key}.ignore: must be a list of strings")
             continue
-        saves[key] = SaveFolder(key, match.group(1), match.group(2), path, tuple(ignore))
+        create_when = entry.get("create_when")
+        if create_when is not None and (not isinstance(create_when, str) or not create_when):
+            err(f"saves.{key}.create_when: must be a non-empty string")
+            continue
+        saves[key] = SaveFolder(
+            key, match.group(1), match.group(2), path, tuple(ignore), create_when
+        )
 
     library_ignore = _parse_library(data.get("library", {}), err)
     bios = _parse_bios(data.get("bios", {}), err)
     settings = _parse_settings(data.get("settings", {}), err)
+    es_systems = _parse_es_systems(data.get("es_systems"), "library" in paths, err)
+    retroarch = _parse_retroarch(data.get("retroarch"), "library" in paths, err)
 
     if errors:
         raise ProfileError("\n".join(errors))
-    return Profile(name, description, paths, saves, library_ignore, bios, settings)
+    return Profile(
+        name,
+        description,
+        paths,
+        saves,
+        library_ignore,
+        bios,
+        settings,
+        ignore_perms,
+        es_systems,
+        retroarch,
+    )
+
+
+def _names(raw: Any) -> bool:
+    return isinstance(raw, list) and bool(raw) and all(isinstance(p, str) and p for p in raw)
+
+
+def _parse_es_systems(raw: Any, has_library: bool, err: Callable[[str], None]) -> EsSystems | None:
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        err("`es_systems` must be a table")
+        return None
+    extras = sorted(set(raw) - {"source", "override", "prefix", "process"})
+    for extra in extras:
+        err(f"es_systems.{extra}: unknown key")
+    problems = len(extras)
+    for key in ("source", "override"):
+        if not isinstance(raw.get(key), str) or not raw.get(key):
+            err(f"es_systems.{key}: must be a non-empty string")
+            problems += 1
+    prefix = raw.get("prefix")
+    if not isinstance(prefix, str) or not prefix.startswith("/") or not prefix.endswith("/"):
+        err("es_systems.prefix: must be an absolute folder starting and ending with `/`")
+        problems += 1
+    if not _names(raw.get("process")):
+        err("es_systems.process: required, a non-empty list of non-empty strings")
+        problems += 1
+    if not has_library:
+        err("es_systems needs paths.library (the ROM folders move below it)")
+        problems += 1
+    if problems:
+        return None
+    return EsSystems(raw["source"], raw["override"], raw["prefix"], tuple(raw["process"]))
+
+
+def _parse_retroarch(
+    raw: Any, has_library: bool, err: Callable[[str], None]
+) -> RetroArchPins | None:
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        err("`retroarch` must be a table")
+        return None
+    extras = sorted(set(raw) - {"cfg", "process", "set"})
+    for extra in extras:
+        err(f"retroarch.{extra}: unknown key")
+    problems = len(extras)
+    if not _names(raw.get("cfg")):
+        err("retroarch.cfg: required, a non-empty list of non-empty strings")
+        problems += 1
+    if not _names(raw.get("process")):
+        err("retroarch.process: required, a non-empty list of non-empty strings")
+        problems += 1
+    values = raw.get("set")
+    if not isinstance(values, dict) or not values:
+        err("retroarch.set: required, a non-empty table of key = value strings")
+        return None
+    for key, value in values.items():
+        bad = not isinstance(value, str) or "{" in value.replace("{library}", "")
+        if bad or '"' in str(value):
+            err(f"retroarch.set.{key}: must be a string; {{library}} is the only placeholder")
+            problems += 1
+        elif "{library}" in value and not has_library:
+            err(f"retroarch.set.{key}: uses {{library}} but there is no paths.library")
+            problems += 1
+    if problems:
+        return None
+    return RetroArchPins(tuple(raw["cfg"]), tuple(raw["process"]), dict(values))
 
 
 def _parse_library(raw: Any, err: Callable[[str], None]) -> tuple[str, ...]:
