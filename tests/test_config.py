@@ -159,11 +159,13 @@ class InboxSettingsTests(unittest.TestCase):
         self.assertIsNone(inbox.titledb_dir)
         data["inbox"] = {
             "nsz": "/opt/nsz",
+            "orbis_pkg_util": "/opt/opu",
             "titledb_dir": "~/titledb",
             "switch_keys": "~/k/prod.keys",
         }
         inbox = parse_config(data).inbox
         self.assertEqual(inbox.nsz, "/opt/nsz")
+        self.assertEqual(inbox.orbis_pkg_util, "/opt/opu")
         self.assertEqual(inbox.titledb_dir, str(Path("~/titledb").expanduser()))
         self.assertEqual(inbox.switch_keys, str(Path("~/k/prod.keys").expanduser()))
 

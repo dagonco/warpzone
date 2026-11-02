@@ -875,6 +875,8 @@ Syncthing state. The contract:
   matching or conversion.
 - **PS3, Xbox, Xbox 360 and Wii U images.** See [Console disc images](#console-disc-images)
   below; they are identified by signature, not by DAT.
+- **PS4 packages.** See [PS4 packages](#ps4-packages) below; with `orbis-pkg-util` they are
+  extracted into a game folder with a shortcut.
 - **Out of scope.** Vita, and PS3 or Xbox content that is not a disc image (`.pkg`,
   `.rap`, an extracted `PS3_GAME` or `default.xbe` folder). Their files are recognised by
   extension or folder and go to review with "not supported by inbox yet". A disc image kept as a
@@ -1000,6 +1002,52 @@ signature. The code is in `warpzone/inbox_console_iso.py`, which is both a kind 
   backup under `tools/logs/gamelist-backups/` before the run's first change). Report mode prints "would add". It
   is also done for a game that was already in the library. If the gamelist cannot be
   updated the item goes to review and a rerun retries it.
+
+### PS4 packages
+
+A PS4 `.pkg` is recognised by `inbox_console_iso` (magic `\x7fCNT`, content id at 0x40,
+title id `CUSAnnnnn`) and handled by `warpzone/inbox_ps4.py`. Current shadPS4 has no package
+installer: it runs extracted game folders found in its install directories, and ES-DE
+lists only the `.desktop` files of `roms/ps4/shortcuts`, whose command on the consoles is
+`%EMULATOR_SHADPS4% %ROM%` (EmuDeck's `shadps4.sh`).
+
+- **Tool.** `[inbox] orbis_pkg_util` (PATH otherwise): `orbis-pkg-util extract -q -o <dir>
+  <pkg>`. Reported in the `tools:` line and by `doctor` as an optional inbox tool. Without it
+  the `.pkg` is placed as it is in `roms/ps4/` with a note saying so (the earlier behaviour).
+- **Kind.** The header says what the package is before anything is unpacked: the u32
+  big-endian content type at 0x74 (`0x1A` game data, `0x1B` additional content) and the
+  content flags at 0x78 (`0x100000` or `0x40000000` mark a patch). An update or DLC goes to
+  review with a message saying that updates are not merged (nothing is extracted, even when
+  the base game is in the library). After extraction the `CATEGORY` of `sce_sys/param.sfo`
+  decides again (`gd*` game, `gp` update, `ac` DLC) and its `TITLE_ID` must equal the header's.
+- **Game folder.** The extraction goes to a temporary folder in the local work folder
+  (`work_dir`), which must have the package's size free. It must hold `eboot.bin` and
+  `sce_sys/param.sfo` and no symbolic link. The folder is then copied file by file with a
+  read-back (`inbox.copy_verified`) to `library/roms/ps4/games/<CUSAxxxxx>.part/` and
+  renamed, so the destination never holds a partial game and a stale `.part` of an earlier
+  run is replaced. A game folder already in the library is reported as "already in the
+  library", not compared and never touched; the package is not unpacked.
+- **Shortcut.** `library/roms/ps4/shortcuts/<Title>.desktop`, written the same way (`.part`,
+  rename), never over another file. The name comes from the `TITLE` of `param.sfo` (trademark
+  signs and quotes dropped, `:` as ` -`, only letters, digits, marks and `-_.,()[]!+#`
+  kept, 100 characters at most). A file of that name that already runs this game is kept;
+  one that runs another game gets ` [CUSAxxxxx]` in its name. A game that was already in
+  the library gets a missing shortcut from the `TITLE` of its own `param.sfo`.
+  ```
+  [Desktop Entry]
+  Type=Application
+  Name=<Title>
+  Exec=shadps4 "/home/deck/Emulation/roms/ps4/games/<CUSAxxxxx>/eboot.bin"
+  ```
+  EmuDeck's launcher greps the `Exec=` line of the shortcut, takes the one quoted string
+  as the game and runs `Shadps4-qt.AppImage -d -g <path>`. In the Qt launcher `-d` is the
+  alias of `-e default`: the version selected in its settings. Nothing expands `~` or
+  `$HOME` on that path, so it is written out under the SteamOS home (`DEVICE_LIBRARY`).
+- **Whitelists.** Two lines per game: `!/roms/ps4/games/<CUSAxxxxx>` and
+  `!/roms/ps4/shortcuts/<Title>.desktop`. A report without `--apply` does not unpack
+  anything, so it cannot name the shortcut and prints only the first.
+- **Install directory.** The consoles must list `~/Emulation/roms/ps4/games` as an install
+  directory of shadPS4. See [shadPS4 install directories](#shadps4-install-directories).
 
 ### Arcade sets
 

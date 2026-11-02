@@ -156,6 +156,10 @@ DOLPHIN_HINTS: HintTable = {
     "any": "dolphin-tool ships with Dolphin; install Dolphin",
 }
 NSZ_HINTS: HintTable = {"any": "uv tool install nsz (or: pipx install nsz)"}
+ORBIS_PKG_UTIL_HINTS: HintTable = {
+    "any": "cargo install orbis-pkg-util (the binary lands in ~/.cargo/bin; set orbis_pkg_util "
+    "in [inbox] to it if that folder is not on PATH)"
+}
 TITLEDB_REPO = "https://github.com/blawar/titledb"
 TITLEDB_HINT = (
     f"git clone --depth 1 {TITLEDB_REPO}, then set titledb_dir in [inbox] to that clone "
@@ -271,6 +275,15 @@ TOOLS: tuple[ToolSpec, ...] = (
         NSZ_HINTS,
         setting="nsz",
         version_args=None,
+    ),
+    ToolSpec(
+        "orbis-pkg-util",
+        ("orbis-pkg-util",),
+        "PS4: unpacks .pkg games into folders shadPS4 can run",
+        ORBIS_PKG_UTIL_HINTS,
+        setting="orbis_pkg_util",
+        version_args=None,
+        known_paths=("~/.cargo/bin/orbis-pkg-util",),
     ),
 )
 
@@ -1621,7 +1634,8 @@ def check_tool(ctx: Context, spec: ToolSpec) -> Result:
                 f"found on PATH, but inbox only uses {spec.key} when [inbox] {spec.setting} is set"
             )
         if not path:
-            for known in spec.known_paths:
+            for raw in spec.known_paths:
+                known = str(p.home / raw[2:]) if raw.startswith("~/") else raw
                 if p.is_executable(known):
                     return Result(
                         spec.key,

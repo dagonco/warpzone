@@ -7,7 +7,7 @@ Drop new dumps (files, folders or archives) in `inbox/` on the hub's share and r
 ```
 $ warpzone inbox
 inbox: /Volumes/hub/inbox (report only), 2 item(s)
-tools: chdman yes, bsdtar yes, rahasher yes, dolphin-tool no; DATs: dreamcast, gb, ...
+tools: chdman yes, bsdtar yes, rahasher yes, dolphin-tool no, nsz no, orbis-pkg-util no; DATs: dreamcast, gb, ...
 [1/2] some random name.zip
   nes: Adventure Island (USA).zip: would place
     path: library/roms/nes/Adventure Island (USA).zip
@@ -40,7 +40,7 @@ fbneo_dat = "~/dats/fbneo-arcade.dat"
 mame2003plus_dat = "~/dats/mame2003-plus.xml"
 ```
 
-`bsdtar`, `dolphin_tool`, `nsz` and `switch_keys` work the same way, and `work_dir` moves the temporary files (they can take several GiB). Run `warpzone doctor` to see what is missing ([doctor.md](doctor.md)). Details in [design.md](design.md#inbox).
+`bsdtar`, `dolphin_tool`, `nsz`, `orbis_pkg_util` and `switch_keys` work the same way, and `work_dir` moves the temporary files (they can take several GiB). Run `warpzone doctor` to see what is missing ([doctor.md](doctor.md)). Details in [design.md](design.md#inbox).
 
 ## What it does for each item
 
@@ -94,7 +94,8 @@ No Redump or No-Intro DAT can match these five, so they are identified by their 
 | PS3, decrypted (`*.dec.iso`) | ISO9660 with `PS3_DISC.SFB` and `PS3_GAME/PARAM.SFO` (its `TITLE_ID` and `TITLE` are reported) | `library/roms/ps3/` |
 | Xbox, XISO (`*.xiso.iso`, `*.xiso`) | XDVDFS (`MICROSOFT*XBOX*MEDIA` at 0x10000) with `default.xbe` in the root | `library/roms/xbox/` |
 | Xbox 360 (plain `*.iso`) | XDVDFS partition at 0xFDA0000 (XGD2) or 0x2080000 (XGD3), or an extracted XISO at 0, with `default.xex` in the root | `library/roms/xbox360/roms/` |
-| Wii U (`*.wua`, a Cemu ZArchive) | the 144-byte footer at the end of the file: its last 16 bytes are the file size (u64), the version `0x61bf3a01` and the magic `0x169f52d6` (all big-endian), and the size must equal the real size of the file | `library/roms/wiiu/roms/` || PS4 (`*.pkg`) | the first 0x60 bytes: magic `\x7fCNT` and, at 0x40, a content id shaped like `XXnnnn-CUSAnnnnn_nn-...` (the title id `CUSAnnnnn` is reported) | `library/roms/ps4/` |
+| Wii U (`*.wua`, a Cemu ZArchive) | the 144-byte footer at the end of the file: its last 16 bytes are the file size (u64), the version `0x61bf3a01` and the magic `0x169f52d6` (all big-endian), and the size must equal the real size of the file | `library/roms/wiiu/roms/` |
+| PS4 (`*.pkg`) | the first 0x80 bytes: magic `\x7fCNT` and, at 0x40, a content id shaped like `XXnnnn-CUSAnnnnn_nn-...` (the title id `CUSAnnnnn` is reported) | `library/roms/ps4/games/<CUSAnnnnn>/` and a shortcut, see [PS4 games](#ps4-games) |
 
 Xbox and Xbox 360 are told apart by the root executable, not by the offset. An item whose file names end in `.dec.iso`, `.xiso.iso`, `.xiso`, `.wua` or `.pkg` (loose, in a folder or in an archive) is taken over. A plain `.iso` is left to the DATs first, so PS2, PSP and GameCube images are never touched, and only an `.iso` that no DAT explains is then sniffed and placed if it is one of these.
 
@@ -107,6 +108,40 @@ A `.pkg` is judged by that header only. A PS3 `.pkg` (magic `\x7fPKG`) or any `.
 A full Redump-style Xbox image (game partition at 0x18300000) is never placed, because xemu cannot boot it. It goes to review with the instruction to convert it to XISO with [extract-xiso](https://github.com/XboxDev/extract-xiso).
 
 A PS3 `.iso` needs ES-DE's alternative emulator `RPCS3 ISO (Standalone)` (the system default is a shortcut launcher). So `--apply` also records `<altemulator>RPCS3 ISO (Standalone)</altemulator>` for the game in the hub's ES-DE gamelist (`frontend/es-de/gamelists/ps3/gamelist.xml`, or `gamelist_ps3`), the same way as for arcade sets: only that game's entry is touched and a copy of the previous file is kept ([gamelist edits](#gamelist-edits)).
+
+## PS4 games
+
+shadPS4 has no package installer: it runs extracted game folders, and ES-DE lists only the `.desktop` shortcuts of `roms/ps4/shortcuts`. With [`orbis-pkg-util`](https://crates.io/crates/orbis-pkg-util) (`cargo install orbis-pkg-util`; set `[inbox] orbis_pkg_util` when `~/.cargo/bin` is not on PATH) `--apply` therefore turns a base-game `.pkg` into:
+
+| What | Where |
+|---|---|
+| The extracted game (`eboot.bin`, `sce_sys/param.sfo`, data) | `library/roms/ps4/games/<CUSAnnnnn>/` |
+| The shortcut ES-DE lists | `library/roms/ps4/shortcuts/<Title>.desktop` |
+
+```
+  ps4: CUSA30992: placed
+    path: library/roms/ps4/games/CUSA30992
+    note: detected: PS4 package: CUSA30992
+    note: shortcut: library/roms/ps4/shortcuts/Teenage Mutant Ninja Turtles - Shredders Revenge.desktop
+    whitelist: !/roms/ps4/games/CUSA30992
+    whitelist: !/roms/ps4/shortcuts/Teenage Mutant Ninja Turtles - Shredders Revenge.desktop
+```
+
+The package is unpacked in the local work folder (free space about the size of the `.pkg`), `eboot.bin` and `sce_sys/param.sfo` must be in the result, and the folder is copied to `<CUSAnnnnn>.part`, read back and renamed, so the library never holds a half game. The title in `param.sfo` names the shortcut. Add both printed whitelist lines to the device whitelists. A report without `--apply` does not unpack anything, so it prints only the folder line.
+
+```
+[Desktop Entry]
+Type=Application
+Name=<Title>
+Exec=shadps4 "/home/deck/Emulation/roms/ps4/games/<CUSAnnnnn>/eboot.bin"
+```
+
+EmuDeck's `shadps4.sh` reads the quoted path of the `Exec=` line and runs shadPS4's Qt launcher with it, which boots the version you selected there. The path is written out because nothing expands `~` in it; it assumes the SteamOS home `/home/deck`. The consoles must also have `~/Emulation/roms/ps4/games` in shadPS4's install directories: `provision device` adds it for profiles that declare it ([emudeck.md](emudeck.md#shadps4-install-directory)).
+
+- A game already in the library is reported and never replaced or compared; its shortcut is created if it is missing.
+- An update (patch) or DLC package goes to review: they are not merged into the game yet. The header shows it before anything is unpacked, and the `CATEGORY` of `param.sfo` is checked again afterwards.
+- A shortcut with that name that runs another game is kept, and the new one gets the title id in its name.
+- Without `orbis-pkg-util` the `.pkg` is placed as it is in `library/roms/ps4/` with a note saying so; shadPS4 cannot run it from there.
 
 ## Arcade sets
 
