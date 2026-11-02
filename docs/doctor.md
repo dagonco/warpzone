@@ -86,5 +86,6 @@ On a device that subscribes to `library` with a profile that moves the frontend 
 - **RetroArch paths.** Each RetroArch config has the BIOS folder and the save and state settings the profile wants. A key that differs is named with its current value; a missing config or a key present twice is a warning.
 - **Frontend artwork.** For a device that lists `frontend` and whose profile has `[artwork]`: every gamelist that `warpzone frontend refresh` would write exists and says what it should (new scrape, new cover or a game that arrived since: `stale`). Missing or stale ones are named and the fix is `warpzone frontend refresh <name>` with the frontend closed. It also warns when no scraped gamelist has arrived yet for the systems on the device (look at the `wz-esde` folder with `warpzone status`) and when the system list or a scraped file cannot be read.
 - **Artwork timer.** Only when the profile sets `refresh`: `warpzone-artwork.timer` is installed in `~/.config/systemd/user`. Otherwise the fix is `warpzone provision device <name>`.
+- **Play state.** For a device that lists `play-state`: its folder is set up in Syncthing and, with ES-DE, the startup script and `warpzone-play-state.timer` are installed. Otherwise the fix is `warpzone provision device <name>`.
 
 Details in [design.md](design.md#doctor).

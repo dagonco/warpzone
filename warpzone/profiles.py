@@ -12,7 +12,7 @@ from typing import Any
 
 from warpzone.shadps4 import kind_of
 
-PATH_KEYS = ("library", "songs", "tools", "media", "esde", "settings")
+PATH_KEYS = ("library", "songs", "tools", "media", "esde", "settings", "play_state")
 # The handlers of the settings layer (`settings_formats.handler`); keep in step.
 SETTINGS_FORMATS = ("ini", "qt-ini", "retroarch-cfg", "yaml-flat", "json", "toml")
 _NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
@@ -180,6 +180,16 @@ class Artwork:
 
 
 @dataclass(frozen=True)
+class PlayState:
+    """`[play_state]`: with `refresh`, `provision device` installs a user timer that publishes
+    this device's favourites and play statistics while the frontend stays closed or open.
+    A device with `[artwork]` needs none: its `frontend refresh` timer does the same.
+    """
+
+    refresh: str | None = None
+
+
+@dataclass(frozen=True)
 class Profile:
     name: str
     description: str
@@ -196,6 +206,7 @@ class Profile:
     es_systems: EsSystems | None = None
     retroarch: RetroArchPins | None = None
     artwork: Artwork | None = None
+    play_state: PlayState | None = None
     shadps4: ShadPS4Dirs | None = None
 
     def placement_ignores(self) -> tuple[str, ...]:
@@ -225,6 +236,7 @@ def parse_profile(data: dict[str, Any], source: str) -> Profile:
         "es_systems",
         "retroarch",
         "artwork",
+        "play_state",
         "shadps4",
     }
     for key in sorted(set(data) - allowed):
@@ -294,6 +306,7 @@ def parse_profile(data: dict[str, Any], source: str) -> Profile:
     es_systems = _parse_es_systems(data.get("es_systems"), "library" in paths, err)
     retroarch = _parse_retroarch(data.get("retroarch"), "library" in paths, err)
     artwork = _parse_artwork(data.get("artwork"), paths, es_systems is not None, err)
+    play_state = _parse_play_state(data.get("play_state"), paths, artwork, err)
     shadps4 = _parse_shadps4(data.get("shadps4"), "library" in paths, err)
 
     if errors:
@@ -310,6 +323,7 @@ def parse_profile(data: dict[str, Any], source: str) -> Profile:
         es_systems,
         retroarch,
         artwork,
+        play_state,
         shadps4,
     )
 
@@ -359,6 +373,35 @@ def _nested(a: str, b: str) -> bool:
     """Whether folder `a` is `b` or sits inside it (literal paths, `~` unexpanded)."""
     a, b = a.rstrip("/") + "/", b.rstrip("/") + "/"
     return a.startswith(b)
+
+
+def _parse_play_state(
+    raw: Any, paths: dict[str, str], artwork: Artwork | None, err: Callable[[str], None]
+) -> PlayState | None:
+    folder = paths.get("play_state")
+    if folder is not None:
+        if "esde" not in paths and artwork is None:
+            err("paths.play_state needs paths.esde or [artwork] (a gamelist to read and write)")
+        if "library" in paths and (
+            _nested(folder, paths["library"]) or _nested(paths["library"], folder)
+        ):
+            err("paths.play_state: must not be the library folder or sit inside it")
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        err("`play_state` must be a table")
+        return None
+    for extra in sorted(set(raw) - {"refresh"}):
+        err(f"play_state.{extra}: unknown key")
+    if folder is None:
+        err("[play_state] needs paths.play_state")
+    if artwork is not None:
+        err("[play_state] is not for a profile with [artwork]: artwork.refresh does this")
+    refresh = raw.get("refresh")
+    if refresh is not None and (not isinstance(refresh, str) or not _INTERVAL_RE.match(refresh)):
+        err("play_state.refresh: must be an interval like 15min or 6h")
+        return None
+    return PlayState(refresh)
 
 
 def _parse_artwork(

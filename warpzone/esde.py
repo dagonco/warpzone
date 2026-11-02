@@ -14,6 +14,7 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 SCRIPT_NAME = "warpzone-settings.sh"
+PLAY_STATE_SCRIPT = "warpzone-play-state.sh"
 SETTING = "CustomEventScripts"
 MENU_PATH = "Main menu > Other settings > Enable custom event scripts"
 # What the process list shows for ES-DE: `comm` of the unpacked binary, and `argv[0]` of the
@@ -34,8 +35,8 @@ class EsdeError(Exception):
     """`es_settings.xml` cannot be read or edited safely."""
 
 
-def script_path(esde_dir: Path) -> Path:
-    return esde_dir / "scripts" / "startup" / SCRIPT_NAME
+def script_path(esde_dir: Path, name: str = SCRIPT_NAME) -> Path:
+    return esde_dir / "scripts" / "startup" / name
 
 
 def settings_path(esde_dir: Path) -> Path:
@@ -58,6 +59,20 @@ def render_startup_script(python: str, device: str, config: Path | None = None) 
         "env -u LD_LIBRARY_PATH -u LD_PRELOAD -u PYTHONHOME -u PYTHONPATH \\\n"
         f"  timeout 15 {_quote(python)} -m warpzone \\\n"
         f"  settings apply --device {_quote(device)}{where} --quiet >/dev/null 2>&1\n"
+        "exit 0\n"
+    )
+
+
+def render_play_state_script(python: str, device: str, config: Path | None = None) -> str:
+    """The script that merges the play state. ES-DE fires `startup` before it reads a gamelist."""
+    where = f" --config {_quote(str(config))}" if config is not None else ""
+    return (
+        "#!/bin/sh\n"
+        "# Written by warpzone provision device, which rewrites it. Merges favourites and\n"
+        "# play statistics into the gamelists, which ES-DE reads after this script ends.\n"
+        "env -u LD_LIBRARY_PATH -u LD_PRELOAD -u PYTHONHOME -u PYTHONPATH \\\n"
+        f"  timeout 15 {_quote(python)} -m warpzone \\\n"
+        f"  play-state sync {_quote(device)}{where} --frontend-starting --quiet >/dev/null 2>&1\n"
         "exit 0\n"
     )
 

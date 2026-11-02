@@ -43,6 +43,8 @@ profile = "steamos-emudeck"
 #   bios      keys and firmware delivered into each emulator's own folder (receive-only);
 #             the library cannot deliver them because EmuDeck symlinks those folders
 #   settings  emulator setting layers (two-way)
+#   play-state  favourites and play statistics shared with the other frontends (two-way,
+#             one file per device; needs `frontend`, see docs/design.md, "Play state")
 folders = ["library", "tools", "saves", "frontend", "bios", "settings"]
 
 # Optional. Where the hub finds this device. Default ["dynamic"].

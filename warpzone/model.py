@@ -18,6 +18,7 @@ NO_VERSIONING: dict[str, Any] = {"type": ""}
 LIBRARY_ID = "wz-library"
 MEDIA_ID = "wz-media"
 ESDE_ID = "wz-esde"
+PLAY_STATE_ID = "wz-play-state"
 
 
 class ModelError(Exception):
@@ -120,11 +121,29 @@ _STATIC: dict[str, tuple[_Def, ...]] = {
             history=True,
         ),
     ),
+    # One file per device, each written by its device only, so it never conflicts. It is apart
+    # from `wz-esde` so that folder stays as it is on the devices that share it.
+    "play-state": (
+        _Def(
+            PLAY_STATE_ID,
+            "frontend/play-state",
+            "sendreceive",
+            "sendreceive",
+            "play_state",
+            fixed_ignores=("*.wz-tmp",),
+            history=True,
+        ),
+    ),
 }
 
 
 def _defs_for(device: Device, profile: Profile) -> list[_Def]:
     defs: list[_Def] = []
+    if "play-state" in device.folders and "frontend" not in device.folders:
+        raise ModelError(
+            f"device {device.name!r} subscribes to 'play-state' without 'frontend': "
+            "the play state lives in the gamelists that group brings"
+        )
     for group in device.folders:
         if group == "saves":
             for save in profile.saves.values():

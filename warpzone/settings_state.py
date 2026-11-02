@@ -314,12 +314,15 @@ def running(
     proc: Path = Path("/proc"),
     self_pid: int | None = None,
     parent_pid: int | None = None,
+    *,
+    skip_ancestors: bool = False,
 ) -> bool:
     """Whether a process is one of `names`, judged by `comm` and the basename of `argv[0]`.
 
     The rest of a command line is never searched, so a shell, an editor or a launcher
     script that merely mentions the emulator does not count. Our own process and its
-    parent are skipped. Entries that cannot be read are ignored.
+    parent are skipped, and with `skip_ancestors` every process above it: a program that
+    runs this from a script and waits for it. Entries that cannot be read are ignored.
     """
     wanted = set(names)
     wanted_comm = {n[:COMM_MAX] for n in wanted}
@@ -334,6 +337,11 @@ def running(
     elif parent_pid is None:
         parent_pid = _parent_of(proc, self_pid)
     skip = {self_pid, parent_pid}
+    while skip_ancestors and parent_pid and parent_pid > 1:
+        parent_pid = _parent_of(proc, parent_pid)
+        if parent_pid in skip:
+            break
+        skip.add(parent_pid)
     try:
         entries = list(proc.iterdir())
     except OSError as exc:

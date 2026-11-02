@@ -50,7 +50,8 @@ Each `library/` and `songs/` folder holds one `patterns-<device>.stignore` per d
 ├── saves/<emulator>/<kind>/ hub: send-receive <-> devices: send-receive, hub keeps 30 days of history
 ├── frontend/
 │   ├── media/               ES-DE downloaded media     <->
-│   └── es-de/               ES-DE gamelists, collections <->
+│   ├── es-de/               ES-DE gamelists, collections <->
+│   └── play-state/          favourites and play statistics, one file per device <->
 ├── settings/                emulator setting layers    <-> two-way, hub keeps 30 days of history
 ├── songs/                   hub: send-only -> opted-in devices, per-device whitelist
 ├── tools/                   hub: send-only -> devices (scripts, docs)
@@ -114,6 +115,7 @@ python3 -m warpzone --help
 | `warpzone status` | Folder state, outstanding items and receive-only local changes. |
 | `warpzone render-ignores <name>` | Prints the ignore lines a device folder would get. |
 | `warpzone frontend refresh` | On a console whose frontend is not ES-DE: rewrites its gamelists from the hub's scraped artwork and metadata. |
+| `warpzone play-state sync <name>` | On a console with ES-DE: shares favourites and play statistics with the other frontends. ES-DE runs it at startup, and a timer between starts. |
 | `warpzone prune` | Reports (or, with `--apply`, deletes) files a device no longer whitelists. |
 | `warpzone bios` | Which BIOS and firmware files the library has, lacks or has wrong. |
 | `warpzone inbox` | Reports (or, with `--apply`, files) new games dropped in `inbox/`. |
