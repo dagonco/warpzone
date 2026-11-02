@@ -181,6 +181,10 @@ def _build_parser() -> argparse.ArgumentParser:
         "else the system temp folder)",
     )
 
+    st_dry_run = argparse.ArgumentParser(add_help=False)
+    st_dry_run.add_argument(
+        "--dry-run", action="store_true", help="print what it would do and change nothing"
+    )
     st = sub.add_parser(
         "settings", help="emulator settings: apply the layers, capture changes, audit drift"
     )
@@ -199,7 +203,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     st_apply = st_sub.add_parser(
         "apply",
-        parents=[common, st_common, writing],
+        parents=[common, st_common, st_dry_run],
         help="write the layered keys into the emulators' files (never while one runs)",
     )
     st_apply.add_argument("--quiet", action="store_true", help="print nothing")
@@ -210,7 +214,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     st_capture = st_sub.add_parser(
         "capture",
-        parents=[common, st_common, writing],
+        parents=[common, st_common, st_dry_run],
         help="take settings changed in an emulator's own interface to the layers on the hub",
     )
     st_capture.add_argument(
