@@ -1,7 +1,12 @@
+import dataclasses
+import shutil
+import stat
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
 from typing import Any
+from unittest import mock
 
 from support import (
     API_KEY,
@@ -13,6 +18,8 @@ from support import (
     config_data,
     make_config,
 )
+from warpzone import esde
+from warpzone import provision as provision_mod
 from warpzone.config import Config, parse_config
 from warpzone.profiles import Profile, load_profile
 from warpzone.provision import (
@@ -23,6 +30,7 @@ from warpzone.provision import (
     folder_status,
     provision_device,
     provision_hub,
+    run_import_check,
     wait_for_files,
 )
 from warpzone.syncthing import Client
@@ -753,6 +761,296 @@ class FlatpakAccessTests(unittest.TestCase):
         rep, _ = self.provision(fail_write)
         self.assertTrue(any("cannot grant Syncthing access" in w for w in rep.warnings))
         self.assertFalse(any("restart Syncthing" in w for w in self.flatpak_warnings(rep)))
+
+
+ES_SETTINGS = (
+    '<?xml version="1.0"?>\n'
+    '<bool name="BackgroundJoystickInput" value="false" />\n'
+    '<bool name="CustomEventScripts" value="false" />\n'
+    '<string name="MediaDirectory" value="/home/user/ES-DE/downloaded_media" />\n'
+)
+PYTHON = "/opt/wz/bin/python"
+
+
+class EsdeScriptTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        tmp = Path(self._tmp.name)
+        self.home = tmp / "home"
+        self.state = tmp / "state"
+        self.proc = tmp / "proc"
+        self.proc.mkdir()
+        self.esde = self.home / "ES-DE"
+        self.script = esde.script_path(self.esde)
+        self.settings = esde.settings_path(self.esde)
+
+    def write_settings(self, text: str = ES_SETTINGS) -> None:
+        self.settings.parent.mkdir(parents=True)
+        self.settings.write_bytes(text.encode())
+
+    def start_esde(self, comm: str = "es-de", argv0: str | None = None) -> None:
+        d = self.proc / "4242"
+        d.mkdir()
+        (d / "comm").write_text(comm + "\n")
+        (d / "cmdline").write_bytes((argv0 or comm).encode() + b"\0")
+        (d / "stat").write_text("4242 (x) S 1 0 0 0\n")
+
+    def provision(self, *, folders=("settings",), dry_run=False, profile=None, **kw):
+        data = config_data()
+        data["devices"]["deck"]["folders"] = list(folders)
+        cfg = parse_config(data)
+        rep, lines = reporter()
+        kw.setdefault("import_check", lambda python: True)
+        kw.setdefault("proc", self.proc)
+        with FakeSyncthing(DECK_ID) as local:
+            client = Client(local.url, API_KEY, label="local", dry_run=dry_run, sink=lines.append)
+            provision_device(
+                cfg,
+                "deck",
+                profile or PROFILES["steamos-emudeck"],
+                client,
+                None,
+                rep,
+                home=self.home,
+                wait_timeout=0.0,
+                poll=1.0,
+                sleep=lambda s: None,
+                python=PYTHON,
+                state_root=self.state,
+                **kw,
+            )
+        return rep, lines
+
+    def backups(self) -> list[Path]:
+        folder = self.state / "backups" / "esde" / "es_settings"
+        return sorted(folder.iterdir()) if folder.is_dir() else []
+
+    def test_writes_an_executable_script(self) -> None:
+        rep, lines = self.provision()
+        self.assertEqual(self.script.read_text(), esde.render_startup_script(PYTHON, "deck"))
+        self.assertEqual(stat.S_IMODE(self.script.stat().st_mode), 0o755)
+        self.assertTrue(any(str(self.script) in line for line in lines))
+        self.assertEqual(rep.warnings, [w for w in rep.warnings if "es_settings" in w])
+
+    def test_a_custom_config_path_is_written_into_the_script(self) -> None:
+        custom = Path("/srv/wz/config.toml")
+        self.provision(config_path=custom)
+        self.assertEqual(
+            self.script.read_text(), esde.render_startup_script(PYTHON, "deck", custom)
+        )
+        self.assertIn("--config '/srv/wz/config.toml'", self.script.read_text())
+
+    def test_the_default_config_path_is_left_out_of_the_script(self) -> None:
+        default = self.home / ".config" / "warpzone" / "config.toml"
+        self.provision(config_path=default)
+        self.assertNotIn("--config", self.script.read_text())
+        self.assertEqual(self.script.read_text(), esde.render_startup_script(PYTHON, "deck"))
+
+    def test_an_unchanged_script_is_not_rewritten(self) -> None:
+        self.provision()
+        before = self.script.stat()
+        _, lines = self.provision()
+        after = self.script.stat()
+        self.assertEqual((before.st_ino, before.st_mtime_ns), (after.st_ino, after.st_mtime_ns))
+        self.assertTrue(any("script unchanged" in line for line in lines))
+
+    def test_a_different_script_is_rewritten_and_the_mode_repaired(self) -> None:
+        self.script.parent.mkdir(parents=True)
+        self.script.write_text("#!/bin/sh\necho old\n")
+        self.script.chmod(0o644)
+        self.provision()
+        self.assertEqual(self.script.read_text(), esde.render_startup_script(PYTHON, "deck"))
+        self.script.chmod(0o644)
+        self.provision()
+        self.assertEqual(stat.S_IMODE(self.script.stat().st_mode), 0o755)
+
+    def test_other_scripts_are_never_touched(self) -> None:
+        other = self.script.with_name("10-mine.sh")
+        other.parent.mkdir(parents=True)
+        other.write_text("#!/bin/sh\n")
+        self.provision()
+        self.assertEqual(other.read_text(), "#!/bin/sh\n")
+
+    def test_dry_run_prints_the_script_and_writes_nothing(self) -> None:
+        self.write_settings()
+        _, lines = self.provision(dry_run=True)
+        self.assertFalse(self.script.exists())
+        self.assertEqual(self.settings.read_text(), ES_SETTINGS)
+        self.assertEqual(self.backups(), [])
+        text = "\n".join(lines)
+        self.assertIn("dry-run: would write", text)
+        self.assertIn("timeout 15 '/opt/wz/bin/python' -m warpzone", text)
+        self.assertIn("dry-run: would set CustomEventScripts", text)
+
+    def test_a_device_without_the_settings_group_gets_nothing(self) -> None:
+        self.write_settings()
+        self.provision(folders=("frontend",))
+        self.assertFalse(self.script.exists())
+        self.assertEqual(self.settings.read_text(), ES_SETTINGS)
+
+    def test_a_profile_without_an_esde_path_gets_nothing(self) -> None:
+        profile = PROFILES["steamos-emudeck"]
+        bare = dataclasses.replace(
+            profile, paths={k: v for k, v in profile.paths.items() if k != "esde"}
+        )
+        rep, _ = self.provision(profile=bare)
+        self.assertFalse(self.script.exists())
+        self.assertEqual(rep.warnings, [])
+
+    def test_a_python_that_cannot_import_warpzone_installs_nothing(self) -> None:
+        self.write_settings()
+        seen: list[str] = []
+
+        def cannot(python: str) -> bool:
+            seen.append(python)
+            return False
+
+        rep, _ = self.provision(import_check=cannot)
+        self.assertEqual(seen, [PYTHON])
+        self.assertFalse(self.script.exists())
+        self.assertEqual(self.settings.read_text(), ES_SETTINGS)
+        self.assertEqual(len(rep.warnings), 1)
+        self.assertIn("cannot import warpzone", rep.warnings[0])
+
+    def test_the_real_import_check_runs_outside_the_current_folder(self) -> None:
+        calls = []
+
+        def fake_run(command, **kw):
+            calls.append((command, kw))
+            return subprocess.CompletedProcess(command, 0)
+
+        with (
+            mock.patch.dict(
+                "os.environ", {"PYTHONPATH": "/clone", "PYTHONHOME": "/x", "KEEP": "1"}
+            ),
+            mock.patch("warpzone.provision.subprocess.run", fake_run),
+        ):
+            self.assertTrue(run_import_check(PYTHON))
+        ((command, kw),) = calls
+        self.assertEqual(command, [PYTHON, "-c", "import warpzone"])
+        self.assertEqual(kw["cwd"], "/")
+        self.assertEqual(kw["env"].get("KEEP"), "1")
+        self.assertNotIn("PYTHONPATH", kw["env"])
+        self.assertNotIn("PYTHONHOME", kw["env"])
+        with mock.patch(
+            "warpzone.provision.subprocess.run",
+            lambda command, **kw: subprocess.CompletedProcess(command, 1),
+        ):
+            self.assertFalse(run_import_check(PYTHON))
+        with mock.patch("warpzone.provision.subprocess.run", side_effect=FileNotFoundError):
+            self.assertFalse(run_import_check(PYTHON))
+
+    def test_turns_the_event_scripts_on_with_a_backup(self) -> None:
+        self.write_settings()
+        self.settings.chmod(0o640)
+        rep, lines = self.provision()
+        self.assertEqual(
+            self.settings.read_text(),
+            ES_SETTINGS.replace(
+                '"CustomEventScripts" value="false"', '"CustomEventScripts" value="true"'
+            ),
+        )
+        self.assertEqual(stat.S_IMODE(self.settings.stat().st_mode), 0o640)
+        (backup,) = self.backups()
+        self.assertEqual(backup.read_text(), ES_SETTINGS)
+        self.assertEqual(stat.S_IMODE(backup.stat().st_mode), 0o600)
+        self.assertTrue(backup.name.endswith("-es_settings.xml"))
+        self.assertEqual(rep.warnings, [])
+        self.assertTrue(any("CustomEventScripts" in line for line in lines))
+
+    def test_a_missing_element_is_added(self) -> None:
+        self.write_settings(
+            ES_SETTINGS.replace('<bool name="CustomEventScripts" value="false" />\n', "")
+        )
+        self.provision()
+        self.assertIs(esde.event_scripts_enabled(self.settings.read_text()), True)
+
+    def test_already_on_changes_nothing(self) -> None:
+        on = ES_SETTINGS.replace(
+            '"CustomEventScripts" value="false"', '"CustomEventScripts" value="true"'
+        )
+        self.write_settings(on)
+        before = self.settings.stat()
+        rep, lines = self.provision()
+        self.assertEqual(self.backups(), [])
+        self.assertEqual(self.settings.stat().st_mtime_ns, before.st_mtime_ns)
+        self.assertEqual(rep.warnings, [])
+        self.assertTrue(any("already on" in line for line in lines))
+
+    def test_second_run_writes_nothing(self) -> None:
+        self.write_settings()
+        self.provision()
+        before = self.settings.stat()
+        self.provision()
+        self.assertEqual(len(self.backups()), 1)
+        self.assertEqual(self.settings.stat().st_mtime_ns, before.st_mtime_ns)
+
+    def test_left_alone_while_esde_runs(self) -> None:
+        for comm, argv0 in (("es-de", None), ("AppRun.wrapped", "/x/ES-DE.AppImage")):
+            with self.subTest(comm=comm):
+                shutil.rmtree(self.proc)
+                self.proc.mkdir()
+                self.start_esde(comm, argv0)
+                self.write_settings() if not self.settings.exists() else None
+                rep, _ = self.provision()
+                self.assertEqual(self.settings.read_text(), ES_SETTINGS)
+                self.assertEqual(self.backups(), [])
+                (warning,) = rep.warnings
+                self.assertIn("quit ES-DE", warning)
+                self.assertIn("provision device deck", warning)
+                self.assertTrue(self.script.exists())  # the script itself is still installed
+
+    def test_without_proc_it_is_left_alone_and_says_why(self) -> None:
+        self.write_settings()
+        rep, _ = self.provision(proc=self.proc / "missing")
+        self.assertEqual(self.settings.read_text(), ES_SETTINGS)
+        (warning,) = rep.warnings
+        self.assertIn("cannot tell whether ES-DE is running", warning)
+
+    def test_a_missing_settings_file_is_warned_and_never_created(self) -> None:
+        rep, _ = self.provision()
+        self.assertFalse(self.settings.exists())
+        self.assertFalse(self.settings.parent.exists())
+        (warning,) = rep.warnings
+        self.assertIn("start ES-DE once", warning)
+
+    def test_a_file_that_does_not_parse_is_left_alone(self) -> None:
+        self.write_settings("<bool name=")
+        rep, _ = self.provision()
+        self.assertEqual(self.settings.read_text(), "<bool name=")
+        self.assertEqual(self.backups(), [])
+        (warning,) = rep.warnings
+        self.assertIn("Enable custom event scripts", warning)
+
+    def test_a_file_that_is_not_utf8_is_left_alone(self) -> None:
+        self.settings.parent.mkdir(parents=True)
+        self.settings.write_bytes(b"\xff\xfe<bool")
+        rep, _ = self.provision()
+        self.assertEqual(self.settings.read_bytes(), b"\xff\xfe<bool")
+        self.assertEqual(len(rep.warnings), 1)
+
+    def test_a_file_that_changes_during_the_edit_is_not_overwritten(self) -> None:
+        self.write_settings()
+        with mock.patch("warpzone.provision.settings_state.atomic_write", return_value=False):
+            rep, _ = self.provision()
+        self.assertEqual(self.settings.read_text(), ES_SETTINGS)
+        (warning,) = rep.warnings
+        self.assertIn("changed while", warning)
+
+    def test_esde_started_just_before_the_write_stops_the_edit(self) -> None:
+        self.write_settings()
+        real = provision_mod.settings_state.backup
+
+        def backup_then_start(*args, **kw):
+            result = real(*args, **kw)
+            self.start_esde()
+            return result
+
+        with mock.patch("warpzone.provision.settings_state.backup", backup_then_start):
+            rep, _ = self.provision()
+        self.assertEqual(self.settings.read_text(), ES_SETTINGS)
+        self.assertIn("quit ES-DE", rep.warnings[0])
 
 
 class ExpandHomeTests(unittest.TestCase):

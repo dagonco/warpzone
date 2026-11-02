@@ -216,6 +216,44 @@ class ModelTests(unittest.TestCase):
         hub = hub_specs(self.cfg, self.profiles)
         self.assertFalse([s for s in hub if s.id.startswith("wz-bios-")])
 
+    def settings_cfg(self):
+        data = config_data()
+        data["devices"]["deck"]["folders"] = ["library", "settings"]
+        return parse_config(data)
+
+    def test_settings_folder_is_two_way_with_the_atomic_write_ignore(self) -> None:
+        device = self.by_id(device_specs(self.settings_cfg(), "deck", self.profile))["wz-settings"]
+        self.assertEqual(device.type, "sendreceive")
+        self.assertEqual(device.path, "~/.local/share/warpzone/settings")
+        self.assertEqual(device.ignores, ignores.inline(("*.wz-tmp",)))
+        self.assertEqual(device.ignores[-1], "*.wz-tmp")
+        self.assertEqual(device.versioning, {"type": ""})
+        self.assertFalse(device.skip_if_missing)  # warpzone creates the folder
+        self.assertIsNone(device.bootstrap_ignores)
+        self.assertEqual(device.required_files, ())
+        self.assertIsNone(device.rescan_interval_s)
+
+    def test_settings_folder_on_the_hub_keeps_30_days_of_history(self) -> None:
+        specs = self.by_id(hub_specs(self.settings_cfg(), self.profiles))
+        hub = specs["wz-settings"]
+        self.assertEqual(hub.path, "/data/games/settings")
+        self.assertEqual(hub.type, "sendreceive")
+        self.assertEqual(hub.devices, (DECK_ID,))
+        self.assertEqual(hub.ignores, ignores.inline(("*.wz-tmp",)))
+        self.assertEqual(
+            hub.versioning, {"type": "staggered", "params": {"maxAge": str(30 * 86400)}}
+        )
+
+    def test_settings_group_needs_the_profile_path(self) -> None:
+        bare = Profile("steamos-emudeck", "", {"library": "~/x"}, {})
+        with self.assertRaises(ModelError) as ctx:
+            device_specs(self.settings_cfg(), "deck", bare)
+        self.assertIn("paths.settings", str(ctx.exception))
+
+    def test_devices_without_the_settings_group_get_no_settings_folder(self) -> None:
+        self.assertNotIn("wz-settings", self.by_id(device_specs(self.cfg, "deck", self.profile)))
+        self.assertNotIn("wz-settings", self.by_id(hub_specs(self.cfg, self.profiles)))
+
     def test_hub_root_slash(self) -> None:
         cfg = dataclasses.replace(self.cfg, hub=dataclasses.replace(self.cfg.hub, root="/"))
         self.assertEqual(self.by_id(hub_specs(cfg, self.profiles))["wz-library"].path, "/library")

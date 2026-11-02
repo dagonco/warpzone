@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ## [Unreleased]
 
+### Added
+
+- Emulator settings layer. The hub keeps key-level layers (`settings/common.toml`, `settings/<device>.toml`) in a new two-way folder `wz-settings` that a device joins with the `settings` group, and the `steamos-emudeck` profile declares the settings files of eleven emulators (Eden, RetroArch, DuckStation, PCSX2, Dolphin, Azahar, melonDS, PPSSPP, Vita3K, xemu, Ryujinx). `warpzone settings capture` takes a setting changed in an emulator's own interface to the layers (`--seed` fills them from a console that is already configured), `warpzone settings apply` writes the layers into the emulators' files and `warpzone settings audit` reports the drift. Apply never writes while the emulator runs, never overwrites a change that was not captured (unless `--overwrite-local`), changes only the layered keys, backs up each file first and touches nothing when a layer is invalid. Logins never reach the hub. See [docs/settings.md](docs/settings.md).
+- `provision device` installs an ES-DE startup script that runs `settings apply`, and turns on ES-DE's custom event scripts when ES-DE is closed. `warpzone doctor` checks the layers, the script and the last apply.
+
 ### Fixed
 
 - Syncthing as a flatpak (SyncThingy) cannot see other apps' `~/.var/app/<app>` folders, so the RetroArch, Dolphin, PPSSPP, PrimeHack and Flycast save folders looked empty to it and synced nothing. `provision device` now adds the missing `flatpak override --user --filesystem=~/.var/app/<app>` for each of them (idempotent, reported in `--dry-run`) and asks for a Syncthing restart. `warpzone doctor` checks the overrides and prints the command for each missing one.

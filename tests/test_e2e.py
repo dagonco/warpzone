@@ -194,6 +194,8 @@ class EndToEndTests(unittest.TestCase):
         self.write(library / "bios/cemu/keys.txt", "fake keys, not real")
         self.write(library / "bios/cemu/other.txt", "never delivered")
         self.write(library / "bios/ryujinx/keys/prod.keys", "fake keys, not real")
+        # Emulator settings: a layer the hub already holds.
+        self.write(root / "settings/common.toml", COMMON_LAYER)
 
         self.home = self.base / "home"
         saves = self.home / ".var/app/org.libretro.RetroArch/config/retroarch/saves"
@@ -220,7 +222,7 @@ addresses = ["{self.hub.address}"]
 [devices.deck]
 device_id = "{deck_id}"
 profile = "steamos-emudeck"
-folders = ["library", "saves", "bios"]
+folders = ["library", "saves", "bios", "settings"]
 addresses = ["{self.deck.address}"]
 rescan_seconds = 10
 """
@@ -296,7 +298,23 @@ rescan_seconds = 10
         wait_for(hub_save.exists, "save to reach the hub")
         self.assertEqual(hub_save.read_text(), "save data")
 
+        self.settings_scenario(root)
+
         self.wz("status", *cfg)
+
+    def settings_scenario(self, root: Path) -> None:
+        """The settings folder is two-way: a hub layer reaches the device and a capture the hub."""
+        folder = self.home / ".local/share/warpzone/settings"
+        wait_for(lambda: (folder / "common.toml").exists(), "the common layer on the device")
+        self.assertEqual((folder / "common.toml").read_text(), COMMON_LAYER)
+        wait_for(lambda: self.settled(self.deck, "wz-settings"), "the settings folder to settle")
+        self.assertEqual(list(folder.glob("*.wz-tmp")), [])
+
+        # What `settings capture` writes on a device (its own layer) reaches the hub.
+        self.write(folder / "deck.toml", DEVICE_LAYER)
+        hub_layer = root / "settings/deck.toml"
+        wait_for(hub_layer.exists, "the device layer to reach the hub")
+        self.assertEqual(hub_layer.read_text(), DEVICE_LAYER)
 
     def bios_scenario(self, emulation: Path, cemu: Path, keys_target: Path) -> None:
         """A placement delivers into the emulator's own folder, the library stays out of it."""
@@ -378,6 +396,19 @@ rescan_seconds = 10
         st = inst.client().db_status(folder)
         need = st.get("needTotalItems", st.get("needFiles", 0))
         return st.get("state") == "idle" and need == 0 and st.get("globalFiles", 0) > 0
+
+
+COMMON_LAYER = """format = 1
+
+[retroarch.cfg]
+savestate_auto_save = "true"
+"""
+
+DEVICE_LAYER = """format = 1
+
+[retroarch.cfg]
+video_fullscreen = "true"
+"""
 
 
 def library_file(library: Path, which: str) -> Path:

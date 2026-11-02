@@ -13,7 +13,7 @@ from typing import Any
 # freshly synced whitelist file does not trigger one reliably (see design.md).
 DEFAULT_RESCAN_SECONDS = 300
 MIN_RESCAN_SECONDS = 5
-FOLDER_GROUPS = ("library", "songs", "tools", "saves", "frontend", "bios")
+FOLDER_GROUPS = ("library", "songs", "tools", "saves", "frontend", "bios", "settings")
 _DEVICE_ID_RE = re.compile(r"^[A-Z2-7]{7}(-[A-Z2-7]{7}){7}$")
 _NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 
@@ -90,6 +90,13 @@ class Config:
     hub: Hub
     devices: dict[str, Device]
     inbox: InboxSettings = field(default_factory=InboxSettings)
+
+
+# Defaults of the command line, kept here so that building the parser imports no command.
+DEFAULT_WAIT_SECONDS = 600.0  # `provision device`: how long to wait for the whitelists
+HUB_WAIT_SECONDS = 120.0  # `provision hub`: how long a new folder waits for its whitelists
+DEFAULT_MAX_GIB = 50.0  # `prune`: the most it deletes in one run
+DEFAULT_RESCAN_TIMEOUT = 600.0  # `prune`: how long it waits for the rescan
 
 
 def default_config_path(env: dict[str, str] | None = None) -> Path:

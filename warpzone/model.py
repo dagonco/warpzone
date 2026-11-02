@@ -75,6 +75,8 @@ class _Def:
     whitelist: bool = False
     fixed_ignores: tuple[str, ...] = ()
     save: bool = False
+    # The hub keeps 30 days of history of this folder, as for save folders.
+    history: bool = False
     skip_if_missing: bool = False
     create_when: str | None = None
 
@@ -95,6 +97,19 @@ _STATIC: dict[str, tuple[_Def, ...]] = {
             "sendreceive",
             "esde",
             fixed_ignores=("!/gamelists", "!/collections", "*"),
+        ),
+    ),
+    # Layers captured on a device travel to the hub, so the folder is two-way; `*.wz-tmp`
+    # is the temporary file of an atomic write.
+    "settings": (
+        _Def(
+            "wz-settings",
+            "settings",
+            "sendreceive",
+            "sendreceive",
+            "settings",
+            fixed_ignores=("*.wz-tmp",),
+            history=True,
         ),
     ),
 }
@@ -144,7 +159,7 @@ def _defs_for(device: Device, profile: Profile) -> list[_Def]:
 
 
 def _versioning(item: _Def, *, hub: bool) -> dict[str, Any]:
-    return dict(STAGGERED if (hub and item.save) else NO_VERSIONING)
+    return dict(STAGGERED if (hub and (item.save or item.history)) else NO_VERSIONING)
 
 
 def device_specs(cfg: Config, device_name: str, profile: Profile) -> list[FolderSpec]:

@@ -206,6 +206,130 @@ class ProfileTests(unittest.TestCase):
         self.assert_invalid({**base, "library": {"x": 1}}, "library: unknown key")
         self.assert_invalid({**base, "library": []}, "`library` must be a table")
 
+    def test_settings_default_to_empty_and_the_path_key_is_known(self) -> None:
+        profile = load_profile("steamos-emudeck")
+        self.assertEqual(profile.paths["settings"], "~/.local/share/warpzone/settings")
+        self.assertEqual(parse_profile({"name": "p"}, "t").settings, {})
+
+    def test_valid_settings_table(self) -> None:
+        parsed = parse_profile(
+            {
+                "name": "p",
+                "settings": {
+                    "emu-1": {
+                        "process": ["emu", "emu-bin"],
+                        "verify": True,
+                        "files": {
+                            "main": {
+                                "path": "~/.config/emu/main.ini",
+                                "format": "qt-ini",
+                                "noise": ["[A]*"],
+                                "secret": ["*_token"],
+                                "device": ["[B]size"],
+                                "known": ["[C]lang"],
+                            },
+                            "opt": {
+                                "path": "~/.config/emu/{name}/{name}.opt",
+                                "format": "retroarch-cfg",
+                                "create": True,
+                            },
+                        },
+                        "data": {
+                            "eeprom": {"path": "~/d/eeprom.bin", "create_when": "~/d"},
+                            "plain": {"path": "~/d/plain.bin"},
+                        },
+                    },
+                    "minimal": {"process": ["m"]},
+                },
+            },
+            "t",
+        )
+        emu = parsed.settings["emu-1"]
+        self.assertEqual((emu.id, emu.process, emu.verify), ("emu-1", ("emu", "emu-bin"), True))
+        main, opt = emu.files["main"], emu.files["opt"]
+        self.assertEqual((main.id, main.format, main.create), ("main", "qt-ini", False))
+        self.assertEqual(main.noise, ("[A]*",))
+        self.assertEqual(main.secret, ("*_token",))
+        self.assertEqual(main.device, ("[B]size",))
+        self.assertEqual(main.known, ("[C]lang",))
+        self.assertFalse(main.templated)
+        self.assertTrue(opt.templated)
+        self.assertTrue(opt.create)
+        self.assertEqual(opt.noise, ())
+        self.assertEqual(emu.data["eeprom"].create_when, "~/d")
+        self.assertIsNone(emu.data["plain"].create_when)
+        minimal = parsed.settings["minimal"]
+        self.assertEqual((minimal.files, minimal.data, minimal.verify), ({}, {}, False))
+
+    def test_settings_validation(self) -> None:
+        def prof(emu: dict | None = None, **top: object) -> dict:
+            return {
+                "name": "p",
+                "settings": {"e": emu if emu is not None else {"process": ["e"]}},
+                **top,
+            }
+
+        def with_file(**file: object) -> dict:
+            base = {"path": "~/f.ini", "format": "ini"}
+            return prof({"process": ["e"], "files": {"f": {**base, **file}}})
+
+        def with_data(**data: object) -> dict:
+            return prof({"process": ["e"], "data": {"d": {"path": "~/d", **data}}})
+
+        self.assert_invalid({"name": "p", "settings": []}, "`settings` must be a table")
+        self.assert_invalid(
+            prof({"process": ["e"]}) | {"settings": {"E": {"process": ["e"]}}}, "emulator id"
+        )
+        self.assert_invalid(
+            prof({"process": ["e"]}) | {"settings": {"a_b": {"process": ["e"]}}}, "emulator id"
+        )
+        self.assert_invalid({"name": "p", "settings": {"e": []}}, "settings.e: must be a table")
+        self.assert_invalid(prof({"process": ["e"], "foo": 1}), "settings.e: unknown key 'foo'")
+        for process in (None, [], "e", [""], [1], ["e", ""]):
+            bad = {} if process is None else {"process": process}
+            self.assert_invalid(prof(bad), "settings.e.process")
+        self.assert_invalid(prof({"process": ["e"], "verify": "yes"}), "settings.e.verify")
+        self.assert_invalid(prof({"process": ["e"], "files": []}), "settings.e.files")
+        self.assert_invalid(prof({"process": ["e"], "files": {"F": {}}}), "file id")
+        self.assert_invalid(prof({"process": ["e"], "files": {"a:b": {}}}), "file id")
+        self.assert_invalid(
+            prof({"process": ["e"], "files": {"data": {"path": "~/f.ini", "format": "ini"}}}),
+            "file id 'data' is reserved",
+        )
+        self.assert_invalid(
+            prof({"process": ["e"], "files": {"f": []}}), "settings.e.files.f: must be a table"
+        )
+        self.assert_invalid(with_file(foo=1), "settings.e.files.f: unknown key 'foo'")
+        self.assert_invalid(with_file(path=""), "settings.e.files.f.path")
+        self.assert_invalid(with_file(path=3), "settings.e.files.f.path")
+        for fmt in ("yaml", "INI", "", None, 3):
+            self.assert_invalid(with_file(format=fmt), "settings.e.files.f.format")
+        for fmt in ("ini", "qt-ini", "retroarch-cfg", "yaml-flat", "json", "toml"):
+            parse_profile(with_file(format=fmt), "t")
+        self.assert_invalid(with_file(create="yes"), "settings.e.files.f.create")
+        for name in ("noise", "secret", "device", "known"):
+            self.assert_invalid(with_file(**{name: "x"}), f"settings.e.files.f.{name}")
+            self.assert_invalid(with_file(**{name: ["x", 1]}), f"settings.e.files.f.{name}")
+        # A templated path needs {name} in its directory part, and only that placeholder.
+        self.assert_invalid(with_file(path="~/c/{name}.ini"), "directory part")
+        self.assert_invalid(with_file(path="{name}"), "directory part")
+        self.assert_invalid(with_file(path="~/{other}/f.ini"), "only placeholder")
+        self.assert_invalid(with_file(path="~/{name}/{x}.ini"), "only placeholder")
+        self.assert_invalid(with_file(path="~/{name/f.ini"), "only placeholder")
+        parse_profile(with_file(path="~/c/{name}/f.ini"), "t")
+        parse_profile(with_file(path="~/c/{name}/{name}.ini"), "t")
+        self.assert_invalid(prof({"process": ["e"], "data": []}), "settings.e.data")
+        self.assert_invalid(prof({"process": ["e"], "data": {"D": {}}}), "data id")
+        self.assert_invalid(
+            prof({"process": ["e"], "data": {"d": []}}), "settings.e.data.d: must be a table"
+        )
+        self.assert_invalid(with_data(foo=1), "settings.e.data.d: unknown key 'foo'")
+        self.assert_invalid(with_data(path=""), "settings.e.data.d.path")
+        self.assert_invalid(with_data(path="~/{name}/d.bin"), "cannot be templated")
+        self.assert_invalid(with_data(create_when=""), "settings.e.data.d.create_when")
+        self.assert_invalid(with_data(create_when=3), "settings.e.data.d.create_when")
+        parse_profile(with_data(create_when="~/x"), "t")
+
     def test_file_name_must_match(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "other.toml"

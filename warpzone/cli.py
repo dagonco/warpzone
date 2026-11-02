@@ -8,22 +8,29 @@ import sys
 import urllib.parse
 from collections.abc import Sequence
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-from warpzone import __version__, bios, doctor, inbox, localst, model, provision, prune, ra
-from warpzone.bios import BiosError
+from warpzone import __version__, localst, model, settings, settings_state
 from warpzone.config import (
+    DEFAULT_MAX_GIB,
+    DEFAULT_RESCAN_TIMEOUT,
+    DEFAULT_WAIT_SECONDS,
+    HUB_WAIT_SECONDS,
     Config,
     ConfigError,
     default_config_path,
     load_config,
     load_inbox_settings,
 )
-from warpzone.inbox import InboxError
 from warpzone.model import ModelError
 from warpzone.profiles import Profile, ProfileError, available_profiles, load_profile
-from warpzone.provision import ProvisionError, Reporter
-from warpzone.prune import PruneError
-from warpzone.syncthing import Client, SyncthingError
+
+# Everything that talks to the network (provision, prune, doctor, the inbox, the Syncthing
+# client) is imported inside the command that needs it, so `settings apply`, which ES-DE runs
+# at every start, loads none of it (see "Speed" in docs/design.md).
+if TYPE_CHECKING:
+    from warpzone.provision import Reporter
+    from warpzone.syncthing import Client
 
 EXIT_OK, EXIT_RUNTIME, EXIT_USAGE = 0, 1, 2
 
@@ -67,7 +74,7 @@ def _build_parser() -> argparse.ArgumentParser:
     hub.add_argument(
         "--timeout",
         type=float,
-        default=provision.HUB_WAIT_SECONDS,
+        default=HUB_WAIT_SECONDS,
         help="seconds a new whitelisted folder waits for its whitelists to be indexed "
         "before the full scan starts (default: %(default)s)",
     )
@@ -81,7 +88,7 @@ def _build_parser() -> argparse.ArgumentParser:
     dev.add_argument(
         "--timeout",
         type=float,
-        default=provision.DEFAULT_WAIT_SECONDS,
+        default=DEFAULT_WAIT_SECONDS,
         help="seconds to wait for the whitelists to arrive (default: %(default)s)",
     )
 
@@ -100,7 +107,7 @@ def _build_parser() -> argparse.ArgumentParser:
     pr.add_argument(
         "--max-gib",
         type=float,
-        default=prune.DEFAULT_MAX_GIB,
+        default=DEFAULT_MAX_GIB,
         help="refuse to delete more than this in one run (default: %(default)s)",
     )
     pr.add_argument("--force", action="store_true", help="ignore --max-gib")
@@ -113,7 +120,7 @@ def _build_parser() -> argparse.ArgumentParser:
     pr.add_argument(
         "--timeout",
         type=float,
-        default=prune.DEFAULT_RESCAN_TIMEOUT,
+        default=DEFAULT_RESCAN_TIMEOUT,
         help="seconds to wait for the rescan (default: %(default)s)",
     )
 
@@ -169,6 +176,95 @@ def _build_parser() -> argparse.ArgumentParser:
         "else the system temp folder)",
     )
 
+    st_dry_run = argparse.ArgumentParser(add_help=False)
+    st_dry_run.add_argument(
+        "--dry-run", action="store_true", help="print what it would do and change nothing"
+    )
+    st = sub.add_parser(
+        "settings", help="emulator settings: apply the layers, capture changes, audit drift"
+    )
+    st_sub = st.add_subparsers(dest="settings_command", required=True, metavar="action")
+    st_common = argparse.ArgumentParser(add_help=False)
+    st_common.add_argument(
+        "--device", metavar="NAME", help="device name (default: the one matching local Syncthing)"
+    )
+    st_common.add_argument(
+        "--emulator",
+        nargs="+",
+        action="extend",
+        metavar="ID",
+        default=[],
+        help="only these emulators (default: all)",
+    )
+    st_apply = st_sub.add_parser(
+        "apply",
+        parents=[common, st_common, st_dry_run],
+        help="write the layered keys into the emulators' files (never while one runs)",
+    )
+    st_apply.add_argument("--quiet", action="store_true", help="print nothing")
+    st_apply.add_argument(
+        "--overwrite-local",
+        action="store_true",
+        help="also write keys changed in an emulator and not captured yet",
+    )
+    st_capture = st_sub.add_parser(
+        "capture",
+        parents=[common, st_common, st_dry_run],
+        help="take settings changed in an emulator's own interface to the layers on the hub",
+    )
+    st_capture.add_argument(
+        "--syncthing-config", type=Path, help="local Syncthing config.xml or its folder"
+    )
+    st_capture.add_argument(
+        "--seed",
+        action="store_true",
+        help="also propose the known keys (and --key ones) of files with no baseline yet",
+    )
+    st_capture.add_argument(
+        "--key",
+        nargs="+",
+        action="extend",
+        metavar="PATTERN",
+        default=[],
+        help="with --seed, also propose keys matching <emulator>/<file>/<key>",
+    )
+    st_capture.add_argument(
+        "--include-new", action="store_true", help="also propose keys new to a file"
+    )
+    st_capture.add_argument(
+        "--yes", action="store_true", help="without a terminal, take every pre-selection"
+    )
+    for flag, what in (("to-common", "common"), ("to-device", "this device's layer")):
+        st_capture.add_argument(
+            f"--{flag}",
+            nargs="+",
+            action="extend",
+            metavar="PATTERN",
+            default=[],
+            help=f"without a terminal, send matching <emulator>/<file>/<key> to {what}",
+        )
+    st_capture.add_argument(
+        "--discard",
+        nargs="+",
+        action="extend",
+        metavar="PATTERN",
+        default=[],
+        help="without a terminal, discard matching keys (the layer value returns at apply)",
+    )
+    st_capture.add_argument(
+        "--offline",
+        action="store_true",
+        help="do not ask Syncthing whether wz-settings is up to date",
+    )
+    st_audit = st_sub.add_parser(
+        "audit",
+        parents=[common, st_common],
+        help="report drift between the layers and the files (read only)",
+    )
+    st_audit.add_argument(
+        "--all", action="store_true", dest="all_keys", help="also list keys in sync"
+    )
+
     sub.add_parser(
         "doctor",
         parents=[common],
@@ -212,8 +308,14 @@ def _eprint(message: str) -> None:
     print(message, file=sys.stderr)
 
 
+def _client(base_url: str, api_key: str, *, label: str, dry_run: bool = False) -> Client:
+    from warpzone.syncthing import Client
+
+    return Client(base_url, api_key, label=label, dry_run=dry_run)
+
+
 def _hub_client(cfg: Config, *, dry_run: bool = False) -> Client:
-    return Client(cfg.hub.api_url, cfg.hub.api_key, label="hub", dry_run=dry_run)
+    return _client(cfg.hub.api_url, cfg.hub.api_key, label="hub", dry_run=dry_run)
 
 
 def _config_path(args: argparse.Namespace) -> Path:
@@ -221,6 +323,9 @@ def _config_path(args: argparse.Namespace) -> Path:
 
 
 def _bios(args: argparse.Namespace, rep: Reporter) -> int:
+    from warpzone import bios
+    from warpzone.bios import BiosError
+
     manifest = bios.load_manifest()
     overrides = bios.load_overrides(
         args.overrides or bios.default_overrides_path(_config_path(args)),
@@ -247,6 +352,9 @@ def _bios(args: argparse.Namespace, rep: Reporter) -> int:
 
 
 def _inbox(args: argparse.Namespace, rep: Reporter) -> int:
+    from warpzone import inbox, ra
+    from warpzone.inbox import InboxError
+
     settings = load_inbox_settings(_config_path(args))
     root = args.root or (Path(settings.root) if settings.root else None)
     dats = args.dats or (Path(settings.dats_dir) if settings.dats_dir else None)
@@ -272,7 +380,60 @@ def _inbox(args: argparse.Namespace, rep: Reporter) -> int:
     return EXIT_RUNTIME if inbox.run_inbox(options, rep) else EXIT_OK
 
 
+def _settings(args: argparse.Namespace, cfg: Config, profiles: dict[str, Profile]) -> int:
+    capturing = args.settings_command == "capture"
+    if capturing and args.key and not args.seed:
+        raise ConfigError("--key only works together with --seed")
+    if args.device:
+        name = _device(cfg, args.device)
+    client: Client | None = None
+    if not args.device or (capturing and not args.offline):
+        local = localst.parse_config(localst.find_config(getattr(args, "syncthing_config", None)))
+        client = _client(local.base_url, local.api_key, label="local")
+    if not args.device:
+        assert client is not None
+        name = _this_device(cfg, client)
+    ctx = settings.make_context(
+        name,
+        profiles[cfg.devices[name].profile],
+        settings.Env(Path.home(), settings_state.state_dir()),
+    )
+    if args.settings_command == "audit":
+        return settings.audit(ctx, emulators=args.emulator, all_keys=args.all_keys)
+    if capturing:
+        return settings.capture(
+            ctx,
+            None if args.offline else client,
+            emulators=args.emulator,
+            seed=args.seed,
+            key=args.key,
+            include_new=args.include_new,
+            yes=args.yes,
+            to_common=args.to_common,
+            to_device=args.to_device,
+            discard=args.discard,
+            offline=args.offline,
+            dry_run=args.dry_run,
+            out=print,
+            err=_eprint,
+        )
+    return settings.apply(
+        ctx,
+        emulators=args.emulator,
+        dry_run=args.dry_run,
+        quiet=args.quiet,
+        overwrite_local=args.overwrite_local,
+        out=print,
+        err=_eprint,
+    )
+
+
 def _run(args: argparse.Namespace) -> int:
+    if args.command == "settings":  # the apply path: no network code
+        return _settings(args, *_load(args))
+    from warpzone import doctor, provision, prune
+    from warpzone.provision import Reporter
+
     rep = Reporter(print, warn_sink=_eprint)
     if args.command == "doctor":  # offline, read-only, needs no valid config
         return doctor.run_doctor(doctor.Probes(config_path=_config_path(args)), rep.out)
@@ -309,13 +470,13 @@ def _run(args: argparse.Namespace) -> int:
             local = localst.parse_config(localst.find_config())
         except localst.LocalSyncthingError:
             return EXIT_OK  # no Syncthing on this machine: hub status is enough
-        client = Client(local.base_url, local.api_key, label="local")
+        client = _client(local.base_url, local.api_key, label="local")
         provision.folder_status(client, "this machine", rep)
         return EXIT_OK
 
     if args.command == "prune":
         local = localst.parse_config(localst.find_config(args.syncthing_config))
-        client = Client(local.base_url, local.api_key, label="local")
+        client = _client(local.base_url, local.api_key, label="local")
         name = args.name or _this_device(cfg, client)
         problems = prune.prune_device(
             cfg,
@@ -345,7 +506,7 @@ def _run(args: argparse.Namespace) -> int:
 
     name = _device(cfg, args.name)
     local = localst.parse_config(localst.find_config(args.syncthing_config))
-    client = Client(local.base_url, local.api_key, label="local", dry_run=args.dry_run)
+    client = _client(local.base_url, local.api_key, label="local", dry_run=args.dry_run)
     provision.provision_device(
         cfg,
         name,
@@ -356,8 +517,24 @@ def _run(args: argparse.Namespace) -> int:
         home=Path.home(),
         wait_timeout=args.timeout,
         syncthing_config=local.config_path,
+        config_path=_config_path(args),
     )
     return EXIT_OK
+
+
+def _late_error_code(exc: Exception) -> int | None:
+    """Exit code for an error of a module that is imported on demand, None for any other."""
+    from warpzone.bios import BiosError
+    from warpzone.inbox import InboxError
+    from warpzone.provision import ProvisionError
+    from warpzone.prune import PruneError
+    from warpzone.syncthing import SyncthingError
+
+    if isinstance(exc, (BiosError, InboxError)):
+        return EXIT_USAGE
+    if isinstance(exc, (SyncthingError, ProvisionError, PruneError)):
+        return EXIT_RUNTIME
+    return None
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -366,13 +543,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _run(args)
     except (ConfigError, ProfileError, ModelError) as exc:
         _eprint(f"warpzone: config error: {exc}")
+        if args.command == "settings" and args.settings_command == "apply" and not args.dry_run:
+            settings.record_refused_apply(settings_state.state_dir(), EXIT_USAGE)
         return EXIT_USAGE
-    except (BiosError, InboxError) as exc:
-        _eprint(f"warpzone: error: {exc}")
-        return EXIT_USAGE
-    except (SyncthingError, ProvisionError, PruneError, localst.LocalSyncthingError) as exc:
+    except (localst.LocalSyncthingError, settings.SettingsError) as exc:
         _eprint(f"warpzone: error: {exc}")
         return EXIT_RUNTIME
+    except Exception as exc:
+        code = _late_error_code(exc)  # the errors of the modules imported on demand
+        if code is None:
+            raise
+        _eprint(f"warpzone: error: {exc}")
+        return code
     except KeyboardInterrupt:
         _eprint("warpzone: interrupted")
         return 130

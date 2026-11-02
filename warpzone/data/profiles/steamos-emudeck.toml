@@ -7,6 +7,7 @@ songs = "~/Songs"
 tools = "~/.local/share/warpzone/tools"
 media = "~/Emulation/tools/downloaded_media"
 esde = "~/ES-DE"
+settings = "~/.local/share/warpzone/settings"
 
 # Paths in the library folder that the device never receives from the hub, whatever
 # its whitelist says. These lines go ahead of the whitelist. The folders that the
@@ -186,3 +187,548 @@ hub = "bios/cemu"
 # Cemu reads keys.txt only from its user data folder.
 path = "~/.local/share/Cemu"
 ignore = ["!/keys.txt", "*"]
+
+# Emulator settings: the files whose keys `warpzone settings` layers across devices.
+# A key is common unless it is listed under `device`. Patterns match the canonical key
+# (see docs/design.md, "Format handlers"): `*` is any run of characters, `?` one, and
+# `[` is literal. Lists are written in TOML literal strings so a Qt `\` needs no escape.
+#   noise   never proposed by `capture` (window state, recent files, input and paths).
+#   secret  logins and tokens: never captured, applied, snapshotted or logged.
+#   device  pre-selected for the device layer (resolution, docked mode, device name).
+#   known   proposed by `capture --seed` as settings meant to be shared.
+# `verify = true`: a process name or path not yet confirmed on a device.
+#
+# Files that hold only a login (Dolphin's RetroAchievements.ini, PPSSPP's achievements
+# token) are deliberately not declared.
+
+# Eden (Switch). Qt settings: a stored value is ignored while its `key\default`
+# companion says true; the qt-ini handler writes the companion when it writes a key.
+[settings.eden]
+process = ["eden", "Eden.AppImage"]
+[settings.eden.files.qt-config]
+path = "~/.config/eden/qt-config.ini"
+format = "qt-ini"
+noise = [
+  '[Controls]*',
+  '[Data%20Storage]*',
+  '[Debugging]*',
+  '[DisabledAddOns]*',
+  '[Multiplayer]*',
+  '[Miscellaneous]*',
+  '[Audio]*_device',
+  '[Renderer]vulkan_device',
+  '[Services]network_interface',
+  '[System]rng_seed*',
+  '[System]custom_rtc*',
+  '[UI]UILayout\*',
+  '[UI]UIGameList\*',
+  '[UI]Paths\gamedirs*',
+  '[UI]Paths\recentFiles',
+  '[UI]Paths\romsPath',
+  '[UI]Paths\symbolsPath',
+  '[UI]Paths\external_content_dirs*',
+  '[UI]Shortcuts\*',
+  '[UI]Screenshots\*',
+  '[UI]Multiplayer\*',
+  '[UI]firstStart',
+  '[UI]calloutFlags',
+  '[UI]fullscreen',
+  '[UI]show*Bar',
+  '[UI]showConsole',
+  '[Renderer]renderdoc_hotkey',
+  '[WebService]web_api_url',
+]
+secret = ['[WebService]*_token', '[WebService]*_username']
+device = [
+  '[System]device_name',
+  '[System]use_docked_mode',
+  '[Renderer]resolution_setup',
+  '[Renderer]max_anisotropy',
+  '[Renderer]scaling_filter',
+  '[Renderer]anti_aliasing',
+  '[Renderer]fsr_sharpening_slider',
+  '[Renderer]fullscreen_mode',
+]
+known = [
+  '[System]language_index',
+  '[System]region_index',
+  '[System]time_zone_index',
+  '[UI]Paths\language',
+  '[Renderer]backend',
+  '[Renderer]gpu_accuracy',
+  '[Renderer]use_asynchronous_shaders',
+]
+
+# RetroArch (Flatpak). `cfg` is retroarch.cfg; `opt` is one file per core, with the core's
+# name in the path and in the file id: `opt:Flycast`, `opt:Mupen64Plus-Next`. The core
+# options are named by each core, so the lists below are patterns over the common spellings.
+# `create = true`: a core that was never opened has no .opt file, but its layered options
+# must still be there when it first starts.
+[settings.retroarch]
+process = ["retroarch"]
+[settings.retroarch.files.cfg]
+path = "~/.var/app/org.libretro.RetroArch/config/retroarch/retroarch.cfg"
+format = "retroarch-cfg"
+noise = [
+  '*_directory',
+  '*_path',
+  '*_dir',
+  'input_*',
+  'joypad_*',
+  'video_window_*',
+  'video_fullscreen_x',
+  'video_fullscreen_y',
+  'video_monitor_index',
+  'current_resolution_id',
+  'audio_device',
+  'camera_device',
+  'midi_*',
+  'libretro_*',
+  'log_*',
+  'cloud_sync_*',
+  'discord_*',
+  'test_input_file_*',
+  'bundle_assets_*',
+  'ai_service_url',
+  'video_driver',
+  'video_context_driver',
+  'video_windowed_position_*',
+  'video_fullscreen',
+  'video_windowed_fullscreen',
+  'video_stream_*',
+  'video_record_*',
+  'custom_viewport_*',
+  'crt_*',
+  'audio_driver',
+  'microphone_device',
+  'vulkan_gpu_index',
+  'screen_brightness',
+  'screen_orientation',
+  'app_icon',
+  'netplay_ip_*',
+  'netplay_*mitm_server',
+  'cheevos_custom_host',
+]
+secret = [
+  'cheevos_username',
+  'cheevos_password',
+  'cheevos_token',
+  'netplay_password',
+  'netplay_spectate_password',
+  'webdav_*',
+  'kiosk_mode_password',
+  'content_show_settings_password',
+  '*_stream_key',
+]
+device = [
+  'run_ahead_*',
+  'preemptive_frames_enable',
+  'video_refresh_rate',
+  'video_scale',
+]
+known = [
+  'user_language',
+  'netplay_nickname',
+  'cheevos_enable',
+  'cheevos_hardcore_mode_enable',
+  'savestate_auto_save',
+  'savestate_auto_load',
+  'rewind_enable',
+]
+[settings.retroarch.files.opt]
+path = "~/.var/app/org.libretro.RetroArch/config/retroarch/config/{name}/{name}.opt"
+format = "retroarch-cfg"
+create = true
+# No core option file was in the inventory the lists were checked against, so these are
+# the cores' own spellings from their documentation; Flycast's `reicast_*` is the one the
+# trial settled on (per-game VMUs keep each game's memory card in the saves folder).
+device = ['*internal_resolution*', '*resolution*', '*upscal*']
+known = ['reicast_region', 'reicast_language', 'reicast_per_content_vmus']
+
+# DuckStation.
+[settings.duckstation]
+process = ["duckstation-qt", "DuckStation.AppImage"]
+[settings.duckstation.files.settings]
+path = "~/.local/share/duckstation/settings.ini"
+format = "ini"
+noise = [
+  '[UI]*',
+  '[Folders]*',
+  '[GameList]*',
+  '[Logging]*',
+  '[Pad*]*',
+  '[Hotkeys]*',
+  '[InputSources]*',
+  '[ControllerPorts]*',
+  '[Debug]*',
+  '[BIOS]SearchDirectory',
+  '[MemoryCards]Directory',
+  '[Main]SettingsVersion',
+  '[GPU]Adapter',
+  '[Audio]OutputDevice',
+  '[Audio]Driver',
+  '[Cheevos]AvatarURL',
+  '[Cheevos]LoginTimestamp',
+]
+secret = ['[Cheevos]Username', '[Cheevos]Token']
+device = ['[GPU]ResolutionScale', '[GPU]Multisamples', '[Main]RunaheadFrameCount']
+known = [
+  '[Main]Language',
+  '[Console]Region',
+  '[GPU]PGXPEnable',
+  '[GPU]TextureFilter',
+  '[Cheevos]Enabled',
+  '[Cheevos]ChallengeMode',
+]
+
+# PCSX2. Some keys appear twice in a section (`[Folders]SaveStates`); the ini handler
+# reports a duplicated key as not writable, and the whole `[Folders]` section is noise.
+[settings.pcsx2]
+process = ["pcsx2-qt", "pcsx2-Qt.AppImage"]
+[settings.pcsx2.files.ini]
+path = "~/.config/PCSX2/inis/PCSX2.ini"
+format = "ini"
+noise = [
+  '[Folders]*',
+  '[Pad*]*',
+  '[Hotkeys]*',
+  '[InputSources]*',
+  '[USB*]*',
+  '[GameList]*',
+  '[GameListTableView]*',
+  '[Logging]*',
+  '[Debugger/*]*',
+  '[EmuCore/TraceLog]*',
+  '[EmuCore/Profiler]*',
+  '[DEV9/*]*',
+  '[UI]*Geometry',
+  '[UI]*State',
+  '[UI]SettingsVersion',
+  '[Achievements]LoginTimestamp',
+  '[Filenames]BIOS',
+  '[EmuCore/GS]Adapter',
+  '[EmuCore/GS]*Directory',
+  '[EmuCore/GS]OsdFontPath',
+  '[EmuCore]BlockDumpSaveDirectory',
+  '[EmuCore]ManuallySetRealTimeClock',
+  '[EmuCore]Rtc*',
+  '[SPU2/Output]DriverName',
+  '[SPU2/Output]DeviceName',
+  '[UI]SetupWizardIncomplete',
+]
+secret = ['[Achievements]Username', '[Achievements]Token']
+device = ['[EmuCore/GS]upscale_multiplier', '[EmuCore/GS]MaxAnisotropy']
+known = [
+  '[UI]Language',
+  '[EmuCore]EnableWideScreenPatches',
+  '[EmuCore/GS]Renderer',
+  '[Achievements]Enabled',
+  '[Achievements]ChallengeMode',
+]
+
+# Dolphin (Flatpak). The GameCube language is `[Core]SelectedLanguage`, the interface
+# language `[Interface]LanguageCode`. The achievements login lives in a file of its own
+# that is not declared.
+[settings.dolphin]
+process = ["dolphin-emu"]
+[settings.dolphin.files.dolphin]
+path = "~/.var/app/org.DolphinEmu.dolphin-emu/config/dolphin-emu/Dolphin.ini"
+format = "ini"
+noise = [
+  '[Analytics]*',
+  '[General]ISOPath*',
+  '[General]RecursiveISOPaths',
+  '[BluetoothPassthrough]*',
+  '[Core]SIDevice*',
+  '[Core]Wiimote*',
+  '[Input]*',
+  '[SDL_Hints]*',
+  '[Display]*',
+  '[NetPlay]*',
+]
+known = [
+  '[Interface]LanguageCode',
+  '[Core]SelectedLanguage',
+  '[Core]FallbackRegion',
+  '[Core]OverrideRegionSettings',
+  '[Core]GFXBackend',
+]
+[settings.dolphin.files.gfx]
+path = "~/.var/app/org.DolphinEmu.dolphin-emu/config/dolphin-emu/GFX.ini"
+format = "ini"
+device = [
+  '[Settings]InternalResolution',
+  '[Enhancements]MaxAnisotropy',
+  '[Settings]MSAA',
+  '[Settings]SSAA',
+]
+known = [
+  '[Settings]ShaderCompilationMode',
+  '[Settings]wideScreenHack',
+  '[Settings]AspectRatio',
+]
+
+# Azahar (3DS). Same Qt settings format as Eden. The system configuration (language,
+# region, user name, birthday) is not in this file; it is the `sysdata-config` data file.
+[settings.azahar]
+process = ["azahar", "azahar-qt", "azahar.AppImage"]
+[settings.azahar.files.qt-config]
+path = "~/.config/azahar-emu/qt-config.ini"
+format = "qt-ini"
+noise = [
+  '[Controls]*',
+  '[Camera]*',
+  '[Data%20Storage]*',
+  '[Debugging]*',
+  '[Miscellaneous]*',
+  '[VideoDumping]*',
+  '[Renderer]physical_device',
+  '[Audio]*_device',
+  '[UI]UILayout\*',
+  '[UI]GameList\*',
+  '[UI]Paths\*',
+  '[UI]Shortcuts\*',
+  '[UI]Multiplayer\*',
+  '[UI]firstStart',
+  '[UI]calloutFlags',
+  '[UI]fullscreen',
+  '[UI]show*Bar',
+  '[UI]showConsole',
+  '[System]init_*',
+  '[WebService]web_api_url',
+]
+secret = [
+  '[WebService]*_token',
+  '[WebService]*_username',
+  '[WebService]network_token',
+]
+device = [
+  '[Renderer]resolution_factor',
+  '[Layout]layout_option',
+  '[Layout]swap_screen',
+  '[Layout]large_screen_proportion',
+  '[Layout]small_screen_position',
+  '[Layout]custom_*',
+  '[Layout]screen_*',
+  '[Layout]upright_screen',
+  '[Layout]layouts_to_cycle',
+  '[UI]resolution_factor',
+]
+known = [
+  '[System]region_value',
+  '[Renderer]graphics_api',
+  '[Renderer]use_disk_shader_cache',
+]
+[settings.azahar.data.sysdata-config]
+path = "~/Emulation/storage/azahar/nand/data/00000000000000000000000000000000/sysdata/00010017/00000000/config"
+create_when = "~/Emulation/storage/azahar/nand"
+
+# melonDS (Flatpak).
+# `Instance0.Firmware.Username` is the DS nickname, not a login, so it is common.
+[settings.melonds]
+process = ["melonDS"]
+[settings.melonds.files.config]
+path = "~/.var/app/net.kuribo64.melonDS/config/melonDS/melonDS.toml"
+format = "toml"
+noise = [
+  'LastBIOSFolder',
+  'LastROMFolder',
+  'Instance0.Keyboard.*',
+  'Instance0.Joystick.*',
+  'Instance0.JoystickID',
+  'Instance0.Window*.Geometry',
+  'Instance0.*Path',
+  'Instance0.Gdb*',
+  'Instance0.RTC.*',
+  'DS.*Path',
+  'DSi.*Path',
+  'DSi.Camera*',
+  'DSi.SD.*',
+  'DLDI.*',
+  'Mic.*',
+  'RecentROM',
+  'Instance0.Window*.Enabled',
+]
+device = [
+  '3D.Renderer',
+  '3D.GL.ScaleFactor',
+  'Instance0.Window0.Screen*',
+  'Instance0.Firmware.MAC',
+  'Instance0.Window0.IntegerScaling',
+  'Screen.UseGL',
+]
+known = [
+  'Instance0.Firmware.Username',
+  'Instance0.Firmware.Language',
+  'Instance0.Firmware.BirthdayMonth',
+  'Instance0.Firmware.BirthdayDay',
+  'Instance0.Firmware.FavouriteColour',
+  'Instance0.Firmware.Message',
+  'Instance0.Firmware.OverrideSettings',
+]
+
+# PPSSPP (Flatpak). The file starts with a UTF-8 BOM, which the ini handler keeps.
+[settings.ppsspp]
+process = ["PPSSPPSDL", "PPSSPPQt"]
+[settings.ppsspp.files.ini]
+path = "~/.var/app/org.ppsspp.PPSSPP/config/ppsspp/PSP/SYSTEM/ppsspp.ini"
+format = "ini"
+noise = [
+  '[General]FirstRun',
+  '[General]RunCount',
+  '[General]CurrentDirectory',
+  '[General]*ScrollPosition',
+  '[Recent]*',
+  '[PlayTime]*',
+  '[Debugger]*',
+  '[Log]*',
+  '[Upgrade]*',
+  '[Control]*',
+  '[TouchControls.*]*',
+  '[GestureControls.*]*',
+  '[Graphics]VulkanDevice',
+  '[Graphics]FailedGraphicsBackends',
+  '[Graphics]DisabledGraphicsBackends',
+  '[Graphics]CameraDevice',
+  '[Sound]AudioDevice',
+  '[SystemParam]MacAddress',
+  '[General]Window*',
+  '[General]LastRemote*',
+  '[General]GridView*',
+]
+secret = ['[Achievements]AchievementsUserName', '[Network]InfrastructureUsername']
+device = [
+  '[Graphics]InternalResolution',
+  '[Graphics]AnisotropyLevel',
+  '[DisplayLayout.*]*',
+  '[Graphics]FullScreen',
+  '[Graphics]FullScreenMulti',
+]
+known = [
+  '[General]Language',
+  '[SystemParam]NickName',
+  '[SystemParam]Language',
+  '[SystemParam]ButtonPreference',
+  '[Graphics]GraphicsBackend',
+  '[Achievements]AchievementsEnable',
+  '[Achievements]AchievementsChallengeMode',
+]
+
+# Vita3K. A flat YAML file; the handler reads only top-level `key: scalar` lines. Its
+# user must be user 00, the one the saves sync (`vita3k-saves`): the user's name,
+# avatar and settings are the `user-00` data file.
+[settings.vita3k]
+process = ["Vita3K"]
+[settings.vita3k.files.config]
+path = "~/.config/Vita3K/config.yml"
+format = "yaml-flat"
+noise = [
+  'keyboard-*',
+  'controller-*',
+  'pref-path',
+  'gpu-idx',
+  'custom-driver-name',
+  'initial-setup',
+  'show-welcome',
+  'warn-missing-firmware',
+  'check-for-updates-mode',
+  'front-camera-*',
+  'back-camera-*',
+  'adhoc-addr',
+  'psn-signed-in',
+  'discord-rich-presence',
+  'log-*',
+  'gdbstub',
+  'apps-list-grid',
+  'validation-layer',
+  'tracy-*',
+  'wait-for-debugger',
+  'color-surface-debug',
+  'lle-modules',
+  'user-auto-connect',
+]
+device = ['resolution-multiplier', 'anisotropic-filtering', 'screen-filter']
+known = [
+  'sys-lang',
+  'sys-button',
+  'sys-date-format',
+  'sys-time-format',
+  'user-id',
+  'user-lang',
+  'backend-renderer',
+]
+[settings.vita3k.data.user-00]
+path = "~/Emulation/storage/Vita3K/ux0/user/00/user.xml"
+create_when = "~/Emulation/storage/Vita3K/ux0/user/00"
+
+# xemu (Flatpak). `input.gamepad_mappings` spans several lines and is not writable.
+# The EEPROM holds the Xbox language and video mode (and the console's identity).
+[settings.xemu]
+process = ["xemu"]
+[settings.xemu.files.config]
+path = "~/.var/app/app.xemu.xemu/data/xemu/xemu/xemu.toml"
+format = "toml"
+noise = ['general.last_viewed_menu_index', 'general.show_welcome', 'input.*', 'sys.files.*']
+device = ['display.quality.surface_scale']
+known = ['sys.mem_limit']
+[settings.xemu.data.eeprom]
+path = "~/Emulation/storage/xemu/eeprom.bin"
+create_when = "~/Emulation/storage/xemu"
+
+# Ryujinx. A JSON file; hotkeys and window state are noise, and a key with an array
+# value is not writable.
+[settings.ryujinx]
+process = ["Ryujinx"]
+[settings.ryujinx.files.config]
+path = "~/.config/Ryujinx/Config.json"
+format = "json"
+noise = [
+  'version',
+  'window_startup.*',
+  'gui_columns.*',
+  'column_sort.*',
+  'shown_file_types.*',
+  'hotkeys.*',
+  'preferred_gpu',
+  'system_time_offset',
+  'logging_*',
+  'enable_file_log',
+  'graphics_shaders_dump_path',
+  'multiplayer_lan_interface_id',
+  'grid_size',
+  'application_sort',
+  'is_ascending_order',
+  'game_list_view_mode',
+  'show_names',
+  'enable_gdb_stub',
+  'gdb_stub_port',
+  'debugger_suspend_on_start',
+  'game_dirs',
+  'autoload_dirs',
+  'input_config',
+  'player_input_assignments',
+  'ldn_server',
+  'remember_window_state',
+  'show_title_bar',
+  'start_fullscreen',
+  'start_no_ui',
+  'show_console',
+]
+secret = ['multiplayer_ldn_passphrase']
+device = [
+  'docked_mode',
+  'res_scale',
+  'res_scale_custom',
+  'max_anisotropy',
+  'scaling_filter',
+  'scaling_filter_level',
+  'anti_aliasing',
+]
+known = [
+  'system_language',
+  'system_region',
+  'system_time_zone',
+  'language_code',
+  'graphics_backend',
+  'enable_vsync',
+]

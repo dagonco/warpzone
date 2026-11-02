@@ -106,6 +106,12 @@ Because the keys now live in the emulators' folders, `warpzone bios` on a device
 
 xemu's disk image (`xbox_hdd.qcow2`, which holds that console's Xbox saves) is deliberately not synced: it is per device.
 
+## Emulator settings
+
+The profile also declares the settings files of eleven emulators (language, region, graphics options), so a choice made on one console can reach the others. See [settings.md](settings.md).
+
+One caveat belongs here. The xemu EEPROM is shared as a whole file, which gives every console the same Xbox serial number and signing key. A console that already had its own EEPROM may reject saves signed with the old key that sit inside its own xemu HDD image (which stays per device, as above). Leave the EEPROM out at capture if that matters ([settings.md](settings.md#the-xbox-eeprom-caveat)).
+
 ## Manual steps
 
 These are done once per device, by hand.

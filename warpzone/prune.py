@@ -25,15 +25,13 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from warpzone.config import Config
+from warpzone.config import DEFAULT_MAX_GIB, DEFAULT_RESCAN_TIMEOUT, Config
 from warpzone.model import FolderSpec, device_specs
 from warpzone.profiles import Profile
 from warpzone.provision import Reporter, expand_home, in_sync
 from warpzone.syncthing import Client, SyncthingError, scrub
 
 GIB = 1024**3
-DEFAULT_MAX_GIB = 50.0
-DEFAULT_RESCAN_TIMEOUT = 600.0
 # The hub's modification time is restored on the device when a file is pulled; FAT
 # stores seconds in steps of two, hence the tolerance.
 MTIME_TOLERANCE_S = 2.0

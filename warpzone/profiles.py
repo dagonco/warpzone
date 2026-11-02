@@ -10,13 +10,17 @@ from importlib import resources
 from pathlib import Path
 from typing import Any
 
-PATH_KEYS = ("library", "songs", "tools", "media", "esde")
+PATH_KEYS = ("library", "songs", "tools", "media", "esde", "settings")
+# The handlers of the settings layer (`settings_formats.handler`); keep in step.
+SETTINGS_FORMATS = ("ini", "qt-ini", "retroarch-cfg", "yaml-flat", "json", "toml")
 _NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 # `<emu>-<kind>`: both halves are single words so the hub path stays unambiguous.
 _SAVE_KEY_RE = re.compile(r"^([a-z0-9]+)-([a-z0-9]+)$")
 # A path below the hub's library folder: plain names only, so it can be written as
 # an ignore line (`/<path>`) without any pattern character in it.
 _HUB_PATH_RE = re.compile(r"^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$")
+# Emulator, file and data ids of the settings layer.
+_ID_RE = re.compile(r"^[a-z0-9-]+$")
 
 
 class ProfileError(Exception):
@@ -54,6 +58,43 @@ class BiosPlacement:
 
 
 @dataclass(frozen=True)
+class SettingsFile:
+    """One settings file of an emulator, or a template for several (`{name}` in the path)."""
+
+    id: str
+    path: str
+    format: str
+    create: bool = False
+    noise: tuple[str, ...] = ()
+    secret: tuple[str, ...] = ()
+    device: tuple[str, ...] = ()
+    known: tuple[str, ...] = ()
+
+    @property
+    def templated(self) -> bool:
+        return "{name}" in self.path
+
+
+@dataclass(frozen=True)
+class DataFile:
+    """A system data file synced whole, the same on every device."""
+
+    id: str
+    path: str
+    create_when: str | None = None
+
+
+@dataclass(frozen=True)
+class EmulatorSettings:
+    id: str
+    process: tuple[str, ...]
+    files: dict[str, SettingsFile] = field(default_factory=dict)
+    data: dict[str, DataFile] = field(default_factory=dict)
+    # True when a path or process name is a best guess not confirmed on a device.
+    verify: bool = False
+
+
+@dataclass(frozen=True)
 class Profile:
     name: str
     description: str
@@ -63,6 +104,7 @@ class Profile:
     # per-device data and symlinks that EmuDeck creates.
     library_ignore: tuple[str, ...] = ()
     bios: dict[str, BiosPlacement] = field(default_factory=dict)
+    settings: dict[str, EmulatorSettings] = field(default_factory=dict)
 
     def placement_ignores(self) -> tuple[str, ...]:
         """The anchored library paths that placements deliver instead of the library."""
@@ -79,7 +121,7 @@ def parse_profile(data: dict[str, Any], source: str) -> Profile:
     def err(msg: str) -> None:
         errors.append(f"{source}: {msg}")
 
-    allowed = {"name", "description", "paths", "saves", "library", "bios"}
+    allowed = {"name", "description", "paths", "saves", "library", "bios", "settings"}
     for key in sorted(set(data) - allowed):
         err(f"unknown key {key!r}")
 
@@ -132,10 +174,11 @@ def parse_profile(data: dict[str, Any], source: str) -> Profile:
 
     library_ignore = _parse_library(data.get("library", {}), err)
     bios = _parse_bios(data.get("bios", {}), err)
+    settings = _parse_settings(data.get("settings", {}), err)
 
     if errors:
         raise ProfileError("\n".join(errors))
-    return Profile(name, description, paths, saves, library_ignore, bios)
+    return Profile(name, description, paths, saves, library_ignore, bios, settings)
 
 
 def _parse_library(raw: Any, err: Callable[[str], None]) -> tuple[str, ...]:
@@ -199,6 +242,164 @@ def _parse_bios(raw: Any, err: Callable[[str], None]) -> dict[str, BiosPlacement
             if inner == outer or inner.startswith(outer + "/"):
                 err(f"bios.{inner_key}.hub: overlaps bios.{outer_key}.hub")
     return placements
+
+
+def _string_list(raw: Any) -> bool:
+    return isinstance(raw, list) and all(isinstance(i, str) for i in raw)
+
+
+def _parse_settings(raw: Any, err: Callable[[str], None]) -> dict[str, EmulatorSettings]:
+    result: dict[str, EmulatorSettings] = {}
+    if not isinstance(raw, dict):
+        err("`settings` must be a table")
+        return result
+    for emu, entry in raw.items():
+        where = f"settings.{emu}"
+        if not _ID_RE.match(emu):
+            err(f"{where}: emulator id must be lowercase letters, digits and hyphens")
+            continue
+        if not isinstance(entry, dict):
+            err(f"{where}: must be a table")
+            continue
+        for extra in sorted(set(entry) - {"process", "files", "data", "verify"}):
+            err(f"{where}: unknown key {extra!r}")
+        ok = True
+        process = entry.get("process")
+        if (
+            not isinstance(process, list)
+            or not process
+            or not all(isinstance(p, str) and p for p in process)
+        ):
+            err(f"{where}.process: required, a non-empty list of non-empty strings")
+            ok = False
+        verify = entry.get("verify", False)
+        if not isinstance(verify, bool):
+            err(f"{where}.verify: must be true or false")
+            ok = False
+        files, files_ok = _parse_settings_files(entry.get("files", {}), where, err)
+        data, data_ok = _parse_settings_data(entry.get("data", {}), where, err)
+        if ok and files_ok and data_ok:
+            result[emu] = EmulatorSettings(emu, tuple(process), files, data, verify)
+    return result
+
+
+def _parse_settings_files(
+    raw: Any, where: str, err: Callable[[str], None]
+) -> tuple[dict[str, SettingsFile], bool]:
+    files: dict[str, SettingsFile] = {}
+    if not isinstance(raw, dict):
+        err(f"{where}.files: must be a table")
+        return files, False
+    all_ok = True
+    for fid, entry in raw.items():
+        at = f"{where}.files.{fid}"
+        if not _ID_RE.match(fid):
+            err(f"{at}: file id must be lowercase letters, digits and hyphens")
+            all_ok = False
+            continue
+        if fid == "data":
+            # The device state keeps data-file hashes under this name.
+            err(f"{at}: file id 'data' is reserved")
+            all_ok = False
+            continue
+        if not isinstance(entry, dict):
+            err(f"{at}: must be a table")
+            all_ok = False
+            continue
+        known = {"path", "format", "create", "noise", "secret", "device", "known"}
+        for extra in sorted(set(entry) - known):
+            err(f"{at}: unknown key {extra!r}")
+            all_ok = False
+        ok = True
+        path = entry.get("path")
+        if not isinstance(path, str) or not path:
+            err(f"{at}.path: must be a non-empty string")
+            ok = False
+        else:
+            problem = _template_problem(path)
+            if problem:
+                err(f"{at}.path: {problem}")
+                ok = False
+        fmt = entry.get("format")
+        if fmt not in SETTINGS_FORMATS:
+            err(f"{at}.format: must be one of {', '.join(SETTINGS_FORMATS)}")
+            ok = False
+        create = entry.get("create", False)
+        if not isinstance(create, bool):
+            err(f"{at}.create: must be true or false")
+            ok = False
+        lists: dict[str, tuple[str, ...]] = {}
+        for name in ("noise", "secret", "device", "known"):
+            value = entry.get(name, [])
+            if not _string_list(value):
+                err(f"{at}.{name}: must be a list of strings")
+                ok = False
+            else:
+                lists[name] = tuple(value)
+        if ok:
+            files[fid] = SettingsFile(
+                fid,
+                path,
+                fmt,
+                create,
+                lists["noise"],
+                lists["secret"],
+                lists["device"],
+                lists["known"],
+            )
+        else:
+            all_ok = False
+    return files, all_ok
+
+
+def _template_problem(path: str) -> str | None:
+    """Why a settings path is not a valid plain or `{name}` path, else None."""
+    rest = path.replace("{name}", "")
+    if "{" in rest or "}" in rest:
+        return "the only placeholder allowed is {name}"
+    if "{name}" in path and "{name}" not in path.rpartition("/")[0]:
+        return "{name} must appear in the directory part of the path"
+    return None
+
+
+def _parse_settings_data(
+    raw: Any, where: str, err: Callable[[str], None]
+) -> tuple[dict[str, DataFile], bool]:
+    data: dict[str, DataFile] = {}
+    if not isinstance(raw, dict):
+        err(f"{where}.data: must be a table")
+        return data, False
+    all_ok = True
+    for did, entry in raw.items():
+        at = f"{where}.data.{did}"
+        if not _ID_RE.match(did):
+            err(f"{at}: data id must be lowercase letters, digits and hyphens")
+            all_ok = False
+            continue
+        if not isinstance(entry, dict):
+            err(f"{at}: must be a table")
+            all_ok = False
+            continue
+        for extra in sorted(set(entry) - {"path", "create_when"}):
+            err(f"{at}: unknown key {extra!r}")
+            all_ok = False
+        ok = True
+        path = entry.get("path")
+        if not isinstance(path, str) or not path:
+            err(f"{at}.path: must be a non-empty string")
+            ok = False
+        elif "{" in path or "}" in path:
+            err(f"{at}.path: a data file cannot be templated")
+            ok = False
+        create_when = entry.get("create_when")
+        if create_when is not None and (not isinstance(create_when, str) or not create_when):
+            err(f"{at}.create_when: must be a non-empty string")
+            ok = False
+        if ok:
+            data[did] = DataFile(did, path, create_when)
+        else:
+            all_ok = False
+    return data, all_ok
 
 
 def load_profile_file(path: Path) -> Profile:
