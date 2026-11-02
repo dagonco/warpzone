@@ -1160,6 +1160,7 @@ def judge_systems_override(
     source_path: str,
     override_path: str,
     prefix: str,
+    renames: Mapping[str, str] | None = None,
     target: str,
 ) -> tuple[str, str, str]:
     """Verdict on the frontend's system list copy (`None`: the file is absent)."""
@@ -1178,7 +1179,7 @@ def judge_systems_override(
             "not the library",
             fix,
         )
-    if not frontend.systems_current(source, override, prefix, target):
+    if not frontend.systems_current(source, override, prefix, target, renames):
         return (
             WARN,
             f"{override_path} is out of date: it no longer matches {source_path} with the "
@@ -1365,6 +1366,7 @@ def check_frontend(ctx: Context) -> list[Result]:
             source_path=str(source),
             override_path=str(override),
             prefix=rule.prefix,
+            renames=rule.renames,
             target=f"{library}/roms/",
         )
         results.append(Result("ES systems override", G_FRONTEND, *verdict))

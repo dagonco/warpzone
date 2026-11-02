@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 import tomllib
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from importlib import resources
 from pathlib import Path
@@ -112,6 +112,7 @@ class EsSystems:
     override: str
     prefix: str
     process: tuple[str, ...]
+    renames: Mapping[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -267,7 +268,7 @@ def _parse_es_systems(raw: Any, has_library: bool, err: Callable[[str], None]) -
     if not isinstance(raw, dict):
         err("`es_systems` must be a table")
         return None
-    extras = sorted(set(raw) - {"source", "override", "prefix", "process"})
+    extras = sorted(set(raw) - {"source", "override", "prefix", "process", "rename"})
     for extra in extras:
         err(f"es_systems.{extra}: unknown key")
     problems = len(extras)
@@ -287,7 +288,15 @@ def _parse_es_systems(raw: Any, has_library: bool, err: Callable[[str], None]) -
         problems += 1
     if problems:
         return None
-    return EsSystems(raw["source"], raw["override"], raw["prefix"], tuple(raw["process"]))
+    renames = raw.get("rename", {})
+    if not isinstance(renames, dict) or not all(
+        isinstance(k, str) and k and isinstance(v, str) and v for k, v in renames.items()
+    ):
+        err("es_systems.rename: must map folder names to folder names")
+        return None
+    return EsSystems(
+        raw["source"], raw["override"], raw["prefix"], tuple(raw["process"]), dict(renames)
+    )
 
 
 def _parse_retroarch(

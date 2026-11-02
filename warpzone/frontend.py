@@ -17,12 +17,15 @@ from warpzone import settings_formats
 LIBRARY_PLACEHOLDER = "{library}"
 
 
-def rewrite_system_paths(text: str, prefix: str, target: str) -> str:
+def rewrite_system_paths(
+    text: str, prefix: str, target: str, renames: Mapping[str, str] | None = None
+) -> str:
     """`text` with every `<path>` element that starts with `prefix` moved below `target`.
 
     Only the start of the element's text changes, so every other byte is kept, line endings
     included. An element that is already below `target` is left alone, which makes the rule
-    safe to apply to its own output (`/roms/` and `/roms/library/roms/` overlap).
+    safe to apply to its own output (`/roms/` and `/roms/library/roms/` overlap). `renames`
+    maps a system folder of the list to the name the hub uses for it.
     """
     pattern = re.compile(r"(<path>\s*)" + re.escape(prefix))
 
@@ -32,12 +35,23 @@ def rewrite_system_paths(text: str, prefix: str, target: str) -> str:
             return match.group(0)
         return match.group(1) + target
 
-    return pattern.sub(move, text)
+    moved = pattern.sub(move, text)
+    for old, new in (renames or {}).items():
+        moved = moved.replace(f"{target}{old}/", f"{target}{new}/")
+    return moved
 
 
-def systems_current(source: str, override: str | None, prefix: str, target: str) -> bool:
+def systems_current(
+    source: str,
+    override: str | None,
+    prefix: str,
+    target: str,
+    renames: Mapping[str, str] | None = None,
+) -> bool:
     """Whether `override` is exactly what the rule makes of `source`."""
-    return override is not None and override == rewrite_system_paths(source, prefix, target)
+    return override is not None and override == rewrite_system_paths(
+        source, prefix, target, renames
+    )
 
 
 @dataclass(frozen=True)

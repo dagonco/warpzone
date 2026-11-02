@@ -30,6 +30,15 @@ TARGET = "/roms/library/roms/"
 
 
 class RewriteTests(unittest.TestCase):
+    def test_renames_a_system_folder_the_hub_calls_differently(self) -> None:
+        src = "<path>/roms/pokemonmini/</path>\n<path>/roms/gb/</path>\n"
+        renames = {"pokemonmini": "pokemini"}
+        out = frontend.rewrite_system_paths(src, PREFIX, TARGET, renames)
+        self.assertIn(f"<path>{TARGET}pokemini/</path>", out)
+        self.assertIn(f"<path>{TARGET}gb/</path>", out)
+        self.assertEqual(frontend.rewrite_system_paths(out, PREFIX, TARGET, renames), out)
+        self.assertTrue(frontend.systems_current(src, out, PREFIX, TARGET, renames))
+
     def test_only_path_elements_below_the_prefix_change(self) -> None:
         out = frontend.rewrite_system_paths(SOURCE, PREFIX, TARGET)
         self.assertEqual(

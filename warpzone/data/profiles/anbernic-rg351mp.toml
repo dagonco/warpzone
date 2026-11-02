@@ -27,6 +27,13 @@ source = "/etc/emulationstation/es_systems.cfg"
 override = "~/.emulationstation/es_systems.cfg"
 prefix = "/roms/"
 process = ["emulationstatio", "emulationstation"]
+# Systems dArkOS and the hub name differently: list folder = hub folder.
+[es_systems.rename]
+pokemonmini = "pokemini"
+segacd = "megacd"
+pico-8 = "pico8"
+coleco = "colecovision"
+atarixegs = "atarixe"
 
 # dArkOS has two RetroArch builds (64-bit and 32-bit), each with its own config. Both
 # take BIOS files from the library and keep saves and save states in the two folders

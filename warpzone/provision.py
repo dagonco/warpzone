@@ -728,7 +728,7 @@ def ensure_systems_override(
     except (OSError, UnicodeDecodeError) as exc:
         rep.warn(f"cannot read the system list {source} ({exc}), so {override} was not written")
         return
-    new = frontend.rewrite_system_paths(text, rule.prefix, target)
+    new = frontend.rewrite_system_paths(text, rule.prefix, target, rule.renames)
     if new == text:
         rep.warn(f"{source} has no <path> below {rule.prefix}, so {override} was not written")
         return
