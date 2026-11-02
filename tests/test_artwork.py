@@ -2,6 +2,7 @@
 
 import dataclasses
 import unittest
+from pathlib import Path
 from xml.etree import ElementTree as ET
 
 from support import config_data, make_config
@@ -56,7 +57,7 @@ class ProfileTests(unittest.TestCase):
         self.assertEqual(art.format, "emulationstation")
         self.assertEqual(art.kinds, ("covers",))
         self.assertEqual(art.systems, "library")
-        self.assertEqual(art.gamelists, "~/.emulationstation/gamelists")
+        self.assertEqual(art.gamelists, artwork.ROMPATH)
         self.assertNotIn("media", PROFILE.paths)  # the artwork folders are not paths.*
 
     def test_the_steam_profile_has_none(self) -> None:
@@ -451,6 +452,39 @@ class RenderTests(unittest.TestCase):
         self.assertFalse(artwork.same_content(self.FMT, built, other))
         self.assertFalse(artwork.same_content(self.FMT, built, "<gameList/>"))
         self.assertFalse(artwork.same_content(self.FMT, built, "not xml"))
+
+
+class RompathGamelistTests(unittest.TestCase):
+    """EmulationStation prefers `<rom folder>/gamelist.xml`, so the generated one goes there."""
+
+    def test_the_gamelist_goes_next_to_the_roms_and_keeps_saved_data(self) -> None:
+        roms = Path("/lib/roms")
+        store = {
+            Path("/es/gamelists/gba/gamelist.xml"): (
+                b"<gameList><game><path>./A.zip</path><name>Alpha</name></game></gameList>"
+            ),
+            roms / "gba/gamelist.xml": (
+                b"<gameList><game><path>./A.zip</path><name>A</name>"
+                b"<favorite>true</favorite></game></gameList>"
+            ),
+            roms / "gba/A.zip": b"x",
+        }
+        files = artwork.Files(
+            read=store.get, is_file=lambda p: p in store, exists=lambda p: p in store
+        )
+        plan = artwork.plan_gamelists(
+            artwork.FORMATS["emulationstation"],
+            ("covers",),
+            artwork.Layout(roms, Path("/m"), Path("/es"), Path(artwork.ROMPATH)),
+            "<systemList><system><name>gba</name><path>/lib/roms/gba/</path></system></systemList>",
+            prefix="/lib/roms/",
+            renames={},
+            hubs=["gba"],
+            files=files,
+        )
+        self.assertEqual([i.path for i in plan.items], [roms / "gba/gamelist.xml"])
+        self.assertIn(b"<favorite>true</favorite>", plan.items[0].data)
+        self.assertIn(b"<name>Alpha</name>", plan.items[0].data)
 
 
 if __name__ == "__main__":

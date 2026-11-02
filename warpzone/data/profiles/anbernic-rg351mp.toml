@@ -61,7 +61,7 @@ path = "~/.config/retroarch/states"
 create_when = "~/.config/retroarch"
 
 # EmulationStation here shows no artwork or descriptions of its own: it reads
-# ~/.emulationstation/gamelists/<system>/gamelist.xml, which nothing writes. The hub's ES-DE
+# <rom folder>/gamelist.xml, where it also saves what the player does. The hub's ES-DE
 # data (scraped gamelists and media, the `frontend` folders) arrives receive-only, limited to
 # the `kinds` below and to the systems that have a folder in the library's `roms/`, so it
 # follows the whitelist without being edited. The folders are outside the library, on the
@@ -77,7 +77,7 @@ kinds = ["covers"]
 systems = "library"
 media = "/roms/warpzone/media"
 metadata = "/roms/warpzone/es-de"
-gamelists = "~/.emulationstation/gamelists"
+gamelists = "{rompath}"
 refresh = "15min"
 
 # Paths in the library folder that the device never receives from the hub. EmulationStation

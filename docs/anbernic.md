@@ -51,7 +51,7 @@ The save layout matches the Steam devices: all `sort_*` options are off on every
 
 ## Artwork
 
-dArkOS's EmulationStation reads `~/.emulationstation/gamelists/<system>/gamelist.xml` for descriptions and images, and nothing writes it. The hub already holds what you scraped with ES-DE (`frontend/es-de/gamelists` and `frontend/media`), so the `frontend` group delivers a slice of it and warpzone converts it. The profile's `[artwork]` table says everything device-specific:
+dArkOS's EmulationStation reads `<rom folder>/gamelist.xml` for descriptions and images, and nothing writes it. The hub already holds what you scraped with ES-DE (`frontend/es-de/gamelists` and `frontend/media`), so the `frontend` group delivers a slice of it and warpzone converts it. The profile's `[artwork]` table says everything device-specific:
 
 | Key | Value here | Meaning |
 |---|---|---|
@@ -59,7 +59,7 @@ dArkOS's EmulationStation reads `~/.emulationstation/gamelists/<system>/gamelist
 | `kinds` | `["covers"]` | Which media kinds arrive. Add `screenshots`, `marquees`... to receive more (and use more space). |
 | `systems` | `library` | The systems that have a folder in `/roms/library/roms`, so it follows your whitelist. |
 | `media`, `metadata` | `/roms/warpzone/media`, `/roms/warpzone/es-de` | Where the hub's `wz-media` and `wz-esde` land, on the card, outside the library. |
-| `gamelists` | `~/.emulationstation/gamelists` | Where the generated gamelists go. |
+| `gamelists` | `{rompath}` | Where the generated gamelists go: next to the ROMs, because EmulationStation saves there and prefers that file. |
 | `refresh` | `15min` | How often the timer looks for new scrapes. |
 
 What happens:

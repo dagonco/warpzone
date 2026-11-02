@@ -313,6 +313,10 @@ def _read(path: Path) -> bytes | None:
 REAL_FILES = Files(_read, Path.is_file, Path.exists)
 
 
+# `[artwork].gamelists` value: the gamelist goes in the ROM folder of each system.
+ROMPATH = "{rompath}"
+
+
 @dataclass(frozen=True)
 class Layout:
     """Where things are on the device, all expanded."""
@@ -390,7 +394,10 @@ def plan_gamelists(
             return str(path) if files.is_file(path) else None
 
         for system in chosen[hub]:
-            path = layout.gamelists / system.name / "gamelist.xml"
+            if str(layout.gamelists) == ROMPATH:
+                path = layout.roms / hub / "gamelist.xml"
+            else:
+                path = layout.gamelists / system.name / "gamelist.xml"
             before = files.read(path)
             try:
                 existing = parse_gamelist(before) if before is not None else []
