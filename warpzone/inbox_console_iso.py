@@ -26,8 +26,8 @@ placed: xemu cannot boot it, so it goes to review with the instruction to conver
 extract-xiso.
 
 How the module hooks into `inbox.py`: `HANDLER` is both a kind handler (it claims items
-whose file names end in `.dec.iso`, `.xiso.iso`, `.xiso`, `.wua` or `.pkg`, in a folder or an archive)
-and an `UnmatchedHandler` (a plain `.iso` that the DATs could not explain is sniffed, and if it
+whose file names end in `.dec.iso`, `.xiso.iso`, `.xiso`, `.wua` or `.pkg`, in a folder or an
+archive) and an `UnmatchedHandler` (a plain `.iso` that the DATs could not explain is sniffed, and if it
 is one of these formats it is placed instead of going to review). PS2, PSP and GameCube
 `.iso` files are therefore untouched: they are matched by the DATs first, and only an
 unmatched `.iso` is ever read for a signature.
