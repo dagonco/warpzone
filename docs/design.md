@@ -458,6 +458,20 @@ overrides. The profile `steamos-emudeck` declares `{library}/roms/ps4/games`.
   value is also derived from each console's own library path, not shared between consoles, so it
   is declared in the profile like the RetroArch paths.
 
+### shadPS4 launch script
+
+`[shadps4.launch]` (`qt_ini`, `versions`, `script`, `find_rules`, `emulator`, all declared by
+the profile) replaces EmuDeck's `shadps4.sh` in ES-DE's find rules without touching that
+script, which EmuDeck rewrites. `shadps4.render_launch_script` is pure: it returns the bash
+text with the two Qt launcher files baked in as quoted absolute paths. The script lives in
+`~/.local/share/warpzone/`, outside `~/ES-DE` (so `wz-esde` never syncs it) and not in the
+Python package (so it runs when warpzone cannot import). `shadps4.point_find_rule` replaces the
+text of the first `staticpath` entry of the named `<emulator>` and verifies that only it
+changed; `provision device` backs the file up, refuses while ES-DE runs and uses an atomic
+write that fails if the file changed meanwhile. `doctor` compares the script with the text
+`provision` would write and reads the rule. The ES-DE startup scripts do not depend on any of
+this: if EmuDeck puts its entry back, only PS4 launching goes back to the Qt launcher.
+
 ### Frontend artwork
 
 A frontend that is not ES-DE shows nothing of what the hub scraped: ES-DE keeps its

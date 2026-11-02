@@ -141,6 +141,22 @@ class RetroArchPins:
 
 
 @dataclass(frozen=True)
+class ShadPS4Launch:
+    """A launch script that starts shadPS4's emulator directly, and the rule that runs it.
+
+    `provision device` writes the bash script to `script` (read `qt_ini` for the version
+    selected in the Qt launcher, `versions` for the installed ones) and points the staticpath
+    entry of `emulator` in ES-DE's `find_rules` at it.
+    """
+
+    qt_ini: str
+    versions: str
+    script: str
+    find_rules: str
+    emulator: str
+
+
+@dataclass(frozen=True)
 class ShadPS4Dirs:
     """Install directories that `provision device` adds to shadPS4's config files.
 
@@ -154,6 +170,7 @@ class ShadPS4Dirs:
     config: tuple[str, ...]
     process: tuple[str, ...]
     install_dirs: tuple[str, ...]
+    launch: ShadPS4Launch | None = None
 
     def wants(self, library: str) -> list[str]:
         return [d.replace("{library}", library) for d in self.install_dirs]
@@ -524,7 +541,7 @@ def _parse_shadps4(raw: Any, has_library: bool, err: Callable[[str], None]) -> S
     if not isinstance(raw, dict):
         err("`shadps4` must be a table")
         return None
-    extras = sorted(set(raw) - {"config", "process", "install_dirs"})
+    extras = sorted(set(raw) - {"config", "process", "install_dirs", "launch"})
     for extra in extras:
         err(f"shadps4.{extra}: unknown key")
     problems = len(extras)
@@ -550,9 +567,37 @@ def _parse_shadps4(raw: Any, has_library: bool, err: Callable[[str], None]) -> S
         elif "{library}" in d and not has_library:
             err(f"shadps4.install_dirs: {d!r} uses {{library}} but there is no paths.library")
             problems += 1
+    launch = None
+    if "launch" in raw:
+        launch = _parse_shadps4_launch(raw["launch"], err)
+        problems += launch is None
     if problems:
         return None
-    return ShadPS4Dirs(tuple(config), tuple(raw["process"]), tuple(dirs))
+    return ShadPS4Dirs(tuple(config), tuple(raw["process"]), tuple(dirs), launch)
+
+
+_LAUNCH_KEYS = ("qt_ini", "versions", "script", "find_rules", "emulator")
+
+
+def _parse_shadps4_launch(raw: Any, err: Callable[[str], None]) -> ShadPS4Launch | None:
+    if not isinstance(raw, dict):
+        err("`shadps4.launch` must be a table")
+        return None
+    problems = 0
+    for extra in sorted(set(raw) - set(_LAUNCH_KEYS)):
+        err(f"shadps4.launch.{extra}: unknown key")
+        problems += 1
+    for key in _LAUNCH_KEYS:
+        value = raw.get(key)
+        if not isinstance(value, str) or not value or '"' in value or "\n" in value:
+            err(f"shadps4.launch.{key}: required, a non-empty string")
+            problems += 1
+        elif key != "emulator" and not value.startswith(("/", "~/")):
+            err(f"shadps4.launch.{key}: {value!r} must be an absolute path or start with ~/")
+            problems += 1
+    if problems:
+        return None
+    return ShadPS4Launch(*(raw[k] for k in _LAUNCH_KEYS))
 
 
 def _parse_library(raw: Any, err: Callable[[str], None]) -> tuple[str, ...]:

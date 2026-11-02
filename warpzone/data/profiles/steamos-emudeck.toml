@@ -208,6 +208,20 @@ config = ["~/.local/share/shadPS4/config.json", "~/.local/share/shadPS4/config.t
 process = ["shadps4", "shadPS4QtLauncher", "Shadps4-qt.AppImage", "Shadps4-sdl.AppImage"]
 install_dirs = ["{library}/roms/ps4/games"]
 
+# EmuDeck's shadps4.sh starts `Shadps4-qt.AppImage -d -g <eboot>`, and that Qt launcher can
+# crash with those arguments while the emulator itself runs the same game fine. EmuDeck
+# rewrites its script, so it is not edited. `provision device` writes `script` instead (it
+# reads the version selected in the Qt launcher and runs its SDL emulator directly) and
+# points the `emulator` entry of ES-DE's find rules at it. EmuDeck can put its own entry back,
+# which `doctor` reports. The script lives outside ~/ES-DE, which only syncs gamelists and
+# collections.
+[shadps4.launch]
+qt_ini = "~/.local/share/shadPS4QtLauncher/qt_ui.ini"
+versions = "~/.local/share/shadPS4QtLauncher/versions.json"
+script = "~/.local/share/warpzone/shadps4-launch.sh"
+find_rules = "~/ES-DE/custom_systems/es_find_rules.xml"
+emulator = "SHADPS4"
+
 # Emulator settings: the files whose keys `warpzone settings` layers across devices.
 # A key is common unless it is listed under `device`. Patterns match the canonical key
 # (see docs/design.md, "Format handlers"): `*` is any run of characters, `?` one, and

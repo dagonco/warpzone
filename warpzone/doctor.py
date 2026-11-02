@@ -1346,6 +1346,45 @@ def judge_shadps4_dirs(
     return _merge(parts)
 
 
+def judge_shadps4_launch(
+    *,
+    device: str,
+    script: str,
+    script_text: str | None,
+    expected: str,
+    executable: bool,
+    rules_path: str,
+    rules_text: str | None,
+    emulator: str,
+) -> tuple[str, str, str]:
+    """Verdict on the shadPS4 launch script and the ES-DE rule that should run it."""
+    again = f"quit ES-DE and run `warpzone provision device {device}`"
+    problems: list[str] = []
+    if script_text is None:
+        problems.append(f"{script} does not exist")
+    elif script_text != expected:
+        problems.append(f"{script} is not the script warpzone writes")
+    elif not executable:
+        problems.append(f"{script} is not executable")
+    if rules_text is None:
+        problems.append(f"{rules_path} does not exist, so ES-DE uses EmuDeck's launcher")
+    else:
+        try:
+            target = shadps4.find_rule_target(rules_text, emulator)
+        except shadps4.ConfigError as exc:
+            problems.append(f"{rules_path}: {exc}")
+        else:
+            if target != script:
+                problems.append(
+                    f"the {emulator} rule in {rules_path} runs {target}, not the launch script "
+                    "(EmuDeck may have rewritten the file), so PS4 games start through the "
+                    "Qt launcher, which can crash"
+                )
+    if problems:
+        return WARN, "; ".join(problems), again
+    return OK, f"ES-DE starts shadPS4 through {script}", ""
+
+
 def judge_last_apply(info: Mapping[str, object] | None, log_path: str) -> tuple[str, str, str]:
     """Verdict on the summary of the last `settings apply` (`None` when there is none)."""
     if info is None:
@@ -1562,6 +1601,20 @@ def check_frontend(ctx: Context) -> list[Result]:
             )
         verdict = judge_shadps4_dirs(device=device.name, files=files, wants=dirs.wants(library))
         results.append(Result("shadPS4 install folder", G_FRONTEND, *verdict))
+        if (launch := dirs.launch) is not None:
+            script, rules = (Path(_expand(x, p.home)) for x in (launch.script, launch.find_rules))
+            qt_ini, versions = (_expand(x, p.home) for x in (launch.qt_ini, launch.versions))
+            verdict = judge_shadps4_launch(
+                device=device.name,
+                script=str(script),
+                script_text=p.read_text(script) if p.is_file(script) else None,
+                expected=shadps4.render_launch_script(qt_ini, versions),
+                executable=p.is_executable(str(script)),
+                rules_path=str(rules),
+                rules_text=p.read_text(rules) if p.is_file(rules) else None,
+                emulator=launch.emulator,
+            )
+            results.append(Result("shadPS4 launcher", G_FRONTEND, *verdict))
     return results
 
 
