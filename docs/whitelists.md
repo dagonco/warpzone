@@ -24,6 +24,8 @@ A whitelist starts with `#include patterns-common.stignore`, lists what the devi
 
 Every device receives every whitelist but applies only its own. Start from [`templates/patterns-common.stignore`](../templates/patterns-common.stignore) and [`templates/patterns-device.example.stignore`](../templates/patterns-device.example.stignore). The same scheme applies to the `songs/` folder for devices that subscribe to it.
 
+Xenia and Model 2 keep their own data inside the system folder, next to the games, which are in its `roms/` subfolder. Name `!/roms/xbox360/roms` and `!/roms/model2/roms` (not `!/roms/xbox360` or `!/roms/model2`) and the emulator data stays on the device. See [emudeck.md](emudeck.md#xenia-and-model-2-live-inside-roms).
+
 Folders without a whitelist (tools, media, saves, ES-DE) get their fixed ignore lines directly through the API; they need no files.
 
 ## When an edit takes effect
