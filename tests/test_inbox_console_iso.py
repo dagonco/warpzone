@@ -9,6 +9,7 @@ from console_iso_support import (
     XGD2,
     XGD3,
     ps3_iso,
+    ps4_pkg,
     sfo,
     write_xdvdfs,
     xdvdfs_dir,
@@ -45,6 +46,24 @@ class PureTests(unittest.TestCase):
         self.assertEqual(ci.destination(ci.XBOX360), "xbox360/roms")
         self.assertEqual(ci.destination(ci.WIIU), "wiiu/roms")
         self.assertIsNone(ci.destination(ci.XBOX_REDUMP))
+
+    def test_ps4_pkg_header(self) -> None:
+        found = ci.detect_pkg(io.BytesIO(ps4_pkg()))
+        self.assertEqual(found, ci.Detected(ci.PS4, "CUSA07934"))
+        assert found
+        self.assertEqual(found.describe(), "PS4 package: CUSA07934")
+        self.assertEqual(ci.destination(ci.PS4), "ps4")
+
+    def test_a_bad_ps4_pkg_header_is_not_recognised(self) -> None:
+        for data in (
+            b"",
+            ps4_pkg()[:0x50],
+            ps4_pkg(magic=b"\x7fPKG"),  # PS3
+            ps4_pkg("not a content id"),
+            ps4_pkg("EP9000-CUSA0793_00-SCES503610000001"),
+            ps4_pkg("EP9000-NPUB07934_00-SCES503610000001"),
+        ):
+            self.assertIsNone(ci.detect_pkg(io.BytesIO(data)))
 
     def test_zarchive_footer(self) -> None:
         found = ci.detect_wua(io.BytesIO(zarchive()))
@@ -244,6 +263,34 @@ class PlacementTests(FlowBase):
         self.assertFalse(self.gamelist.exists())
         self.assertEqual(self.review(), [])
 
+    def test_ps4_pkg_goes_to_ps4(self) -> None:
+        name = "Jak and Daxter The Precursor Legacy EU-CUSA07934.pkg"
+        data = ps4_pkg()
+        self.drop(name, data)
+        self.assertEqual(self.go(), 0, self.out)
+        self.assertEqual(self.library(), [f"ps4/{name}"])
+        self.assertEqual((self.roms / "ps4" / name).read_bytes(), data)
+        self.assertIn("detected: PS4 package: CUSA07934", self.out)
+        self.assertIn(whitelist_line("ps4", name), self.out)
+        self.assertEqual(self.review(), [])
+
+    def test_a_ps3_pkg_stays_unsupported(self) -> None:
+        self.drop("Old.pkg", ps4_pkg(magic=b"\x7fPKG"))
+        self.assertEqual(self.go(), 1, self.out)
+        self.assertIn("not supported by inbox yet (PS3", self.reason("Old.pkg"))
+        self.assertEqual(self.library(), [])
+
+    def test_a_pkg_with_a_bad_content_id_goes_to_review(self) -> None:
+        self.drop("Odd.pkg", ps4_pkg("garbage"))
+        self.assertEqual(self.go(), 1, self.out)
+        self.assertEqual(self.library(), [])
+
+    def test_a_ps4_pkg_inside_a_zip(self) -> None:
+        data = ps4_pkg()
+        self.zip_of("pack.zip", {"sub/Game-CUSA07934.pkg": data, "Notes.txt": b"hi"})
+        self.assertEqual(self.go(), 0, self.out)
+        self.assertEqual((self.roms / "ps4" / "Game-CUSA07934.pkg").read_bytes(), data)
+
     def test_report_only_changes_nothing(self) -> None:
         self.drop(PS3_NAME, ps3_iso())
         self.assertEqual(self.go(apply=False), 0, self.out)
@@ -385,6 +432,7 @@ class ClaimingTests(FlowBase):
         self.assertTrue(self.claims(self.drop("b.xiso.iso", b"x")))
         self.assertTrue(self.claims(self.drop("c.xiso", b"x")))
         self.assertTrue(self.claims(self.drop("w.wua", b"x")))
+        self.assertTrue(self.claims(self.drop("p.pkg", b"x")))
         self.assertFalse(self.claims(self.drop("d.iso", b"x")))
         self.assertFalse(self.claims(self.drop("e.zip", b"x")))
         self.assertTrue(self.claims(self.drop("dir", {"sub/f.dec.iso": b"x"})))
