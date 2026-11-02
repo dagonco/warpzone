@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from warpzone import esde, flatpak, frontend, settings_state
+from warpzone import esde, flatpak, frontend, settings_state, updatetimer
 from warpzone.config import DEFAULT_WAIT_SECONDS, HUB_WAIT_SECONDS, Config
 from warpzone.model import FolderSpec, device_specs, hub_specs
 from warpzone.profiles import Profile
@@ -525,15 +525,15 @@ def run_import_check(python: str) -> bool:
     return proc.returncode == 0
 
 
-def _write_script(path: Path, text: str) -> None:
-    """Write an executable file atomically, creating its directories."""
+def _write_script(path: Path, text: str, mode: int = 0o755) -> None:
+    """Write a file (executable by default) atomically, creating its directories."""
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f".{path.name}{settings_state.TMP_SUFFIX}")
     tmp.unlink(missing_ok=True)
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o755)
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode)
     try:
         with os.fdopen(fd, "wb") as fh:
-            os.fchmod(fh.fileno(), 0o755)
+            os.fchmod(fh.fileno(), mode)
             fh.write(text.encode())
             fh.flush()
             os.fsync(fh.fileno())
@@ -677,6 +677,98 @@ def ensure_esde_script(
         rep.out(f"es-de: wrote {path}")
     root = state_root if state_root is not None else settings_state.state_dir(home=home)
     _enable_event_scripts(name, esde_dir, rep, dry_run=dry_run, proc=proc, state_root=root)
+
+
+def run_systemctl(command: Sequence[str]) -> tuple[int, str]:
+    """(exit code, stdout and stderr) of a `systemctl` command; raises OSError if it cannot run."""
+    return run_flatpak(command)
+
+
+def ensure_update_timer(
+    home: Path,
+    rep: Reporter,
+    *,
+    dry_run: bool,
+    python: str | None = None,
+    import_check: ImportCheck = run_import_check,
+    systemctl: FlatpakRunner | None = None,
+) -> None:
+    """Install and enable the systemd user timer that runs `warpzone self-update`.
+
+    The service runs the Python that runs this command, so it must import warpzone from
+    outside the current folder (a venv with the editable install does). Nothing is written
+    when that is not so or when there is no systemd user manager. The units are rewritten
+    only when their content differs, and the timer is enabled only when it is not already.
+    """
+    ctl = systemctl or run_systemctl
+    python = python or sys.executable
+    units = home / updatetimer.UNIT_DIR
+    manual = (
+        "schedule `warpzone self-update` with another scheduler (cron, for example), or "
+        "set `self_update = false` for this device in the config"
+    )
+
+    def call(*args: str) -> tuple[int, str]:
+        return ctl(["systemctl", "--user", *args])
+
+    if not import_check(python):
+        rep.warn(
+            f"the self-update timer was not installed: {python} cannot import warpzone from "
+            "outside the current folder (run from a clone?). Install warpzone for it (an "
+            "editable install in a venv), then run `warpzone provision device` from there"
+        )
+        return
+    try:
+        code, shown = call("show-environment")
+        if code != 0:
+            raise OSError(shown.strip().splitlines()[0] if shown.strip() else f"exit code {code}")
+    except (OSError, subprocess.SubprocessError) as exc:
+        rep.warn(
+            f"the self-update timer was not installed: no systemd user manager ({exc}); {manual}"
+        )
+        return
+
+    wanted = {
+        units / updatetimer.SERVICE: updatetimer.render_service(python),
+        units / updatetimer.TIMER: updatetimer.render_timer(),
+    }
+
+    def current(path: Path) -> str | None:
+        try:
+            return path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            return None
+
+    changed = [path for path, text in wanted.items() if current(path) != text]
+    try:
+        enabled = call("is-enabled", updatetimer.TIMER)[0] == 0
+        active = call("is-active", updatetimer.TIMER)[0] == 0
+    except (OSError, subprocess.SubprocessError):
+        enabled = active = False
+    if not changed and enabled and active:
+        rep.out("self-update timer: already installed and enabled")
+        return
+    if dry_run:
+        if changed:
+            rep.out(f"self-update timer: dry-run: would write {', '.join(map(str, changed))}")
+        rep.out(f"self-update timer: dry-run: would enable {updatetimer.TIMER}")
+        return
+    enable = f"systemctl --user enable --now {updatetimer.TIMER}"
+    try:
+        for path in changed:
+            _write_script(path, wanted[path], 0o644)
+        steps = [("daemon-reload",)] if changed else []
+        steps.append(("enable", "--now", updatetimer.TIMER))
+        if changed and active:
+            steps.append(("restart", updatetimer.TIMER))
+        for step in steps:
+            code, shown = call(*step)
+            if code != 0:
+                raise OSError(shown.strip() or f"exit code {code}")
+    except (OSError, subprocess.SubprocessError) as exc:
+        rep.warn(f"the self-update timer could not be enabled ({exc}). Run `{enable}`")
+        return
+    rep.out(f"self-update timer: installed and enabled ({updatetimer.TIMER})")
 
 
 def _busy(
@@ -843,6 +935,7 @@ def provision_device(
     proc: Path = Path("/proc"),
     state_root: Path | None = None,
     config_path: Path | None = None,
+    systemctl_run: FlatpakRunner | None = None,
 ) -> None:
     device = cfg.devices[name]
     actual = local.my_id()
@@ -918,6 +1011,18 @@ def provision_device(
             state_root=state_root,
             config_path=config_path,
         )
+
+    if device.self_update:
+        ensure_update_timer(
+            home,
+            rep,
+            dry_run=local.dry_run,
+            python=python,
+            import_check=import_check,
+            systemctl=systemctl_run,
+        )
+    else:
+        rep.out("self-update timer: turned off (self_update = false in the config)")
 
 
 def folder_status(client: Client, title: str, rep: Reporter) -> None:

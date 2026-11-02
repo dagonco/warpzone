@@ -4,17 +4,27 @@ import dataclasses
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import addModuleCleanup, mock
 
 from support import API_KEY, HUB_ID, FakeSyncthing, config_data
 from test_doctor import by_name, context
 from test_provision import reporter
 from warpzone import frontend
+from warpzone import provision as provision_mod
 from warpzone.config import parse_config
 from warpzone.doctor import CHECKS, OK, WARN, Context, check_frontend
 from warpzone.model import ModelError, device_specs
 from warpzone.profiles import ProfileError, load_profile, parse_profile
 from warpzone.provision import provision_device
 from warpzone.syncthing import Client
+
+
+def setUpModule() -> None:
+    """provision_device would install a systemd timer: tests/test_update_timer.py covers that."""
+    patcher = mock.patch.object(provision_mod, "ensure_update_timer")
+    patcher.start()
+    addModuleCleanup(patcher.stop)
+
 
 ARK_ID = "DDDDDDD-DDDDDDD-DDDDDDD-DDDDDDD-DDDDDDD-DDDDDDD-DDDDDDD-DDDDDDD"
 PROFILE = load_profile("anbernic-rg351mp")

@@ -38,6 +38,7 @@ from warpzone.doctor import (
     check_syncthing,
     check_syncthing_unit,
     check_tool,
+    check_update_timer,
     check_vita3k,
     collapse_inbox,
     exit_code,
@@ -49,6 +50,7 @@ from warpzone.doctor import (
     judge_last_apply,
     judge_settings_layers,
     judge_unit_state,
+    judge_update_timer,
     judge_vita3k_user,
     load_config_state,
     platform_family,
@@ -1525,6 +1527,117 @@ class SyncthingUnitTests(TmpCase):
         self.assertEqual(
             check_syncthing_unit(context(self.tmp, system="Linux")), []
         )  # no systemctl
+
+
+class UpdateTimerJudgeTests(unittest.TestCase):
+    def judge(self, **kw):
+        values = {"device": "deck", "files": True, "enabled": True, "active": True}
+        return judge_update_timer(**{**values, **kw})
+
+    def test_installed_and_running_is_ok(self) -> None:
+        status, detail, fix = self.judge()
+        self.assertEqual((status, fix), (OK, ""))
+        self.assertIn("daily", detail)
+
+    def test_missing_units_are_a_warning_that_names_the_fix(self) -> None:
+        status, detail, fix = self.judge(files=False, enabled=False, active=False)
+        self.assertEqual(status, WARN)
+        self.assertIn("not installed", detail)
+        self.assertIn("warpzone provision device deck", fix)
+        self.assertIn("self_update = false", fix)
+
+    def test_units_that_are_not_enabled_or_not_active_are_a_warning(self) -> None:
+        for enabled, active in ((False, False), (True, False), (False, True)):
+            status, _, fix = self.judge(enabled=enabled, active=active)
+            self.assertEqual(status, WARN, (enabled, active))
+            self.assertIn("systemctl --user enable --now warpzone-self-update.timer", fix)
+
+    def test_a_systemd_that_cannot_be_asked_is_a_warning(self) -> None:
+        status, detail, _ = self.judge(enabled=None, active=None)
+        self.assertEqual(status, WARN)
+        self.assertIn("cannot ask systemd", detail)
+
+
+class UpdateTimerCheckTests(TmpCase):
+    def setUp(self) -> None:
+        super().setUp()
+        self.home = self.tmp / "home"
+        folder = self.home / ".config/syncthing"
+        folder.mkdir(parents=True)
+        (folder / "config.xml").write_text(
+            f'<configuration><folder id="wz-library" path="{self.home}/Emulation/">'
+            f'<device id="{HUB_ID}"/></folder><device id="{DECK_ID}" name="x"/>'
+            f"<gui><address>127.0.0.1:8384</address><apikey>{ST_KEY}</apikey></gui>"
+            "</configuration>"
+        )
+        self.commands: list[tuple[str, ...]] = []
+
+    def units(self, *names: str) -> None:
+        folder = self.home / ".config/systemd/user"
+        folder.mkdir(parents=True, exist_ok=True)
+        for name in names:
+            (folder / name).write_text("[Unit]\n")
+
+    def check(self, *, enabled=True, active=True, bus=True, config=None, **kw):
+        def run(command):
+            self.commands.append(tuple(command))
+            if not bus:
+                raise FileNotFoundError("systemctl")
+            verb = command[2]
+            if verb == "is-enabled":
+                return RunOutput(0 if enabled else 1, "enabled" if enabled else "disabled")
+            return RunOutput(0 if active else 3, "active" if active else "inactive")
+
+        text = FULL.replace(
+            "BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB", DECK_ID
+        )
+        return check_update_timer(
+            context(self.tmp, config or text, system="Linux", run=run, home=self.home, **kw)
+        )
+
+    def both(self) -> None:
+        self.units("warpzone-self-update.service", "warpzone-self-update.timer")
+
+    def test_a_device_with_the_timer_running_is_ok(self) -> None:
+        self.both()
+        (r,) = self.check()
+        self.assertEqual((r.name, r.group, r.status), ("Self-update timer", doctor.G_UPDATE, OK))
+        self.assertIn(
+            ("systemctl", "--user", "is-enabled", "warpzone-self-update.timer"), self.commands
+        )
+
+    def test_a_device_without_the_timer_gets_a_warning(self) -> None:
+        (r,) = self.check(enabled=False, active=False)
+        self.assertEqual(r.status, WARN)
+        self.assertIn("provision device deck", r.fix)
+
+    def test_a_timer_that_is_switched_off_gets_a_warning(self) -> None:
+        self.both()
+        (r,) = self.check(enabled=False, active=False)
+        self.assertEqual(r.status, WARN)
+        self.assertIn("enable --now", r.fix)
+
+    def test_without_systemctl_the_units_are_judged_by_their_files(self) -> None:
+        (r,) = self.check(bus=False)
+        self.assertEqual(r.status, WARN)
+        self.both()
+        (r,) = self.check(bus=False)
+        self.assertEqual(r.status, WARN)
+        self.assertIn("cannot ask systemd", r.detail)
+
+    def test_silent_when_the_config_turns_it_off(self) -> None:
+        off = FULL.replace(
+            'folders = ["library", "saves"]', 'folders = ["library", "saves"]\nself_update = false'
+        ).replace("BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB", DECK_ID)
+        self.assertEqual(self.check(config=off), [])
+
+    def test_silent_off_linux_and_on_a_machine_that_is_not_a_device(self) -> None:
+        self.assertEqual(check_update_timer(context(self.tmp, FULL, home=self.home)), [])  # macOS
+        (self.home / ".config/syncthing/config.xml").unlink()
+        self.assertEqual(self.check(), [])
+
+    def test_runs_with_the_other_checks(self) -> None:
+        self.assertIn(check_update_timer, doctor.CHECKS)
 
 
 RA_APP = "org.libretro.RetroArch"
