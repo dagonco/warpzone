@@ -26,6 +26,7 @@ You have a NAS full of ROMs, a Steam Deck, maybe a Steam Machine, maybe a spare 
          │ tools/     scripts, docs          │ ──► receive-only
          │ saves/     per emulator           │ ◄─► two-way, 30 days of history
          │ frontend/  ES-DE media, gamelists │ ◄─► two-way
+         │ settings/  emulator settings      │ ◄─► two-way, 30 days of history
          │ inbox/     new dumps (not synced) │
          └───────────────────────────────────┘
                  │ Syncthing           │
@@ -50,6 +51,7 @@ Each `library/` and `songs/` folder holds one `patterns-<device>.stignore` per d
 ├── frontend/
 │   ├── media/               ES-DE downloaded media     <->
 │   └── es-de/               ES-DE gamelists, collections <->
+├── settings/                emulator setting layers    <-> two-way, hub keeps 30 days of history
 ├── songs/                   hub: send-only -> opted-in devices, per-device whitelist
 ├── tools/                   hub: send-only -> devices (scripts, docs)
 └── inbox/                   never synced; drop zone for new content (SMB)
@@ -114,9 +116,12 @@ python3 -m warpzone --help
 | `warpzone prune` | Reports (or, with `--apply`, deletes) files a device no longer whitelists. |
 | `warpzone bios` | Which BIOS and firmware files the library has, lacks or has wrong. |
 | `warpzone inbox` | Reports (or, with `--apply`, files) new games dropped in `inbox/`. |
+| `warpzone settings apply` | On a console: writes the emulator settings from the hub's layers. ES-DE runs it at startup. |
+| `warpzone settings capture` | On a console: takes settings changed in an emulator to the hub's layers. |
+| `warpzone settings audit` | Reports drift between the layers and this console (read only). |
 | `warpzone doctor` | Checks this machine and prints the fix for each problem. |
 
-`provision` supports `--dry-run`. `prune` and `inbox` report first and act only with `--apply`.
+`provision` supports `--dry-run`. `prune` and `inbox` report first and act only with `--apply`. `settings apply` and `settings capture` support `--dry-run`.
 
 ## Safety
 
@@ -132,6 +137,7 @@ Turn on filesystem snapshots for the hub's share. The full list of rules is in [
 | Guide | Covers |
 |---|---|
 | [docs/whitelists.md](docs/whitelists.md) | How whitelists work, rescan, bootstrap, pruning. |
+| [docs/settings.md](docs/settings.md) | Sharing emulator settings across consoles: capture, apply, audit. |
 | [docs/inbox.md](docs/inbox.md) | Adding games: DAT-based discs and cartridges, Switch, PS3 and Xbox, arcade. |
 | [docs/bios.md](docs/bios.md) | The BIOS and firmware check. |
 | [docs/doctor.md](docs/doctor.md) | Checking a machine. |
