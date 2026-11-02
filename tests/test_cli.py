@@ -7,7 +7,7 @@ from pathlib import Path
 from unittest import mock
 
 from support import API_KEY, DECK_ID, HUB_ID, MACHINE_ID, FakeSyncthing
-from warpzone import __version__
+from warpzone import __version__, doctor, settings_state
 from warpzone.cli import _build_parser, main
 
 
@@ -147,6 +147,21 @@ class CliTests(unittest.TestCase):
         self.assertIn("no Syncthing config", err)
 
 
+class ProvisionConfigPathTests(unittest.TestCase):
+    def test_provision_device_passes_the_config_path_on(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = write_config(tmp, "http://127.0.0.1:1")
+            local = mock.Mock(base_url="http://127.0.0.1:1", api_key=API_KEY)
+            with (
+                mock.patch("warpzone.cli.localst.find_config"),
+                mock.patch("warpzone.cli.localst.parse_config", return_value=local),
+                mock.patch("warpzone.cli.provision.provision_device") as provision_device,
+            ):
+                code, _, err = run("provision", "device", "deck", "--config", path)
+            self.assertEqual(code, 0, err)
+            self.assertEqual(provision_device.call_args.kwargs["config_path"], Path(path))
+
+
 class SettingsCliTests(unittest.TestCase):
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
@@ -177,6 +192,35 @@ class SettingsCliTests(unittest.TestCase):
             "settings", "apply", "--device", "deck", "--quiet", "--config", self.config
         )
         self.assertEqual((code, out), (0, ""))
+
+    def test_a_config_that_cannot_load_leaves_a_trace_for_doctor(self) -> None:
+        missing = str(self.tmp / "nowhere.toml")
+        code, _, _ = run("settings", "apply", "--device", "deck", "--quiet", "--config", missing)
+        self.assertEqual(code, 2)
+        info = settings_state.read_last_apply()
+        assert info is not None
+        self.assertEqual(info["exit"], 2)
+        self.assertTrue(info["time"])
+        log = (settings_state.state_dir() / "log").read_text()
+        self.assertIn("config", log)
+        self.assertNotIn(str(self.tmp), log)  # the log never holds paths of the user's files
+        status, detail, _ = doctor.judge_last_apply(info, "LOG")
+        self.assertEqual(status, doctor.WARN)
+        self.assertIn("exit code 2", detail)
+
+    def test_an_invalid_config_leaves_a_trace_too(self) -> None:
+        bad = self.tmp / "bad.toml"
+        bad.write_text("[hub\n")
+        code, _, _ = run("settings", "apply", "--device", "deck", "--quiet", "--config", str(bad))
+        self.assertEqual(code, 2)
+        info = settings_state.read_last_apply()
+        assert info is not None
+        self.assertEqual(info["exit"], 2)
+
+    def test_a_dry_run_leaves_no_trace(self) -> None:
+        missing = str(self.tmp / "nowhere.toml")
+        run("settings", "apply", "--device", "deck", "--dry-run", "--config", missing)
+        self.assertIsNone(settings_state.read_last_apply())
 
     def test_unknown_device_is_exit_2(self) -> None:
         code, _, err = run("settings", "audit", "--device", "tablet", "--config", self.config)

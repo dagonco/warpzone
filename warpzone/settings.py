@@ -659,6 +659,26 @@ def apply(
         return _apply_locked(ctx, selected, log, say, complain, dry_run, overwrite_local)
 
 
+def record_refused_apply(
+    root: Path, code: int, clock: Callable[[], datetime] = datetime.now
+) -> None:
+    """Leave a trace of an `apply` that failed before it ran (invalid or missing config).
+
+    Doctor reads it as a failed run, so a startup script that cannot start does not look like
+    "no run yet" forever. The message is fixed: it never holds a value or a path.
+    """
+    try:
+        state.Log(root / "log", clock=clock).line(
+            f"apply: refused before running (exit {code}): the config could not be used; "
+            "run `warpzone check`"
+        )
+        state.write_last_apply(
+            _Counts().info(time=clock().isoformat(timespec="seconds"), exit=code), root=root
+        )
+    except OSError:
+        pass  # nowhere to write: the error was already printed
+
+
 def _apply_locked(
     ctx: Context,
     selected: list[EmulatorSettings],

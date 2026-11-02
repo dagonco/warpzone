@@ -34,6 +34,17 @@ class ScriptTests(unittest.TestCase):
             "exit 0\n",
         )
 
+    def test_a_config_path_is_carried_to_apply(self) -> None:
+        text = esde.render_startup_script("/opt/wz/bin/python", "deck", Path("/etc/wz/c.toml"))
+        self.assertIn("  settings apply --device 'deck' --config '/etc/wz/c.toml' --quiet ", text)
+        tokens = command_tokens(text)
+        self.assertEqual(tokens[tokens.index("--config") + 1], "/etc/wz/c.toml")
+
+    def test_an_odd_config_path_stays_one_word(self) -> None:
+        path = Path("/home/user name/it's/$(touch x)/c.toml")
+        tokens = command_tokens(esde.render_startup_script("/p", "deck", path))
+        self.assertEqual(tokens[tokens.index("--config") + 1], str(path))
+
     def test_odd_values_stay_one_word_each(self) -> None:
         python = "/home/user name/it's/$(touch x)/python"
         device = "d e;`reboot`"

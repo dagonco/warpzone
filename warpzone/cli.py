@@ -508,6 +508,7 @@ def _run(args: argparse.Namespace) -> int:
         home=Path.home(),
         wait_timeout=args.timeout,
         syncthing_config=local.config_path,
+        config_path=_config_path(args),
     )
     return EXIT_OK
 
@@ -518,6 +519,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _run(args)
     except (ConfigError, ProfileError, ModelError) as exc:
         _eprint(f"warpzone: config error: {exc}")
+        if args.command == "settings" and args.settings_command == "apply" and not args.dry_run:
+            settings.record_refused_apply(settings_state.state_dir(), EXIT_USAGE)
         return EXIT_USAGE
     except (BiosError, InboxError) as exc:
         _eprint(f"warpzone: error: {exc}")

@@ -1249,9 +1249,14 @@ directories created, rewritten only when its content differs, printed with `--dr
 # settings from the hub. ES-DE waits for it, so it is bounded and never fails.
 env -u LD_LIBRARY_PATH -u LD_PRELOAD -u PYTHONHOME -u PYTHONPATH \
   timeout 15 '/home/user/.local/share/pipx/venvs/warpzone/bin/python' -m warpzone \
-  settings apply --device 'deck' --quiet >/dev/null 2>&1
+  settings apply --device 'deck' --config '/srv/warpzone/config.toml' --quiet >/dev/null 2>&1
 exit 0
 ```
+
+The `--config '<path>'` part is there only when the config file `provision` used (`--config`,
+`WARPZONE_CONFIG`, `XDG_CONFIG_HOME`) is not `~/.config/warpzone/config.toml`, as an
+absolute path: ES-DE does not have the user's environment, so without it `apply` would not
+find the config. Provisioning again with another config rewrites the script.
 
 - The interpreter is the absolute path of the Python that runs `provision`, because ES-DE in
   Game Mode does not have the user's `PATH`. `provision` first checks that this interpreter
@@ -1261,6 +1266,9 @@ exit 0
 - `env -u` drops what ES-DE's AppImage sets for its own libraries, which could break the
   system's Python. `timeout` bounds how long ES-DE waits. The output is discarded:
   `apply` logs to its own file, so a failure never shows in ES-DE or stops it.
+- A run that fails before it starts (the config is missing or invalid, the device is not in
+  it; exit 2) still leaves a line in the log and a `last-apply.json` with that exit code, so
+  `doctor` reports a failed run instead of "no run yet". `--dry-run` leaves nothing.
 - `~/ES-DE` is also the device path of `wz-esde`, whose whitelist lets only `gamelists` and
   `collections` through, so the script is never synced.
 - `provision` also turns the scripts on. When `CustomEventScripts` in `es_settings.xml` is

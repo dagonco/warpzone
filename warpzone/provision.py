@@ -617,6 +617,14 @@ def _enable_event_scripts(
     rep.out(f"es-de: set CustomEventScripts to true in {path} (old file backed up)")
 
 
+def _script_config(config_path: Path | None, home: Path) -> Path | None:
+    """The config path the startup script has to pass, or None for the default location."""
+    if config_path is None:
+        return None
+    absolute = Path(os.path.abspath(config_path))
+    return None if absolute == home / ".config" / "warpzone" / "config.toml" else absolute
+
+
 def ensure_esde_script(
     name: str,
     profile: Profile,
@@ -628,13 +636,16 @@ def ensure_esde_script(
     import_check: ImportCheck = run_import_check,
     proc: Path = Path("/proc"),
     state_root: Path | None = None,
+    config_path: Path | None = None,
 ) -> None:
     """Install ES-DE's startup script for `settings apply` and turn ES-DE's scripts on.
 
     The script runs the Python that runs this command, so that interpreter must import
     warpzone from outside the current folder; run from a clone it warns and installs
     nothing. The script is rewritten only when its content differs. Does nothing when the
-    profile has no ES-DE folder.
+    profile has no ES-DE folder. `config_path` is the private config file this run used: the
+    script names it unless it is the default one, since ES-DE does not have the user's
+    environment (`WARPZONE_CONFIG`, `XDG_CONFIG_HOME`).
     """
     if "esde" not in profile.paths:
         return
@@ -648,7 +659,7 @@ def ensure_esde_script(
         )
         return
     path = esde.script_path(esde_dir)
-    text = esde.render_startup_script(python, name)
+    text = esde.render_startup_script(python, name, _script_config(config_path, home))
     try:
         current: str | None = path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
@@ -688,6 +699,7 @@ def provision_device(
     import_check: ImportCheck = run_import_check,
     proc: Path = Path("/proc"),
     state_root: Path | None = None,
+    config_path: Path | None = None,
 ) -> None:
     device = cfg.devices[name]
     actual = local.my_id()
@@ -756,6 +768,7 @@ def provision_device(
             import_check=import_check,
             proc=proc,
             state_root=state_root,
+            config_path=config_path,
         )
 
 

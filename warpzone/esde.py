@@ -48,14 +48,16 @@ def _quote(value: str) -> str:
     return quoted if quoted.startswith("'") else f"'{quoted}'"
 
 
-def render_startup_script(python: str, device: str) -> str:
+def render_startup_script(python: str, device: str, config: Path | None = None) -> str:
+    """The script text; `config` is the private config file when it is not the default one."""
+    where = f" --config {_quote(str(config))}" if config is not None else ""
     return (
         "#!/bin/sh\n"
         "# Written by warpzone provision device, which rewrites it. Applies the emulator\n"
         "# settings from the hub. ES-DE waits for it, so it is bounded and never fails.\n"
         "env -u LD_LIBRARY_PATH -u LD_PRELOAD -u PYTHONHOME -u PYTHONPATH \\\n"
         f"  timeout 15 {_quote(python)} -m warpzone \\\n"
-        f"  settings apply --device {_quote(device)} --quiet >/dev/null 2>&1\n"
+        f"  settings apply --device {_quote(device)}{where} --quiet >/dev/null 2>&1\n"
         "exit 0\n"
     )
 

@@ -833,6 +833,20 @@ class EsdeScriptTests(unittest.TestCase):
         self.assertTrue(any(str(self.script) in line for line in lines))
         self.assertEqual(rep.warnings, [w for w in rep.warnings if "es_settings" in w])
 
+    def test_a_custom_config_path_is_written_into_the_script(self) -> None:
+        custom = Path("/srv/wz/config.toml")
+        self.provision(config_path=custom)
+        self.assertEqual(
+            self.script.read_text(), esde.render_startup_script(PYTHON, "deck", custom)
+        )
+        self.assertIn("--config '/srv/wz/config.toml'", self.script.read_text())
+
+    def test_the_default_config_path_is_left_out_of_the_script(self) -> None:
+        default = self.home / ".config" / "warpzone" / "config.toml"
+        self.provision(config_path=default)
+        self.assertNotIn("--config", self.script.read_text())
+        self.assertEqual(self.script.read_text(), esde.render_startup_script(PYTHON, "deck"))
+
     def test_an_unchanged_script_is_not_rewritten(self) -> None:
         self.provision()
         before = self.script.stat()
