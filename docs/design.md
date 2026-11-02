@@ -1345,6 +1345,12 @@ device. `--key` without `--seed` is a usage error (exit 2).
      next apply.
    - skip: nothing; the key is proposed again next time.
 
+   A key whose value a layer cannot hold (a double quote in a RetroArch value, a line break)
+   is not captured: capture names the key and the reason, never the value, treats it as
+   skipped (snapshot kept) and exits 1 at the end; the other keys still go. The resulting
+   layers are validated as `apply` validates them before anything is written, and a run whose
+   result would be invalid writes nothing.
+
    Right before writing, each layer file is read again and must equal what was loaded
    (otherwise nothing is written and capture exits 1); the same goes for a hub copy of a data
    file and for the local data file, which must still hash as it did when proposed. Files are

@@ -406,6 +406,44 @@ class SeedTests(SettingsCase):
         self.assertNotIn("Controls", written)
 
 
+GAMMA = ".config/gamma/gamma.cfg"
+
+
+class UnsafeValueTests(CaptureBase):
+    """A value the layers cannot hold is refused by key name; the other keys still go."""
+
+    def seeded(self, cfg: str) -> tuple[int, str, str]:
+        self.put(GAMMA, cfg)
+        code, out, err, _ = self.capture(seed=True, yes=True, key=["gamma/cfg/*"])
+        return code, out, err
+
+    def test_a_double_quote_in_a_retroarch_value_is_refused_by_name(self) -> None:
+        code, out, err = self.seeded('video_scale = 3"4\nsaving = "yes"\n')
+        self.assertEqual(code, 1)
+        self.assertIn("video_scale", err)
+        self.assertNotIn('3"4', out + err + self.every_output())
+        common = self.layer_text("common")
+        self.assertNotIn("video_scale", common)
+        self.assertIn('saving = "yes"', common)
+        # the hub still validates, so apply is not broken on every device
+        self.assertEqual(self.run_apply()[0], 0)
+
+    def test_a_lone_carriage_return_is_refused_by_name(self) -> None:
+        code, _, err = self.seeded('video_scale = "a\rb"\nsaving = "yes"\n')
+        self.assertEqual(code, 1)
+        self.assertIn("video_scale", err)
+        self.assertNotIn("video_scale", self.layer_text("common"))
+        self.assertIn('saving = "yes"', self.layer_text("common"))
+        self.assertEqual(self.run_apply()[0], 0)
+
+    def test_a_refused_key_may_still_be_discarded(self) -> None:
+        self.put(GAMMA, 'video_scale = 3"4\n')
+        code, _, err, _ = self.capture(
+            seed=True, yes=True, key=["gamma/cfg/*"], discard=["gamma/cfg/video_scale"]
+        )
+        self.assertEqual((code, err), (0, ""))
+
+
 class RefusalTests(CaptureBase):
     def assertUntouched(self, before: str) -> None:
         self.assertEqual(self.every_output(), before)

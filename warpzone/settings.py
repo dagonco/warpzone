@@ -659,6 +659,18 @@ def apply(
         return _apply_locked(ctx, selected, log, say, complain, dry_run, overwrite_local)
 
 
+def unlayerable(profile: Profile, cand: plan.Candidate) -> str | None:
+    """Why a captured key cannot be held by a layer (as `validate` judges it), else None.
+
+    The reason never holds the value.
+    """
+    layer = Layer({(cand.emulator, cand.file): {cand.key: cand.here}})
+    errors, _ = layers_mod.validate(layer, profile, "capture")
+    if not errors:
+        return None
+    return errors[0].partition(f": {cand.key}: ")[2] or "a layer cannot hold it"
+
+
 def record_refused_apply(
     root: Path, code: int, clock: Callable[[], datetime] = datetime.now
 ) -> None:
@@ -1337,12 +1349,24 @@ def _capture_locked(
     pending = [c for c in run.cands if c.ref not in decisions]
     if interactive and pending:
         decisions.update(prompt_decisions(pending, ctx.device, ask, out))
+    for cand in run.cands:
+        if cand.kind == "key" and decisions.get(cand.ref) in ("common", "device"):
+            reason = unlayerable(ctx.profile, cand)
+            if reason:
+                run.problem(cand.ref, f"not captured: {reason}")
+                decisions[cand.ref] = "skip"
     others = run.other_layers() if "common" in decisions.values() else {}
     common_after, device_after, updates, notes = plan.apply_decisions(
         layers.common.entries, layers.device.entries, decisions, run.cands, others=others
     )
     for message in notes:
         out(f"note: {message}")
+    for name, entries in ((COMMON_FILE, common_after), (f"{ctx.device}.toml", device_after)):
+        errors, _ = layers_mod.validate(Layer(entries), ctx.profile, name)
+        if errors:  # the per-key check above should have caught it; never write an invalid layer
+            for message in errors:
+                err(f"error: {message}")
+            return refuse("the result would be an invalid layer, nothing was written")
     prefix = "would " if dry_run else ""
     device_name = f"{ctx.device}.toml"
     changes: list[tuple[str, dict[tuple[str, str], dict[str, Value]]]] = []
