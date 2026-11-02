@@ -204,7 +204,7 @@ ignore = ["!/keys.txt", "*"]
 # Eden (Switch). Qt settings: a stored value is ignored while its `key\default`
 # companion says true; the qt-ini handler writes the companion when it writes a key.
 [settings.eden]
-process = ["eden"]
+process = ["eden", "Eden.AppImage"]
 verify = true
 [settings.eden.files.qt-config]
 path = "~/.config/eden/qt-config.ini"
@@ -349,7 +349,7 @@ known = ['reicast_region', 'reicast_language', 'reicast_per_content_vmus']
 
 # DuckStation.
 [settings.duckstation]
-process = ["duckstation-qt"]
+process = ["duckstation-qt", "DuckStation.AppImage"]
 verify = true
 [settings.duckstation.files.settings]
 path = "~/.local/share/duckstation/settings.ini"
@@ -387,7 +387,7 @@ known = [
 # PCSX2. Some keys appear twice in a section (`[Folders]SaveStates`); the ini handler
 # reports a duplicated key as not writable, and the whole `[Folders]` section is noise.
 [settings.pcsx2]
-process = ["pcsx2-qt"]
+process = ["pcsx2-qt", "pcsx2-Qt.AppImage"]
 verify = true
 [settings.pcsx2.files.ini]
 path = "~/.config/PCSX2/inis/PCSX2.ini"
@@ -476,7 +476,7 @@ known = [
 # Azahar (3DS). Same Qt settings format as Eden. The system configuration (language,
 # region, user name, birthday) is not in this file; it is the `sysdata-config` data file.
 [settings.azahar]
-process = ["azahar", "azahar-qt"]
+process = ["azahar", "azahar-qt", "azahar.AppImage"]
 verify = true
 [settings.azahar.files.qt-config]
 path = "~/.config/azahar-emu/qt-config.ini"
