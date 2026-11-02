@@ -424,6 +424,37 @@ named after the game (`<game>.srm`, `<game>.state`), and the hub folders are the
 a file; a state of one core does not load in another core or another version of it, which
 warpzone cannot check.
 
+### shadPS4 install directories
+
+shadPS4 runs the extracted games it finds in its install directories, and the PS4 games that
+`inbox` extracts land in `library/roms/ps4/games` ([PS4 packages](#ps4-packages)). A profile
+with `[shadps4]` (`config`, `process`, `install_dirs`) has `provision device` list that folder
+there, for a device that subscribes to `library`, at the end of the same step as the other
+overrides. The profile `steamos-emudeck` declares `{library}/roms/ps4/games`.
+
+- **Files.** Each path of `config` that exists is edited, chosen by its suffix. `config.json`
+  (shadPS4 v0.21 and later) holds `General.install_dirs`, a list of
+  `{"enabled": true, "path": "..."}`; `config.toml` (older versions, and still on disk after the
+  move to JSON) holds `GUI.installDirs`, a list of strings. Both are edited because either may be
+  the one a version reads. A missing file is never created (shadPS4 writes it on its first
+  start); when neither exists the run warns to start shadPS4 once and run `provision` again.
+- **Edit.** The existing entries stay and the missing folder is appended (a disabled entry for
+  it is enabled; trailing slashes do not count as a difference). `config.json` must be
+  exactly what `json.dumps(indent=2)` writes, which is shadPS4's layout, or it is left alone:
+  the edit re-serialises it. In `config.toml` only the `installDirs` value is replaced (or the key
+  or the `[GUI]` table added) and the result must read back as the original plus the new folders.
+  Anything that does not read as expected is left alone with a warning (`shadps4.apply` is pure).
+- **Safety.** Written only while none of `process` runs (the emulator, its Qt launcher and the
+  AppImages: `/proc` is read as for the other overrides, and a missing `/proc` is a warning), with
+  the old file backed up first to the settings state folder and an atomic write that is refused if
+  the file changed meanwhile. A second run changes nothing; `--dry-run` prints what it would add.
+- **Doctor.** `doctor` reports `shadPS4 install folder`: a warning naming each existing file that
+  lacks the folder (with the command to run), or none found.
+- **Why not the settings layer.** `settings apply` layers typed scalar keys from the hub, and its
+  `json` and `toml` handlers write scalars only; this list is an array (of objects, in JSON). Its
+  value is also derived from each console's own library path, not shared between consoles, so it
+  is declared in the profile like the RetroArch paths.
+
 ### Frontend artwork
 
 A frontend that is not ES-DE shows nothing of what the hub scraped: ES-DE keeps its
@@ -583,7 +614,7 @@ error messages; the RetroAchievements key is read from `RA_API_KEY`, never from 
 |---|---|---|
 | `warpzone check` | anywhere | Validates config + profiles, reports which whitelists are missing on the hub (via `GET /rest/db/browse`), never writes. Exit 1 if any are missing; `--offline` skips the hub. |
 | `warpzone provision hub` | anywhere that reaches the hub API | Adds every configured device to the hub, creates/updates every `wz-*` folder on the hub and shares it with the devices that subscribe to it, sets the hub ignores. A newly created whitelisted folder first lets only the whitelists through and waits for them (`--timeout`, default 120 s) before the full scan, see "Hub bootstrap". Idempotent. |
-| `warpzone provision device <name>` | on the device | Reads the local Syncthing API key from the local `config.xml` (searching the default locations, including the SyncThingy flatpak; `--syncthing-config PATH` overrides), adds the hub device, creates the subscribed folders with the bootstrap above (`--timeout SECONDS`). When that Syncthing is the SyncThingy flatpak it first grants it the missing `flatpak override --user --filesystem=~/.var/app/<app>` for every folder under `~/.var/app` (flatpak hides other apps' data), and asks for a Syncthing restart. When the device subscribes to `settings`, it installs the ES-DE startup script that runs `settings apply` (see [ES-DE startup script](#es-de-startup-script)). When the device subscribes to `library` and its profile has `[es_systems]` or `[retroarch]`, it also writes the frontend's system list override and pins RetroArch's paths (see [Frontend and RetroArch overrides](#frontend-and-retroarch-overrides)). When it lists `frontend` and the profile has `[artwork]`, it limits the artwork folders to the systems on the device, writes the gamelists and installs the refresh timer (see [Frontend artwork](#frontend-artwork)). Idempotent. |
+| `warpzone provision device <name>` | on the device | Reads the local Syncthing API key from the local `config.xml` (searching the default locations, including the SyncThingy flatpak; `--syncthing-config PATH` overrides), adds the hub device, creates the subscribed folders with the bootstrap above (`--timeout SECONDS`). When that Syncthing is the SyncThingy flatpak it first grants it the missing `flatpak override --user --filesystem=~/.var/app/<app>` for every folder under `~/.var/app` (flatpak hides other apps' data), and asks for a Syncthing restart. When the device subscribes to `settings`, it installs the ES-DE startup script that runs `settings apply` (see [ES-DE startup script](#es-de-startup-script)). When the device subscribes to `library` and its profile has `[es_systems]` or `[retroarch]`, it also writes the frontend's system list override and pins RetroArch's paths (see [Frontend and RetroArch overrides](#frontend-and-retroarch-overrides)). When the profile has `[shadps4]` it also lists the PS4 games folder in shadPS4's install directories (see [shadPS4 install directories](#shadps4-install-directories)). When it lists `frontend` and the profile has `[artwork]`, it limits the artwork folders to the systems on the device, writes the gamelists and installs the refresh timer (see [Frontend artwork](#frontend-artwork)). Idempotent. |
 | `warpzone frontend refresh [device]` | on the device | For a device whose profile has `[artwork]` and that lists `frontend`: widens the artwork folders' ignores to the systems that have games now (when the local Syncthing is found) and rewrites the frontend's gamelists from the synced ES-DE data, only while the frontend is closed. `--dry-run` prints what it would do. See [Frontend artwork](#frontend-artwork). |
 | `warpzone provision device <name>` | on the device | Reads the local Syncthing API key from the local `config.xml` (searching the default locations, including the SyncThingy flatpak; `--syncthing-config PATH` overrides), adds the hub device, creates the subscribed folders with the bootstrap above (`--timeout SECONDS`). When that Syncthing is the SyncThingy flatpak it first grants it the missing `flatpak override --user --filesystem=~/.var/app/<app>` for every folder under `~/.var/app` (flatpak hides other apps' data), and asks for a Syncthing restart. When the device subscribes to `settings`, it installs the ES-DE startup script that runs `settings apply` (see [ES-DE startup script](#es-de-startup-script)). When the device subscribes to `library` and its profile has `[es_systems]` or `[retroarch]`, it also writes the frontend's system list override and pins RetroArch's paths (see [Frontend and RetroArch overrides](#frontend-and-retroarch-overrides)). It then installs the self-update timer, for every profile (see [Self-update](#self-update)). Idempotent. |
 | `warpzone prune [device]` | on the device | Reports, and with `--apply` deletes, the files of the whitelisted folders that the device no longer whitelists (see [Pruning](#pruning)). Report only by default. |

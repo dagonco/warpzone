@@ -45,6 +45,7 @@ from warpzone import (
     model,
     ra,
     settings_state,
+    shadps4,
     updatetimer,
 )
 from warpzone import inbox_switch as switch
@@ -743,7 +744,9 @@ def load_config_state(path: Path) -> ConfigState:
                     settings_devices.append(entry)
                 profile = profiles[device.profile]
                 art = profile.artwork is not None and "frontend" in device.folders
-                if "library" in device.folders and (profile.es_systems or profile.retroarch or art):
+                if "library" in device.folders and (
+                    profile.es_systems or profile.retroarch or profile.shadps4 or art
+                ):
                     frontend_devices.append(
                         SettingsDevice(device.name, device.device_id, profile, device.folders)
                     )
@@ -1300,6 +1303,40 @@ def judge_retroarch_paths(
     return _merge(parts)
 
 
+def judge_shadps4_dirs(
+    *, device: str, files: Sequence[tuple[str, str, str | None]], wants: Sequence[str]
+) -> tuple[str, str, str]:
+    """Verdict on shadPS4's install folders: `files` holds (path, kind, text or None if absent)."""
+    again = f"run `warpzone provision device {device}` with shadPS4 closed"
+    present = [(path, kind, text) for path, kind, text in files if text is not None]
+    if not present:
+        shown = " or ".join(path for path, _, _ in files)
+        return (
+            WARN,
+            f"no shadPS4 config file found ({shown})",
+            f"start shadPS4 once, then {again}",
+        )
+    parts: list[tuple[str, str, str]] = []
+    for path, kind, text in present:
+        try:
+            gap = shadps4.missing(kind, text, wants)
+        except shadps4.ConfigError as exc:
+            parts.append((WARN, f"{path}: {exc}", "fix the file by hand, or start shadPS4 again"))
+            continue
+        if gap:
+            parts.append(
+                (
+                    WARN,
+                    f"{path} does not list {', '.join(gap)}, so shadPS4 does not find the games "
+                    "that inbox extracts there",
+                    again,
+                )
+            )
+        else:
+            parts.append((OK, f"{path} lists the install folder", ""))
+    return _merge(parts)
+
+
 def judge_last_apply(info: Mapping[str, object] | None, log_path: str) -> tuple[str, str, str]:
     """Verdict on the summary of the last `settings apply` (`None` when there is none)."""
     if info is None:
@@ -1458,6 +1495,19 @@ def check_frontend(ctx: Context) -> list[Result]:
             wants=pins.wants(library),
         )
         results.append(Result("RetroArch paths", G_FRONTEND, *verdict))
+    if (dirs := profile.shadps4) is not None:
+        files = []
+        for raw in dirs.config:
+            path = Path(_expand(raw, p.home))
+            files.append(
+                (
+                    str(path),
+                    shadps4.kind_of(raw) or shadps4.JSON,
+                    p.read_text(path) if p.is_file(path) else None,
+                )
+            )
+        verdict = judge_shadps4_dirs(device=device.name, files=files, wants=dirs.wants(library))
+        results.append(Result("shadPS4 install folder", G_FRONTEND, *verdict))
     return results
 
 
