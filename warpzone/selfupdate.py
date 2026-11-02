@@ -26,12 +26,19 @@ LOG_NAME = "self-update.log"
 LOG_MAX_BYTES = 64 * 1024
 LOG_KEEP_LINES = 200
 
-_TAG = re.compile(r"v(\d+)\.(\d+)\.(\d+)")
-_VERSION = re.compile(r"(\d+)\.(\d+)\.(\d+)(.*)")
+_TAG = re.compile(r"v(\d+)\.(\d+)\.(\d+)", re.ASCII)
+_VERSION = re.compile(r"(\d+)\.(\d+)\.(\d+)(?:(rc)(\d+)|(.+))?", re.ASCII)
+
+# The last two numbers of a version key: the stage and the pre-release number. Any other
+# suffix sorts before every `rcN`; a plain release sorts after all of them.
+_STAGE_OTHER, _STAGE_RC, _STAGE_RELEASE = 0, 1, 2
+
+VersionKey = tuple[int, int, int, int, int]
 
 
 def parse_tag(tag: str) -> tuple[int, int, int] | None:
-    """`(major, minor, patch)` of a plain release tag `vX.Y.Z`; None for anything else."""
+    """`(major, minor, patch)` of a plain release tag `vX.Y.Z`; None for anything else
+    (`self-update` still follows only these; a release candidate is `tag_key`'s business)."""
     match = _TAG.fullmatch(tag)
     if match is None:
         return None
@@ -39,13 +46,27 @@ def parse_tag(tag: str) -> tuple[int, int, int] | None:
     return major, minor, patch
 
 
-def version_key(version: str) -> tuple[int, int, int, int] | None:
-    """A sortable key for a package version; a pre-release sorts before its release."""
+def version_key(version: str) -> VersionKey | None:
+    """A sortable key for a package version: `0.3.0rc1` < `0.3.0rc2` < `0.3.0`. Only the
+    PEP 440 spelling `rcN` is ordered; any other suffix sorts before every `rcN`."""
     match = _VERSION.fullmatch(version)
     if match is None:
         return None
     major, minor, patch = (int(n) for n in match.groups()[:3])
-    return major, minor, patch, 0 if match.group(4) else 1
+    if match.group(4):
+        return major, minor, patch, _STAGE_RC, int(match.group(5))
+    if match.group(6):
+        return major, minor, patch, _STAGE_OTHER, 0
+    return major, minor, patch, _STAGE_RELEASE, 0
+
+
+def tag_key(tag: str) -> VersionKey | None:
+    """The sort key of a release tag, `vX.Y.Z` or `vX.Y.ZrcN` (the tag is `v` plus
+    `__version__`, see docs/releasing.md); None for any other spelling, such as `v0.3.0-rc1`."""
+    if not tag.startswith("v") or _VERSION.fullmatch(tag[1:]) is None:
+        return None
+    key = version_key(tag[1:])
+    return key if key is not None and key[3] != _STAGE_OTHER else None
 
 
 def newest_tag(tags: Sequence[str]) -> str | None:
@@ -72,7 +93,7 @@ def decide(running: str, tags: Sequence[str]) -> Decision:
         return Decision("no-tags", None)
     target = parse_tag(tag)
     assert target is not None
-    wanted = (*target, 1)
+    wanted = (*target, _STAGE_RELEASE, 0)
     if wanted > have:
         return Decision("update", tag)
     return Decision("current" if wanted == have else "ahead", tag)

@@ -765,6 +765,8 @@ profile = "steamos-emudeck"
 folders = ["library", "tools", "saves", "frontend"]
 addresses = ["tcp://deck.local:22000"]       # optional, default ["dynamic"]
 self_update = true                           # optional: install the self-update timer (default true)
+channel = "stable"                           # optional: "stable" (default) or "rc"
+pin = "v0.3.0"                               # optional: stay on this tag (vX.Y.Z or vX.Y.ZrcN)
 
 [devices.machine]
 device_id = "ZZZZZZZ-..."
@@ -2100,15 +2102,16 @@ for every problem, the exact fix for this platform.
 
 Devices run warpzone from a git clone with an editable install, so updating is moving the
 clone to a release tag. `selfupdate.py` holds the decisions as pure functions (`parse_tag`,
-`newest_tag`, `version_key`, `decide`) and a runner-based `run_self_update`, so the tests use
+`newest_tag`, `version_key`, `tag_key`, `decide`) and a runner-based `run_self_update`, so the tests use
 a real repository on disk (a bare repository as the remote) and no network.
 
 - **Checkout.** The root is the folder that holds the `warpzone` package. It must be the
   top level of a git work tree (`git rev-parse --show-toplevel`); otherwise (a wheel, a
   package folder inside another repository, no git) the command says so and exits 0.
 - **Which tag.** `git fetch --tags`, then the highest tag matching `vX.Y.Z` exactly,
-  compared as numbers. Pre-release tags are ignored. A pre-release running version
-  (`0.3.0rc1`) sorts before its release. A fetch that fails or times out (300 s) is "could
+  compared as numbers. Pre-release tags are ignored (until the channels of "Autonomous
+  updates" are implemented). A pre-release running version (`0.3.0rc1`) sorts before its
+  release, and `rc1` before `rc2`. A fetch that fails or times out (300 s) is "could
   not reach the remote": a message and exit 0.
 - **Never a downgrade.** If the running `__version__` is the same as or newer than the
   newest tag, nothing happens.
@@ -2145,6 +2148,181 @@ device subscribed to `library` without `self_update = false` (found through the 
 `wz-library` folder, as for the frontend), `judge_update_timer` is `[ok]` when both units
 exist and the timer is enabled and active, and `[! ]` when the units are missing, the timer
 is not enabled or not active, or systemd cannot be asked.
+
+### Autonomous updates (contract)
+
+This section is the contract for making a device keep itself on a working release with no
+person logged in. Each piece says whether it exists. **Implemented** means it is in the code
+today; **Not implemented** means the code does not do it yet and this text is what it must
+do. Until then `warpzone self-update` behaves as described above.
+
+| Piece | State |
+| --- | --- |
+| `channel` and `pin` in the device config, validated | Implemented |
+| Ordering of release candidates (`tag_key`, `version_key`) | Implemented |
+| Everything else in this section | Not implemented |
+
+**Tag spelling.** A release is `vX.Y.Z` and a release candidate is `vX.Y.ZrcN`: the tag is
+`v` plus `__version__`, in the PEP 440 spelling that [releasing.md](releasing.md) requires
+(`v0.3.0-rc1` is not a tag warpzone knows). They order as `v0.3.0rc1` < `v0.3.0rc2` <
+`v0.3.0`, and every number is compared as a number (`rc10` is after `rc2`).
+`selfupdate.tag_key` returns that key, or None for any other spelling; `version_key` gives
+the same key for a package version, so a tag and the version it carries compare equal.
+`parse_tag`, `newest_tag` and `decide` still look at plain releases only.
+
+**One tick.** A single timer starts a single script. The unit keeps the name
+`warpzone-self-update`, so rewriting it leaves no orphan unit. The timer has `OnBootSec=45s`
+and `OnUnitActiveSec=15min` and no random delay (a delay also pushes back the start after
+boot, when the menu may not be open yet); the service is a one-shot with
+`TimeoutStartSec=30min` and `ExecStart=/bin/sh <updater> tick`. The timer is a piece of its
+own, separate from `updater.sh tick`: the script does not know what started it, so a platform
+without systemd can start the same `tick` from another launcher. Each tick, in this order:
+
+1. Take a lock; a tick that finds it held exits at once.
+2. Read the configuration; if the device is not `enabled` (`self_update = false`), stop.
+3. If the menu is open, defer (see below).
+4. Repair the Python environment (see below).
+5. Fetch the remote at most once a day. The moment is offset by a number derived from the
+   device name, so devices do not all arrive together.
+6. Pick the target tag. When there is one, switch to it and verify it. When there is none,
+   reconcile (`provision device --unattended`) only if `/proc/sys/kernel/random/boot_id`
+   differs from the last tick's, or `pending` is set.
+
+**The script lives outside warpzone.** The tick must be able to repair a warpzone that no
+longer starts, so the selection and the rollback are in `warpzone/data/updater.sh`, POSIX
+`sh`, standard tools and `git` only (about 250 lines), and not in Python. This is the one
+exception to "decisions are pure Python"; tests run the script against real repositories
+with a fake Python. The live copy is `~/.local/share/warpzone/updater/updater.sh`, outside
+the clone, so checking out any tag cannot remove or replace it. `provision` renews it
+atomically, only after `sh -n` and `updater.sh selftest` pass, keeping the old file as
+`.prev`. The script carries `UPDATER_ABI`, and a copy with a lower ABI is never installed
+over a higher one, so a rollback does not downgrade the script. It reads its settings from
+`~/.local/state/warpzone/updater/conf`, written by `provision` from `config.toml`
+(`device`, `config`, `channel`, `pin`, `enabled`, `frontend`), line by line and never with
+`source`, so a value cannot run anything. A person installs a device with `git clone` and
+`sh <clone>/warpzone/data/updater.sh install`, which checks out the newest release, creates
+the venv and runs `provision device`. There is one way to install; a `pipx` or wheel install
+is not a supported device install.
+
+**Verifying a version.** A version passes when all of these exit 0 within a time limit:
+
+1. `python -I -c "import warpzone.cli, warpzone.provision, ..."`, and `--version` equal to
+   the tag.
+2. `python -m warpzone provision device <device> --unattended`.
+3. `warpzone health` (a new command): loads the config and the profiles, runs
+   `settings apply`, `play-state sync`, `links sync` and `frontend refresh` as dry runs and
+   the startup scripts within the 15 seconds ES-DE allows them, and checks that the scripts
+   and units exist with a valid interpreter.
+
+`doctor` is not used for this because it depends on the environment (DATs, tools). The check
+does not prove that a game starts or that Syncthing syncs; that is what retirement is for.
+`provision device --unattended` never does what could lose data: it does not apply the
+bootstrap ignores to a folder that already exists (it uses the final ones when the
+whitelists are on disk, and otherwise leaves the folder alone), it refuses to change `type`
+or `versioning` of an existing folder, it turns a new folder in an existing group and a slow
+`wait_for_files` into warnings, and it aborts without changes when a folder that should
+exist has no `.stfolder` (a card that is not mounted). It never runs `prune --apply`,
+`inbox --apply` or `settings capture`.
+
+**Differential verdict.** The script does not trust the exit codes of a version that may be
+broken. It knows three outcomes: 0 passed, 3 deferred (the menu opened during the check),
+anything else failed. After a failure it goes back to the `good` version and runs the same
+check:
+
+- `good` passes: the new version is bad, and `bad/<tag>` is written.
+- `good` fails too: the environment is at fault (Syncthing down, a broken config). The tag
+  is not marked bad; the device stays on `good` and retries after 1, 2, 4 and then 7 days.
+
+**State.** `~/.local/state/warpzone/updater/state`, `key=value` lines, written only by the
+script, to a temporary file that is renamed. Keys: `schema`, `good_tag`, `good_sha`,
+`trying_tag`, `trying_sha`, `from_sha`, `attempts`, `probation`, `pending`,
+`deferred_since`, `last_fetch`, `last_boot_id`, `last_result`, `retry_after`,
+`env_failures`. `last_result` is one of `ok`, `deferred`, `env`, `rolled-back`, `dirty`,
+`dev`, `no-python`, `stuck`. `bad/<tag>` holds the commit, the date and the reason. The log
+stays in `self-update.log`. `doctor` reads the state and warns about a rollback, `stuck`,
+`dirty`, or more than 14 days without a success.
+
+**Bad versions and the loop.**
+
+- Before the checkout, `trying_*` and `attempts + 1` are written and synced to disk. A tick
+  that finds `trying` already set knows the previous run died halfway (power cut, kill,
+  hang) and resumes by verifying the checked-out tag.
+- **A run that died halfway is not a failure of the version.** Only a verification that
+  failed, followed by a passing `good`, writes `bad/<tag>`. A power cut never does.
+- A tag is switched to at most twice without a verdict. When `attempts` reaches 2 and the
+  runs keep dying, the device returns to `good` without marking the tag bad, sets
+  `retry_after` one day ahead and resets `attempts`.
+- A `bad` tag never comes back.
+- The new version stays on `probation` until it passes the check on the next boot; a
+  failure there goes through the differential verdict.
+- After probation there is no automatic rollback: a later failure comes from a change in
+  the system, not from the version. New tags are still tried.
+- If checking out `good` fails, the result is `stuck` and nothing else is touched.
+- `.git/index.lock` is removed only when it is older than 10 minutes and no `git` process
+  is alive.
+
+**Deferring while the menu is open.** The script scans `/proc/*/comm` and `argv[0]` the way
+`settings_state.running` does (`WZ_PROC` points it at a fake tree in tests, and a test checks
+that both agree). The names come from `esde.ESDE_PROCESSES` (unconfirmed on a console, as
+that module says) or from `es_systems.process`, depending on the profile. ES-DE stays alive
+during a game, so nothing updates while playing either. When it is open the tick sets
+`pending=1`, sets `deferred_since` if it was not set, and exits 0; the 15 minute timer tries
+again. If it opens during the check, `--unattended` exits 3: `trying` is kept without a
+rollback and the next tick continues. **The deferral lasts 72 hours at most**: once
+`deferred_since` is older than that, the update runs anyway, because on some devices the
+menu looks open for as long as the console is on, and every write is already guarded by
+`_busy`.
+
+**Python.** The interpreter must run `python3 -I -c "import tomllib, sys"` and be 3.11 or
+newer; the candidates are the one in `conf`, `/usr/bin/python3` and `python3`. With none the
+result is `no-python` and nothing rolls back. With an interpreter but a broken venv, the
+script recreates it with `python3 -m venv --without-pip --clear <venv>`, plus a `.pth` file
+that points at the clone and a `bin/warpzone` shim that runs `python -m warpzone`. That
+needs no network and no setuptools, and it keeps the path written into units and scripts.
+Only `venv/` is cleared; its parent folder also holds the two-way `play-state` folder and is
+never deleted.
+
+**Channels.** `channel = "stable"` (default) considers only `vX.Y.Z` tags; `channel = "rc"`
+considers those and `vX.Y.ZrcN`. A candidate is valid when it matches the channel, is not
+under `bad/` and not retired, its tag is an ancestor of `origin/main`, and the `__version__`
+read with `git show <tag>:warpzone/__init__.py` equals the tag without its `v`. That
+reproduces, without a server, the central check of `verify` in `release.yml`. The target is
+the best valid candidate in `tag_key` order (the tests cover this order, also against
+`git -c versionsort.suffix=rc for-each-ref --sort=-v:refname`). A device never moves to a
+lower version than the one it runs, except when that one is retired (below).
+
+**`RETIRED`.** A tag cannot be edited, so a release is withdrawn in a file named `RETIRED` at
+the root of `main`, one entry per line: `vX.Y.Z YYYY-MM-DD reason`. The script reads it with
+`git fetch origin main` and `git show origin/main:RETIRED`. A retired tag is never a
+candidate. When the running version is retired the device goes to the best valid candidate,
+even a lower one, and a test of the file's format keeps it parseable.
+
+**`pin`.** `pin = "vX.Y.Z"` (or `vX.Y.ZrcN`) keeps the device on that tag whatever the
+channel: the target is the pin, even when it is lower than the running version. The tag must
+exist and passes the same verification as any other. A pin wins over `RETIRED`; `doctor`
+warns when the pinned tag is retired.
+
+**Kind of checkout.** Decided from `git symbolic-ref -q HEAD` and `git merge-base`:
+
+- HEAD on a release tag: managed.
+- On a branch, clean, with HEAD contained in `origin/main`: adopted (a plain `git clone`
+  leaves a user there); it moves to tags like a managed one.
+- Commits of its own, a loose commit or a dirty tree: `dev` or `dirty`. It is not moved, but
+  it is still reconciled, and `doctor` warns. The script never runs `reset`, `stash` or
+  `clean`.
+
+**Signed tags.** Release tags are signed with an SSH key, and the script runs `git verify-tag`
+against an allowed-signers file before it trusts a tag; a tag that does not verify is not a
+candidate. Without it, whoever controls the maintainer's account could run code on every
+device, and each holds the hub's API key. Rotating the key means shipping a new
+allowed-signers file to the devices.
+
+**Never unattended.** `prune --apply`, `inbox --apply` and `settings capture`. The shadPS4
+version is the user's choice and is only read. `ensure_flatpak_access` asks for a Syncthing
+restart; unattended, that is a warning.
+
+**What a rollback does not undo.** It reverts code only: not what `provision` wrote, nor the
+data in `wz-settings`, `wz-play-state` and the saves.
 
 ## Syncthing API surface used
 
@@ -2328,7 +2506,7 @@ logic is unit-tested without a network.
   the test then checks the created `wz-*` folders, the final ignores, `check`, and that
   `provision device` makes a device receive the whitelisted game and not the other one.
 - Self-update tests (`test_selfupdate.py`, `test_update_timer.py`): tag and version
-  comparison as pure functions; whole runs against a bare repository used as the remote
+  comparison as pure functions (including the order `rc1` < `rc2` < release); whole runs against a bare repository used as the remote
   (update, up to date, ahead, dirty tree, untracked files, dry-run, remote gone, timeout,
   not a checkout, `pyproject.toml` changed or not, the log); the units' rendering and
   `ensure_update_timer` with a fake `systemctl` (first run, second run, changed unit,

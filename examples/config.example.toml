@@ -59,6 +59,14 @@ folders = ["library", "tools", "saves", "frontend", "bios", "settings"]
 # self-update` every day. Set false to skip it on this device (docs/self-update.md).
 # self_update = true
 
+# Optional. Which releases this device follows once the updater picks them by channel:
+# "stable" (default) takes only vX.Y.Z tags; "rc" also takes release candidates
+# (vX.Y.ZrcN). See docs/design.md, "Autonomous updates".
+# channel = "stable"
+
+# Optional. Keep this device on one tag, whatever the channel: vX.Y.Z or vX.Y.ZrcN.
+# pin = "v0.3.0"
+
 [devices.machine]
 device_id = "CCCCCCC-CCCCCCC-CCCCCCC-CCCCCCC-CCCCCCC-CCCCCCC-CCCCCCC-CCCCCCC"
 profile = "steamos-emudeck"

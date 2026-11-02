@@ -47,6 +47,10 @@ It does not depend on ES-DE or on any other part of the profile. `provision devi
 
 `warpzone doctor` warns on a device when the timer is not installed, not enabled or not running.
 
+### Channel and pin
+
+`channel` (`"stable"`, the default, or `"rc"`) and `pin` (a tag such as `v0.3.0` or `v0.3.0rc1`) can be set under `[devices.<name>]` next to `self_update`; the config is rejected when they are malformed. `warpzone self-update` does not use them yet: it still follows plain `vX.Y.Z` releases. The planned behaviour is in [design.md](design.md#autonomous-updates-contract).
+
 ### Turning it off
 
 Set it in the config, so that `provision device` and `doctor` agree:
