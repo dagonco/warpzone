@@ -12,9 +12,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from warpzone import esde, flatpak, frontend, settings_state, updatetimer
+from warpzone import artwork, esde, flatpak, frontend, settings_state, updatetimer
 from warpzone.config import DEFAULT_WAIT_SECONDS, HUB_WAIT_SECONDS, Config
-from warpzone.model import FolderSpec, device_specs, hub_specs
+from warpzone.model import ESDE_ID, MEDIA_ID, FolderSpec, device_specs, hub_specs
 from warpzone.profiles import Profile
 from warpzone.syncthing import Client, SyncthingError
 
@@ -916,6 +916,268 @@ def ensure_retroarch_pins(
         rep.out(f"retroarch: set {keys} in {path} (old file backed up)")
 
 
+def _artwork_layout(profile: Profile, home: Path) -> artwork.Layout | None:
+    art = profile.artwork
+    if art is None or "library" not in profile.paths:
+        return None
+    library = expand_home(profile.paths["library"], home).rstrip("/")
+    return artwork.Layout(
+        Path(library) / "roms",
+        Path(expand_home(art.media, home)),
+        Path(expand_home(art.metadata, home)),
+        Path(expand_home(art.gamelists, home)),
+    )
+
+
+def artwork_scope(profile: Profile, home: Path) -> list[str]:
+    """The hub systems a device with `[artwork]` receives artwork for (none without any)."""
+    layout = _artwork_layout(profile, home)
+    if layout is None or profile.artwork is None:
+        return []
+    return artwork.library_systems(layout.roms)  # `systems = "library"`, the only scope
+
+
+def _no_scope_warning(name: str, layout: artwork.Layout) -> str:
+    return (
+        f"no system folder in {layout.roms} yet, so no artwork is received; it follows once "
+        f"games have arrived (`warpzone frontend refresh {name}`, or the timer, picks it up)"
+    )
+
+
+def sync_artwork_scope(
+    cfg: Config,
+    name: str,
+    profile: Profile,
+    home: Path,
+    local: Client,
+    rep: Reporter,
+) -> None:
+    """Make the ignores of the artwork folders match the systems that are on the device now.
+
+    A system whose games arrived after `provision device` has no artwork until its folders
+    let it in. A folder that Syncthing does not have yet is left for `provision device`.
+    """
+    if profile.artwork is None or "frontend" not in cfg.devices[name].folders:
+        return
+    wanted = [
+        dataclasses.replace(s, path=expand_home(s.path, home))
+        for s in device_specs(cfg, name, profile, artwork_scope(profile, home))
+        if s.id in (MEDIA_ID, ESDE_ID)
+    ]
+    existing = {f["id"]: f for f in local.folders()}
+    systems = len(artwork_scope(profile, home))
+    for spec in wanted:
+        if spec.id not in existing:
+            rep.warn(f"{spec.id} is not in Syncthing yet: run `warpzone provision device {name}`")
+        elif local.get_ignores(spec.id) != list(spec.ignores):
+            local.set_ignores(spec.id, list(spec.ignores))
+            rep.out(f"{spec.id}: ignores updated ({systems} systems)")
+
+
+def ensure_gamelists(
+    name: str,
+    profile: Profile,
+    home: Path,
+    rep: Reporter,
+    *,
+    dry_run: bool,
+    proc: Path = Path("/proc"),
+) -> None:
+    """Write the frontend's gamelists from the scraped data that Syncthing delivered.
+
+    Each system on the device that has a scraped gamelist gets one for the frontend, under
+    the system's name in the frontend's list (`artwork.plan_gamelists`). Nothing is written
+    for a gamelist that already says the same, so a second run, and a run while the frontend
+    is open and has nothing to change, do nothing. A file is written only while the frontend
+    is not running, atomically, and refused when it changed after it was read. The user
+    data the frontend saved in a gamelist is carried over; see docs/design.md, "Frontend
+    artwork".
+    """
+    art, rule = profile.artwork, profile.es_systems
+    layout = _artwork_layout(profile, home)
+    if art is None or rule is None or layout is None:
+        return
+    fmt = artwork.FORMATS[art.format]
+    again = f"run `warpzone frontend refresh {name}` again"
+    hubs = artwork.library_systems(layout.roms)
+    if not hubs:
+        rep.out(f"gamelists: no system has games in {layout.roms} yet")
+        return
+    source = Path(expand_home(rule.source, home))
+    try:
+        system_list = source.read_bytes().decode("utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        rep.warn(f"cannot read the system list {source} ({exc}), so no gamelist was written")
+        return
+    stamps: dict[Path, settings_state.FileStamp] = {}
+
+    def read(path: Path) -> bytes | None:
+        try:
+            stamp = settings_state.stamp(path)
+            data = path.read_bytes()
+        except FileNotFoundError:
+            return None
+        stamps[path] = stamp
+        return data
+
+    files = dataclasses.replace(artwork.REAL_FILES, read=read)
+    try:
+        plan = artwork.plan_gamelists(
+            fmt,
+            art.kinds,
+            layout,
+            system_list,
+            prefix=rule.prefix,
+            renames=rule.renames,
+            hubs=hubs,
+            files=files,
+        )
+    except artwork.ArtworkError as exc:
+        rep.warn(f"{source}: {exc}, so no gamelist was written")
+        return
+    for problem in plan.problems:
+        rep.warn(f"{problem}, so the gamelists of that system were left as they are")
+    for system in plan.dropped:
+        rep.warn(
+            f"{system.hub}: the frontend has another system called {system.name!r}, "
+            "so no gamelist was written for this one"
+        )
+    pending = plan.pending()
+    if not plan.items:
+        rep.out("gamelists: no scraped gamelist for the systems on the device yet")
+        return
+    if not pending:
+        rep.out(f"gamelists: {len(plan.items)} current")
+        return
+    label, what = "EmulationStation", "its gamelists"
+    if _busy(rule.process, label, what, again, rep, proc):
+        return
+    for item in pending:
+        if dry_run:
+            rep.out(f"gamelists: dry-run: would write {item.path} ({item.games} games)")
+        elif _busy(rule.process, label, what, again, rep, proc):  # it may have started
+            return
+        elif not settings_state.atomic_write(item.path, item.data, expect=stamps.get(item.path)):
+            rep.warn(
+                f"{item.path} changed while it was being written, so it was left alone: {again}"
+            )
+        else:
+            rep.out(f"gamelists: wrote {item.path} ({item.games} games, was {item.state})")
+    if not dry_run:
+        rep.out(f"gamelists: {len(plan.items) - len(pending)} current")
+
+
+SystemctlRunner = Callable[[Sequence[str]], bool]
+
+
+def run_user_systemctl(args: Sequence[str]) -> bool:
+    """Whether `systemctl --user <args>` succeeded."""
+    try:
+        proc = subprocess.run(
+            ["systemctl", "--user", *args],
+            capture_output=True,
+            timeout=60,
+            stdin=subprocess.DEVNULL,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return proc.returncode == 0
+
+
+def ensure_artwork_timer(
+    name: str,
+    profile: Profile,
+    home: Path,
+    rep: Reporter,
+    *,
+    dry_run: bool,
+    python: str | None = None,
+    import_check: ImportCheck = run_import_check,
+    config_path: Path | None = None,
+    systemctl: SystemctlRunner = run_user_systemctl,
+) -> None:
+    """Install and start the `systemd --user` timer that runs `frontend refresh`.
+
+    Only for a profile whose `[artwork]` sets `refresh`. The units run the Python that runs
+    this command, which must import warpzone from outside the current folder. They are
+    rewritten only when their text differs; a second run makes no systemctl call.
+    """
+    art = profile.artwork
+    if art is None or art.refresh is None:
+        return
+    python = python or sys.executable
+    if not import_check(python):
+        rep.warn(
+            f"the artwork timer was not installed: {python} cannot import warpzone from "
+            "outside the current folder (run from a clone?). Install warpzone for it (for "
+            f"example with pipx), then run `warpzone provision device {name}` from there"
+        )
+        return
+    service, timer = artwork.render_units(
+        python, name, _script_config(config_path, home), art.refresh
+    )
+    folder = home / ".config" / "systemd" / "user"
+    wanted = {f"{artwork.UNIT_NAME}.service": service, f"{artwork.UNIT_NAME}.timer": timer}
+    changed = False
+    for filename, text in wanted.items():
+        path = folder / filename
+        try:
+            before: settings_state.FileStamp | None = settings_state.stamp(path)
+            current: str | None = path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            before, current = None, None
+        except (OSError, UnicodeDecodeError) as exc:
+            rep.warn(f"cannot read {path} ({exc}), so the artwork timer was left alone")
+            return
+        if current == text:
+            continue
+        changed = True
+        if dry_run:
+            rep.out(f"timer: dry-run: would write {path}")
+        elif not settings_state.atomic_write(path, text.encode("utf-8"), expect=before):
+            rep.warn(f"{path} changed while it was being written, so it was left alone: run again")
+            return
+        else:
+            rep.out(f"timer: wrote {path}")
+    if not changed:
+        rep.out(f"timer: {artwork.UNIT_NAME} unchanged (every {art.refresh})")
+        return
+    if dry_run:
+        return
+    unit = f"{artwork.UNIT_NAME}.timer"
+    for args in (("daemon-reload",), ("enable", "--now", unit), ("restart", unit)):
+        if not systemctl(args):
+            rep.warn(
+                f"`systemctl --user {' '.join(args)}` failed, so the artwork timer may not "
+                f"run: run it by hand (is a user session running? `loginctl enable-linger`)"
+            )
+            return
+    rep.out(f"timer: {unit} runs every {art.refresh}, skipping while the frontend is open")
+
+
+def refresh_artwork(
+    cfg: Config,
+    name: str,
+    profile: Profile,
+    home: Path,
+    rep: Reporter,
+    *,
+    local: Client | None,
+    dry_run: bool,
+    proc: Path = Path("/proc"),
+) -> None:
+    """`frontend refresh`: bring the artwork scope up to date, then the gamelists."""
+    layout = _artwork_layout(profile, home)
+    if layout is not None and not artwork_scope(profile, home):
+        rep.warn(_no_scope_warning(name, layout))
+    if local is None:
+        rep.warn("local Syncthing not found, so which systems receive artwork was not checked")
+    else:
+        sync_artwork_scope(cfg, name, profile, home, local, rep)
+    ensure_gamelists(name, profile, home, rep, dry_run=dry_run, proc=proc)
+
+
 def provision_device(
     cfg: Config,
     name: str,
@@ -935,6 +1197,7 @@ def provision_device(
     proc: Path = Path("/proc"),
     state_root: Path | None = None,
     config_path: Path | None = None,
+    systemctl: SystemctlRunner = run_user_systemctl,
     systemctl_run: FlatpakRunner | None = None,
 ) -> None:
     device = cfg.devices[name]
@@ -945,13 +1208,15 @@ def provision_device(
             f"starts with {device.device_id[:7]}..."
         )
 
+    with_artwork = profile.artwork is not None and "frontend" in device.folders
+    scope = artwork_scope(profile, home) if with_artwork else None
     specs = [
         dataclasses.replace(
             s,
             path=expand_home(s.path, home),
             create_when=expand_home(s.create_when, home) if s.create_when else None,
         )
-        for s in device_specs(cfg, name, profile)
+        for s in device_specs(cfg, name, profile, scope)
     ]
     todo: list[FolderSpec] = []
     for spec in specs:
@@ -997,6 +1262,23 @@ def provision_device(
         root = state_root if state_root is not None else settings_state.state_dir(home=home)
         for ensure in (ensure_systems_override, ensure_retroarch_pins):
             ensure(name, profile, home, rep, dry_run=local.dry_run, proc=proc, state_root=root)
+
+    if with_artwork:
+        layout = _artwork_layout(profile, home)
+        if layout is not None and not scope:
+            rep.warn(_no_scope_warning(name, layout))
+        ensure_gamelists(name, profile, home, rep, dry_run=local.dry_run, proc=proc)
+        ensure_artwork_timer(
+            name,
+            profile,
+            home,
+            rep,
+            dry_run=local.dry_run,
+            python=python,
+            import_check=import_check,
+            config_path=config_path,
+            systemctl=systemctl,
+        )
 
     if "settings" in device.folders:
         ensure_esde_script(

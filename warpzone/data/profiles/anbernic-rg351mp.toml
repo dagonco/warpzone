@@ -6,9 +6,10 @@ description = "Anbernic RG351MP running dArkOS (EmulationStation and RetroArch, 
 # nothing below depends on a symlink.
 ignore_perms = true
 
-# Only the library has a place on this device. There is no ES-DE, no downloaded media, no
-# songs folder and no emulator settings layer, so a device of this profile that lists
-# `tools`, `songs`, `frontend` or `settings` in its folders is refused with a clear error.
+# The library has a place on this device, and so has the scraped artwork (`[artwork]`
+# below). There is no ES-DE, no songs folder, no tools folder and no emulator settings
+# layer, so a device of this profile that lists `tools`, `songs` or `settings` in its folders
+# is refused with a clear error; `frontend` is the artwork.
 #
 # The library goes in its own folder next to dArkOS's own: games land in
 # /roms/library/roms/<system> and BIOS files in /roms/library/bios.
@@ -58,6 +59,26 @@ create_when = "~/.config/retroarch"
 [saves.retroarch-states]
 path = "~/.config/retroarch/states"
 create_when = "~/.config/retroarch"
+
+# EmulationStation here shows no artwork or descriptions of its own: it reads
+# <rom folder>/gamelist.xml, where it also saves what the player does. The hub's ES-DE
+# data (scraped gamelists and media, the `frontend` folders) arrives receive-only, limited to
+# the `kinds` below and to the systems that have a folder in the library's `roms/`, so it
+# follows the whitelist without being edited. The folders are outside the library, on the
+# card (exFAT). The `emulationstation` converter turns each ES-DE gamelist into one for this
+# frontend (absolute `<image>` paths to the covers that exist, only games that are on the
+# device, user data such as favourites kept) under the name the system list gives the system
+# (`[es_systems.rename]` maps the folder names). It runs at `provision device` and with
+# `warpzone frontend refresh`, only while EmulationStation is closed; `refresh` installs a
+# `systemd --user` timer that runs it that often.
+[artwork]
+format = "emulationstation"
+kinds = ["covers"]
+systems = "library"
+media = "/roms/warpzone/media"
+metadata = "/roms/warpzone/es-de"
+gamelists = "{rompath}"
+refresh = "15min"
 
 # Paths in the library folder that the device never receives from the hub. EmulationStation
 # writes a gamelist.xml next to the ROMs of a system when it saves its metadata; it is

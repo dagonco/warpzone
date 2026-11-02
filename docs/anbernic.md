@@ -6,7 +6,7 @@ The `anbernic-rg351mp` profile is for an Anbernic RG351MP that runs dArkOS: Emul
 
 - **The library has its own folder, `/roms/library`.** Games land in `/roms/library/roms/<system>` and BIOS files in `/roms/library/bios`, the same layout as on the hub, and dArkOS's own `/roms/<system>` folders are left alone.
 - **No symlinks, no permissions.** exFAT has neither. Every folder of the device is created with Syncthing's `ignorePerms` on (the profile sets `ignore_perms = true`), so the hub's file modes do not show up as local changes. Nothing in the profile relies on a symlink: the save folders are real directories on the root filesystem, outside the card.
-- **No ES-DE, EmuDeck, flatpak, downloaded media, songs or emulator settings layer.** The profile has no path for `tools`, `songs`, `frontend` or `settings`, so a device that lists one of them is refused with a clear message.
+- **No ES-DE, EmuDeck, flatpak, songs or emulator settings layer.** The profile has no path for `tools`, `songs` or `settings`, so a device that lists one of them is refused with a clear message. `frontend` is accepted, but it is not ES-DE's folders: it delivers the scraped artwork, see [Artwork](#artwork).
 
 ## Config
 
@@ -14,10 +14,10 @@ The `anbernic-rg351mp` profile is for an Anbernic RG351MP that runs dArkOS: Emul
 [devices.rg351mp]
 device_id = "XXXXXXX-XXXXXXX-XXXXXXX-XXXXXXX-XXXXXXX-XXXXXXX-XXXXXXX-XXXXXXX"
 profile = "anbernic-rg351mp"
-folders = ["library", "saves"]
+folders = ["library", "saves", "frontend"]
 ```
 
-`library` and `saves` are the folders that make sense here. `bios` is accepted but empty (the profile has no BIOS placements; BIOS files arrive through the library, from `bios/` in your whitelist). Whitelist systems by the folder names dArkOS uses; a name on the hub that dArkOS spells differently (for example `megacd` and `segacd`) needs the hub folder renamed or a copy under the other name.
+`library`, `saves` and `frontend` are the folders that make sense here. `bios` is accepted but empty (the profile has no BIOS placements; BIOS files arrive through the library, from `bios/` in your whitelist). Whitelist systems by the folder names dArkOS uses; a name on the hub that dArkOS spells differently (for example `megacd` and `segacd`) needs the hub folder renamed or a copy under the other name.
 
 Then, on the device (the user that runs Syncthing), with EmulationStation and RetroArch closed:
 
@@ -49,6 +49,37 @@ With the first two off, saves and states stop being written next to the ROMs and
 
 The save layout matches the Steam devices: all `sort_*` options are off on every device, so each save is one file named after the game in one folder. A save only loads in the same core (and a state in the same core version), which depends on the games you play and which core each device uses for them.
 
+## Artwork
+
+dArkOS's EmulationStation reads `<rom folder>/gamelist.xml` for descriptions and images, and nothing writes it. The hub already holds what you scraped with ES-DE (`frontend/es-de/gamelists` and `frontend/media`), so the `frontend` group delivers a slice of it and warpzone converts it. The profile's `[artwork]` table says everything device-specific:
+
+| Key | Value here | Meaning |
+|---|---|---|
+| `format` | `emulationstation` | The converter that writes this frontend's gamelist. |
+| `kinds` | `["covers"]` | Which media kinds arrive. Add `screenshots`, `marquees`... to receive more (and use more space). |
+| `systems` | `library` | The systems that have a folder in `/roms/library/roms`, so it follows your whitelist. |
+| `media`, `metadata` | `/roms/warpzone/media`, `/roms/warpzone/es-de` | Where the hub's `wz-media` and `wz-esde` land, on the card, outside the library. |
+| `gamelists` | `{rompath}` | Where the generated gamelists go: next to the ROMs, because EmulationStation saves there and prefers that file. |
+| `refresh` | `15min` | How often the timer looks for new scrapes. |
+
+What happens:
+
+- **Only what is needed arrives.** The two folders are receive-only here, with ignore lines that let in only the covers (`<system>/covers`) and the gamelists of the systems on the device. The Steam Deck and Steam Machine receive the same hub folders in full and nothing about them changes. After you add a system to a whitelist, its artwork follows once its games have arrived (the next `frontend refresh`, or the timer). Covers of a whole system arrive even when only a few of its games are on the device.
+- **The gamelist is rebuilt from it.** For each system, `<image>` is the absolute path of the cover that exists (`<media>/<system>/covers/<game>.png`, subfolders kept), the descriptions, ratings, dates, developer, publisher, genre and player count are copied, and a game whose ROM is not on the device is left out. The file goes under the name EmulationStation gives the system, not the folder: hub `pokemini` becomes `pokemonmini` (`[es_systems.rename]`), hub `mame` becomes `mame2010` and hub `psp` becomes `ppsspp`. If two systems share a name, one is chosen and the other is reported.
+- **Your own data stays.** EmulationStation saves favourites, play counts and last played time in that same file (on exit). A rebuild carries them over; only the scraped fields are replaced, so edit a description on the hub, not on the device. ES-DE's own play statistics are not copied.
+- **Only while EmulationStation is closed.** Like the system list override, the files are written only when it is not running (it rewrites them when it quits). A rebuild that would change nothing leaves the files alone.
+- **New scrapes apply by themselves.** `provision device` installs a `systemd --user` timer (`warpzone-artwork.timer`) that runs `warpzone frontend refresh` every 15 minutes. If EmulationStation is open the run changes nothing and the next one tries again. It uses the Python that runs `provision`, which must be able to import warpzone from outside a clone (install it with pipx).
+
+To refresh by hand, with EmulationStation closed:
+
+```bash
+warpzone frontend refresh rg351mp
+```
+
+It first brings the ignore lines up to date with the systems on the device (if it finds the local Syncthing), then rewrites the gamelists. `--dry-run` prints what it would write.
+
+To set this up on an existing device: add `"frontend"` to its `folders`, run `warpzone provision hub` (it adds the device to `wz-media` and `wz-esde` and changes nothing else), then `warpzone provision device rg351mp` on the device. Covers alone are a few hundred MB for fifteen classic systems; more `kinds` mean more space.
+
 ## Doctor
 
-On the device, `warpzone doctor` adds two lines under "Frontend": `ES systems override` and `RetroArch paths`. See [doctor.md](doctor.md#frontend).
+On the device, `warpzone doctor` adds two lines under "Frontend": `ES systems override` and `RetroArch paths`; with `frontend` in the folders it adds `Frontend artwork` (gamelists missing or stale) and `Artwork timer`. See [doctor.md](doctor.md#frontend).

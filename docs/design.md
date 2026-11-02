@@ -104,7 +104,8 @@ Folder-level settings:
 A device subscribes to a subset of folders, set in the private config
 (`folders = ["library", "tools", "saves", "frontend", "songs", "bios", "settings"]`).
 `saves` expands to every save folder of the device's profile; `frontend` expands to
-`wz-media` and `wz-esde`; `bios` expands to every BIOS placement of the profile;
+`wz-media` and `wz-esde` (a profile with `[artwork]` places and limits them itself, see
+[Frontend artwork](#frontend-artwork)); `bios` expands to every BIOS placement of the profile;
 `settings` is `wz-settings`.
 
 ## Ignore files and the bootstrap problem
@@ -423,6 +424,111 @@ named after the game (`<game>.srm`, `<game>.state`), and the hub folders are the
 a file; a state of one core does not load in another core or another version of it, which
 warpzone cannot check.
 
+### Frontend artwork
+
+A frontend that is not ES-DE shows nothing of what the hub scraped: ES-DE keeps its
+gamelists and media in its own layout and the other frontends do not read it. A profile with
+`[artwork]` closes that gap with data only; nothing in the code tests a profile or a device
+name. The table:
+
+```toml
+[artwork]
+format = "emulationstation"        # the converter, a key of artwork.FORMATS
+kinds = ["covers"]                 # hub media kinds to receive, best first
+systems = "library"                # which systems: those with a folder in the library's roms/
+media = "/roms/warpzone/media"     # where wz-media lands on the device
+metadata = "/roms/warpzone/es-de"  # where wz-esde lands on the device
+gamelists = "~/.emulationstation/gamelists"  # where the generated gamelists go
+refresh = "15min"                  # optional: a systemd --user timer interval
+```
+
+`format` must be in `profiles.ARTWORK_FORMATS` (a test keeps it in step with
+`artwork.FORMATS`), `kinds` a non-empty list without repeats of `covers`, `screenshots`,
+`miximages`, `marquees`, `3dboxes`, `physicalmedia`. The table needs `paths.library` and, for
+`emulationstation`, `[es_systems]` (the system list names the systems and its `process` tells
+whether the frontend runs). It replaces `paths.media` and `paths.esde`, so setting both is an
+error, and neither folder may be the library, inside it or inside each other (Syncthing
+folders do not nest).
+
+**Delivery.** A device that lists `frontend` gets `wz-media` and `wz-esde` at `media` and
+`metadata`, both receive-only and with `ignorePerms` like the rest of the device. The hub
+folders are the ones the Steam devices already share and stay exactly as they are (type,
+versioning, ignores): `hub_specs` builds them from the static definitions, never from the
+profile, so the order of the devices in the config cannot change them; a test builds the hub
+specs with and without the console, in both orders. Only the device side differs, in its ignore
+lines: `!/<system>/<kind>` per system and kind for the media folder (the hub's layout is
+`<system>/<kind>/...`), `!/gamelists/<system>/gamelist.xml` per system for the ES-DE folder,
+then `*`. The systems are the plain-named directories below `<library>/roms` at the time
+`device_specs` is asked (`artwork.library_systems`); a name that would be a pattern
+(`*`, `?`, `[`, spaces) is left out. So the scope follows the whitelist without being edited
+per system, but it is computed, not read from Syncthing: `provision device` sets it, and so does
+every `frontend refresh` (`provision.sync_artwork_scope`, which patches only ignores that differ
+and only for folders Syncthing already has). With no system folder yet the ignores let nothing
+in and `provision` says so. Covers of every game of an included system arrive, also those whose
+game is not on the device (a single ROM of a big system whitelists the whole system's covers);
+the ROM check below keeps them out of the gamelist, not off the card.
+
+**Converter.** `artwork.Format` is a frontend's gamelist shape: the fields it keeps from ES-DE
+(`source_fields`; ES-DE-only tags such as `altemulator` are not copied), the fields the
+frontend writes itself (`user_fields`), a map from hub media kind to the tag that holds the
+path, and a `render` function. A new frontend with another file shape is one more `Format` and
+one more name in `ARTWORK_FORMATS`; planning, writing, the timer and the doctor do not change.
+`artwork.build` is pure and takes the existence checks as functions:
+
+- ES-DE's gamelist is read from the synced `metadata` folder. ES-DE writes an
+  `<alternativeEmulator>` element before `<gameList>` (two top-level elements), so a file that
+  does not parse as one document is read from its `<gameList>` block. Entries with a path that
+  is absolute or climbs out of the system folder (`..`) are dropped.
+- An entry is kept only when its ROM exists on the device
+  (`<library>/roms/<hub system>/<path>`).
+- The cover is `<media>/<hub system>/<kind>/<path without extension>.png`, subfolders kept; the
+  first kind of `kinds` whose file exists becomes the `<image>`, as an absolute path. Without a
+  cover there is no `<image>`.
+- Text is XML-escaped and characters XML 1.0 cannot hold are dropped. Entries keep the hub's
+  order; the file layout is fixed, so the same input gives the same bytes.
+
+**System names.** The gamelist goes under the frontend's *system name*, and the name is not
+always the ROM folder: dArkOS's `ppsspp` reads `psp`, `mame2010` reads `mame`, `jaguar` reads
+`atarijaguar`. So `artwork.frontend_systems` reads the system list (the OS's, after the same
+rewrite as the override, which applies `[es_systems.rename]`: frontend folder -> hub folder,
+so hub `pokemini` is the system `pokemonmini`) and takes `<name>` and the folder of each
+entry. A system whose folder is below the hub's system folder (`pico-8` reads `pico8/carts/`)
+gets paths relative to it. When several hub folders carry one name (`snes` has two entries),
+the one the hub names alike wins and the rest are reported. One hub folder may feed several
+names.
+
+**User data.** The frontend rewrites its gamelist (`SaveGamelistsMode` is `on exit` on dArkOS)
+with what the player does: `favorite`, `hidden`, `kidgame`, `playcount`, `lastplayed`. A
+regeneration reads the existing file first and carries those fields over for the same path;
+they are never taken from the hub (ES-DE's own play statistics belong to another machine).
+An entry the hub has no scrape for, but with user data on a ROM that is still there, is kept
+with just that data. Descriptive fields and images always come from the hub, so editing a
+description in the frontend's metadata editor is overwritten; edit the scrape on the hub.
+No backup is made: the hub copy is the source and user data is kept. A gamelist whose
+content already matches (`artwork.same_content`: same entries and known fields, whatever the
+layout or the games listed without data) is not rewritten, so the frontend's own formatting
+survives and a second run changes nothing.
+
+**When it runs.** `provision.ensure_gamelists` is the writer, like `ensure_systems_override`: only
+while no process in `[es_systems].process` runs (a missing `/proc` or a running frontend warns
+and writes nothing, except when nothing would change), atomically, and refused when the file
+changed after it was read. `provision device` calls it for a device that lists `frontend`;
+`warpzone frontend refresh [device]` calls scope sync then the writer, for new scrapes and for
+games that arrived later. To apply new scrapes without a manual step, a profile may set
+`refresh`: `provision device` then writes `~/.config/systemd/user/warpzone-artwork.service`
+(`Type=oneshot`, `ExecStart=<python> -m warpzone frontend refresh <device>`, naming `--config`
+only when it is not the default) and `warpzone-artwork.timer` (`OnBootSec=5min`,
+`OnUnitActiveSec=<refresh>`), then runs `systemctl --user daemon-reload`, `enable --now` and
+`restart`. Units are rewritten only when their text differs; a second run makes no systemctl
+call. The timer is the choice over a path unit because Syncthing writes many files per scrape
+(a path unit fires per change) and because the same run also widens the scope. A run that
+finds the frontend open changes nothing and exits 0, so the timer does not show as failed.
+Like the ES-DE startup script it needs a Python that imports `warpzone` from outside the
+current folder. The user manager must run without a login session (`loginctl enable-linger`;
+dArkOS has it on).
+
+The doctor reports missing and stale gamelists and the timer (see [Doctor](#doctor)).
+
 ## Private configuration
 
 Lives outside the repo, at `$XDG_CONFIG_HOME/warpzone/config.toml`
@@ -477,6 +583,8 @@ error messages; the RetroAchievements key is read from `RA_API_KEY`, never from 
 |---|---|---|
 | `warpzone check` | anywhere | Validates config + profiles, reports which whitelists are missing on the hub (via `GET /rest/db/browse`), never writes. Exit 1 if any are missing; `--offline` skips the hub. |
 | `warpzone provision hub` | anywhere that reaches the hub API | Adds every configured device to the hub, creates/updates every `wz-*` folder on the hub and shares it with the devices that subscribe to it, sets the hub ignores. A newly created whitelisted folder first lets only the whitelists through and waits for them (`--timeout`, default 120 s) before the full scan, see "Hub bootstrap". Idempotent. |
+| `warpzone provision device <name>` | on the device | Reads the local Syncthing API key from the local `config.xml` (searching the default locations, including the SyncThingy flatpak; `--syncthing-config PATH` overrides), adds the hub device, creates the subscribed folders with the bootstrap above (`--timeout SECONDS`). When that Syncthing is the SyncThingy flatpak it first grants it the missing `flatpak override --user --filesystem=~/.var/app/<app>` for every folder under `~/.var/app` (flatpak hides other apps' data), and asks for a Syncthing restart. When the device subscribes to `settings`, it installs the ES-DE startup script that runs `settings apply` (see [ES-DE startup script](#es-de-startup-script)). When the device subscribes to `library` and its profile has `[es_systems]` or `[retroarch]`, it also writes the frontend's system list override and pins RetroArch's paths (see [Frontend and RetroArch overrides](#frontend-and-retroarch-overrides)). When it lists `frontend` and the profile has `[artwork]`, it limits the artwork folders to the systems on the device, writes the gamelists and installs the refresh timer (see [Frontend artwork](#frontend-artwork)). Idempotent. |
+| `warpzone frontend refresh [device]` | on the device | For a device whose profile has `[artwork]` and that lists `frontend`: widens the artwork folders' ignores to the systems that have games now (when the local Syncthing is found) and rewrites the frontend's gamelists from the synced ES-DE data, only while the frontend is closed. `--dry-run` prints what it would do. See [Frontend artwork](#frontend-artwork). |
 | `warpzone provision device <name>` | on the device | Reads the local Syncthing API key from the local `config.xml` (searching the default locations, including the SyncThingy flatpak; `--syncthing-config PATH` overrides), adds the hub device, creates the subscribed folders with the bootstrap above (`--timeout SECONDS`). When that Syncthing is the SyncThingy flatpak it first grants it the missing `flatpak override --user --filesystem=~/.var/app/<app>` for every folder under `~/.var/app` (flatpak hides other apps' data), and asks for a Syncthing restart. When the device subscribes to `settings`, it installs the ES-DE startup script that runs `settings apply` (see [ES-DE startup script](#es-de-startup-script)). When the device subscribes to `library` and its profile has `[es_systems]` or `[retroarch]`, it also writes the frontend's system list override and pins RetroArch's paths (see [Frontend and RetroArch overrides](#frontend-and-retroarch-overrides)). It then installs the self-update timer, for every profile (see [Self-update](#self-update)). Idempotent. |
 | `warpzone prune [device]` | on the device | Reports, and with `--apply` deletes, the files of the whitelisted folders that the device no longer whitelists (see [Pruning](#pruning)). Report only by default. |
 | `warpzone bios` | on a device or the hub | Reports which BIOS and firmware files a library has, lacks or has wrong (see [BIOS check](#bios-check)). Read-only. Exit 1 if a required item is missing or wrong. |
@@ -1588,7 +1696,15 @@ for every problem, the exact fix for this platform.
   wanted key has its value; a key that differs is named with its current value, a missing
   file or a key present twice is `[! ]`. The fix is `warpzone provision device <name>` with
   the frontend or RetroArch closed. `judge_systems_override` and `judge_retroarch_paths`
-  are pure.
+  are pure. A device whose profile has `[artwork]` and whose config lists `frontend` gets two
+  more lines. `Frontend artwork` plans the gamelists exactly as `frontend refresh` would
+  (`artwork.plan_gamelists`, with the reads going through the probes) and is `[ok]` when every
+  gamelist is current, `[! ]` when some are missing or stale (named, with
+  `warpzone frontend refresh <name>` as the fix, frontend closed), when no scraped gamelist has
+  arrived yet for the systems on the device (the sync is the thing to look at), or when the
+  system list or a scraped file is unreadable. `Artwork timer` (only when the profile sets
+  `refresh`) is `[ok]` when `warpzone-artwork.timer` is installed and `[! ]` otherwise.
+  `judge_artwork` is pure.
 - **Exit codes.** `0` when no check is a problem, `1` otherwise.
 - **Install hints** live in one table in `warpzone/doctor.py` (`TOOLS` and the `*_HINTS`
   dicts), keyed by platform family: `macos`, `debian`, `fedora`, `arch`, `steamos`,
@@ -1714,6 +1830,8 @@ warpzone/
   settings_state.py  device state: snapshots, backups, log, lock, atomic write, processes
   esde.py            ES-DE startup script, `es_settings.xml` check and edit (pure)
   frontend.py        frontend system list rewrite, RetroArch key gap (pure)
+  artwork.py         frontend artwork: ES-DE gamelist -> the frontend's gamelist, scope ignores,
+                     system names, timer units (pure; the reads are passed in)
   tomlw.py           TOML scalar and key writer (tomllib only reads)
   doctor.py          machine checklist (`warpzone doctor`): checks, install hints, renderer
   ra.py              RetroAchievements: RAHasher wrapper, game list lookup
@@ -1756,6 +1874,12 @@ logic is unit-tested without a network.
 - Profile and model unit tests cover the placement and library-exclusion tables
   (validation, overlaps, rendering order on the device and the hub); the provision
   tests cover skipped, created (`create_when`) and dry-run targets.
+- Artwork tests (`test_artwork.py`, `test_artwork_device.py`): profile validation, the
+  device and hub folder specs (the hub's stay identical whatever the device order), the pure
+  converter (escaping, paths that escape, user data, determinism, system names), `ensure_gamelists`
+  in a temporary home (idempotence, frontend running, no `/proc`, dry-run, a changed file), the
+  timer units and their systemctl calls, scope sync against the fake Syncthing, `frontend
+  refresh` and the doctor lines.
 - `anbernic-rg351mp` tests: the shipped profile and its parsing, `ignorePerms` in the folder
   specs, the pure rewrite and key gap, `provision device` in a temporary home (backups,
   second run, frontend or RetroArch running, no `/proc`, dry-run) and the doctor lines.

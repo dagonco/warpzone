@@ -124,6 +124,21 @@ def _build_parser() -> argparse.ArgumentParser:
         help="seconds to wait for the rescan (default: %(default)s)",
     )
 
+    fe = sub.add_parser("frontend", help="the frontend's artwork and gamelists")
+    fe_sub = fe.add_subparsers(dest="frontend_command", required=True, metavar="action")
+    refresh = fe_sub.add_parser(
+        "refresh",
+        parents=[common, writing],
+        help="update the artwork scope and rewrite the frontend's gamelists from the "
+        "scraped data (run on the device; never while the frontend is open)",
+    )
+    refresh.add_argument(
+        "name", nargs="?", help="device name (default: the one matching local Syncthing)"
+    )
+    refresh.add_argument(
+        "--syncthing-config", type=Path, help="local Syncthing config.xml or its folder"
+    )
+
     chk = sub.add_parser(
         "bios",
         parents=[common],
@@ -435,6 +450,40 @@ def _settings(args: argparse.Namespace, cfg: Config, profiles: dict[str, Profile
     )
 
 
+def _frontend(args: argparse.Namespace, cfg: Config, profiles: dict[str, Profile]) -> int:
+    from warpzone import provision
+    from warpzone.provision import Reporter
+
+    name = _device(cfg, args.name) if args.name else None
+    client: Client | None = None
+    try:
+        local = localst.parse_config(localst.find_config(args.syncthing_config))
+        client = _client(local.base_url, local.api_key, label="local", dry_run=args.dry_run)
+    except localst.LocalSyncthingError:
+        if args.syncthing_config is not None or name is None:
+            raise
+    if name is None:
+        assert client is not None
+        name = _this_device(cfg, client)
+    device, profile = cfg.devices[name], profiles[cfg.devices[name].profile]
+    if profile.artwork is None:
+        raise ConfigError(f"profile {profile.name!r} has no [artwork] table: nothing to refresh")
+    if "frontend" not in device.folders:
+        raise ConfigError(
+            f"device {name!r} does not list the 'frontend' folder group, so it receives no artwork"
+        )
+    provision.refresh_artwork(
+        cfg,
+        name,
+        profile,
+        Path.home(),
+        Reporter(print, warn_sink=_eprint),
+        local=client,
+        dry_run=args.dry_run,
+    )
+    return EXIT_OK
+
+
 def _self_update(args: argparse.Namespace, rep: Reporter) -> int:
     from warpzone import selfupdate
 
@@ -473,7 +522,10 @@ def _run(args: argparse.Namespace) -> int:
 
     if args.command == "render-ignores":
         name = _device(cfg, args.name)
-        for spec in model.device_specs(cfg, name, profiles[cfg.devices[name].profile]):
+        profile = profiles[cfg.devices[name].profile]
+        # Artwork folders let in the systems that have a folder in this machine's library.
+        scope = provision.artwork_scope(profile, Path.home())
+        for spec in model.device_specs(cfg, name, profile, scope):
             rep.out(f"# {spec.id}")
             if spec.bootstrap_ignores is not None:
                 rep.out("# bootstrap, replaced once the whitelist has arrived:")
@@ -494,6 +546,9 @@ def _run(args: argparse.Namespace) -> int:
         client = _client(local.base_url, local.api_key, label="local")
         provision.folder_status(client, "this machine", rep)
         return EXIT_OK
+
+    if args.command == "frontend":
+        return _frontend(args, cfg, profiles)
 
     if args.command == "prune":
         local = localst.parse_config(localst.find_config(args.syncthing_config))

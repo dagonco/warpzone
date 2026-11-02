@@ -66,7 +66,7 @@ class ProfileTests(unittest.TestCase):
         self.assertEqual(PROFILE.bios, {})
 
     def test_folders_without_a_path_are_refused_by_name(self) -> None:
-        for group in ("songs", "tools", "frontend", "settings"):
+        for group in ("songs", "tools", "settings"):
             with self.subTest(group=group):
                 cfg = ark_config(("library", group))
                 with self.assertRaisesRegex(ModelError, group):

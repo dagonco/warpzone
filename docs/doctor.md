@@ -33,6 +33,7 @@ Inbox tools
 - RetroArch's Flycast option for per-game VMUs, when the core has run.
 - Vita3K's active user, when Vita3K has a config.
 - The emulator settings layers, the ES-DE startup script and the last `settings apply`, on a device that subscribes to `settings`.
+- The frontend's system list override and RetroArch's paths, and the generated artwork gamelists and their timer, on a device whose profile sets them (`anbernic-rg351mp`).
 - The `warpzone self-update` timer, on a Linux device (a warning when it is not installed or not enabled).
 - The frontend's system list override and RetroArch's paths, on a device whose profile sets them (`anbernic-rg351mp`).
 - The inbox tools (`chdman`, `bsdtar`, `RAHasher`, `dolphin-tool`, `nsz`), the Switch titledb folder and keys file (presence only).
@@ -78,9 +79,11 @@ On a console that subscribes to the `settings` group, `doctor` finds the device 
 
 ## Frontend
 
-On a device that subscribes to `library` with a profile that moves the frontend and RetroArch to the library (`anbernic-rg351mp`), `doctor` finds the device the same way, through the local Syncthing's `config.xml`, and adds two lines. See [anbernic.md](anbernic.md).
+On a device that subscribes to `library` with a profile that moves the frontend and RetroArch to the library (`anbernic-rg351mp`), `doctor` finds the device the same way, through the local Syncthing's `config.xml`, and adds two lines, and two more when it lists `frontend`. See [anbernic.md](anbernic.md).
 
 - **ES systems override.** `~/.emulationstation/es_systems.cfg` is exactly the system list of the OS with the ROM folders moved into the library. Missing or out of date (dArkOS updated its list) is a warning, and the fix is `warpzone provision device <name>` with EmulationStation closed.
 - **RetroArch paths.** Each RetroArch config has the BIOS folder and the save and state settings the profile wants. A key that differs is named with its current value; a missing config or a key present twice is a warning.
+- **Frontend artwork.** For a device that lists `frontend` and whose profile has `[artwork]`: every gamelist that `warpzone frontend refresh` would write exists and says what it should (new scrape, new cover or a game that arrived since: `stale`). Missing or stale ones are named and the fix is `warpzone frontend refresh <name>` with the frontend closed. It also warns when no scraped gamelist has arrived yet for the systems on the device (look at the `wz-esde` folder with `warpzone status`) and when the system list or a scraped file cannot be read.
+- **Artwork timer.** Only when the profile sets `refresh`: `warpzone-artwork.timer` is installed in `~/.config/systemd/user`. Otherwise the fix is `warpzone provision device <name>`.
 
 Details in [design.md](design.md#doctor).

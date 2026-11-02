@@ -113,6 +113,7 @@ python3 -m warpzone --help
 | `warpzone provision device <name>` | On a console: adds the hub and creates the subscribed folders. |
 | `warpzone status` | Folder state, outstanding items and receive-only local changes. |
 | `warpzone render-ignores <name>` | Prints the ignore lines a device folder would get. |
+| `warpzone frontend refresh` | On a console whose frontend is not ES-DE: rewrites its gamelists from the hub's scraped artwork and metadata. |
 | `warpzone prune` | Reports (or, with `--apply`, deletes) files a device no longer whitelists. |
 | `warpzone bios` | Which BIOS and firmware files the library has, lacks or has wrong. |
 | `warpzone inbox` | Reports (or, with `--apply`, files) new games dropped in `inbox/`. |
@@ -122,6 +123,7 @@ python3 -m warpzone --help
 | `warpzone self-update` | On a device: moves the git clone to the newest release tag (never a downgrade). A daily timer runs it, see [docs/self-update.md](docs/self-update.md). |
 | `warpzone doctor` | Checks this machine and prints the fix for each problem. |
 
+`provision` and `frontend refresh` support `--dry-run`. `prune` and `inbox` report first and act only with `--apply`. `settings apply` and `settings capture` support `--dry-run`.
 `provision` and `self-update` support `--dry-run`. `prune` and `inbox` report first and act only with `--apply`. `settings apply` and `settings capture` support `--dry-run`.
 
 ## Safety
