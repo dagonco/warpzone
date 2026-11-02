@@ -703,7 +703,7 @@ Syncthing state. The contract:
   DAT matching or conversion.
 - **Switch games.** See [Switch games](#switch-games) below; they do not go through DAT
   matching or conversion.
-- **PS3, Xbox and Xbox 360 disc images.** See [Console disc images](#console-disc-images)
+- **PS3, Xbox, Xbox 360 and Wii U images.** See [Console disc images](#console-disc-images)
   below; they are identified by signature, not by DAT.
 - **Out of scope.** Vita, and PS3 or Xbox content that is not a disc image (`.pkg`,
   `.rap`, an extracted `PS3_GAME` or `default.xbe` folder). Their files are recognised by
@@ -779,7 +779,7 @@ blawar/titledb and filed under the library's existing conventions. The code is i
 
 ### Console disc images
 
-PS3, Xbox and Xbox 360 images have no Redump or No-Intro entry, so they are identified by
+PS3, Xbox, Xbox 360 and Wii U images have no Redump or No-Intro entry, so they are identified by
 signature. The code is in `warpzone/inbox_console_iso.py`, which is both a kind handler in
 `inbox.kind_handlers()` and the one `UnmatchedHandler` in `inbox.unmatched_handlers()`.
 
@@ -794,11 +794,15 @@ signature. The code is in `warpzone/inbox_console_iso.py`, which is both a kind 
     is Xbox, `default.xex` at 0, 0xFDA0000 or 0x2080000 is Xbox 360, `default.xbe` at
     0x18300000 is a full Xbox image that is not placed. Any other combination is not
     recognised.
+  - *Wii U* (`.wua`, a Cemu ZArchive): the last 16 bytes of the file are a big-endian u64
+    total size, the u32 version `0x61bf3a01` and the u32 magic `0x169f52d6` (the end of a
+    144-byte footer), and the size must equal the file's own. A `.wua` name is only ever
+    judged this way and no other name is judged as a ZArchive.
   - *PS3*: an ISO9660 primary volume descriptor at sector 16; the root must hold
     `PS3_DISC.SFB` and a `PS3_GAME` directory with `PARAM.SFO`, whose `TITLE_ID` and `TITLE`
     are read.
 - **Claiming.** The handler claims an item (a file, a folder, or an archive listed by
-  `zipfile` or `bsdtar -tf`) when a file name ends in `.dec.iso`, `.xiso.iso` or `.xiso`.
+  `zipfile` or `bsdtar -tf`) when a file name ends in `.dec.iso`, `.xiso.iso`, `.xiso` or `.wua`.
   Names alone never identify: a claimed file whose content is not recognised goes to
   review. Every `.iso` or `.xiso` in a claimed item is sniffed; other non-sidecar files are
   named in the review reason.
@@ -809,8 +813,9 @@ signature. The code is in `warpzone/inbox_console_iso.py`, which is both a kind 
   PS2, PSP or GameCube image that a DAT matches is therefore never read for a signature,
   and one that no DAT matches and no signature fits ends in review as before. The cost is
   that an unmatched plain `.iso` is hashed once, like any other unmatched file.
-- **Placement.** `library/roms/ps3/`, `roms/xbox/` and `roms/xbox360/roms/` (the folder
-  EmuDeck's ES-DE system for the 360 reads), under the file's own name. It is copied to
+- **Placement.** `library/roms/ps3/`, `roms/xbox/`, `roms/xbox360/roms/` (the folder
+  EmuDeck's ES-DE system for the 360 reads) and `roms/wiiu/roms/` (where Cemu's game path
+  points), under the file's own name. It is copied to
   `<name>.part`, read back and renamed; an existing name with the same size and SHA1 is
   "already in the library", a different one a review (nothing replaced). The report shows
   `detected: <platform>` (for PS3 also the TITLE_ID and title), the path and the whitelist
@@ -1574,7 +1579,7 @@ warpzone/
   inbox.py           unpack, identify, convert, place, file the originals
   inbox_switch.py    Switch games: identify with nsz, titledb names, decompress, place
   inbox_mame.py      arcade sets: MAME / FBNeo / 2003-Plus fit, emulator choice, ES-DE gamelist
-  inbox_console_iso.py  PS3, Xbox and Xbox 360 disc images: identify by signature, place
+  inbox_console_iso.py  PS3, Xbox, Xbox 360 and Wii U images: identify by signature, place
   flatpak.py         the SyncThingy flatpak: app id and the unit's commands
   settings.py        `settings apply`, `capture`, `audit`: loading, prompts, output
   settings_formats.py  format handlers ini, qt-ini, retroarch-cfg, yaml-flat (pure)

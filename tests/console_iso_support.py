@@ -121,3 +121,14 @@ def write_xdvdfs(path: Path, base: int, exe: str, extra: tuple[str, ...] = ("a.x
         f.seek(base + 40 * SECTOR)
         f.write(b"EXE")
     return path
+
+
+WUA_VERSION, WUA_MAGIC = 0x61BF3A01, 0x169F52D6
+
+
+def zarchive(body: int = 200, *, magic: int = WUA_MAGIC, size: int | None = None) -> bytes:
+    """A synthetic ZArchive (Cemu `.wua`): filler followed by the 144-byte footer (six
+    offset/size sections, a 32-byte hash, the total size, the version and the magic)."""
+    total = body + 144 if size is None else size
+    footer = bytes(96 + 32) + struct.pack(">QII", total, WUA_VERSION, magic)
+    return b"\x5a" * body + footer
