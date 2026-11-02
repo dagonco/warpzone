@@ -32,6 +32,7 @@ Inbox tools
 - The local Syncthing and its REST API.
 - RetroArch's Flycast option for per-game VMUs, when the core has run.
 - Vita3K's active user, when Vita3K has a config.
+- The emulator settings layers, the ES-DE startup script and the last `settings apply`, on a device that subscribes to `settings`.
 - The inbox tools (`chdman`, `bsdtar`, `RAHasher`, `dolphin-tool`, `nsz`), the Switch titledb folder and keys file (presence only).
 - The DAT folder and how old the newest DAT is, and the optional arcade DAT files.
 - The hub folder and its free space.
@@ -64,5 +65,13 @@ When RetroArch's Flycast core has run (`Flycast.opt` exists in the RetroArch fla
 ## Vita3K user
 
 `doctor` reads `user-id:` in `~/.config/Vita3K/config.yml`. The profile syncs the saves of user `00`; if Vita3K's active user has another id, the check warns and says how to fix it. See [emudeck.md](emudeck.md#vita3k-syncs-user-00).
+
+## Emulator settings
+
+On a console that subscribes to the `settings` group, `doctor` finds the device from the local Syncthing's `config.xml` (a machine without it says nothing) and adds three lines. See [settings.md](settings.md).
+
+- **Settings layers.** The local `wz-settings` folder and its marker exist, and `common.toml` and the device's layer parse and validate. A missing folder, an invalid layer, a conflict copy or a secret key in a layer is a problem; an emulator or file id the profile does not know is a warning.
+- **ES-DE startup script.** The script is installed, executable and its Python exists, and ES-DE's custom event scripts are on (`CustomEventScripts` in `es_settings.xml`). Otherwise it warns and the fix is `warpzone provision device <name>`, run with ES-DE closed, or the menu path in ES-DE.
+- **Last settings apply.** Read from `last-apply.json`: a failed run warns and names the log; keys held back warn and the fix is `warpzone settings capture`; no run yet is optional.
 
 Details in [design.md](design.md#doctor).
