@@ -124,6 +124,7 @@ python3 -m warpzone --help
 | `warpzone settings capture` | On a console: takes settings changed in an emulator to the hub's layers. |
 | `warpzone settings audit` | Reports drift between the layers and this console (read only). |
 | `warpzone self-update` | On a device: moves the git clone to the newest release tag (never a downgrade). A daily timer runs it, see [docs/self-update.md](docs/self-update.md). |
+| `warpzone health [device]` | On a device: checks that this version works (config, dry runs of what ES-DE and the timers run, startup scripts and units); writes nothing. Exit 0 when it works. See [docs/self-update.md](docs/self-update.md#checking-a-version). |
 | `warpzone doctor` | Checks this machine and prints the fix for each problem. |
 
 `provision`, `frontend refresh` and `links sync` support `--dry-run`. `prune` and `inbox` report first and act only with `--apply`. `settings apply` and `settings capture` support `--dry-run`.
