@@ -9,10 +9,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .selfupdate import tag_key
+
 # Syncthing applies a changed whitelist only on a full scan of the folder, and a
 # freshly synced whitelist file does not trigger one reliably (see design.md).
 DEFAULT_RESCAN_SECONDS = 300
 MIN_RESCAN_SECONDS = 5
+CHANNELS = ("stable", "rc")
 FOLDER_GROUPS = (
     "library",
     "songs",
@@ -51,6 +54,10 @@ class Device:
     rescan_seconds: int = DEFAULT_RESCAN_SECONDS
     # Whether `provision device` installs the timer that runs `warpzone self-update`.
     self_update: bool = True
+    # Which releases the device follows: "stable" (vX.Y.Z) or "rc" (those and vX.Y.ZrcN).
+    channel: str = "stable"
+    # A tag (vX.Y.Z or vX.Y.ZrcN) the device stays on, whatever the channel; None for none.
+    pin: str | None = None
 
 
 INBOX_KEYS = (
@@ -252,7 +259,16 @@ def parse_config(data: dict[str, Any], known_profiles: set[str] | None = None) -
             continue
         _check_keys(
             entry,
-            {"device_id", "profile", "folders", "addresses", "rescan_seconds", "self_update"},
+            {
+                "device_id",
+                "profile",
+                "folders",
+                "addresses",
+                "rescan_seconds",
+                "self_update",
+                "channel",
+                "pin",
+            },
             where,
             errors,
         )
@@ -290,6 +306,14 @@ def parse_config(data: dict[str, Any], known_profiles: set[str] | None = None) -
         if not isinstance(self_update, bool):
             errors.append(f"{where}.self_update: must be true or false")
             self_update = True
+        channel = entry.get("channel", "stable")
+        if not isinstance(channel, str) or channel not in CHANNELS:
+            errors.append(f"{where}.channel: must be 'stable' or 'rc'")
+            channel = "stable"
+        pin = entry.get("pin")
+        if "pin" in entry and (not isinstance(pin, str) or tag_key(pin) is None):
+            errors.append(f"{where}.pin: must be a release tag such as v0.3.0 or v0.3.0rc1")
+            pin = None
         devices[dev_name] = Device(
             dev_name,
             device_id,
@@ -298,6 +322,8 @@ def parse_config(data: dict[str, Any], known_profiles: set[str] | None = None) -
             _addresses(entry, where, errors),
             rescan,
             self_update,
+            channel,
+            pin,
         )
 
     if errors:

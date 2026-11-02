@@ -98,6 +98,50 @@ class ConfigTests(unittest.TestCase):
                 "self_update: must be true or false",
             )
 
+    def test_channel_defaults_to_stable_and_must_be_known(self) -> None:
+        self.assertEqual(parse_config(config_data()).devices["deck"].channel, "stable")
+        data = copy.deepcopy(config_data())
+        for value in ("stable", "rc"):
+            data["devices"]["deck"]["channel"] = value
+            self.assertEqual(parse_config(data).devices["deck"].channel, value)
+        for bad in ("beta", "RC", "", " rc", 1, True, None, ["rc"]):
+            self.assert_error(
+                lambda d, bad=bad: d["devices"]["deck"].update(channel=bad),
+                "channel: must be 'stable' or 'rc'",
+            )
+
+    def test_pin_is_optional_and_must_be_a_tag(self) -> None:
+        self.assertIsNone(parse_config(config_data()).devices["deck"].pin)
+        data = copy.deepcopy(config_data())
+        for value in ("v0.3.0", "v10.0.12", "v0.3.0rc1", "v0.3.0rc12"):
+            data["devices"]["deck"]["pin"] = value
+            self.assertEqual(parse_config(data).devices["deck"].pin, value)
+        bad_pins = (
+            "0.3.0",
+            "v0.3",
+            "v0.3.0-rc1",
+            "v0.3.0-rc.1",
+            "v0.3.0rc",
+            "v0.3.0a1",
+            "latest",
+            "",
+            " v0.3.0",
+            3,
+            True,
+            None,
+        )
+        for bad in bad_pins:
+            self.assert_error(
+                lambda d, bad=bad: d["devices"]["deck"].update(pin=bad),
+                "pin: must be a release tag such as v0.3.0 or v0.3.0rc1",
+            )
+
+    def test_a_pin_may_name_a_release_candidate_on_the_stable_channel(self) -> None:
+        data = copy.deepcopy(config_data())
+        data["devices"]["deck"].update(channel="stable", pin="v0.3.0rc1")
+        device = parse_config(data).devices["deck"]
+        self.assertEqual((device.channel, device.pin), ("stable", "v0.3.0rc1"))
+
     def test_all_errors_are_reported_together(self) -> None:
         data = copy.deepcopy(config_data())
         data["hub"]["device_id"] = "x"
