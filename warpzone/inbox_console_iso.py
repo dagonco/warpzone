@@ -1,6 +1,6 @@
 """Console disc images that no DAT can match, for `warpzone inbox`.
 
-Four kinds of file have no Redump / No-Intro entry, so they are identified by their
+Five kinds of file have no Redump / No-Intro entry, so they are identified by their
 signature instead of by hash:
 
 - PS3 decrypted discs (`*.dec.iso`): ISO9660 with `PS3_DISC.SFB` and `PS3_GAME/PARAM.SFO`,
@@ -16,12 +16,17 @@ signature instead of by hash:
   `.wua` is only ever judged by that footer: it is never sniffed as a disc image, and a
   `.iso` is never taken for a ZArchive.
 
+- PS4 `.pkg` files: the header starts with the magic `\x7fCNT` and holds a content id such
+  as `EP9000-CUSA07934_00-SCES503610000001` at 0x40 (only the first 0x60 bytes are read).
+  Filed in `roms/ps4/`, and the title id (`CUSA07934`) is reported. A PS3 `.pkg` (magic
+  `\x7fPKG`) or any other `.pkg` keeps the "not supported by inbox yet" outcome.
+
 A full Redump-style Xbox image (game partition at 0x18300000) is recognised but never
 placed: xemu cannot boot it, so it goes to review with the instruction to convert it with
 extract-xiso.
 
 How the module hooks into `inbox.py`: `HANDLER` is both a kind handler (it claims items
-whose file names end in `.dec.iso`, `.xiso.iso`, `.xiso` or `.wua`, in a folder or an archive)
+whose file names end in `.dec.iso`, `.xiso.iso`, `.xiso`, `.wua` or `.pkg`, in a folder or an archive)
 and an `UnmatchedHandler` (a plain `.iso` that the DATs could not explain is sniffed, and if it
 is one of these formats it is placed instead of going to review). PS2, PSP and GameCube
 `.iso` files are therefore untouched: they are matched by the DATs first, and only an
@@ -52,19 +57,28 @@ from warpzone import inbox, inbox_mame
 from warpzone.dat import FileInfo
 from warpzone.inbox import Context, ItemFailure, ItemResult, Options, Staged, UnitResult
 
-PS3, XBOX, XBOX360, XBOX_REDUMP, WIIU = "ps3", "xbox", "xbox360", "xbox-redump", "wiiu"
+PS3, XBOX, XBOX360, XBOX_REDUMP, WIIU, PS4 = (
+    "ps3",
+    "xbox",
+    "xbox360",
+    "xbox-redump",
+    "wiiu",
+    "ps4",
+)
 PLATFORMS = {
     PS3: "PS3 decrypted disc image",
     XBOX: "Xbox (XISO)",
     XBOX360: "Xbox 360 disc image",
     XBOX_REDUMP: "Xbox full disc image (Redump layout)",
     WIIU: "Wii U archive (Cemu ZArchive)",
+    PS4: "PS4 package",
 }
 # Where each kind goes inside library/roms/.
-FOLDERS = {PS3: "ps3", XBOX: "xbox", XBOX360: "xbox360/roms", WIIU: "wiiu/roms"}
+FOLDERS = {PS3: "ps3", XBOX: "xbox", XBOX360: "xbox360/roms", WIIU: "wiiu/roms", PS4: "ps4"}
 WUA_SUFFIX = ".wua"
-CLAIMED_SUFFIXES = (".dec.iso", ".xiso.iso", ".xiso", WUA_SUFFIX)
-SNIFFED_SUFFIXES = (".iso", ".xiso", WUA_SUFFIX)
+PKG_SUFFIX = ".pkg"
+CLAIMED_SUFFIXES = (".dec.iso", ".xiso.iso", ".xiso", WUA_SUFFIX, PKG_SUFFIX)
+SNIFFED_SUFFIXES = (".iso", ".xiso", WUA_SUFFIX, PKG_SUFFIX)
 EMU_RPCS3_ISO = "RPCS3 ISO (Standalone)"  # the ES-DE name, as written in <altemulator>
 GAMELIST_REL = ("frontend", "es-de", "gamelists", "ps3", "gamelist.xml")
 CONVERT_HINT = (
@@ -87,6 +101,10 @@ MAX_SFO_BYTES = 1 << 16
 # then big-endian u64 total size, u32 version and u32 magic.
 ZARCHIVE_FOOTER = 144
 ZARCHIVE_VERSION, ZARCHIVE_MAGIC = 0x61BF3A01, 0x169F52D6
+# PS4 package header: the magic, and the content id (`XXnnnn-CUSAnnnnn_nn-...`) at 0x40.
+PS4_PKG_MAGIC = b"\x7fCNT"
+PS4_CONTENT_ID_AT, PS4_HEADER_BYTES = 0x40, 0x60
+_PS4_CONTENT_ID = re.compile(rb"^[A-Z]{2}\d{4}-(CUSA\d{5})_\d\d-[A-Za-z0-9_]+")
 _VERSION_SUFFIX = re.compile(r";\d+$")
 
 
@@ -206,7 +224,7 @@ class Detected:
         return PLATFORMS[self.kind]
 
     def describe(self) -> str:
-        if self.kind == PS3:
+        if self.kind in (PS3, PS4):
             return f"{self.platform}: {self.title_id} {self.title}".rstrip()
         return self.platform
 
@@ -314,10 +332,27 @@ def detect_wua(f: BinaryIO) -> Detected | None:
     return Detected(WIIU)
 
 
+def is_pkg(name: str) -> bool:
+    return name.lower().endswith(PKG_SUFFIX)
+
+
+def detect_pkg(f: BinaryIO) -> Detected | None:
+    """A PS4 package, from the magic and the content id of its header alone (the title id
+    is the `CUSAnnnnn` part). Reads the first 0x60 bytes."""
+    head = _read_at(f, 0, PS4_HEADER_BYTES)
+    if head[:4] != PS4_PKG_MAGIC:
+        return None
+    found = _PS4_CONTENT_ID.match(head[PS4_CONTENT_ID_AT:])
+    return Detected(PS4, found.group(1).decode("ascii")) if found else None
+
+
 def detect_path(path: Path) -> Detected | None:
-    """`.wua` files are judged by the ZArchive footer only, everything else as a disc image."""
+    """`.wua` files are judged by the ZArchive footer only, `.pkg` files by the PS4 header
+    only, everything else as a disc image."""
     with path.open("rb") as f:
-        return detect_wua(f) if is_wua(path.name) else detect(f)
+        if is_wua(path.name):
+            return detect_wua(f)
+        return detect_pkg(f) if is_pkg(path.name) else detect(f)
 
 
 # ------------------------------------------------------------------ disk
@@ -452,7 +487,7 @@ def _names_in(ctx: Context, item: Path) -> list[str]:
 
 
 class ConsoleIsoHandler:
-    """Items holding a `.dec.iso`, `.xiso.iso`, `.xiso` or `.wua` (the item is taken over
+    """Items holding a `.dec.iso`, `.xiso.iso`, `.xiso`, `.wua` or `.pkg` (the item is taken over
     whole), and plain `.iso` files the DATs could not match (see `adopt`)."""
 
     def validate(self, opts: Options) -> None:
@@ -484,6 +519,12 @@ class ConsoleIsoHandler:
             found = detect_path(s.path)
         except OSError as exc:
             result.reasons.append(f"{s.rel}: {exc.strerror or exc}")
+            return
+        if found is None and is_pkg(s.path.name):
+            # PS3 and any other .pkg keep today's outcome
+            result.reasons.append(
+                inbox.unsupported_reason([s.rel]) or f"{s.rel}: not recognised as a PS4 .pkg"
+            )
             return
         if found is None:
             result.reasons.append(

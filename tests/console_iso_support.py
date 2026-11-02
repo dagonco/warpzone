@@ -132,3 +132,11 @@ def zarchive(body: int = 200, *, magic: int = WUA_MAGIC, size: int | None = None
     total = body + 144 if size is None else size
     footer = bytes(96 + 32) + struct.pack(">QII", total, WUA_VERSION, magic)
     return b"\x5a" * body + footer
+
+
+def ps4_pkg(
+    content_id: str = "EP9000-CUSA07934_00-SCES503610000001", *, magic: bytes = b"\x7fCNT"
+) -> bytes:
+    """A synthetic PS4 `.pkg`: the magic, a big-endian header and the content id at 0x40."""
+    head = magic + struct.pack(">I", 1) + bytes(0x38)
+    return head + content_id.encode("ascii").ljust(36, b"\x00") + b"\x5a" * 400

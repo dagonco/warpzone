@@ -63,7 +63,7 @@ mame2003plus_dat = "~/dats/mame2003-plus.xml"
 
 Items modified in the last 30 seconds are left alone (they may still be copying), and `_*` folders, hidden files, `@eaDir` and `.DS_Store` are never items. warpzone does not edit whitelists: add the printed lines to the device whitelists yourself ([whitelists.md](whitelists.md)). Exit code 1 when any item needs review.
 
-Vita is not supported yet, and neither are PS3 or Xbox games kept as extracted folders or `.pkg` files. Those items go to review ("not supported by inbox yet").
+Vita is not supported yet, and neither are PS3 or Xbox games kept as extracted folders or PS3 `.pkg` files. Those items go to review ("not supported by inbox yet").
 
 ## Switch games
 
@@ -85,22 +85,24 @@ Titles come from a local clone of titledb (`git clone --depth 1 https://github.c
 - A file is never overwritten. The check is by TitleID and version wherever the library has it: the same bytes are "already in the library", different bytes go to review.
 - Games print their whitelist line (`!/roms/switch/...`). Updates and DLC are usually whitelisted by folder (`!/extras/switch/updates`, `!/extras/switch/dlc`), so the report says that once instead of one line per file.
 
-## PS3, Xbox, Xbox 360 and Wii U images
+## PS3, PS4, Xbox, Xbox 360 and Wii U images
 
-No Redump or No-Intro DAT can match these four, so they are identified by their signature, read in a few small pieces (never the whole image):
+No Redump or No-Intro DAT can match these five, so they are identified by their signature, read in a few small pieces (never the whole image):
 
 | Image | Signature | Placed in |
 |---|---|---|
 | PS3, decrypted (`*.dec.iso`) | ISO9660 with `PS3_DISC.SFB` and `PS3_GAME/PARAM.SFO` (its `TITLE_ID` and `TITLE` are reported) | `library/roms/ps3/` |
 | Xbox, XISO (`*.xiso.iso`, `*.xiso`) | XDVDFS (`MICROSOFT*XBOX*MEDIA` at 0x10000) with `default.xbe` in the root | `library/roms/xbox/` |
 | Xbox 360 (plain `*.iso`) | XDVDFS partition at 0xFDA0000 (XGD2) or 0x2080000 (XGD3), or an extracted XISO at 0, with `default.xex` in the root | `library/roms/xbox360/roms/` |
-| Wii U (`*.wua`, a Cemu ZArchive) | the 144-byte footer at the end of the file: its last 16 bytes are the file size (u64), the version `0x61bf3a01` and the magic `0x169f52d6` (all big-endian), and the size must equal the real size of the file | `library/roms/wiiu/roms/` |
+| Wii U (`*.wua`, a Cemu ZArchive) | the 144-byte footer at the end of the file: its last 16 bytes are the file size (u64), the version `0x61bf3a01` and the magic `0x169f52d6` (all big-endian), and the size must equal the real size of the file | `library/roms/wiiu/roms/` || PS4 (`*.pkg`) | the first 0x60 bytes: magic `\x7fCNT` and, at 0x40, a content id shaped like `XXnnnn-CUSAnnnnn_nn-...` (the title id `CUSAnnnnn` is reported) | `library/roms/ps4/` |
 
-Xbox and Xbox 360 are told apart by the root executable, not by the offset. An item whose file names end in `.dec.iso`, `.xiso.iso`, `.xiso` or `.wua` (loose, in a folder or in an archive) is taken over. A plain `.iso` is left to the DATs first, so PS2, PSP and GameCube images are never touched, and only an `.iso` that no DAT explains is then sniffed and placed if it is one of these.
+Xbox and Xbox 360 are told apart by the root executable, not by the offset. An item whose file names end in `.dec.iso`, `.xiso.iso`, `.xiso`, `.wua` or `.pkg` (loose, in a folder or in an archive) is taken over. A plain `.iso` is left to the DATs first, so PS2, PSP and GameCube images are never touched, and only an `.iso` that no DAT explains is then sniffed and placed if it is one of these.
 
 The file keeps its name and nothing is overwritten (same size and SHA1 is "already in the library", anything else goes to review). The report shows what was detected, the destination and the whitelist line (`!/roms/xbox360/roms/<name>`).
 
 A `.wua` is judged by its footer only, by reading its last 16 bytes: a truncated file, a file with a wrong footer or another kind of image renamed to `.wua` goes to review and is not placed, and a ZArchive named `.iso` is not recognised. It goes to `roms/wiiu/roms/` (not `roms/wiiu/`) because that is the game path Cemu is pointed at. It also works inside a `.zip`, `.7z` or `.rar` (7z and rar need `bsdtar`), like the other images here.
+
+A `.pkg` is judged by that header only. A PS3 `.pkg` (magic `\x7fPKG`) or any `.pkg` with another magic or content id is not placed and goes to review as "not supported by inbox yet". It also works inside a `.zip`, `.7z` or `.rar`.
 
 A full Redump-style Xbox image (game partition at 0x18300000) is never placed, because xemu cannot boot it. It goes to review with the instruction to convert it to XISO with [extract-xiso](https://github.com/XboxDev/extract-xiso).
 
