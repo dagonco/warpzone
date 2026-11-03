@@ -44,3 +44,47 @@ Users can verify a download with `sha256sum -c SHA256SUMS` and `gh attestation v
 - `build` or `release` fails for a transient reason (network, runner): re-run the failed jobs from the Actions tab. Re-running `release` is safe only if no release exists for the tag yet.
 - The release exists but is wrong (bad notes, wrong asset): edit the notes in the GitHub UI, or `gh release delete vX.Y.Z` (keep the tag) and re-run the workflow. If the code itself is wrong, do not move the tag: publish a new patch version instead.
 - Never reuse a version number that users may already have downloaded.
+
+## Signing a tag
+
+Devices that update themselves accept only tags signed with the maintainer's SSH key, once its public key is in `warpzone/data/allowed_signers`. Until a key is there they accept unsigned tags and say so in their log.
+
+One-time setup, with a key used only for this (an `ed25519` key is enough):
+
+```bash
+ssh-keygen -t ed25519 -f ~/.ssh/warpzone-release -C "warpzone release"
+git config gpg.format ssh
+git config user.signingkey ~/.ssh/warpzone-release.pub
+```
+
+Put the public key in `warpzone/data/allowed_signers` through a normal pull request, one line per key (`<principal> namespaces="git" <key type> <public key>`; the namespace is the one `git` signs with). A device gets the file with the release that carries it (the installer that copies it next to the updater is not written yet), so a key must be added in a release before the first tag signed with it: tags are signed from the release after that. To rotate, add the new key in a release signed with the old one, then sign with the new one.
+
+Sign the tag instead of just annotating it in step 7 of the checklist (`-s` replaces `-a`), and check it before pushing:
+
+```bash
+git tag -s vX.Y.Z -m "warpzone X.Y.Z"
+git -c gpg.ssh.allowedSignersFile=warpzone/data/allowed_signers verify-tag vX.Y.Z
+git push origin vX.Y.Z
+```
+
+An unsigned or lightweight tag, or one signed by a key that is not in the file, is ignored by every device that checks signatures. The workflow does not check signatures: it only needs the tag to match the package version.
+
+## Publishing a release candidate
+
+A release candidate is a normal release with a PEP 440 version. Set `__version__` to `X.Y.ZrcN` (for example `0.3.0rc1`), add a `## [0.3.0rc1] - YYYY-MM-DD` section to the changelog (the workflow refuses a tag without one), follow the checklist and tag `v0.3.0rc1` (signed, as above). The workflow publishes it as a GitHub pre-release. The final release `v0.3.0` is the next version and orders after every `rc`; `v0.3.0rc2` orders after `v0.3.0rc1` and `rc10` after `rc2`. Only devices with `channel = "rc"` follow candidates; those on `stable` ignore them until the release. Do not spell it `v0.3.0-rc1`: no device knows that tag.
+
+## Retiring a release
+
+A tag cannot be edited, and a published release must never be moved or reused. If a release turns out to be harmful, withdraw it by adding a line to the `RETIRED` file at the root of `main`, through a normal pull request:
+
+```text
+v0.3.0 2026-11-20 settings apply overwrote a captured key
+```
+
+The line is `vX.Y.Z` (or `vX.Y.ZrcN`), the date, and a short reason, separated by blanks. Lines that start with `#` and blank lines are ignored; a line in any other shape retires nothing (`python3 -m unittest tests.test_retired` checks the file). Devices read `RETIRED` from `origin/main` after their daily fetch, so the pull request has to be merged for it to take effect. From then on:
+
+- no device picks the tag as a target;
+- a device that runs it moves to the best release that is not retired, even a lower one, after verifying it like any update;
+- a device with `pin` set to the tag stays on it (a pin wins) and records it in its state so that `doctor` can warn.
+
+Publish a fixed version as well, as a new patch release, so devices have something to move up to.
