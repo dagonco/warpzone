@@ -121,6 +121,11 @@ class Rig:
         self.python.parent.mkdir()
         self.python.write_text(FAKE_PYTHON)
         self.python.chmod(0o755)
+        # `sync` flushes the whole machine and is slow on a developer's laptop; nothing here
+        # looks at it, so the ticks run with one that does nothing (`selftest` still needs it).
+        nosync = self.python.parent / "sync"
+        nosync.write_text("#!/bin/sh\nexit 0\n")
+        nosync.chmod(0o755)
         self.boot_id.write_text("boot-1\n")
         shutil.copy(UPDATER, self.updater)
         subprocess.run(
@@ -265,6 +270,7 @@ class Rig:
             "WZ_FAKE_DIR": str(self.fake_dir),
             "WZ_FETCH_INTERVAL": "0",
             "WZ_STEP_TIMEOUT": "20",
+            "PATH": f"{self.python.parent}{os.pathsep}{os.environ['PATH']}",
         }
         if now is not None:
             env["WZ_NOW"] = str(now)
@@ -921,14 +927,27 @@ class DeferralClockTests(UpdaterCase):
         self.assertEqual(rig.on_tag(), "v0.1.0", "no update while the user plays")
         self.assertEqual(rig.state()["deferred_since"], str(later))
 
-    def test_a_failed_reconcile_and_an_environment_failure_end_the_deferral(self) -> None:
+    def test_an_environment_failure_ends_the_deferral_with_the_menu_still_open(self) -> None:
+        # The menu has been open for 80 hours, so the tick goes on; the lines that clear
+        # `deferred_since` when the menu is seen closed cannot be what clears it here.
         rig = self.rig
         rig.release("0.2.0")
         rig.flag("env_broken")
-        rig.write_state(pending="1", deferred_since=str(NOW - HOUR))
+        rig.add_process(7000001, "es-de")
+        rig.write_state(pending="1", deferred_since=str(NOW - 80 * HOUR))
         self.assertTick(rig.tick(), 1)
         self.assertEqual(rig.state()["last_result"], "env")
         self.assertEqual(rig.state()["deferred_since"], "")
+
+    def test_a_failed_reconcile_ends_the_deferral_with_the_menu_still_open(self) -> None:
+        rig = self.rig
+        rig.flag("env_broken")
+        rig.add_process(7000001, "es-de")
+        rig.write_state(pending="1", deferred_since=str(NOW - 80 * HOUR))
+        self.assertTick(rig.tick(), 0)
+        self.assertEqual(len(rig.provisions()), 1)
+        self.assertEqual(rig.state()["deferred_since"], "")
+        self.assertEqual(rig.state()["pending"], "0")
 
 
 class ProcessGroupTests(UpdaterCase):
@@ -951,6 +970,14 @@ class ProcessGroupTests(UpdaterCase):
             with self.subTest(behaviour=behaviour):
                 rig = Rig(self)
                 rig.release("0.2.0", behaviour)
+                # a release under suspicion gets its second look at once: one cut, not three
+                git(rig.clone, "fetch", "-q", "--tags")
+                rig.write_state(
+                    good_tag="v0.1.0",
+                    good_sha=rig.head(),
+                    suspect_tag="v0.2.0",
+                    suspect_sha=git(rig.work, "rev-parse", "v0.2.0^{commit}"),
+                )
                 started = time.monotonic()
                 self.assertTick(rig.tick(WZ_STEP_TIMEOUT="1"), 1)
                 self.assertLess(time.monotonic() - started, 30, "a grandchild held the pipe")
@@ -998,7 +1025,7 @@ class BudgetTests(UpdaterCase):
         rig = self.rig
         rig.release("0.2.0", "hang")
         started = time.monotonic()
-        self.assertTick(rig.tick(WZ_TICK_BUDGET="4", WZ_STEP_TIMEOUT="30"), 1)
+        self.assertTick(rig.tick(WZ_TICK_BUDGET="3", WZ_STEP_TIMEOUT="30"), 1)
         self.assertLess(time.monotonic() - started, 20)
         state = rig.state()
         self.assertEqual(rig.bad(), [], "running out of time says nothing about the release")
@@ -1006,12 +1033,6 @@ class BudgetTests(UpdaterCase):
         self.assertEqual((state["last_result"], state["env_failures"]), ("env", "1"))
         self.assertEqual(state["retry_after"], str(NOW + DAY))
         self.assertEqual(state["trying_tag"], "")
-
-    def test_a_step_that_runs_out_of_its_own_time_is_still_the_releases_fault(self) -> None:
-        rig = self.rig
-        rig.release("0.2.0", "hang")
-        self.assertTick(rig.tick(WZ_TICK_BUDGET="600", WZ_STEP_TIMEOUT="1"), 1)
-        self.assertEqual(rig.bad(), ["v0.2.0"])
 
     def test_numbers_in_the_environment_that_are_not_numbers_do_not_kill_the_script(self) -> None:
         rig = self.rig
@@ -1116,6 +1137,8 @@ class StateHardeningTests(UpdaterCase):
         )
         self.assertTick(rig.tick(), 0)
         self.assertEqual(rig.state()["trying_tag"], "")
+        self.assertEqual(rig.state()["trying_sha"], "", "the sha goes with its tag")
+        self.assertEqual(rig.state()["attempts"], "0")
         self.assertEqual(rig.state()["last_result"], "ok")
         self.assertFalse((rig.state_dir.parent / "escape").exists())
         self.assertEqual(rig.bad(), [])
@@ -1185,6 +1208,122 @@ class LockTests(UpdaterCase):
         self.assertTick(rig.tick(), 0)
         leftovers = [p.name for p in rig.state_dir.iterdir() if p.name.startswith("lock")]
         self.assertEqual(leftovers, [])
+
+
+class UsersEditsTests(UpdaterCase):
+    """A file the update changes is not the updater's just because of its path."""
+
+    EDIT = "# my own edit\n"
+
+    def test_an_edit_in_a_file_the_release_changes_survives_a_deferred_update(self) -> None:
+        rig = self.rig
+        rig.release("0.2.0")
+        rig.flag("defer")  # the check is deferred for hours, `trying` stays set
+        self.assertTick(rig.tick(), 0)
+        init = rig.clone / "warpzone" / "__init__.py"
+        init.write_text(self.EDIT)
+        rig.flag("defer", False)
+        self.assertTick(rig.tick(now=NOW + HOUR), 0)
+        self.assertEqual(init.read_text(), self.EDIT)
+        self.assertEqual(rig.state()["last_result"], "dirty")
+        self.assertEqual(rig.bad(), [])
+
+    def test_an_edit_during_probation_survives_the_next_boot(self) -> None:
+        rig = self.rig
+        rig.release("0.2.0")
+        self.assertTick(rig.tick(), 0)
+        self.assertEqual(rig.state()["probation"], "1")
+        init = rig.clone / "warpzone" / "__init__.py"
+        init.write_text(self.EDIT)
+        rig.boot_id.write_text("boot-2\n")
+        self.assertTick(rig.tick(now=NOW + DAY), 0)
+        self.assertEqual(init.read_text(), self.EDIT)
+        self.assertEqual(rig.state()["last_result"], "dirty")
+
+    def test_a_deleted_file_of_the_update_is_the_updaters_to_restore(self) -> None:
+        rig = self.rig
+        rig.release("0.2.0", extra={"zz.txt": "later\n"})
+        rig.cut_checkouts("kill")
+        self.assertNotEqual(rig.tick().returncode, 0)
+        (rig.clone / "warpzone" / "__init__.py").write_text("")  # cut before the file was written
+        rig.age_index_lock()
+        self.assertTick(rig.tick(now=NOW + 900), 0)
+        self.assertEqual(rig.on_tag(), "v0.2.0")
+
+
+class SuspectTests(UpdaterCase):
+    def test_a_release_that_hangs_is_looked_at_again_with_a_whole_budget(self) -> None:
+        rig = self.rig
+        rig.release("0.2.0", "hang")
+        slow = {"WZ_STEP_TIMEOUT": "3", "WZ_TICK_BUDGET": "6"}
+        # The first look fails at its own limit, the previous version passes, and the second
+        # look is cut by what is left of the budget: the release stays under suspicion.
+        self.assertTick(rig.tick(**slow), 1)
+        state = rig.state()
+        self.assertEqual(rig.on_tag(), "v0.1.0")
+        self.assertEqual(rig.bad(), [])
+        self.assertEqual(state.get("suspect_tag"), "v0.2.0")
+        self.assertEqual(state["env_failures"], "0", "this is not the environment's fault")
+        self.assertEqual(state["retry_after"], "")
+        # The next tick looks at it first thing, with the whole budget, and it fails again.
+        self.assertTick(rig.tick(now=NOW + 900, **slow), 1)
+        self.assertEqual(rig.bad(), ["v0.2.0"])
+        self.assertEqual(rig.on_tag(), "v0.1.0")
+        self.assertEqual(rig.state().get("suspect_tag"), "")
+
+    def test_a_suspect_that_passes_the_second_look_is_accepted(self) -> None:
+        rig = self.rig
+        rig.release("0.2.0")
+        rig.write_state(
+            good_tag="v0.1.0",
+            good_sha=rig.head(),
+            suspect_tag="v0.2.0",
+            suspect_sha=git(rig.work, "rev-parse", "v0.2.0^{commit}"),
+        )
+        git(rig.clone, "fetch", "-q", "--tags")
+        self.assertTick(rig.tick(), 0)
+        self.assertEqual(rig.on_tag(), "v0.2.0")
+        self.assertEqual(rig.bad(), [])
+        self.assertEqual(rig.state().get("suspect_tag"), "")
+
+    def test_a_probation_that_cannot_look_again_leaves_a_consistent_state(self) -> None:
+        rig = self.rig
+        rig.release("0.2.0", extra={"zz.txt": "later\n"})
+        self.assertTick(rig.tick(), 0)
+        rig.break_version("0.2.0", "provision_fails")  # it breaks after the reboot
+        rig.cut_checkouts("fail")  # and the checkout back onto it fails
+        rig.boot_id.write_text("boot-2\n")
+        self.assertTick(rig.tick(now=NOW + DAY), 1)
+        state = rig.state()
+        self.assertEqual(rig.on_tag(), "v0.1.0")
+        self.assertEqual(git(rig.clone, "status", "--porcelain", "--untracked-files=no"), "")
+        self.assertEqual((state["good_tag"], state["probation"]), ("v0.1.0", "0"))
+        self.assertEqual(state.get("suspect_tag"), "v0.2.0")
+        self.assertEqual(state["last_result"], "rolled-back")
+        self.assertEqual(rig.bad(), [])
+        # the next tick is not fooled into thinking somebody moved the checkout
+        proc = rig.tick(now=NOW + DAY + 900)
+        self.assertNotIn("moved outside", proc.output)
+        self.assertEqual(rig.bad(), ["v0.2.0"])
+        self.assertEqual(rig.on_tag(), "v0.1.0")
+
+
+class ClockTests(UpdaterCase):
+    def test_the_budget_runs_on_the_uptime_not_on_the_wall_clock(self) -> None:
+        rig = self.rig
+        rig.release("0.2.0", "hang")
+        (rig.proc / "uptime").write_text("100.00 400.00\n")  # it does not advance
+        # The two hangs and the check of the previous version take longer than 2 seconds of
+        # wall clock, which would cut the second look; the uptime did not move.
+        self.assertTick(rig.tick(WZ_TICK_BUDGET="2", WZ_STEP_TIMEOUT="1"), 1)
+        self.assertEqual(rig.bad(), ["v0.2.0"])
+
+    def test_a_budget_that_is_already_spent_is_not_reported_as_a_missing_python(self) -> None:
+        rig = self.rig
+        rig.release("0.2.0")
+        self.assertTick(rig.tick(WZ_TICK_BUDGET="0"), 1)
+        self.assertEqual(rig.state()["last_result"], "env")
+        self.assertEqual(rig.on_tag(), "v0.1.0")
 
 
 class ScriptTests(UpdaterCase):

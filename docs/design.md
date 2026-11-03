@@ -2249,7 +2249,12 @@ below). Every step runs in a process group of its own (`setsid` where it exists,
 otherwise) and a cut kills the whole group, SIGTERM and then SIGKILL, so a grandchild cannot
 outlive the step; the output of a step goes to a file, never to a `$(...)` that a grandchild
 could hold open (this includes `git fetch`, limited by `WZ_FETCH_TIMEOUT`, 120 s). When the
-tick itself receives SIGTERM it takes the step in progress down with it. The script has no
+tick itself receives SIGTERM it takes the step in progress down with it. The budget is
+measured on the uptime (the first field of `/proc/uptime`, which only goes forward) and on
+the date only where there is none: a device without a battery-backed clock gets its date set
+by NTP in the middle of a tick, and a jump of the date must not make every later step run out
+of time. A budget that runs out while looking for a Python is the environment (`env`), not
+`no-python`. The script has no
 `timeout` command to lean on (macOS has none), so it polls a status file. The output of the
 steps goes to `last-verify.log` next to the state.
 
@@ -2352,7 +2357,13 @@ check:
   through the same three steps), so that a failure that does not repeat, such as a service that
   was slow to come up, does not burn a release for good. Only if it fails again is it
   bad, and `bad/<tag>` is written. If it passes the second time it is accepted. The same
-  second look is given to a release that fails its probation check.
+  second look is given to a release that fails its probation check. When there is no time
+  left in the tick for the second look (a release that hangs spends 900 s on the first), or
+  the checkout for it fails, the release is only **under suspicion**: `suspect_tag` and
+  `suspect_sha` go in the state, the device stays on `good` without a back-off, and the
+  next tick (15 minutes later) looks at it first thing, with the whole budget; if it fails
+  again it is bad, if it passes it is accepted. Without this, a release that hangs `provision`
+  would never be burned and would cost 25 minutes of every back-off.
 - `good` fails too: the environment is at fault (Syncthing down, a broken config). The tag
   is not marked bad; the device stays on `good` and retries after 1, 2, 4 and then 7 days
   (`env_failures` counts the failures in a row and a success resets it).
@@ -2371,7 +2382,10 @@ script, to a temporary file that is renamed. Keys: `schema`, `good_tag`, `good_s
 `env_failures`, and four that the script adds: `good_branch` (the branch to return to when
 the version it started from was a clean branch inside `origin/main`, empty for a tag),
 `from_tag` and `from_branch` (with `from_sha`, the version before the last switch, kept while
-the new one is on probation) and `last_ok` (when something last went well, for `doctor`).
+the new one is on probation), `last_ok` (when something last went well, for `doctor`) and
+`suspect_tag` with `suspect_sha` (a release that failed once and has to be looked at again,
+see the differential verdict). A tag and its sha go together in `trying` and in `suspect`:
+one without the other is dropped, and `attempts` with it.
 `last_result` is one of `ok`, `deferred`, `env`, `rolled-back`, `dirty`,
 `dev`, `no-python`, `stuck`. `bad/<tag>` is a file holding `sha=`, `date=` and `reason=`
 lines. The log stays in `self-update.log` (cut to its last 200 lines past 64 KiB). Values are
@@ -2402,11 +2416,16 @@ leaves no status at all.
   become bad meanwhile goes back to `good` and clears `trying` instead of resuming.
 - **A checkout the updater itself cut in the middle** (a power cut, a full disk during
   `git checkout`) leaves a tree that is neither one commit nor the other, and every later
-  tick would see a dirty tree. When `trying` is set (or the new version is on probation) and
-  every file that differs from HEAD is one that the two commits involved differ in, the
-  change is the updater's own and the checkout is done again with `--force` onto the target;
-  a failed checkout is repaired the same way, back to `good`. A file that the two commits do
-  not differ in is somebody's work: the tree stays `dirty` and untouched. Before switching,
+  tick would see a dirty tree. When `trying` is set and every file that differs from HEAD
+  is one that the two commits involved differ in, **and** whose content is that of one of the
+  two commits (`git hash-object` against the blobs; a file that is gone or empty counts too,
+  and a path that git has to quote never does), the change is the updater's own and the
+  checkout is done again with `--force` onto the target; a failed checkout, including the
+  one of a second look, is repaired the same way, back to where it started. A file that the
+  two commits do not differ in, or that differs in content (the user edited a file that the
+  release also changes, which can go unnoticed for hours of deferral), is somebody's work:
+  the tree stays `dirty` and untouched. A new version on probation is not repaired at all,
+  because no checkout of ours is in progress then. Before switching,
   the script checks that the clone's file system has at least `WZ_MIN_FREE_KB` (50 MiB)
   free, and if not it counts as an environment failure without touching the tree. Every
   checkout uses `--no-overwrite-ignore`, so an ignored file of the user's that a release
@@ -2418,7 +2437,8 @@ leaves no status at all.
 - If checking out `good` fails, the result is `stuck` and nothing else is touched.
 - `.git/index.lock` is removed only when it is older than 10 minutes and no `git` process
   is alive (found in `/proc` like the menu; where `/proc` cannot be read the lock stays).
-- The lock is a folder (`mkdir` is atomic) holding the pid and the boot id. A tick that
+- The lock is a folder (`mkdir` is atomic) holding the pid and the boot id, which the
+  tick reads back after writing to be sure it is the one that owns it. A tick that
   finds it held by a live process exits at once; one that finds a dead pid, a lock written
   before the last boot (the pid may belong to somebody else now) or a lock older than three
   hours, takes it over: it renames the lock to a name of its own (only one tick wins that),
@@ -2436,7 +2456,9 @@ leaves no status at all.
   the switch. If the new release fails and the old one passes, the new release is marked bad
   and the device goes back; if both fail, the device stays on the new release (an environment
   that is not ready yet after a boot, such as Syncthing starting, must not downgrade it) and
-  backs off like any environment failure.
+  backs off like any environment failure. If the second look at the new release cannot be
+  made (no time, or the checkout fails), the device stays on the previous version, which is
+  the reference again, and the release is under suspicion as described above.
 
 **Deferring while the menu is open.** The script scans `/proc/*/comm` and `argv[0]` the way
 `settings_state.running` does (`WZ_PROC` points it at a fake tree in tests, and a test checks
@@ -2698,7 +2720,9 @@ logic is unit-tested without a network.
   `origin/main` or whose version disagrees, a broken import, a wrong `--version`, a failing
   `provision`, a failing `health` and a hang (all bad when `good` passes and the release fails
   again), a failure that happens once (not bad), a step cut off with a grandchild alive (the
-  grandchild dies and the pipe is free), the tick budget, a python that imports another
+  grandchild dies and the pipe is free), the tick budget and the second look at a release
+  that ran out of it, the budget on the uptime and not on the date, a user's edit of a file
+  the release changes (during a deferral and during probation), a python that imports another
   warpzone, a checkout cut in the middle by a filter that kills the process group or fails
   (the tree is repaired), too little free space, an ignored file in the way, a menu that
   closes and opens again, a lock from another boot, times from the future, a moved tag, a

@@ -32,7 +32,7 @@ DAY=86400
 DEFER_MAX=$((72 * 3600))
 MAX_ATTEMPTS=2
 IMPORT_CODE='import os, sys, warpzone.cli, warpzone.provision, warpzone.health; root = os.path.realpath(sys.argv[1]); here = os.path.realpath(warpzone.__file__); sys.exit(0 if here.startswith(root + os.sep) else 7)'
-STATE_KEYS="schema good_tag good_sha good_branch trying_tag trying_sha from_tag from_sha from_branch attempts probation pending deferred_since last_fetch last_boot_id last_result last_ok retry_after env_failures"
+STATE_KEYS="schema good_tag good_sha good_branch trying_tag trying_sha from_tag from_sha from_branch attempts probation pending deferred_since last_fetch last_boot_id last_result last_ok retry_after env_failures suspect_tag suspect_sha"
 
 STATE_DIR=${WZ_STATE_DIR:-${XDG_STATE_HOME:-${HOME:-/nonexistent}/.local/state}/warpzone/updater}
 CONF=${WZ_CONF:-$STATE_DIR/conf}
@@ -52,8 +52,19 @@ export GIT_TERMINAL_PROMPT=0
 
 # ---- small helpers --------------------------------------------------------------------
 
-# real_now: the clock, whatever WZ_NOW says (the time budget is real time).
+# real_now: seconds on a clock that only goes forward, whatever WZ_NOW says: the uptime
+# (first field of /proc/uptime) where there is one, because a device without a battery-backed
+# clock gets its date set by NTP in the middle of a tick, and the date otherwise. The time
+# budget is measured with it.
 real_now() {
+	if [ -r "$PROC/uptime" ]; then
+		IFS=' ' read -r _up _rest <"$PROC/uptime" 2>/dev/null
+		_up=${_up%%.*}
+		if is_number "$_up"; then
+			printf '%s\n' "$_up"
+			return 0
+		fi
+	fi
 	date +%s
 }
 
@@ -313,14 +324,24 @@ state_load() {
 		eval "_v=\$S_$_k"
 		is_number "$_v" || state_assign "$_k" ""
 	done
-	case $S_good_sha$S_trying_sha$S_from_sha in
-	*[!0-9a-f]*) S_good_sha= S_trying_sha= S_from_sha= ;;
+	case $S_good_sha$S_trying_sha$S_from_sha$S_suspect_sha in
+	*[!0-9a-f]*) S_good_sha= S_trying_sha= S_from_sha= S_suspect_sha= ;;
 	esac
 	# These end up in file names and in git commands: only what a tag and a branch can be.
-	for _k in good_tag trying_tag from_tag; do
+	for _k in good_tag trying_tag from_tag suspect_tag; do
 		eval "_v=\$S_$_k"
 		[ -z "$_v" ] || is_plain_tag "$_v" || state_assign "$_k" ""
 	done
+	# A tag and its commit go together: one without the other is nothing.
+	if [ -z "$S_trying_tag" ] || [ -z "$S_trying_sha" ]; then
+		S_trying_tag=
+		S_trying_sha=
+		S_attempts=0
+	fi
+	if [ -z "$S_suspect_tag" ] || [ -z "$S_suspect_sha" ]; then
+		S_suspect_tag=
+		S_suspect_sha=
+	fi
 	for _k in good_branch from_branch; do
 		eval "_v=\$S_$_k"
 		case $_v in
@@ -386,14 +407,16 @@ LOCK_HELD=0
 
 lock_claim() {
 	echo "$$" >"$LOCK_DIR/pid"
+	[ "$(cat "$LOCK_DIR/pid" 2>/dev/null)" = "$$" ] || return 1
 	boot_id >"$LOCK_DIR/boot"
 	LOCK_HELD=1
+	return 0
 }
 
 acquire_lock() {
 	if mkdir "$LOCK_DIR" 2>/dev/null; then
 		lock_claim
-		return 0
+		return $?
 	fi
 	_old=$(cat "$LOCK_DIR/pid" 2>/dev/null)
 	_old_boot=$(cat "$LOCK_DIR/boot" 2>/dev/null)
@@ -419,7 +442,7 @@ acquire_lock() {
 	rm -rf "$_stale"
 	mkdir "$LOCK_DIR" 2>/dev/null || return 1
 	lock_claim
-	return 0
+	return $?
 }
 
 release_lock() {
@@ -514,15 +537,31 @@ free_kb() {
 	fi
 }
 
+# heal_is_ours PATH A B: a file that differs from HEAD is the update's own only if it is gone,
+# empty, or exactly the content it has in A or in B (what a checkout between them writes);
+# anything else is somebody's edit, however it came to be in a file that the update changes.
+# A path that git quotes (odd characters) is never taken for ours.
+heal_is_ours() {
+	case $1 in '"'*) return 1 ;; esac
+	[ -e "$CLONE/$1" ] || return 0
+	[ -s "$CLONE/$1" ] || return 0
+	_h=$(g hash-object -- "$1" 2>/dev/null) || return 1
+	[ -n "$_h" ] || return 1
+	[ "$_h" = "$(g rev-parse -q --verify "$2:$1" 2>/dev/null)" ] && return 0
+	[ "$_h" = "$(g rev-parse -q --verify "$3:$1" 2>/dev/null)" ] && return 0
+	return 1
+}
+
 # heal_half_checkout A B TARGET: a checkout between the commits A and B was cut in the middle
 # (a power cut, a full disk), so the tree is neither one nor the other. When every file that
-# differs from HEAD is one that A and B differ in, the change is the updater's own and the
-# checkout is done again, forced, onto TARGET; anything else is somebody's work and stays.
-# Succeeds when the tree is consistent afterwards.
+# differs from HEAD is one that A and B differ in AND has the content of A or of B (or is
+# gone or empty), the change is the updater's own and the checkout is done again, forced,
+# onto TARGET; anything else is somebody's work and stays. Succeeds when the tree is
+# consistent afterwards.
 heal_half_checkout() {
 	[ -n "$1" ] && [ -n "$2" ] || return 1
-	_changed=$(g diff --name-only "$1" "$2" 2>/dev/null) || return 1
-	_dirty=$(g diff --name-only HEAD 2>/dev/null) || return 1
+	_changed=$(g -c core.quotepath=off diff --name-only "$1" "$2" 2>/dev/null) || return 1
+	_dirty=$(g -c core.quotepath=off diff --name-only HEAD 2>/dev/null) || return 1
 	[ -n "$_dirty" ] || return 0
 	_own=1
 	_ifs=$IFS
@@ -530,7 +569,9 @@ heal_half_checkout() {
 '
 	set -f
 	for _f in $_dirty; do
-		printf '%s\n' "$_changed" | grep -Fxq -- "$_f" || _own=0
+		if ! printf '%s\n' "$_changed" | grep -Fxq -- "$_f" || ! heal_is_ours "$_f" "$1" "$2"; then
+			_own=0
+		fi
 	done
 	set +f
 	IFS=$_ifs
@@ -657,8 +698,14 @@ VERIFY_LOG=$STATE_DIR/last-verify.log
 PY=
 OVER=0
 
+PY_CUT=0
 py_ok() {
 	run_limited 30 "$1" -I -c 'import sys, tomllib; sys.exit(0 if sys.version_info >= (3, 11) else 1)' >/dev/null 2>&1
+	_pr=$?
+	if [ "$_pr" -eq 124 ] && [ "$RL_BUDGET_CUT" = 1 ]; then
+		PY_CUT=1
+	fi
+	return "$_pr"
 }
 
 find_python() {
@@ -903,6 +950,7 @@ promote() {
 # the reference and check it: if it passes the suspect is bad, if it fails too the
 # environment is at fault. Sets DV to bad, env, deferred or stuck. HEAD ends on the reference.
 DV=
+SECOND_LOOK=0
 differential() {
 	log "$1 failed its check ($VERIFY_WHY); checking the previous version to tell a bad release from a broken environment"
 	if ! checkout_ref "$4" "$5"; then
@@ -924,7 +972,11 @@ differential() {
 # failed.
 retry_suspect() {
 	log "$1 failed once and the previous version passes; checking $1 once more before blaming it"
-	g checkout --quiet --no-overwrite-ignore --detach "$2" >/dev/null 2>&1 || return 5
+	_cur=$(head_sha)
+	if ! g checkout --quiet --no-overwrite-ignore --detach "$2" >/dev/null 2>&1; then
+		heal_half_checkout "$_cur" "$2" "$_cur" || log "the tree is left as it is"
+		return 5
+	fi
 	verify_version "$1"
 }
 
@@ -943,7 +995,8 @@ env_abort() {
 	finish 1
 }
 
-# attempt: S_trying_* and S_attempts are set. Check it out, verify it, decide.
+# attempt: S_trying_* and S_attempts are set. Check it out, verify it, decide. SECOND_LOOK=1
+# is the look at a release that was already under suspicion: if it fails again it is bad.
 attempt() {
 	if is_dirty; then
 		log "the tree has local changes; not switching to $S_trying_tag"
@@ -986,12 +1039,24 @@ attempt() {
 	4) env_abort "$_tag could not be judged: $VERIFY_WHY" ;;
 	esac
 	_why=$VERIFY_WHY
+	if [ "$SECOND_LOOK" = 1 ]; then
+		back_to_good
+		write_bad "$_tag" "$_sha" "$_why (second look)"
+		log "$_tag is bad ($_why, again); back on the previous version"
+		clear_trying
+		S_env_failures=0
+		S_retry_after=
+		S_last_result=rolled-back
+		settle_pending
+		finish 1
+	fi
 	differential "$_tag" "$_sha" "$S_good_tag" "$S_good_branch" "$S_good_sha"
 	case $DV in
 	stuck) stuck "checkout of $S_good_sha failed" ;;
 	bad)
 		retry_suspect "$_tag" "$_sha"
-		case $? in
+		_rr=$?
+		case $_rr in
 		0)
 			log "$_tag passed the second time"
 			promote
@@ -1002,12 +1067,23 @@ attempt() {
 			mark_deferred
 			finish 0
 			;;
-		4) env_abort "$_tag could not be judged the second time: $VERIFY_WHY" ;;
-		5) env_abort "cannot check out $_tag again" ;;
 		esac
+		_why2=$VERIFY_WHY
 		back_to_good
-		write_bad "$_tag" "$_sha" "$_why (twice)"
-		log "$_tag is bad ($_why, twice); back on the previous version"
+		case $_rr in
+		4 | 5)
+			# No time or no way to look again now: the release stays under suspicion and the
+			# next tick looks at it first thing, with a whole budget. It is not the
+			# environment's fault, so there is no back-off.
+			S_suspect_tag=$_tag
+			S_suspect_sha=$_sha
+			log "$_tag failed once and could not be looked at again ($_why2); it will at the next tick"
+			;;
+		*)
+			write_bad "$_tag" "$_sha" "$_why (twice)"
+			log "$_tag is bad ($_why, twice); back on the previous version"
+			;;
+		esac
 		clear_trying
 		S_env_failures=0
 		S_retry_after=
@@ -1095,7 +1171,8 @@ probation_check() {
 	stuck) stuck "checkout of $S_from_sha failed" ;;
 	bad)
 		retry_suspect "$_tag" "$_sha"
-		case $? in
+		_rr=$?
+		case $_rr in
 		0)
 			log "$_tag passed the second time"
 			probation_pass
@@ -1105,17 +1182,21 @@ probation_check() {
 			mark_deferred
 			finish 0
 			;;
-		4)
-			log "$_tag could not be judged the second time: $VERIFY_WHY"
-			S_last_boot_id=$_boot
-			env_backoff
-			finish 1
-			;;
-		5) stuck "checkout of $_sha failed" ;;
 		esac
+		_why2=$VERIFY_WHY
 		checkout_ref "$S_from_branch" "$S_from_sha" || stuck "checkout of $S_from_sha failed"
-		write_bad "$_tag" "$_sha" "$_why (twice)"
-		log "$_tag is bad after the restart ($_why, twice); back on the previous version"
+		case $_rr in
+		4 | 5)
+			S_suspect_tag=$_tag
+			S_suspect_sha=$_sha
+			log "$_tag failed after the restart and could not be looked at again ($_why2); it will at the next tick"
+			;;
+		*)
+			write_bad "$_tag" "$_sha" "$_why (twice)"
+			log "$_tag is bad after the restart ($_why, twice); back on the previous version"
+			;;
+		esac
+		# HEAD is on the previous version, which passed: that is the reference again.
 		S_good_tag=$S_from_tag
 		S_good_sha=$S_from_sha
 		S_good_branch=$S_from_branch
@@ -1216,6 +1297,11 @@ cmd_tick() {
 	esac
 
 	if ! find_python; then
+		if [ "$PY_CUT" = 1 ]; then
+			S_last_result=env
+			log "the time budget ran out while looking for python; that is not a missing python"
+			finish 1
+		fi
 		S_last_result=no-python
 		log "no usable Python 3.11 or newer was found"
 		finish 1
@@ -1225,13 +1311,7 @@ cmd_tick() {
 	detect_kind
 	if [ "$KIND" = dirty ]; then
 		# A tree that an update of ours left half done is not somebody's work.
-		_healed=0
-		if [ -n "$S_trying_sha" ]; then
-			heal_half_checkout "$S_good_sha" "$S_trying_sha" "$S_trying_sha" && _healed=1
-		elif [ "$S_probation" = 1 ] && [ -n "$S_from_sha" ]; then
-			heal_half_checkout "$S_from_sha" "$S_good_sha" "$S_good_sha" && _healed=1
-		fi
-		if [ "$_healed" = 1 ]; then
+		if [ -n "$S_trying_sha" ] && heal_half_checkout "$S_good_sha" "$S_trying_sha" "$S_trying_sha"; then
 			detect_kind
 		fi
 	fi
@@ -1252,6 +1332,23 @@ cmd_tick() {
 
 	if [ -n "$S_trying_tag" ]; then
 		resume
+	fi
+	if [ -n "$S_suspect_tag" ]; then
+		# A release that failed once, while the previous version passed, and could not be
+		# looked at again for lack of time: this is that second look, with a whole budget.
+		if is_bad "$S_suspect_tag"; then
+			S_suspect_tag=
+			S_suspect_sha=
+		else
+			log "second look at $S_suspect_tag"
+			S_trying_tag=$S_suspect_tag
+			S_trying_sha=$S_suspect_sha
+			S_suspect_tag=
+			S_suspect_sha=
+			S_attempts=1
+			SECOND_LOOK=1
+			attempt
+		fi
 	fi
 	probation_check
 
@@ -1326,6 +1423,8 @@ cmd_selftest() {
 		LOG=
 		state_load
 		S_good_tag=v0.1.0
+		S_trying_tag=v0.1.0
+		S_trying_sha=0123456789abcdef
 		S_attempts=2
 		S_last_result=ok
 		state_save
