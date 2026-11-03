@@ -20,7 +20,7 @@ Versions follow [SemVer](https://semver.org/). The single source of the version 
    git push origin vX.Y.Z
    ```
 
-8. Watch the `release` workflow in the Actions tab, then open the release and check its notes and assets. Devices with the self-update timer ([self-update.md](self-update.md)) check out the new tag within a day.
+8. Watch the `release` workflow in the Actions tab, then open the release and check its notes and assets. Devices with the updater timer ([self-update.md](self-update.md)) fetch once a day and check out the new tag at the tick after that.
 
 ## What the workflow does
 

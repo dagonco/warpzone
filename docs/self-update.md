@@ -1,40 +1,60 @@
 # Updating a device
 
-A device runs warpzone from a git clone with an editable install in a venv, for example:
+A device runs warpzone from a git clone, with a venv next to it, and keeps itself on a release that works. An updater script (`warpzone/data/updater.sh`, POSIX `sh`) does the work, started by a systemd user timer. This is how it is laid out:
 
 ```
-~/.local/share/warpzone/src      the clone
-~/.local/share/warpzone/venv     the venv with `pip install -e src`
+~/.local/share/warpzone/src                       the clone
+~/.local/share/warpzone/venv                      the venv: no pip, a .pth to the clone, a bin/warpzone shim
+~/.local/share/warpzone/updater/updater.sh        the live copy of the updater, outside the clone
+~/.local/state/warpzone/updater/conf              its settings, written by provision device
+~/.local/state/warpzone/updater/state, bad/       what it did and the releases it found bad
+~/.local/state/warpzone/self-update.log           its log
 ```
 
-`warpzone self-update` moves that clone to the newest release. `warpzone provision device` also installs a timer that runs it every day, so a device follows the releases without anyone logging in.
+There is one way to install a device. A `pipx` or wheel install is not a supported device install.
 
-## The command
+## Installing a device
+
+On the device, from a clone, with Python 3.11 or newer, git, Syncthing running, and the config file in `~/.config/warpzone/config.toml` (see the README):
+
+```bash
+mkdir -p ~/.local/share/warpzone && cd ~/.local/share/warpzone
+git clone https://github.com/dagonco/warpzone.git src
+sh src/warpzone/data/updater.sh install deck
+```
+
+`deck` is the device's name in the config. `install` is `updater.sh install DEVICE [--config FILE] [--venv DIR] [--channel stable|rc] [-- ARGS...]`:
+
+1. It refuses, before changing anything, a clone that has changes to tracked files or commits of its own, a device with no Python 3.11 or newer, and the case where no release can be installed. The clone must be on a release tag or on a clean branch inside `origin/main`; a fresh `git clone` is.
+2. It fetches the tags (when the remote answers) and picks the best release of the channel with the same rules as a tick (see [The updater script](#the-updater-script)): the highest `vX.Y.Z` tag, or with `--channel rc` also `vX.Y.ZrcN`, that is an ancestor of `origin/main`, carries its own version, is not retired, is signed when signatures are required, and has `warpzone/data/updater.sh` in it. It checks that tag out (detached).
+3. It makes the venv next to the clone (`--venv DIR` for another place) with `python3 -m venv --without-pip`, puts a `.pth` to the clone in it and a `bin/warpzone` shim that runs `python -m warpzone`. A venv that already works is kept. It checks that this release imports with it.
+4. It runs `python -m warpzone provision device deck`, adding `--config FILE` when you gave one and whatever follows `--`. That is the step that installs the live copy of the updater, writes its settings and starts the timer (see below).
+
+Run `~/.local/share/warpzone/venv/bin/warpzone doctor` afterwards; put `~/.local/share/warpzone/venv/bin` on your `PATH` to type `warpzone`.
+
+To change `channel`, `pin` or anything else in the device's table, edit the config and run `warpzone provision device <name>` again: it rewrites the settings file.
+
+## Python repair
+
+The settings name the venv's interpreter (`python`). At each tick, if it is `<folder>/venv/bin/python` and it no longer runs (an operating system update replaced the Python it was made with), or the venv no longer finds the clone, and another Python 3.11 or newer is installed, the script makes the venv again:
+
+```
+python3 -m venv --without-pip --clear <folder>
+```
+
+then writes `warpzone-clone.pth` (the clone's path) in its `site-packages` and `bin/warpzone`. It needs no network and no setuptools, and the path of the venv's Python, which the units and ES-DE's scripts hold, does not change. warpzone is always started as `python -m warpzone`. `--clear` is only run on a folder that is called `venv`, has a `pyvenv.cfg` (or does not exist), is not a symlink and does not hold the clone: never on the folder around it, where `play-state` lives. If no other Python exists the script changes nothing and says so in the log.
+
+## `warpzone self-update`
 
 ```bash
 warpzone self-update            # on the device
-warpzone self-update --dry-run  # only say what it would do
 ```
 
-It finds the clone from the installed package (the folder that holds the `warpzone` package) and then:
-
-1. If that folder is not a git checkout (a `pipx` or wheel install, or a package folder inside some other repository), it says so and exits `0`. Update that kind of install with the tool that installed it.
-2. Runs `git fetch --tags`. If the remote cannot be reached, it prints a short message and exits `0`, so a device that is offline never fails a scheduled run.
-3. Picks the highest tag of the form `vX.Y.Z` (pre-release tags such as `v0.3.0rc1` are ignored) and compares it with the running version.
-4. Does nothing when the running version is the same, or newer: it never downgrades. A device on a development checkout, ahead of the newest tag, stays where it is.
-5. When the tag is newer: refuses if the clone has local changes to tracked files (exit `1`, nothing touched; untracked files do not count), otherwise checks the tag out (`git checkout --detach`).
-
-Exit codes: `0` for every outcome that needs no attention (updated, up to date, ahead, offline, not a checkout), `1` when an update was due and could not be done (local changes, a failed checkout or reinstall).
-
-`--dry-run` still runs `git fetch --tags` (it only adds tags and remote branches) but changes nothing else and writes no log.
-
-### The version after an update
-
-`warpzone --version` prints `__version__` from `warpzone/__init__.py`, and an editable install imports the package straight from the clone. After the checkout, the next `warpzone` process therefore reports the new version at once; nothing has to be reinstalled. What can go stale is the install metadata in the venv (what `pip list` shows, the entry point script and the package list), and that can only change when `pyproject.toml` does. So `self-update` runs `python -m pip install -e <clone>` with the venv's Python only when `pyproject.toml` differs between the old and the new commit. If that fails it prints the command to run by hand and exits `1`. It finishes by asking the venv's Python which version it now imports and prints it.
+It runs one tick of the live copy (`sh ~/.local/share/warpzone/updater/updater.sh tick`), exactly as the timer does, prints what the script prints and exits with its code. It needs no config and has no `--dry-run`. Without a live copy it says so and exits `1`. What a tick does is in [The updater script](#the-updater-script).
 
 ### Log
 
-Every run except `--dry-run` appends its messages, with a UTC timestamp, to `~/.local/state/warpzone/self-update.log` (under `$XDG_STATE_HOME` when that is set). The file is cut to its last 200 lines when it passes 64 KiB. The timer's own output is in the journal: `journalctl --user -u warpzone-self-update`.
+The script appends its messages, with a UTC timestamp, to `~/.local/state/warpzone/self-update.log` (under `$XDG_STATE_HOME` when that is set), cut to its last 200 lines past 64 KiB. The output of its last check is in `~/.local/state/warpzone/updater/last-verify.log`. The timer's own output is in the journal: `journalctl --user -u warpzone-self-update`.
 
 ## Unattended provisioning
 
@@ -51,7 +71,7 @@ Exit codes: `0` when it finished (warnings included), `3` when something was lef
 
 ## Checking a version
 
-`warpzone health [device]` says whether the installed version works on this device. It is the check the autonomous update will run after it switches to a new release, and you can run it by hand at any time. It changes nothing of yours.
+`warpzone health [device]` says whether the installed version works on this device. It is the check the updater runs after it switches to a new release, and you can run it by hand at any time. It changes nothing of yours.
 
 ```bash
 warpzone health deck       # on the device
@@ -62,7 +82,7 @@ It prints one line per check, then `health: ok` or how many failed, and exits `0
 
 - The config and the profiles load.
 - `settings apply`, `play-state sync`, `links sync` and `frontend refresh` run as dry runs (only the ones that apply to the device), each within the 15 seconds that ES-DE gives its startup scripts, without an error. A menu that is open does not fail it.
-- The ES-DE startup scripts and the systemd units that `provision device` installs for the device exist, and the Python they run exists and can import warpzone. Where there is no systemd user manager, the units are skipped.
+- The ES-DE startup scripts and the systemd units that `provision device` installs for the device exist, and the Python they run exists and can import warpzone. The updater's service must run `sh` with a script that exists. Where there is no systemd user manager, the units are skipped.
 
 It is not `doctor`: it does not look at DATs or optional tools, and it does not prove that a game starts or that Syncthing syncs. `frontend refresh` reads the local Syncthing's REST API, so a Syncthing that is down fails that check.
 
@@ -70,29 +90,37 @@ It is not `doctor`: it does not look at DATs or optional tools, and it does not 
 
 `warpzone provision device <name>` installs two units in `~/.config/systemd/user/` and enables the timer, for every profile:
 
-- `warpzone-self-update.service`, a one-shot that runs `<python> -m warpzone self-update` with the Python that ran `provision device` (the venv's).
-- `warpzone-self-update.timer`: `OnCalendar=daily` with `Persistent=true` (a device that was off at the usual time runs it as soon as it is on), `OnBootSec=5min`, and a random delay of up to 30 minutes.
+- `warpzone-self-update.service`, a one-shot with `TimeoutStartSec=30min` that runs `/bin/sh ~/.local/share/warpzone/updater/updater.sh tick`.
+- `warpzone-self-update.timer`: `OnBootSec=45s` and `OnUnitActiveSec=15min`, with no random delay (a delay also pushes back the start after boot, when the menu may not be open yet).
 
-It does not depend on ES-DE or on any other part of the profile. `provision device` is idempotent here: units are rewritten only when their content differs, the timer is enabled only when it is not, and `--dry-run` prints what it would do. It installs nothing, and warns, when the Python cannot import warpzone from outside the current folder (run it from the venv) or when there is no systemd user manager (a device without systemd can schedule `warpzone self-update` with cron instead).
+The timer is a piece of its own, apart from the script: the script does not know what started it, so a platform without systemd can start the same `tick` from another launcher (cron, for example). It does not depend on ES-DE or on any other part of the profile. `provision device` is idempotent here: units are rewritten only when their content differs, the timer is enabled only when it is not, and `--dry-run` prints what it would do. It installs nothing, and warns, when the live copy is not there or there is no systemd user manager.
 
-`warpzone doctor` warns on a device when the timer is not installed, not enabled or not running.
+Each run of `provision device` also renews the live copy of the script and its settings:
+
+- **The live copy.** The script that ships with the running version is written beside `~/.local/share/warpzone/updater/updater.sh`, checked with `sh -n` and with `sh <copy> selftest`, and only then replaces the live one with a rename (a tick that is running keeps the file it started with). The old one is kept as `updater.sh.prev`. A script with a lower `UPDATER_ABI` than the live one is never installed, so a rollback to an older release does not downgrade the script; a check that fails leaves the live one as it was and warns.
+- **The settings** (`~/.local/state/warpzone/updater/conf`), written from the device's table in `config.toml`: `device`, `config`, `clone`, `python`, `channel`, `pin`, `enabled` (from `self_update`) and `frontend` (the frontend's process names, from the profile). One `key=value` per line; the script reads it line by line and never runs it.
+
+`provision device` installs nothing, and warns, when the folder warpzone runs from is not a git checkout, or when its Python cannot import warpzone from outside the current folder: set the device up with `updater.sh install`.
+
+`warpzone doctor` checks the timer (its units run the updater and the timer is enabled and running), the live copy, the settings against the config, and the updater's state: a rollback in the last 14 days, `stuck`, a `dirty` or `dev` checkout, a retired `pin`, signatures not required, no success for 14 days.
 
 ### The updater script
 
-`warpzone/data/updater.sh` is the script that will replace `warpzone self-update` as what the timer runs. It is POSIX `sh` and needs only `git` and the usual tools, so that it can put a working release back even when warpzone itself no longer starts. **It is not installed or started by anything yet**: `provision device` does not copy it, and the timer still runs `warpzone self-update`. The rules it follows are the contract in [design.md](design.md#autonomous-updates-contract); this is what you can run today.
+`warpzone/data/updater.sh` is POSIX `sh` and needs only `git` and the usual tools, so that it can put a working release back even when warpzone itself no longer starts. The rules it follows are the contract in [design.md](design.md#autonomous-updates-contract).
 
 ```bash
 sh warpzone/data/updater.sh tick       # one run of the timer
+sh warpzone/data/updater.sh install DEVICE   # the install above
 sh warpzone/data/updater.sh menu       # open (exit 0), closed (1) or unknown (2)
 sh warpzone/data/updater.sh selftest   # its tools and helpers; prints "selftest: ok abi=N"
 git tag --list | sh warpzone/data/updater.sh order   # the release tags, best first
 ```
 
-It reads `~/.local/state/warpzone/updater/conf` (`device`, `python`, `clone`, `enabled`, `frontend`, `config`, `channel`, `pin`, one `key=value` per line) and keeps its state in `state` and `bad/` next to it, a log in `~/.local/state/warpzone/self-update.log` and the output of the last check in `last-verify.log`. A tick:
+It reads `~/.local/state/warpzone/updater/conf` and keeps its state in `state` and `bad/` next to it, a log in `~/.local/state/warpzone/self-update.log` and the output of the last check in `last-verify.log`. A tick:
 
 1. Takes a lock and stops if another tick holds it, or if `enabled` is `false`.
 2. Defers if the frontend (ES-DE) is running, for at most 72 hours from the first deferral; after that it goes on.
-3. Fetches the remote at most once a day, then picks the best tag of its channel (`stable`: `vX.Y.Z`; `rc`: those and `vX.Y.ZrcN`, where `v0.3.0rc1` < `v0.3.0rc2` < `v0.3.0`) that is newer than the checkout, is an ancestor of `origin/main`, carries the same `__version__`, is not marked bad, is not retired (a signed tag `retired/vX.Y.Z`, see [releasing.md](releasing.md#retiring-a-release)) and, when the `warpzone/data/allowed_signers` of the version it runs holds a key, has a tag signed by it with SSH. What was chosen at one tick is checked again at the next, so a version that is retired, or off the channel, or no longer signed, while it was being tried is dropped. It never goes down, except when the version it runs has been retired: then it goes to the best valid one, even a lower one. With a `pin` the pinned tag is the target instead, whatever the channel, the running version or a retirement; the log and the `pin_retired` key of the state say when the pin is retired.
+3. Looks for a Python 3.11 or newer, fetches the remote at most once a day, then repairs the venv if it no longer works (see [Python repair](#python-repair)), and picks the best tag of its channel (`stable`: `vX.Y.Z`; `rc`: those and `vX.Y.ZrcN`, where `v0.3.0rc1` < `v0.3.0rc2` < `v0.3.0`) that is newer than the checkout, is an ancestor of `origin/main`, carries the same `__version__`, is not marked bad, is not retired (a signed tag `retired/vX.Y.Z`, see [releasing.md](releasing.md#retiring-a-release)) and, when the `warpzone/data/allowed_signers` of the version it runs holds a key, has a tag signed by it with SSH. What was chosen at one tick is checked again at the next, so a version that is retired, or off the channel, or no longer signed, while it was being tried is dropped. It never goes down, except when the version it runs has been retired: then it goes to the best valid one, even a lower one. With a `pin` the pinned tag is the target instead, whatever the channel, the running version or a retirement; the log and the `pin_retired` key of the state say when the pin is retired.
 4. Checks the tag out (after checking there is room for it) and verifies it in three steps with a time limit each, and 25 minutes for the whole tick: warpzone imports from the checkout and `--version` is the tag; `provision device <device> --unattended`; `warpzone health <device>`. A step that is cut off takes its whole process group with it.
 5. If a step fails it goes back to the version it came from and runs the same check. If that passes, the new tag is checked once more, and only if it fails again is it bad and never tried again (`bad/<tag>`). If the previous version fails too, the environment is at fault: the tag is not blamed and the device waits 1, 2, 4 and then 7 days. Running out of the tick's time counts as the environment too.
 6. A power cut or a kill halfway never counts against a tag: after two attempts without a verdict it goes back and waits a day. A checkout that was cut in the middle is finished again by the next tick, as long as the only changed files are the update's own.
@@ -100,11 +128,11 @@ It reads `~/.local/state/warpzone/updater/conf` (`device`, `python`, `clone`, `e
 
 It only moves a checkout that is on a release tag or on a clean branch contained in `origin/main`. A branch with commits of its own, a loose commit or a tree with changes is left exactly as it is (the script never runs `reset`, `stash` or `clean`) and only gets `provision device --unattended` once per boot. An `index.lock` older than 10 minutes with no `git` running is removed.
 
-Without a key in the allowed-signers file (the repository ships it with comments only) no signature is required and the log says so. Not done yet: installing the script and the settings (`provision`), the venv repair, the timer units that run it, and the `doctor` checks.
+Without a key in the allowed-signers file (the repository ships it with comments only) no signature is required and the log says so; `warpzone doctor` warns about it.
 
 ### Channel and pin
 
-`channel` (`"stable"`, the default, or `"rc"`) and `pin` (a tag such as `v0.3.0` or `v0.3.0rc1`) can be set under `[devices.<name>]` next to `self_update`; the config is rejected when they are malformed. `updater.sh` uses them (see above); `warpzone self-update` does not: it still follows plain `vX.Y.Z` releases. The behaviour is in [design.md](design.md#autonomous-updates-contract), and how a release is signed, published as a candidate or retired is in [releasing.md](releasing.md).
+`channel` (`"stable"`, the default, or `"rc"`) and `pin` (a tag such as `v0.3.0` or `v0.3.0rc1`) can be set under `[devices.<name>]` next to `self_update`; the config is rejected when they are malformed. `provision device` writes them to the updater's settings. The behaviour is in [design.md](design.md#autonomous-updates-contract), and how a release is signed, published as a candidate or retired is in [releasing.md](releasing.md).
 
 ### Turning it off
 
@@ -116,7 +144,7 @@ Set it in the config, so that `provision device` and `doctor` agree:
 self_update = false
 ```
 
-Then remove the timer once on the device:
+Then run `warpzone provision device <name>` once: it writes `enabled=false` in the updater's settings, so the next tick does nothing, and it neither installs the updater nor the timer on a device that never had them. To remove the timer as well:
 
 ```bash
 systemctl --user disable --now warpzone-self-update.timer
@@ -124,4 +152,4 @@ rm ~/.config/systemd/user/warpzone-self-update.{service,timer}
 systemctl --user daemon-reload
 ```
 
-`provision device` does not remove an installed timer by itself. A device with `self_update = false` is still updated by hand with `warpzone self-update`.
+`provision device` does not remove an installed timer by itself. A device with `self_update = false` can still be moved by hand: check out the tag you want in the clone.

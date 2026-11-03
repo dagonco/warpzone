@@ -39,8 +39,9 @@ PROFILES = {"steamos-emudeck": load_profile("steamos-emudeck")}
 
 
 def setUpModule() -> None:
-    """provision_device would install a systemd timer: tests/test_update_timer.py covers that."""
-    patcher = mock.patch.object(provision_mod, "ensure_update_timer")
+    """provision_device would install the updater and its timer: tests/test_update_timer.py
+    covers that."""
+    patcher = mock.patch.object(provision_mod, "ensure_self_update")
     patcher.start()
     addModuleCleanup(patcher.stop)
 

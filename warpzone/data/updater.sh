@@ -6,6 +6,9 @@
 # rules are written in docs/design.md, "Autonomous updates (contract)".
 #
 #   updater.sh tick      one run of the timer: update, verify, roll back, reconcile
+#   updater.sh install DEVICE [--config FILE] [--venv DIR] [--channel stable|rc] [-- ARGS...]
+#                        the human install, from a git clone: check out the best release,
+#                        make the venv, run `provision device`
 #   updater.sh menu      exit 0 when the frontend is running, 1 when not, 2 when unknown
 #   updater.sh selftest  check the tools this script needs and its own helpers
 #   updater.sh order     read tags on the standard input, print those that are releases or
@@ -1086,6 +1089,113 @@ find_python() {
 	return 1
 }
 
+# ---- the venv -------------------------------------------------------------------------
+# The venv has no pip and no copy of warpzone: a `.pth` file puts the clone on its path and
+# `bin/warpzone` is a shim that runs `python -m warpzone`. That needs no network and no
+# setuptools, so it can be made again whenever the interpreter it was made with is gone (an
+# operating system update), and the path of its Python, which units and ES-DE scripts hold,
+# stays the same. `--clear` is only ever run on a folder that is called `venv`, is a venv
+# (has `pyvenv.cfg`) or does not exist, is not a symlink, and does not hold the clone: never on
+# the folder around it, where the play state lives.
+
+LOCATE_CODE='import importlib.util, os, sys; s = importlib.util.find_spec("warpzone"); root = os.path.realpath(sys.argv[1]); here = os.path.realpath(s.origin) if s is not None and s.origin else ""; sys.exit(0 if here.startswith(root + os.sep) else 7)'
+VENV_LOG=$STATE_DIR/last-venv.log
+
+# sh_quote S: S in single quotes, for a line of a script.
+sh_quote() {
+	printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
+}
+
+# venv_works PYTHON: PYTHON runs (Python 3.11 or newer) and warpzone, found without running
+# it, is a file of the clone.
+venv_works() {
+	py_ok "$1" || return 1
+	run_limited 60 "$1" -I -c "$LOCATE_CODE" "$CLONE" >/dev/null 2>&1
+}
+
+# make_venv BASE VENV: make VENV again with the interpreter BASE, without pip, put the .pth
+# to the clone in it and the shim, and check that warpzone imports from it.
+make_venv() {
+	_mv_base=$1
+	_mv_venv=$2
+	case $_mv_venv in
+	/*) ;;
+	*)
+		log "not repairing $_mv_venv: it is not an absolute path"
+		return 1
+		;;
+	esac
+	if [ "${_mv_venv##*/}" != venv ] || [ -L "$_mv_venv" ]; then
+		log "not repairing $_mv_venv: it must be a folder called venv, and not a symlink"
+		return 1
+	fi
+	case $CLONE/ in
+	"$_mv_venv"/*)
+		log "not repairing $_mv_venv: the clone is inside it"
+		return 1
+		;;
+	esac
+	if [ -e "$_mv_venv" ] && { [ ! -d "$_mv_venv" ] || [ ! -f "$_mv_venv/pyvenv.cfg" ]; }; then
+		log "not repairing $_mv_venv: it exists and is not a venv (there is no pyvenv.cfg)"
+		return 1
+	fi
+	log "making the venv $_mv_venv again with $_mv_base"
+	if ! run_limited 120 "$_mv_base" -m venv --without-pip --clear "$_mv_venv" >"$VENV_LOG" 2>&1; then
+		log "could not make the venv ($(head -n 1 "$VENV_LOG" 2>/dev/null))"
+		return 1
+	fi
+	_mv_py=$_mv_venv/bin/python
+	_mv_site="$STATE_DIR/.site.$$"
+	run_limited 30 "$_mv_py" -I -c 'import sysconfig; print(sysconfig.get_path("purelib"))' >"$_mv_site" 2>>"$VENV_LOG"
+	IFS= read -r _mv_lib <"$_mv_site"
+	rm -f "$_mv_site"
+	if [ -z "$_mv_lib" ] || ! mkdir -p "$_mv_lib" || ! printf '%s\n' "$CLONE" >"$_mv_lib/warpzone-clone.pth"; then
+		log "could not put the clone on the path of the venv"
+		return 1
+	fi
+	_mv_shim="$_mv_venv/bin/warpzone"
+	{
+		printf '#!/bin/sh\n'
+		printf 'exec %s -m warpzone "$@"\n' "$(sh_quote "$_mv_py")"
+	} >"$_mv_shim.tmp"
+	if ! chmod 755 "$_mv_shim.tmp" || ! mv -f "$_mv_shim.tmp" "$_mv_shim"; then
+		log "could not write $_mv_shim"
+		return 1
+	fi
+	if ! venv_works "$_mv_py"; then
+		log "the venv $_mv_venv was made, but warpzone cannot be found from it"
+		return 1
+	fi
+	return 0
+}
+
+# repair_python: the interpreter of the settings is the venv's. When that does not work (it is
+# gone, or the venv no longer finds the clone) and another Python 3.11 or newer is there, make
+# the venv again. Sets PY to the venv's Python when it works afterwards.
+repair_python() {
+	case $C_python in
+	/*/bin/python | /*/bin/python3 | /*/bin/python3.*) ;;
+	*) return 0 ;;
+	esac
+	_rp_dir=${C_python%/bin/*}
+	if [ "${_rp_dir##*/}" != venv ]; then
+		if [ -f "$_rp_dir/pyvenv.cfg" ] && ! venv_works "$C_python"; then
+			log_daily "$_rp_dir looks like a venv that does not work, but its folder is not called venv; not repairing it"
+		fi
+		return 0
+	fi
+	venv_works "$C_python" && return 0
+	for _rp_c in $PY_FALLBACKS; do
+		[ "$_rp_c" != "$C_python" ] || continue
+		py_ok "$_rp_c" || continue
+		make_venv "$_rp_c" "$_rp_dir" || return 1
+		find_python || return 1
+		return 0
+	done
+	log_daily "the venv $_rp_dir does not work, and there is no other Python 3.11 or newer to make it again with"
+	return 1
+}
+
 # wz_step SECONDS ARGS...: run `python -m warpzone ARGS` from the clone.
 wz_step() {
 	_to=$1
@@ -1718,6 +1828,7 @@ cmd_tick() {
 
 	conf_check
 	fetch_if_due
+	repair_python || true
 	detect_kind
 	if [ "$KIND" = dirty ]; then
 		# A tree that an update of ours left half done is not somebody's work.
@@ -1800,6 +1911,144 @@ cmd_tick() {
 		;;
 	esac
 	finish 0
+}
+
+install_usage() {
+	echo "usage: updater.sh install DEVICE [--config FILE] [--venv DIR] [--channel stable|rc] [-- ARGS...]" >&2
+	echo "  checks out the best release of the channel, makes the venv next to the clone and runs" >&2
+	echo "  python -m warpzone provision device DEVICE [--config FILE] [ARGS...]" >&2
+	exit 2
+}
+
+install_fail() {
+	echo "updater: $*" >&2
+	exit 1
+}
+
+# cmd_install DEVICE [options]: the human install, from a git clone. Everything that can be
+# refused is refused before anything changes: the clone must be on a release tag or a clean
+# branch inside origin/main, a Python 3.11 or newer must exist, and a release must pass the
+# rules of a tick (channel, ancestor of origin/main, its own version, not retired, signed
+# when signatures are required) and carry this script. Then it checks the release out, makes
+# the venv (kept when it already works) and runs `provision device`, which installs the live
+# copy of this script, writes its settings and starts the timer.
+cmd_install() {
+	_i_device=
+	_i_config=
+	_i_venv=
+	_i_channel=stable
+	_i_start=$(pwd)
+	while [ $# -gt 0 ]; do
+		case $1 in
+		--config)
+			[ $# -ge 2 ] || install_usage
+			_i_config=$2
+			shift 2
+			;;
+		--venv)
+			[ $# -ge 2 ] || install_usage
+			_i_venv=$2
+			shift 2
+			;;
+		--channel)
+			[ $# -ge 2 ] || install_usage
+			case $2 in stable | rc) ;; *) install_usage ;; esac
+			_i_channel=$2
+			shift 2
+			;;
+		--)
+			shift
+			break
+			;;
+		-*) install_usage ;;
+		*)
+			[ -z "$_i_device" ] || install_usage
+			_i_device=$1
+			shift
+			;;
+		esac
+	done
+	[ -n "$_i_device" ] || install_usage
+	# what is left in "$@" goes to provision
+
+	command -v git >/dev/null 2>&1 || install_fail "git is not installed"
+	CLONE=$(cd "$(dirname "$0")/../.." 2>/dev/null && pwd)
+	if [ -z "$CLONE" ] || ! g rev-parse --git-dir >/dev/null 2>&1; then
+		install_fail "$(dirname "$0")/../.. is not a git checkout: install from a clone (git clone <repository>)"
+	fi
+	mkdir -p "$STATE_DIR" || install_fail "cannot create $STATE_DIR"
+	if ! acquire_lock; then
+		install_fail "an update is running (the lock in $STATE_DIR is held); try again in a few minutes"
+	fi
+	trap release_lock EXIT
+	trap 'rl_abort; exit 143' HUP INT TERM
+	C_channel=$_i_channel
+	C_pin=
+	find_python || install_fail "no Python 3.11 or newer was found (tried: $PY_FALLBACKS)"
+	_i_py=$PY
+
+	if run_limited "$FETCH_TIMEOUT" git -C "$CLONE" fetch --tags origin >"$STATE_DIR/.fetch.$$" 2>&1; then
+		log "fetched the tags of the remote"
+	else
+		log "could not fetch the remote ($(head -n 1 "$STATE_DIR/.fetch.$$" 2>/dev/null)); using the tags already here"
+	fi
+	rm -f "$STATE_DIR/.fetch.$$"
+	detect_kind
+	case $KIND in
+	dirty) install_fail "$CLONE has changes to tracked files: commit or discard them, or install from a fresh clone" ;;
+	dev) install_fail "$CLONE has commits of its own, or is not on a release: install from a fresh clone" ;;
+	nogit) install_fail "$CLONE is not a git checkout" ;;
+	esac
+
+	state_reset
+	S_good_sha=$(head_sha)
+	signing_setup
+	[ "$SIGN_ON" = 1 ] || log "signatures are not required: $SIGN_WHY"
+	retired_load
+	_i_pick=
+	for _tag in $(g tag --list 'v*' 2>/dev/null | order_tags); do
+		target_ok "$_tag" || continue
+		g cat-file -e "refs/tags/$_tag:warpzone/data/updater.sh" 2>/dev/null || continue
+		_i_pick=$_tag
+		break
+	done
+	[ -n "$_i_pick" ] ||
+		install_fail "no release of the $_i_channel channel can be installed: none that is valid carries warpzone/data/updater.sh"
+
+	if [ "$(g rev-parse "refs/tags/$_i_pick^{commit}")" = "$(head_sha)" ]; then
+		log "the clone is on $_i_pick already"
+	else
+		log "checking out $_i_pick"
+		g checkout --quiet --no-overwrite-ignore --detach "refs/tags/$_i_pick" >/dev/null 2>&1 ||
+			install_fail "could not check out $_i_pick"
+	fi
+
+	[ -n "$_i_venv" ] || _i_venv=$(dirname "$CLONE")/venv
+	case $_i_venv in /*) ;; *) _i_venv=$_i_start/$_i_venv ;; esac
+	if venv_works "$_i_venv/bin/python"; then
+		log "the venv $_i_venv works; keeping it"
+	else
+		make_venv "$_i_py" "$_i_venv" || install_fail "the venv $_i_venv could not be made (see $VENV_LOG)"
+	fi
+	_i_vpy=$_i_venv/bin/python
+	PY=$_i_vpy
+	run_limited "${STEP_TIMEOUT:-120}" "$_i_vpy" -I -c "$IMPORT_CODE" "$CLONE" >"$VERIFY_LOG" 2>&1 ||
+		install_fail "warpzone $_i_pick does not import with $_i_vpy (see $VERIFY_LOG)"
+
+	log "running provision device $_i_device"
+	# From the clone, as a tick runs it: `-m` puts the current folder first on the path, and the
+	# folder the person happens to be in must not be able to supply another warpzone.
+	case $_i_config in '' | /*) ;; *) _i_config=$_i_start/$_i_config ;; esac
+	cd "$CLONE" || install_fail "cannot enter $CLONE"
+	if [ -n "$_i_config" ]; then
+		"$_i_vpy" -m warpzone provision device "$_i_device" --config "$_i_config" "$@"
+	else
+		"$_i_vpy" -m warpzone provision device "$_i_device" "$@"
+	fi
+	_i_rc=$?
+	[ "$_i_rc" -eq 0 ] || install_fail "provision device failed (exit $_i_rc); fix what it says and run the install again"
+	log "installed warpzone ${_i_pick#v} for $_i_device in $CLONE (venv $_i_venv)"
+	exit 0
 }
 
 cmd_menu() {
@@ -1906,6 +2155,10 @@ cmd_selftest() {
 		echo "selftest: cannot create a temporary folder"
 		_bad=1
 	fi
+	if [ "$(sh_quote "a'b c")" != "'a'\\''b c'" ]; then
+		echo "selftest: sh_quote is wrong"
+		_bad=1
+	fi
 	if [ "$_bad" -ne 0 ]; then
 		exit 1
 	fi
@@ -1915,11 +2168,15 @@ cmd_selftest() {
 
 case ${1:-} in
 tick) cmd_tick ;;
+install)
+	shift
+	cmd_install "$@"
+	;;
 menu) cmd_menu ;;
 selftest) cmd_selftest ;;
 order) cmd_order ;;
 *)
-	echo "usage: updater.sh tick|menu|selftest|order" >&2
+	echo "usage: updater.sh tick|install|menu|selftest|order" >&2
 	exit 2
 	;;
 esac

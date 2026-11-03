@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import contextlib
 import dataclasses
 import os
+import signal
 import subprocess
 import sys
+import tempfile
 import time
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
@@ -18,12 +21,13 @@ from warpzone import (
     flatpak,
     frontend,
     playstate_device,
+    selfupdate,
     settings_state,
     shadps4,
     titlelinks,
     updatetimer,
 )
-from warpzone.config import DEFAULT_WAIT_SECONDS, HUB_WAIT_SECONDS, Config
+from warpzone.config import DEFAULT_WAIT_SECONDS, HUB_WAIT_SECONDS, Config, Device
 from warpzone.model import ESDE_ID, MEDIA_ID, FolderSpec, device_specs, hub_specs
 from warpzone.profiles import Profile
 from warpzone.syncthing import Client, SyncthingError
@@ -907,39 +911,159 @@ def run_systemctl(command: Sequence[str]) -> tuple[int, str]:
     return run_flatpak(command)
 
 
+UPDATER_SOURCE = selfupdate.UPDATER_SOURCE
+# `sh -n` and the script's `selftest` each get this long; the selftest takes a few seconds.
+UPDATER_CHECK_SECONDS = 120
+
+
+def run_script_check(command: Sequence[str], timeout: float) -> tuple[int, str]:
+    """(exit code, output) of a command that is cut off after `timeout` seconds, with all
+    its children: its output goes to a file, so a child that outlives it cannot hold a pipe
+    open. The exit code is 124 when it ran out of time."""
+    with tempfile.TemporaryFile() as out:
+        proc = subprocess.Popen(
+            list(command),
+            stdin=subprocess.DEVNULL,
+            stdout=out,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+        try:
+            code = proc.wait(timeout)
+        except subprocess.TimeoutExpired:
+            with contextlib.suppress(OSError):
+                os.killpg(proc.pid, signal.SIGKILL)
+            proc.wait()
+            code = 124
+        out.seek(0)
+        text = out.read().decode("utf-8", errors="replace")
+    return code, text
+
+
+def _read_text(path: Path) -> str | None:
+    try:
+        return path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+
+
+def _first_lines(text: str, count: int = 3) -> str:
+    return " / ".join([line.strip() for line in text.splitlines() if line.strip()][:count])
+
+
+def ensure_updater(
+    home: Path,
+    rep: Reporter,
+    *,
+    dry_run: bool,
+    source: Path = UPDATER_SOURCE,
+    run: Callable[[Sequence[str], float], tuple[int, str]] | None = None,
+) -> bool:
+    """Put `source` (the script that ships with this version) in place as the live copy
+    outside the clone, and say whether there is a usable live copy afterwards.
+
+    The copy is written next to the live one and replaces it atomically (a tick that is running
+    keeps reading the file it started with), only after `sh -n` and `sh <copy> selftest` pass,
+    and the old one stays as `updater.sh.prev`. A copy of a lower `UPDATER_ABI` than the live
+    one is never installed: a rollback to an older release must not downgrade the script.
+    """
+    live = selfupdate.live_path(home)
+    check = run or run_script_check
+    candidate = _read_text(source)
+    if candidate is None:
+        rep.warn(f"the updater was not installed: cannot read {source}")
+        return live.is_file()
+    current = _read_text(live)
+    verdict = selfupdate.install_decision(candidate, current)
+    if verdict == "invalid":
+        rep.warn(f"the updater was not installed: {source} has no UPDATER_ABI line")
+        return current is not None
+    if verdict == "current":
+        rep.out(f"updater: already current ({live})")
+        return True
+    if verdict == "older":
+        have, new = selfupdate.updater_abi(current or ""), selfupdate.updater_abi(candidate)
+        rep.out(
+            f"updater: keeping {live}: its abi {have} is higher than the abi {new} of this version"
+        )
+        return True
+    if dry_run:
+        rep.out(f"updater: dry-run: would install {live}")
+        return current is not None
+
+    new_abi = selfupdate.updater_abi(candidate)
+    tmp = live.with_name(f".{live.name}.new")
+    try:
+        _write_script(tmp, candidate)
+        code, shown = check(["sh", "-n", str(tmp)], UPDATER_CHECK_SECONDS)
+        if code != 0:
+            rep.warn(
+                f"the updater was not installed: the new script has a syntax error "
+                f"({_first_lines(shown) or f'exit {code}'}); {live} is unchanged"
+            )
+            return current is not None
+        code, shown = check(["sh", str(tmp), "selftest"], UPDATER_CHECK_SECONDS)
+        if code != 0 or f"selftest: ok abi={new_abi}" not in shown.splitlines():
+            why = "ran out of time" if code == 124 else _first_lines(shown) or f"exit {code}"
+            rep.warn(
+                f"the updater was not installed: its selftest failed ({why}); {live} is unchanged"
+            )
+            return current is not None
+        if current is not None:
+            _write_script(live.with_name(f"{live.name}.prev"), current)
+        os.replace(tmp, live)
+    except OSError as exc:
+        rep.warn(f"the updater was not installed: {exc}")
+        return live.is_file()
+    finally:
+        tmp.unlink(missing_ok=True)
+    rep.out(f"updater: installed {live}" + (" (the old one is kept as .prev)" if current else ""))
+    return True
+
+
+def ensure_updater_conf(conf: Path, text: str, rep: Reporter, *, dry_run: bool) -> None:
+    """Write the settings file of the script when its content differs."""
+    if _read_text(conf) == text:
+        rep.out(f"updater settings: already current ({conf})")
+        return
+    if dry_run:
+        rep.out(f"updater settings: dry-run: would write {conf}")
+        return
+    try:
+        _write_script(conf, text, 0o644)
+    except OSError as exc:
+        rep.warn(f"the updater settings were not written ({exc})")
+        return
+    rep.out(f"updater settings: wrote {conf}")
+
+
 def ensure_update_timer(
     home: Path,
     rep: Reporter,
     *,
     dry_run: bool,
-    python: str | None = None,
-    import_check: ImportCheck = run_import_check,
+    updater: Path,
     systemctl: FlatpakRunner | None = None,
 ) -> None:
-    """Install and enable the systemd user timer that runs `warpzone self-update`.
+    """Install and enable the systemd user timer that starts one tick of the updater.
 
-    The service runs the Python that runs this command, so it must import warpzone from
-    outside the current folder (a venv with the editable install does). Nothing is written
-    when that is not so or when there is no systemd user manager. The units are rewritten
-    only when their content differs, and the timer is enabled only when it is not already.
+    The service runs `sh <updater> tick` with the live copy of the script, so nothing is
+    written when that file is not there (outside a dry run) or when there is no systemd user
+    manager. The units are rewritten only when their content differs, and the timer is enabled
+    only when it is not already.
     """
     ctl = systemctl or run_systemctl
-    python = python or sys.executable
     units = home / updatetimer.UNIT_DIR
     manual = (
-        "schedule `warpzone self-update` with another scheduler (cron, for example), or "
+        f"run `sh {updater} tick` from another scheduler (cron, for example), or "
         "set `self_update = false` for this device in the config"
     )
 
     def call(*args: str) -> tuple[int, str]:
         return ctl(["systemctl", "--user", *args])
 
-    if not import_check(python):
-        rep.warn(
-            f"the self-update timer was not installed: {python} cannot import warpzone from "
-            "outside the current folder (run from a clone?). Install warpzone for it (an "
-            "editable install in a venv), then run `warpzone provision device` from there"
-        )
+    if not dry_run and not updater.is_file():
+        rep.warn(f"the self-update timer was not installed: there is no updater at {updater}")
         return
     try:
         code, shown = call("show-environment")
@@ -952,17 +1076,10 @@ def ensure_update_timer(
         return
 
     wanted = {
-        units / updatetimer.SERVICE: updatetimer.render_service(python),
+        units / updatetimer.SERVICE: updatetimer.render_service(str(updater)),
         units / updatetimer.TIMER: updatetimer.render_timer(),
     }
-
-    def current(path: Path) -> str | None:
-        try:
-            return path.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError):
-            return None
-
-    changed = [path for path, text in wanted.items() if current(path) != text]
+    changed = [path for path, text in wanted.items() if _read_text(path) != text]
     try:
         enabled = call("is-enabled", updatetimer.TIMER)[0] == 0
         active = call("is-active", updatetimer.TIMER)[0] == 0
@@ -992,6 +1109,77 @@ def ensure_update_timer(
         rep.warn(f"the self-update timer could not be enabled ({exc}). Run `{enable}`")
         return
     rep.out(f"self-update timer: installed and enabled ({updatetimer.TIMER})")
+
+
+def ensure_self_update(
+    device: Device,
+    profile: Profile,
+    home: Path,
+    rep: Reporter,
+    *,
+    dry_run: bool,
+    python: str | None = None,
+    import_check: ImportCheck = run_import_check,
+    clone: Path | None = None,
+    config_path: Path | None = None,
+    state_root: Path | None = None,
+    systemctl: FlatpakRunner | None = None,
+    updater_source: Path = UPDATER_SOURCE,
+) -> None:
+    """Everything the autonomous update needs on this device: the settings file written from
+    the config, the live copy of the updater script and the timer that starts it.
+
+    It needs a git clone (the device install: `updater.sh install`) and a Python that imports
+    warpzone from outside the current folder (the venv); without them it installs nothing and
+    says so. A device with `self_update = false` gets no updater; one that already has settings
+    gets `enabled=false`, so its timer's ticks stop.
+    """
+    python = python or sys.executable
+    clone = clone if clone is not None else selfupdate.package_root()
+    base = (state_root if state_root is not None else settings_state.state_dir(home=home)).parent
+    conf = selfupdate.conf_path(base)
+    live = selfupdate.live_path(home)
+
+    def conf_text(enabled: bool) -> str:
+        return selfupdate.render_conf(
+            device=device.name,
+            config=os.path.abspath(config_path) if config_path is not None else None,
+            clone=clone,
+            python=python,
+            channel=device.channel,
+            pin=device.pin,
+            enabled=enabled,
+            frontend=selfupdate.frontend_names(profile),
+        )
+
+    try:
+        if not device.self_update:
+            if conf.is_file():
+                ensure_updater_conf(conf, conf_text(False), rep, dry_run=dry_run)
+            rep.out("self-update timer: turned off (self_update = false in the config)")
+            return
+        text = conf_text(True)
+    except ValueError as exc:
+        rep.warn(f"the updater was not installed: {exc}")
+        return
+    if not (clone / ".git").exists():
+        rep.warn(
+            f"the updater was not installed: {clone} is not a git checkout. A device runs "
+            "warpzone from a clone made with `sh <clone>/warpzone/data/updater.sh install "
+            f"{device.name}` (see docs/self-update.md)"
+        )
+        return
+    if not import_check(python):
+        rep.warn(
+            f"the updater was not installed: {python} cannot import warpzone from outside the "
+            "current folder (run from the clone's venv?). Set the device up with "
+            f"`sh {clone}/warpzone/data/updater.sh install {device.name}`"
+        )
+        return
+    ensure_updater_conf(conf, text, rep, dry_run=dry_run)
+    installed = ensure_updater(home, rep, dry_run=dry_run, source=updater_source)
+    if installed or dry_run:
+        ensure_update_timer(home, rep, dry_run=dry_run, updater=live, systemctl=systemctl)
 
 
 def _busy(
@@ -1711,6 +1899,8 @@ def provision_device(
     systemctl: SystemctlRunner = run_user_systemctl,
     systemctl_run: FlatpakRunner | None = None,
     unattended: bool = False,
+    clone: Path | None = None,
+    updater_source: Path = UPDATER_SOURCE,
 ) -> None:
     device = cfg.devices[name]
     actual = local.my_id()
@@ -1886,17 +2076,20 @@ def provision_device(
             systemctl=systemctl,
         )
 
-    if device.self_update:
-        ensure_update_timer(
-            home,
-            rep,
-            dry_run=local.dry_run,
-            python=python,
-            import_check=import_check,
-            systemctl=systemctl_run,
-        )
-    else:
-        rep.out("self-update timer: turned off (self_update = false in the config)")
+    ensure_self_update(
+        device,
+        profile,
+        home,
+        rep,
+        dry_run=local.dry_run,
+        python=python,
+        import_check=import_check,
+        clone=clone,
+        config_path=config_path,
+        state_root=state_root,
+        systemctl=systemctl_run,
+        updater_source=updater_source,
+    )
 
 
 def folder_status(client: Client, title: str, rep: Reporter) -> None:

@@ -326,9 +326,8 @@ def _build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser(
         "self-update",
-        parents=[st_dry_run],
-        help="on a device: move this git checkout to the newest release tag "
-        "(never a downgrade; offline is not an error)",
+        help="on a device: run one tick of the updater, as its timer does (look for a "
+        "release, switch to it, verify it, go back if it fails)",
     )
 
     hl = sub.add_parser(
@@ -595,16 +594,10 @@ def _links(args: argparse.Namespace, cfg: Config, profiles: dict[str, Profile]) 
     return EXIT_OK
 
 
-def _self_update(args: argparse.Namespace, rep: Reporter) -> int:
+def _self_update(rep: Reporter) -> int:
     from warpzone import selfupdate
 
-    return selfupdate.run_self_update(
-        selfupdate.package_root(),
-        __version__,
-        rep.out,
-        dry_run=args.dry_run,
-        log=selfupdate.log_path(settings_state.state_dir().parent),
-    )
+    return selfupdate.run_tick(selfupdate.live_path(Path.home()), rep.out)
 
 
 def _health(args: argparse.Namespace, rep: Reporter) -> int:
@@ -634,7 +627,7 @@ def _run(args: argparse.Namespace) -> int:
 
     rep = Reporter(print, warn_sink=_eprint)
     if args.command == "self-update":  # needs no config
-        return _self_update(args, rep)
+        return _self_update(rep)
     if args.command == "health":  # a failed check is a result, not a usage error
         return _health(args, rep)
     if args.command == "doctor":  # offline, read-only, needs no valid config

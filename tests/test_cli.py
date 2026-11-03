@@ -439,30 +439,34 @@ if __name__ == "__main__":
 
 
 class SelfUpdateCommandTests(unittest.TestCase):
-    def test_runs_on_the_package_checkout_and_needs_no_config(self) -> None:
+    def test_it_runs_the_live_copy_of_the_updater_and_needs_no_config(self) -> None:
         with (
-            mock.patch("warpzone.selfupdate.run_self_update", return_value=0) as update,
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch("pathlib.Path.home", return_value=Path(tmp)),
+            mock.patch("warpzone.selfupdate.run_tick", return_value=0) as tick,
             mock.patch.dict(os.environ, {"WARPZONE_CONFIG": "/nonexistent/config.toml"}),
         ):
             code, _, err = run("self-update")
         self.assertEqual(code, 0, err)
-        args, kwargs = update.call_args
-        self.assertEqual(args[0], Path(__file__).resolve().parent.parent)
-        self.assertEqual(args[1], __version__)
-        self.assertFalse(kwargs["dry_run"])
-        self.assertEqual(kwargs["log"].name, "self-update.log")
+        live = tick.call_args.args[0]
+        self.assertEqual(live, Path(tmp) / ".local/share/warpzone/updater/updater.sh")
 
-    def test_dry_run_flag_and_exit_code_are_passed_through(self) -> None:
-        with mock.patch("warpzone.selfupdate.run_self_update", return_value=1) as update:
-            code, _, _ = run("self-update", "--dry-run")
-        self.assertEqual(code, 1)
-        self.assertTrue(update.call_args.kwargs["dry_run"])
+    def test_the_exit_code_of_the_tick_is_the_exit_code(self) -> None:
+        with mock.patch("warpzone.selfupdate.run_tick", return_value=3):
+            code, _, _ = run("self-update")
+        self.assertEqual(code, 3)
 
-    def test_log_goes_to_the_state_folder(self) -> None:
+    def test_without_a_live_copy_it_says_so_and_fails(self) -> None:
         with (
             tempfile.TemporaryDirectory() as tmp,
-            mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp}),
-            mock.patch("warpzone.selfupdate.run_self_update", return_value=0) as update,
+            mock.patch("pathlib.Path.home", return_value=Path(tmp)),
         ):
-            run("self-update")
-        self.assertEqual(update.call_args.kwargs["log"], Path(tmp) / "warpzone" / "self-update.log")
+            code, out, _ = run("self-update")
+        self.assertEqual(code, 1)
+        self.assertIn("updater.sh", out)
+        self.assertIn("warpzone provision device", out)
+
+    def test_it_has_no_dry_run_any_more(self) -> None:
+        code, _, err = run("self-update", "--dry-run")
+        self.assertEqual(code, 2)
+        self.assertIn("--dry-run", err)

@@ -12,7 +12,7 @@ from unittest import mock
 from support import API_KEY, DECK_ID, FakeSyncthing, config_data
 from test_anbernic import ARK_ID, ark_config
 from test_artwork_device import Art
-from warpzone import artwork, esde, health, localst, provision, updatetimer
+from warpzone import artwork, esde, health, localst, provision, selfupdate, updatetimer
 from warpzone.cli import main
 from warpzone.config import Config, ConfigError, parse_config
 from warpzone.model import device_specs
@@ -183,9 +183,9 @@ class ExecCommandTests(unittest.TestCase):
         )
 
     def test_a_quoted_word_keeps_its_spaces_and_systemd_escapes_are_undone(self) -> None:
-        python = "/home/a b/venv/bin/py%thon$"
-        text = updatetimer.render_service(python)
-        self.assertEqual(updatetimer.exec_command(text)[0], python)
+        script = "/home/a b/updater/up%dater$.sh"
+        text = updatetimer.render_service(script)
+        self.assertEqual(updatetimer.exec_command(text), ["/bin/sh", script, "tick"])
 
     def test_the_units_warpzone_writes_round_trip(self) -> None:
         service, _ = artwork.render_play_state_units(
@@ -275,9 +275,11 @@ class DeckBase(Base):
                 provision._write_script(esde.script_path(esde_dir, name), text)
         if units:
             folder = self.home / updatetimer.UNIT_DIR
+            live = selfupdate.live_path(self.home)
+            provision._write_script(live, "UPDATER_ABI=1\n")
             service, timer = artwork.render_play_state_units(self.python, "deck", None, "15min")
             for name, text in (
-                (updatetimer.SERVICE, updatetimer.render_service(self.python)),
+                (updatetimer.SERVICE, updatetimer.render_service(str(live))),
                 (updatetimer.TIMER, updatetimer.render_timer()),
                 (f"{artwork.PLAY_STATE_UNIT}.service", service),
                 (f"{artwork.PLAY_STATE_UNIT}.timer", timer),
@@ -348,7 +350,9 @@ class DeckTests(DeckBase, unittest.TestCase):
         code, lines = self.health("deck", self.cfg, self.profiles)
         self.assertEqual(code, 1)
         failed = [x for x in lines if x.split()[0] == health.FAIL]
-        self.assertEqual(len(failed), 5)  # 3 scripts and 2 services; timers run nothing
+        # 3 scripts and the play-state service; timers run nothing, and the self-update
+        # service runs `sh`, not python
+        self.assertEqual(len(failed), 4)
         self.assertEqual(set(self.checked), {self.python})
         self.assertEqual(len(self.checked), 1, "one import check per interpreter")
 
@@ -361,13 +365,26 @@ class DeckTests(DeckBase, unittest.TestCase):
     def test_a_unit_that_runs_a_missing_program_fails(self) -> None:
         gone = str(self.home / "gone/bin/python")
         provision._write_script(
-            self.home / updatetimer.UNIT_DIR / updatetimer.SERVICE,
-            updatetimer.render_service(gone),
+            self.home / updatetimer.UNIT_DIR / f"{artwork.PLAY_STATE_UNIT}.service",
+            f"[Service]\nExecStart={gone} -m warpzone play-state sync deck\n",
             0o644,
         )
         code, lines = self.health("deck", self.cfg, self.profiles)
         self.assertEqual(code, 1)
+        self.assertEqual(self.status(lines, f"{artwork.PLAY_STATE_UNIT}.service"), health.FAIL)
+
+    def test_a_self_update_unit_whose_script_is_gone_fails(self) -> None:
+        os.remove(selfupdate.live_path(self.home))
+        code, lines = self.health("deck", self.cfg, self.profiles)
+        self.assertEqual(code, 1)
         self.assertEqual(self.status(lines, updatetimer.SERVICE), health.FAIL)
+        (line,) = [x for x in lines if updatetimer.SERVICE in x]
+        self.assertIn("updater.sh", line)
+
+    def test_a_self_update_unit_that_runs_the_script_with_sh_passes(self) -> None:
+        code, lines = self.health("deck", self.cfg, self.profiles)
+        self.assertEqual(code, 0, "\n".join(lines))
+        self.assertEqual(self.status(lines, updatetimer.SERVICE), health.OK)
 
     def test_without_a_systemd_user_manager_the_units_are_not_required(self) -> None:
         self.manager = False
