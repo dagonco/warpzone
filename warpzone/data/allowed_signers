@@ -1,0 +1,6 @@
+# Public keys whose signature a release tag must carry, in the format of `ssh-keygen -Y`
+# (docs/releasing.md, "Signing a tag"). One line per key:
+#
+#   <principal> namespaces="git" <key type> <public key>
+#
+# While no key is listed, a device does not require signed tags and says so in its log.

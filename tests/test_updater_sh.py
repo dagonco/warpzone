@@ -18,14 +18,17 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from typing import ClassVar
 
 from warpzone import settings_state
+from warpzone.selfupdate import tag_key
 
 UPDATER = Path(__file__).resolve().parent.parent / "warpzone" / "data" / "updater.sh"
 NOW = 1_700_000_000
 DAY = 86400
 HOUR = 3600
 GIT = shutil.which("git")
+SSH_KEYGEN = shutil.which("ssh-keygen")
 SHELLS = [s for s in ("sh", "dash", "bash") if shutil.which(s)]
 
 GIT_ENV = {
@@ -104,6 +107,21 @@ def git(cwd: Path, *args: str) -> str:
     return proc.stdout.strip()
 
 
+class SigningKey:
+    """An SSH key made for one test, and the allowed-signers line that trusts it."""
+
+    def __init__(self, folder: Path, name: str = "signer") -> None:
+        folder.mkdir(parents=True, exist_ok=True)
+        self.private = folder / name
+        subprocess.run(
+            ["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", "t", "-f", str(self.private)],
+            check=True,
+            capture_output=True,
+        )
+        public = self.private.with_suffix(".pub").read_text().strip()
+        self.allowed = f'test@example.invalid namespaces="git" {public}\n'
+
+
 class Rig:
     """An upstream repository, a clone of it, a fake Python and the updater's folders."""
 
@@ -164,11 +182,14 @@ class Rig:
         on_main: bool = True,
         file_version: str | None = None,
         extra: dict[str, str] | None = None,
+        sign: SigningKey | None = None,
+        raw_tag: str | None = None,
     ) -> str:
         """Commit a release in the upstream repository, tag it and publish it."""
         if not on_main:
             git(self.work, "checkout", "-q", "--detach")
         for name, text in (extra or {}).items():
+            (self.work / name).parent.mkdir(parents=True, exist_ok=True)
             (self.work / name).write_text(text)
         (self.work / "warpzone").mkdir(exist_ok=True)
         (self.work / "warpzone" / "__init__.py").write_text(
@@ -178,7 +199,27 @@ class Rig:
         git(self.work, "add", "-A")
         git(self.work, "commit", "-q", "-m", f"Release {version}")
         name = tag or f"v{version}"
-        git(self.work, "tag", name)
+        if raw_tag is not None:
+            # A tag object written by hand ({sha} and {name} are filled in): git mktag does not
+            # look at the signature, so it can hold any kind of block.
+            body = raw_tag.format(sha=git(self.work, "rev-parse", "HEAD"), name=name)
+            made = subprocess.run(
+                ["git", "-C", str(self.work), "mktag"],
+                input=body,
+                capture_output=True,
+                text=True,
+                env={**os.environ, **GIT_ENV},
+                check=True,
+            )
+            git(self.work, "update-ref", f"refs/tags/{name}", made.stdout.strip())
+        elif sign is None:
+            git(self.work, "tag", name)
+        else:
+            git(
+                self.work,
+                *("-c", "gpg.format=ssh", "-c", f"user.signingkey={sign.private}"),
+                *("tag", "-s", "-m", f"warpzone {version}", name),
+            )
         if on_main:
             git(self.work, "push", "-q", "origin", "main", f"refs/tags/{name}")
         else:
@@ -189,10 +230,52 @@ class Rig:
     def head(self) -> str:
         return git(self.clone, "rev-parse", "HEAD")
 
+    def retire(
+        self,
+        tag: str,
+        reason: str = "it is withdrawn",
+        *,
+        sign: SigningKey | None = None,
+        annotated: bool = True,
+        at: str | None = None,
+        nested: bool = False,
+    ) -> None:
+        """Retire a release the way the maintainer does: a tag `retired/<tag>` on the commit
+        of the release (or of `at`), annotated and signed with `sign`, whose message is the
+        reason, published. With `nested` it is made on the release's own tag, as
+        `git tag -s retired/v1.2.3 v1.2.3` does, and so it points at a tag object."""
+        name = f"retired/{tag}"
+        target = (at or tag) if nested else f"{at or tag}^{{commit}}"
+        try:
+            git(self.work, "rev-parse", "-q", "--verify", target)
+        except AssertionError:
+            target = "HEAD"  # a name that is no release has no commit of its own
+        if not annotated:
+            git(self.work, "tag", name, target)
+        elif sign is None:
+            git(self.work, "tag", "-a", "-m", reason, name, target)
+        else:
+            signing = ("-c", "gpg.format=ssh", "-c", f"user.signingkey={sign.private}")
+            git(self.work, *signing, "tag", "-s", "-m", reason, name, target)
+        git(self.work, "push", "-q", "origin", f"refs/tags/{name}")
+
+    def move_to(self, tag: str) -> None:
+        """Put the clone on a tag by hand, as if the device had been installed there."""
+        git(self.clone, "fetch", "-q", "--tags", "origin")
+        git(self.clone, "checkout", "-q", "--detach", tag)
+
+    def allow(self, *keys: SigningKey, name: str = "allowed_signers") -> Path:
+        """Write an allowed-signers file that trusts `keys`, and return its path."""
+        path = self.root / name
+        path.write_text("# test signers\n" + "".join(k.allowed for k in keys))
+        return path
+
     def on_tag(self) -> str:
         """The release tag the clone is on, or '' when it is not exactly on one."""
         try:
-            return git(self.clone, "describe", "--exact-match", "--tags", "HEAD")
+            return git(
+                self.clone, "describe", "--exact-match", "--tags", "--match", "v[0-9]*", "HEAD"
+            )
         except AssertionError:
             return ""
 
@@ -1400,6 +1483,568 @@ class ClockTests(UpdaterCase):
         self.assertEqual(rig.on_tag(), "v0.1.0")
 
 
+class OrderTests(UpdaterCase):
+    TAGS: ClassVar[list[str]] = [
+        "v0.9.0", "v0.10.0", "v0.10.0rc1", "v0.10.0rc2", "v0.10.0rc10", "v1.0.0", "v0.2.0",
+        "v0.2.0rc3", "v10.0.0rc1", "v0.3.0-rc1", "v0.3.0rc", "v1.2", "vx.y.z", "0.4.0",
+        "v0.4.0.1", "v0.4.0rc1rc2", "v0.5.0beta1", "v0.6.0rc1.dev1",
+    ]  # fmt: skip
+
+    def valid_best_first(self) -> list[str]:
+        return sorted((t for t in self.TAGS if tag_key(t) is not None), key=tag_key, reverse=True)
+
+    def test_the_order_is_the_one_of_selfupdate_tag_key(self) -> None:
+        for shell in SHELLS:
+            with self.subTest(shell=shell):
+                proc = subprocess.run(
+                    [shell, str(UPDATER), "order"],
+                    input="\n".join(self.TAGS) + "\n",
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                self.assertEqual(proc.returncode, 0, proc.stderr)
+                self.assertEqual(proc.stdout.split(), self.valid_best_first())
+
+    def test_the_order_agrees_with_gits_version_sort(self) -> None:
+        repo = self.rig.root / "ordering"
+        subprocess.run(["git", "init", "-q", str(repo)], check=True, env={**os.environ, **GIT_ENV})
+        git(repo, "commit", "-q", "--allow-empty", "-m", "x")
+        for tag in self.TAGS:
+            git(repo, "tag", tag)
+        listed = git(
+            repo,
+            *("-c", "versionsort.suffix=rc", "for-each-ref", "--sort=-v:refname"),
+            *("--format=%(refname:strip=2)", "refs/tags"),
+        ).split()
+        self.assertEqual([t for t in listed if tag_key(t) is not None], self.valid_best_first())
+
+
+class ChannelTests(UpdaterCase):
+    def test_stable_follows_releases_and_rc_follows_candidates_too(self) -> None:
+        rig = self.rig
+        rig.release("0.2.0rc1")
+        rig.release("0.2.0rc2")
+        self.assertTick(rig.tick(), 0)
+        self.assertEqual(rig.on_tag(), "v0.1.0", "stable ignores candidates")
+        rig.write_conf(channel="rc")
+        self.assertTick(rig.tick(), 0)
+        self.assertEqual(rig.on_tag(), "v0.2.0rc2")
+        self.assertEqual(rig.state()["good_tag"], "v0.2.0rc2")
+        self.assertIn("-m warpzone health deck @ 0.2.0rc2", rig.calls())
+        rig.release("0.2.0")  # a release is after its candidates
+        self.assertTick(rig.tick(), 0)
+        self.assertEqual(rig.on_tag(), "v0.2.0")
+        rig.release("0.3.0rc1")
+        rig.write_conf()  # stable again
+        self.assertTick(rig.tick(), 0)
+        self.assertEqual(rig.on_tag(), "v0.2.0", "a candidate is not a release")
+        rig.write_conf(channel="rc")
+        self.assertTick(rig.tick(), 0)
+        self.assertEqual(rig.on_tag(), "v0.3.0rc1")
+        rig.release("0.2.1")  # lower than the candidate it runs: no way down
+        self.assertTick(rig.tick(), 0)
+        self.assertEqual(rig.on_tag(), "v0.3.0rc1")
+        rig.release("0.3.0")
+        rig.write_conf()  # a device on a candidate goes to the release on stable
+        self.assertTick(rig.tick(), 0)
+        self.assertEqual(rig.on_tag(), "v0.3.0")
+        self.assertEqual(rig.bad(), [])
+
+    def test_a_candidate_has_to_be_valid_like_any_tag(self) -> None:
+        rig = self.rig
+        rig.release("0.2.0rc1")
+        rig.release("0.2.0rc2", file_version="0.2.0rc9")  # the version disagrees
+        rig.release("0.2.0rc3", on_main=False)  # not on main
+        rig.release("0.2.0rc4")  # marked bad
+        (rig.state_dir / "bad").mkdir()
+        (rig.state_dir / "bad" / "v0.2.0rc4").write_text("sha=0\n")
+        rig.write_conf(channel="rc")
+        self.assertTick(rig.tick(), 0)
+        self.assertEqual(rig.on_tag(), "v0.2.0rc1")
+
+    def test_an_unknown_channel_is_stable_and_a_pin_that_is_no_tag_is_ignored(self) -> None:
+        rig = self.rig
+        rig.release("0.2.0rc1")
+        rig.release("0.3.0")
+        rig.write_conf(channel="nightly", pin="v0.2.0-rc1")
+        proc = rig.tick()
+        self.assertTick(proc, 0)
+        self.assertEqual(rig.on_tag(), "v0.3.0", "stable, and no pin")
+        self.assertIn("channel", proc.output)
+        self.assertIn("pin", proc.output)
+
+    def test_a_candidate_that_fails_is_marked_bad_like_a_release(self) -> None:
+        rig = self.rig
+        rig.release("0.2.0rc1", "provision_fails")
+        rig.write_conf(channel="rc")
+        self.assertTick(rig.tick(), 1)
+        self.assertEqual(rig.bad(), ["v0.2.0rc1"])
+        self.assertEqual(rig.on_tag(), "v0.1.0")
+
+
+class RetiredTests(UpdaterCase):
+    def retired_ticks(self, rig, *, now: int = NOW) -> subprocess.CompletedProcess:
+        proc = rig.tick(now=now)
+        self.assertTick(proc, 0)
+        return proc
+
+    def test_a_retired_tag_is_never_a_candidate(self) -> None:
+        rig = self.rig
+        rig.release("0.2.0")
+        rig.release("0.3.0")
+        rig.retire("v0.3.0", "broke the settings merge")
+        self.retired_ticks(rig)
+        self.assertEqual(rig.on_tag(), "v0.2.0")
+        self.assertEqual(rig.bad(), [], "retired is not bad")
+
+    def test_a_retired_version_goes_to_the_best_valid_one_even_a_lower_one(self) -> None:
+        rig = self.rig
+        rig.release("0.2.0")
+        rig.release("0.3.0")
+        rig.move_to("v0.3.0")
+        self.retired_ticks(rig)
+        self.assertEqual(rig.state()["good_tag"], "v0.3.0")
+        rig.retire("v0.3.0", "data loss")
+        proc = self.retired_ticks(rig)
+        self.assertEqual(rig.on_tag(), "v0.2.0")
+        self.assertEqual(rig.state()["good_tag"], "v0.2.0")
+        self.assertIn("retired", proc.output)
+        self.assertIn("data loss", proc.output)
+        self.retired_ticks(rig)
+        self.assertEqual(rig.on_tag(), "v0.2.0", "it does not bounce")
+        rig.retire("v0.2.0", "b")
+        self.retired_ticks(rig)
+        self.assertEqual(rig.on_tag(), "v0.1.0")
+        rig.retire("v0.1.0", "c")
+        calls = len(rig.calls())
+        self.retired_ticks(rig)
+        self.assertEqual(rig.on_tag(), "v0.1.0", "nothing valid is left: it stays")
+        self.assertEqual(len(rig.calls()), calls)
+        self.assertEqual(rig.bad(), [])
+
+    def test_tags_that_are_no_retirement_do_not_use_up_the_limit(self) -> None:
+        rig = self.rig
+        rig.release("0.2.0")
+        rig.release("0.3.0")
+        rig.move_to("v0.3.0")
+        for n in range(1, 5):  # lightweight: they sort first and are no retirement at all
+            git(rig.work, "update-ref", f"refs/tags/retired/v1.0.{n}", "HEAD")
+        git(rig.work, "push", "-q", "origin", "refs/tags/retired/*:refs/tags/retired/*")
+        rig.retire("v0.3.0", "the real one, after four that are not")
+        proc = rig.tick(WZ_RETIRED_MAX="3")
+        self.assertTick(proc, 0)
+        self.assertEqual(rig.on_tag(), "v0.2.0")
+
+    def test_only_the_newest_well_formed_retirements_are_looked_at(self) -> None:
+        rig = self.rig
+        rig.release("0.2.0")
+        rig.release("0.3.0")
+        rig.move_to("v0.3.0")
+        for n in range(1, 5):  # well formed retirements of tags that are no candidates
+            git(rig.work, "update-ref", f"refs/tags/v1.0.{n}", "HEAD")
+            git(rig.work, "tag", "-a", "-m", "x", f"retired/v1.0.{n}", "HEAD")
+        git(rig.work, "push", "-q", "origin", "refs/tags/*:refs/tags/*")
+        rig.retire("v0.3.0", "the fifth by version: too old to be looked at")
+        proc = rig.tick(WZ_RETIRED_MAX="3")
+        self.assertTick(proc, 0)
+        self.assertEqual(rig.on_tag(), "v0.3.0")
+        self.assertRegex(proc.output, r"more than 3 retirement")
+        self.assertTick(rig.tick(), 0)  # with the default limit it is looked at
+        self.assertEqual(rig.on_tag(), "v0.2.0")
+
+    def test_only_an_annotated_tag_with_a_version_name_retires_and_nothing_runs(self) -> None:
+        rig = self.rig
+        marker = rig.root / "pwned"
+        # the old RETIRED file is not read any more, even on main
+        rig.release("0.2.0", extra={"RETIRED": "v0.2.0 2026-11-03 old way\n"})
+        rig.release("0.3.0")
+        rig.retire("v0.3.0", f"$(touch {marker}) `touch {marker}`", annotated=False)
+        rig.retire("v0.2.0;touch", "a name that is no version")
+        rig.retire("latest", "neither")
+        rig.retire("v0.2.0-rc1", "nor the wrong spelling")
+        proc = self.retired_ticks(rig)
+        self.assertFalse(marker.exists())
+        self.assertEqual(rig.on_tag(), "v0.3.0", "a lightweight tag has no reason: no retirement")
+        self.assertRegex(proc.output, r"retire.*ignor")
+        rig.retire("v0.2.0", f"$(touch {marker})")  # a reason is text
+        rig.move_to("v0.2.0")
+        self.retired_ticks(rig)
+        self.assertFalse(marker.exists())
+        self.assertEqual(rig.on_tag(), "v0.3.0", "the retired version moves up")
+
+
+class PinTests(UpdaterCase):
+    def test_the_pin_is_the_target_even_below_the_running_version_or_retired(self) -> None:
+        rig = self.rig
+        rig.release("0.2.0")
+        rig.release("0.3.0")
+        rig.move_to("v0.3.0")
+        rig.write_conf(pin="v0.2.0")
+        self.assertTick(rig.tick(), 0)
+        self.assertEqual(rig.on_tag(), "v0.2.0")
+        self.assertEqual(rig.state()["good_tag"], "v0.2.0")
+        self.assertEqual(rig.state()["pin_retired"], "")
+        calls = len(rig.calls())
+        self.assertTick(rig.tick(), 0)
+        self.assertEqual(rig.on_tag(), "v0.2.0", "v0.3.0 exists and the pin holds")
+        self.assertEqual(len(rig.calls()), calls)
+        rig.retire("v0.2.0", "bad one")
+        rig.retire("v0.1.0", "old")
+        proc = rig.tick()
+        self.assertTick(proc, 0)
+        self.assertEqual(rig.on_tag(), "v0.2.0", "the pin wins over a retirement")
+        self.assertEqual(rig.state()["pin_retired"], "v0.2.0")
+        self.assertIn("pin", proc.output)
+        self.assertIn("retired", proc.output)
+        rig.write_conf(pin="v0.1.0")  # retired too, and lower
+        self.assertTick(rig.tick(), 0)
+        self.assertEqual(rig.on_tag(), "v0.1.0")
+        self.assertEqual(rig.state()["pin_retired"], "v0.1.0")
+        rig.write_conf()  # no pin: the device goes up to the best valid release
+        self.assertTick(rig.tick(), 0)
+        self.assertEqual(rig.on_tag(), "v0.3.0")
+        self.assertEqual(rig.state()["pin_retired"], "")
+
+    def test_a_pin_follows_no_channel_and_must_be_a_valid_tag(self) -> None:
+        rig = self.rig
+        rig.release("0.2.0rc1")
+        rig.release("0.3.0", on_main=False)
+        rig.release("0.4.0", file_version="0.4.1")
+        self.assertTick(rig.tick(), 0)  # the first run reconciles once; after it nothing runs
+        calls = len(rig.calls())
+        for pin in ("v9.9.9", "v0.3.0", "v0.4.0"):
+            with self.subTest(pin=pin):
+                rig.write_conf(pin=pin)
+                self.assertTick(rig.tick(), 0)
+                self.assertEqual(rig.on_tag(), "v0.1.0")
+                self.assertEqual(len(rig.calls()), calls)
+        rig.write_conf(pin="v0.2.0rc1")  # stable channel, a candidate
+        self.assertTick(rig.tick(), 0)
+        self.assertEqual(rig.on_tag(), "v0.2.0rc1")
+
+    def test_a_pin_that_fails_is_judged_by_the_differential_verdict(self) -> None:
+        rig = self.rig
+        rig.release("0.2.0")
+        rig.write_conf(pin="v0.2.0")
+        rig.flag("env_broken")  # the good version fails too: not the pin's fault
+        self.assertTick(rig.tick(), 1)
+        self.assertEqual(rig.bad(), [])
+        self.assertEqual(rig.state()["last_result"], "env")
+        rig.flag("env_broken", False)
+        rig.break_version("0.2.0", "provision_fails")
+        later = NOW + 2 * DAY
+        self.assertTick(rig.tick(now=later), 1)
+        self.assertEqual(rig.bad(), ["v0.2.0"])
+        self.assertEqual(rig.on_tag(), "v0.1.0")
+        self.assertTick(rig.tick(now=later + DAY), 0)
+        tried = [c for c in rig.calls() if "@ 0.2.0" in c]
+        self.assertTick(rig.tick(now=later + 2 * DAY), 0)
+        self.assertEqual([c for c in rig.calls() if "@ 0.2.0" in c], tried)
+        self.assertEqual(rig.on_tag(), "v0.1.0", "a pin that was judged bad is not tried again")
+
+
+@unittest.skipUnless(SSH_KEYGEN, "ssh-keygen is not installed")
+class SignatureTests(UpdaterCase):
+    def setUp(self) -> None:
+        super().setUp()
+        self.key = SigningKey(self.rig.root / "keys", "maintainer")
+        self.other = SigningKey(self.rig.root / "keys", "stranger")
+
+    def test_only_tags_signed_by_an_allowed_key_are_candidates(self) -> None:
+        rig = self.rig
+        allowed = {"WZ_ALLOWED_SIGNERS": str(rig.allow(self.key))}
+        rig.release("0.2.0", sign=self.key)
+        rig.release("0.3.0", sign=self.other)  # signed, by a key nobody trusts
+        rig.release("0.4.0")  # not signed at all
+        proc = rig.tick(**allowed)
+        self.assertTick(proc, 0)
+        self.assertEqual(rig.on_tag(), "v0.2.0")
+        for tag in ("v0.3.0", "v0.4.0"):
+            self.assertRegex(proc.output, rf"{tag}.*signature")
+        self.assertEqual(rig.bad(), [])
+        rig.release("0.5.0rc1", sign=self.key)
+        rig.write_conf(channel="rc")
+        self.assertTick(rig.tick(**allowed), 0)
+        self.assertEqual(rig.on_tag(), "v0.5.0rc1", "a candidate is signed the same way")
+
+    def test_without_a_signers_file_nothing_is_demanded_and_it_says_so(self) -> None:
+        rig = self.rig
+        comments = rig.root / "comments"
+        comments.write_text("# no keys yet\n\n   \n")
+        cases = [
+            ("0.2.0", str(rig.root / "missing")),
+            ("0.3.0", str(comments)),
+            ("0.4.0", ""),
+        ]
+        for version, path in cases:
+            with self.subTest(path=path):
+                rig.release(version)
+                proc = rig.tick(WZ_ALLOWED_SIGNERS=path)
+                self.assertTick(proc, 0)
+                self.assertEqual(rig.on_tag(), f"v{version}")
+                self.assertRegex(proc.output, r"signatures are not required")
+
+    def trusted(self, rig, version: str = "0.2.0") -> None:
+        """A device whose running version is signed and carries the allowed signers."""
+        rig.release(
+            version,
+            sign=self.key,
+            extra={"warpzone/data/allowed_signers": self.key.allowed},
+        )
+        rig.move_to(f"v{version}")
+
+    def test_the_keys_are_the_ones_of_the_running_version_not_a_file_next_to_the_script(
+        self,
+    ) -> None:
+        rig = self.rig
+        self.trusted(rig)
+        self.assertFalse((rig.updater.parent / "allowed_signers").exists())
+        # a release that trusts its own signer, and one that nobody signed
+        rig.release(
+            "0.3.0",
+            sign=self.other,
+            extra={"warpzone/data/allowed_signers": self.other.allowed},
+        )
+        rig.release("0.4.0")
+        proc = rig.tick()
+        self.assertTick(proc, 0)
+        self.assertEqual(rig.on_tag(), "v0.2.0")
+        self.assertRegex(proc.output, r"v0\.3\.0.*signature")
+        rig.write_conf(pin="v0.4.0")
+        self.assertTick(rig.tick(), 0)
+        self.assertEqual(rig.on_tag(), "v0.2.0", "an unsigned pin is no target")
+        rig.write_conf()
+        # a release signed by the trusted key can change the keys for the ones after it
+        both = self.key.allowed + self.other.allowed
+        rig.release("0.5.0", sign=self.key, extra={"warpzone/data/allowed_signers": both})
+        self.assertTick(rig.tick(), 0)
+        self.assertEqual(rig.on_tag(), "v0.5.0")
+        rig.release("0.6.0", sign=self.other, extra={"warpzone/data/allowed_signers": both})
+        self.assertTick(rig.tick(), 0)
+        self.assertEqual(rig.on_tag(), "v0.6.0")
+
+    def test_a_retirement_needs_the_same_signature_when_there_are_keys(self) -> None:
+        rig = self.rig
+        allowed = {"WZ_ALLOWED_SIGNERS": str(rig.allow(self.key))}
+        rig.release("0.2.0", sign=self.key)
+        rig.release("0.3.0", sign=self.key)
+        rig.retire("v0.3.0", "withdrawn by a stranger", sign=self.other)
+        rig.retire("v0.2.0", "not signed")
+        self.assertTick(rig.tick(**allowed), 0)
+        self.assertEqual(rig.on_tag(), "v0.3.0", "neither retirement counts")
+        rig.release("0.4.0", sign=self.key)
+        rig.retire("v0.4.0", "signed by the maintainer", sign=self.key)
+        self.assertTick(rig.tick(**allowed), 0)
+        self.assertEqual(rig.on_tag(), "v0.3.0", "this one does")
+
+    def test_a_tag_signed_with_openpgp_is_not_accepted(self) -> None:
+        rig = self.rig
+        # a gpg that vouches for anything: `verify-tag` picks the verifier by the signature
+        # block, not by gpg.format, so a PGP block would never reach allowed_signers
+        gpg = rig.python.parent / "gpg"
+        gpg.write_text(
+            "#!/bin/sh\n"
+            "echo '[GNUPG:] NEWSIG'\n"
+            "echo '[GNUPG:] GOODSIG 0123456789ABCDEF Maintainer <m@example.invalid>'\n"
+            "echo '[GNUPG:] VALIDSIG AAAA 2023-11-14 1700000000 0 4 0 1 10 00 AAAA'\n"
+            "echo '[GNUPG:] TRUST_ULTIMATE 0 pgp'\n"
+        )
+        gpg.chmod(0o755)
+        pgp = (
+            "object {sha}\ntype commit\ntag {name}\n"
+            "tagger T <t@example.invalid> 1700000000 +0000\n\nrelease\n"
+            "-----BEGIN PGP SIGNATURE-----\n\niQEzBAABCAAdFiEE\n=abcd\n"
+            "-----END PGP SIGNATURE-----\n"
+        )
+        allowed = {"WZ_ALLOWED_SIGNERS": str(rig.allow(self.key))}
+        rig.release("0.2.0", sign=self.key)
+        rig.release("0.3.0", raw_tag=pgp)
+        self.assertTick(rig.tick(**allowed), 0)
+        self.assertEqual(rig.on_tag(), "v0.2.0", "v0.3.0 is not signed by an allowed key")
+
+    def test_a_version_being_tried_that_is_not_signed_any_more_is_not_promoted(self) -> None:
+        rig = self.rig
+        rig.release("0.2.0")
+        git(rig.clone, "fetch", "-q", "--tags")
+        rig.write_state(
+            good_tag="v0.1.0",
+            good_sha=rig.head(),
+            trying_tag="v0.2.0",
+            trying_sha=git(rig.work, "rev-parse", "v0.2.0^{commit}"),
+            attempts="1",
+        )
+        rig.tick(WZ_ALLOWED_SIGNERS=str(rig.allow(self.key)))
+        self.assertEqual(rig.on_tag(), "v0.1.0")
+        self.assertEqual(rig.state()["trying_tag"], "")
+        self.assertEqual([c for c in rig.calls() if "@ 0.2.0" in c], [])
+
+
+class SignedNameTests(UpdaterCase):
+    """A signature covers a tag object, and a ref can point at any object."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        if not SSH_KEYGEN:
+            self.skipTest("ssh-keygen is not installed")
+        self.key = SigningKey(self.rig.root / "keys", "maintainer")
+        self.allowed = {"WZ_ALLOWED_SIGNERS": str(self.rig.allow(self.key))}
+
+    def publish_as(self, ref: str, source: str) -> None:
+        """Publish the tag object of `source` under another ref name."""
+        rig = self.rig
+        git(
+            rig.work,
+            "update-ref",
+            f"refs/tags/{ref}",
+            git(rig.work, "rev-parse", f"refs/tags/{source}"),
+        )
+        git(rig.work, "push", "-q", "origin", f"refs/tags/{ref}")
+
+    def test_a_signed_retirement_published_under_another_version_retires_nothing(self) -> None:
+        rig = self.rig
+        rig.release("0.2.0", sign=self.key)
+        rig.release("0.3.0", sign=self.key)
+        rig.move_to("v0.3.0")
+        rig.retire("v0.2.0", "really withdrawn", sign=self.key)
+        self.publish_as("retired/v0.3.0", "retired/v0.2.0")  # its signature is good
+        proc = rig.tick(**self.allowed)
+        self.assertTick(proc, 0)
+        self.assertEqual(rig.on_tag(), "v0.3.0")
+        self.assertRegex(proc.output, r"retirement.*ignored.*v0\.3\.0")
+
+    def test_a_signed_retirement_on_another_commit_retires_nothing(self) -> None:
+        rig = self.rig
+        rig.release("0.2.0", sign=self.key)
+        rig.release("0.3.0", sign=self.key)
+        rig.move_to("v0.3.0")
+        rig.retire("v0.3.0", "it names v0.3.0 but sits on v0.2.0", sign=self.key, at="v0.2.0")
+        self.assertTick(rig.tick(**self.allowed), 0)
+        self.assertEqual(rig.on_tag(), "v0.3.0")
+
+    def test_a_signed_object_published_as_another_release_is_no_release(self) -> None:
+        rig = self.rig
+        # the maintainer signed a tag with a name of their own on a commit whose version is
+        # 0.2.1: with that signature, the version and main all in order, only the name inside
+        # the tag object tells that it is not "v0.2.1"
+        rig.release("0.2.1", tag="scratch-0.2.1", sign=self.key)
+        self.publish_as("v0.2.1", "scratch-0.2.1")
+        proc = rig.tick(**self.allowed)
+        self.assertTick(proc, 0)
+        self.assertEqual(rig.on_tag(), "v0.1.0")
+        self.assertRegex(proc.output, r"v0\.2\.1.*signature")
+
+    def test_signatures_stay_required_when_the_version_known_to_work_has_no_keys(self) -> None:
+        rig = self.rig
+        rig.release("0.1.5", sign=self.key)  # signed, but without the keys in its tree
+        rig.release(
+            "0.2.0",
+            sign=self.key,
+            extra={"warpzone/data/allowed_signers": self.key.allowed},
+        )
+        rig.move_to("v0.2.0")
+        self.assertTick(rig.tick(), 0)
+        self.assertEqual(rig.state()["signing"], "1")
+        rig.write_conf(pin="v0.1.5")  # down to a release that has no allowed_signers
+        self.assertTick(rig.tick(), 0)
+        self.assertEqual(rig.on_tag(), "v0.1.5")
+        rig.write_conf()
+        rig.release("0.3.0")  # nobody signed it
+        proc = rig.tick()
+        self.assertTick(proc, 0)
+        self.assertEqual(rig.on_tag(), "v0.2.0", "v0.3.0 is unsigned; v0.2.0 is signed")
+        self.assertRegex(proc.output, r"v0\.3\.0.*signature")
+
+
+class KeysNeverGoBackTests(UpdaterCase):
+    def setUp(self) -> None:
+        super().setUp()
+        if not SSH_KEYGEN:
+            self.skipTest("ssh-keygen is not installed")
+        self.old = SigningKey(self.rig.root / "keys", "old")
+        self.new = SigningKey(self.rig.root / "keys", "new")
+
+    def test_going_down_to_an_older_release_does_not_trust_its_older_keys(self) -> None:
+        rig = self.rig
+        both = {"warpzone/data/allowed_signers": self.old.allowed + self.new.allowed}
+        only_new = {"warpzone/data/allowed_signers": self.new.allowed}
+        rig.release("0.3.5", sign=self.new, extra=both)  # still trusts the old key
+        rig.move_to("v0.3.5")
+        self.assertTick(rig.tick(), 0)
+        rig.release("0.4.0", sign=self.new, extra=only_new)  # the old key is dropped
+        self.assertTick(rig.tick(), 0)
+        self.assertEqual(rig.on_tag(), "v0.4.0")
+        rig.retire("v0.4.0", "withdrawn", sign=self.new)
+        self.assertTick(rig.tick(), 0)
+        self.assertEqual(rig.on_tag(), "v0.3.5", "down, to a release that lists both keys")
+        # the old key may have been the one that leaked: nothing it signs is installed
+        rig.release("0.9.0", sign=self.old, extra=both)
+        proc = rig.tick()
+        self.assertTick(proc, 0)
+        self.assertEqual(rig.on_tag(), "v0.3.5")
+        self.assertRegex(proc.output, r"v0\.9\.0.*signature")
+        rig.release("0.9.1", sign=self.new, extra=only_new)
+        self.assertTick(rig.tick(), 0)
+        self.assertEqual(rig.on_tag(), "v0.9.1", "the newer key still works")
+
+    def test_a_retirement_made_on_the_release_tag_itself_counts(self) -> None:
+        rig = self.rig
+        allowed = {"WZ_ALLOWED_SIGNERS": str(rig.allow(self.new))}
+        rig.release("0.2.0", sign=self.new)
+        rig.release("0.3.0", sign=self.new)  # annotated: `git tag -s retired/v0.3.0 v0.3.0` nests
+        rig.move_to("v0.3.0")
+        rig.retire("v0.3.0", "withdrawn the natural way", sign=self.new, nested=True)
+        self.assertTick(rig.tick(**allowed), 0)
+        self.assertEqual(rig.on_tag(), "v0.2.0")
+
+
+class StaleTargetTests(UpdaterCase):
+    """A version that was chosen at one tick and is checked at a later one is chosen again."""
+
+    def prepare(self, rig, version: str, **state: str) -> None:
+        git(rig.clone, "fetch", "-q", "--tags")
+        rig.write_state(
+            good_tag="v0.1.0",
+            good_sha=rig.head(),
+            **{
+                k: v.format(sha=git(rig.work, "rev-parse", f"v{version}^{{commit}}"))
+                for k, v in state.items()
+            },
+        )
+
+    def assert_left_alone(self, rig, version: str) -> None:
+        self.assertEqual(rig.on_tag(), "v0.1.0")
+        state = rig.state()
+        self.assertEqual(state["good_tag"], "v0.1.0")
+        self.assertEqual(state["trying_tag"], "")
+        self.assertEqual(state["suspect_tag"], "")
+        self.assertEqual([c for c in rig.calls() if f"@ {version}" in c], [])
+
+    def test_a_version_being_tried_that_gets_retired_is_not_promoted(self) -> None:
+        rig = self.rig
+        rig.release("0.2.0")
+        self.prepare(rig, "0.2.0", trying_tag="v0.2.0", trying_sha="{sha}", attempts="1")
+        rig.retire("v0.2.0", "found out in the meantime")
+        rig.tick()
+        self.assert_left_alone(rig, "0.2.0")
+
+    def test_a_suspect_that_gets_retired_is_not_installed(self) -> None:
+        rig = self.rig
+        rig.release("0.2.0")
+        self.prepare(rig, "0.2.0", suspect_tag="v0.2.0", suspect_sha="{sha}")
+        rig.retire("v0.2.0", "found out in the meantime")
+        rig.tick()
+        self.assert_left_alone(rig, "0.2.0")
+
+    def test_a_suspect_candidate_is_dropped_when_the_channel_goes_back_to_stable(self) -> None:
+        rig = self.rig
+        rig.release("0.2.0rc1")
+        rig.write_conf(channel="stable")
+        self.prepare(rig, "0.2.0rc1", suspect_tag="v0.2.0rc1", suspect_sha="{sha}")
+        rig.tick()
+        self.assert_left_alone(rig, "0.2.0rc1")
+
+
 class ScriptTests(UpdaterCase):
     def test_it_parses_with_every_shell(self) -> None:
         for shell in SHELLS:
@@ -1442,6 +2087,11 @@ class ScriptTests(UpdaterCase):
     def test_the_script_is_shipped_as_package_data(self) -> None:
         pyproject = (UPDATER.parent.parent.parent / "pyproject.toml").read_text()
         self.assertIn("*.sh", pyproject)
+
+    def test_the_allowed_signers_file_is_shipped_as_package_data(self) -> None:
+        pyproject = (UPDATER.parent.parent.parent / "pyproject.toml").read_text()
+        self.assertIn("allowed_signers", pyproject)
+        self.assertTrue((UPDATER.parent / "allowed_signers").is_file())
 
 
 if __name__ == "__main__":

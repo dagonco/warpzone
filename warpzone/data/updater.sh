@@ -8,6 +8,8 @@
 #   updater.sh tick      one run of the timer: update, verify, roll back, reconcile
 #   updater.sh menu      exit 0 when the frontend is running, 1 when not, 2 when unknown
 #   updater.sh selftest  check the tools this script needs and its own helpers
+#   updater.sh order     read tags on the standard input, print those that are releases or
+#                        candidates, best first (for the tests and for looking at it by hand)
 #
 # Settings are read, line by line and never sourced, from a key=value file; the state is a
 # key=value file only this script writes. Both can be moved for tests:
@@ -23,6 +25,11 @@
 #   WZ_FETCH_TIMEOUT   seconds for the fetch (default 120)
 #   WZ_MIN_FREE_KB     free space in KiB needed before switching (default 51200)
 #   WZ_PYTHON_FALLBACKS  interpreters to try after the one in the settings
+#   WZ_RETIRED_MAX       retirement tags whose signature is checked per tick (default 50)
+#   WZ_ALLOWED_SIGNERS   the allowed-signers file (ssh-keygen -Y format) that tags must be
+#                        signed against, for tests (default: the one in the version known to
+#                        work, warpzone/data/allowed_signers; empty or without keys, no
+#                        signature is required)
 
 # Every S_* variable is the state; state_save writes them to the file through eval, which
 # the linter cannot follow, so it takes them for unused.
@@ -35,7 +42,7 @@ DAY=86400
 DEFER_MAX=$((72 * 3600))
 MAX_ATTEMPTS=2
 IMPORT_CODE='import os, sys, warpzone.cli, warpzone.provision, warpzone.health; root = os.path.realpath(sys.argv[1]); here = os.path.realpath(warpzone.__file__); sys.exit(0 if here.startswith(root + os.sep) else 7)'
-STATE_KEYS="schema good_tag good_sha good_branch trying_tag trying_sha from_tag from_sha from_branch attempts probation pending deferred_since last_fetch last_boot_id last_result last_ok retry_after env_failures suspect_tag suspect_sha"
+STATE_KEYS="schema good_tag good_sha good_branch trying_tag trying_sha from_tag from_sha from_branch attempts probation pending deferred_since last_fetch last_boot_id last_result last_ok retry_after env_failures suspect_tag suspect_sha pin_retired signing signers_version"
 
 STATE_DIR=${WZ_STATE_DIR:-${XDG_STATE_HOME:-${HOME:-/nonexistent}/.local/state}/warpzone/updater}
 CONF=${WZ_CONF:-$STATE_DIR/conf}
@@ -44,6 +51,12 @@ PROC=${WZ_PROC:-/proc}
 BOOT_ID_FILE=${WZ_BOOT_ID_FILE:-/proc/sys/kernel/random/boot_id}
 FETCH_INTERVAL=${WZ_FETCH_INTERVAL:-$DAY}
 PY_FALLBACKS=${WZ_PYTHON_FALLBACKS-/usr/bin/python3 python3}
+SIGNERS_FILE=
+SIGNERS_SRC=
+SIGNERS_TMP=$STATE_DIR/.allowed_signers
+SIGNERS_LAST=$STATE_DIR/allowed_signers.last
+RETIRED_MAX=${WZ_RETIRED_MAX:-50}
+RETIRED_SCAN=500
 STEP_TIMEOUT=${WZ_STEP_TIMEOUT:-}
 FETCH_TIMEOUT=${WZ_FETCH_TIMEOUT:-120}
 TICK_BUDGET=${WZ_TICK_BUDGET:-1500}
@@ -94,19 +107,12 @@ log() {
 	return 0
 }
 
-# ver_gt A B: succeeds when the plain version A (X.Y.Z) is greater than B.
-ver_gt() {
-	_a=$1
-	_b=$2
-	for _i in 1 2 3; do
-		_x=${_a%%.*}
-		_y=${_b%%.*}
-		[ "$_x" -gt "$_y" ] && return 0
-		[ "$_x" -lt "$_y" ] && return 1
-		case $_a in *.*) _a=${_a#*.} ;; *) _a=0 ;; esac
-		case $_b in *.*) _b=${_b#*.} ;; *) _b=0 ;; esac
-	done
-	return 1
+# log_daily MESSAGE: a message about the state of the world (not about something this tick
+# did) that the next tick would only repeat: said when the remote was fetched, which is
+# once a day.
+log_daily() {
+	[ "${FETCHED:-0}" = 1 ] || return 0
+	log "$*"
 }
 
 # is_plain_tag T: succeeds for vX.Y.Z (numbers only).
@@ -132,6 +138,88 @@ is_number() {
 	return 0
 }
 
+# pad9 N: P is N with zeros in front up to nine digits; fails for a longer number.
+pad9() {
+	[ "${#1}" -le 9 ] || return 1
+	P=000000000$1
+	P=${P#"${P%?????????}"}
+}
+
+# rel_key TAG: RK is a key that sorts, as plain text, like selfupdate.tag_key orders the tag
+# vX.Y.Z or vX.Y.ZrcN (v0.3.0rc1 < v0.3.0rc2 < v0.3.0, the numbers as numbers); fails for
+# any other spelling. RK_NUM is the part of the key that is the three numbers.
+RK=
+RK_NUM=
+rel_key() {
+	RK=
+	case $1 in v*) ;; *) return 1 ;; esac
+	_rk_v=${1#v}
+	_rk_stage=2
+	_rk_rc=0
+	case $_rk_v in
+	*rc*)
+		_rk_rc=${_rk_v#*rc}
+		_rk_v=${_rk_v%%rc*}
+		is_number "$_rk_rc" || return 1
+		_rk_stage=1
+		;;
+	esac
+	is_plain_tag "v$_rk_v" || return 1
+	_rk_ifs=$IFS
+	IFS=.
+	set -f
+	# shellcheck disable=SC2086
+	set -- $_rk_v
+	set +f
+	IFS=$_rk_ifs
+	pad9 "$1" || return 1
+	RK_NUM=$P
+	pad9 "$2" || return 1
+	RK_NUM=$RK_NUM.$P
+	pad9 "$3" || return 1
+	RK_NUM=$RK_NUM.$P
+	pad9 "$_rk_rc" || return 1
+	RK=$RK_NUM.$_rk_stage.$P
+	return 0
+}
+
+is_release_tag() {
+	rel_key "$1"
+}
+
+# ver_key VERSION: VK is the key of a package version, as version_key gives it: an rcN or a
+# plain release as for a tag, any other suffix before every rcN, and one that cannot be read
+# before all.
+VK=
+ver_key() {
+	if rel_key "v$1"; then
+		VK=$RK
+		return 0
+	fi
+	_vk_num=$(printf '%s' "$1" | sed -n 's/^\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\).*/\1/p')
+	if [ -n "$_vk_num" ] && rel_key "v$_vk_num"; then
+		VK=$RK_NUM.0.000000000
+	else
+		VK=000000000.000000000.000000000.0.000000000
+	fi
+	return 0
+}
+
+# key_gt A B: succeeds when the key A sorts after the key B.
+key_gt() {
+	[ "$1" != "$2" ] && [ "$(printf '%s\n%s\n' "$1" "$2" | LC_ALL=C sort | tail -n 1)" = "$1" ]
+}
+
+# order_tags: the tags on the standard input that are releases or candidates, best first.
+order_tags() {
+	while IFS= read -r _ot_tag; do
+		rel_key "$_ot_tag" || continue
+		printf '%s %s\n' "$RK" "$_ot_tag"
+	done | LC_ALL=C sort -r | while read -r _ot_key _ot_tag; do
+		printf '%s\n' "$_ot_tag"
+	done
+}
+
 # Numbers that come from the environment: one that is not a number would stop the script
 # on its first sum.
 case $FETCH_INTERVAL in '' | *[!0-9]*) FETCH_INTERVAL=$DAY ;; esac
@@ -139,6 +227,7 @@ case $STEP_TIMEOUT in '' | 0 | *[!0-9]*) STEP_TIMEOUT= ;; esac
 case $FETCH_TIMEOUT in '' | *[!0-9]*) FETCH_TIMEOUT=120 ;; esac
 case $TICK_BUDGET in '' | *[!0-9]*) TICK_BUDGET=1500 ;; esac
 case $MIN_FREE_KB in '' | *[!0-9]*) MIN_FREE_KB=51200 ;; esac
+case $RETIRED_MAX in '' | 0 | *[!0-9]*) RETIRED_MAX=50 ;; esac
 
 # ---- run with a time limit ------------------------------------------------------------
 # run_limited SECONDS COMMAND...: the command's exit status, or 124 when it ran out of
@@ -255,6 +344,8 @@ C_enabled=1
 C_frontend=
 C_clone=
 C_config=
+C_channel=stable
+C_pin=
 
 conf_load() {
 	[ -f "$CONF" ] || return 1
@@ -273,6 +364,8 @@ conf_load() {
 		frontend) C_frontend=$_v ;;
 		clone) C_clone=$_v ;;
 		config) C_config=$_v ;;
+		channel) C_channel=$_v ;;
+		pin) C_pin=$_v ;;
 		enabled)
 			case $_v in
 			false | 0 | no | off) C_enabled=0 ;;
@@ -298,6 +391,7 @@ state_reset() {
 	S_env_failures=0
 	S_probation=0
 	S_pending=0
+	S_signing=0
 }
 
 # state_assign KEY VALUE: KEY is one of STATE_KEYS and only letters and underscores.
@@ -321,7 +415,7 @@ state_load() {
 		eval "_v=\$S_$_k"
 		is_number "$_v" || state_assign "$_k" 0
 	done
-	for _k in probation pending; do
+	for _k in probation pending signing; do
 		eval "_v=\$S_$_k"
 		[ "$_v" = 1 ] || state_assign "$_k" 0
 	done
@@ -340,8 +434,10 @@ state_load() {
 	# These end up in file names and in git commands: only what a tag and a branch can be.
 	for _k in good_tag trying_tag from_tag suspect_tag; do
 		eval "_v=\$S_$_k"
-		[ -z "$_v" ] || is_plain_tag "$_v" || state_assign "$_k" ""
+		[ -z "$_v" ] || is_release_tag "$_v" || state_assign "$_k" ""
 	done
+	[ -z "$S_pin_retired" ] || is_release_tag "$S_pin_retired" || S_pin_retired=
+	case $S_signers_version in *[!A-Za-z0-9._+-]*) S_signers_version= ;; esac
 	# A tag and its commit go together: one without the other is nothing.
 	if [ -z "$S_trying_tag" ] || [ -z "$S_trying_sha" ]; then
 		S_trying_tag=
@@ -458,6 +554,7 @@ acquire_lock() {
 # shellcheck disable=SC2329 # it is run by the trap of cmd_tick
 release_lock() {
 	if [ "$LOCK_HELD" = 1 ]; then
+		rm -f "$SIGNERS_TMP"
 		rm -rf "$LOCK_DIR"
 		LOCK_HELD=0
 	fi
@@ -650,31 +747,287 @@ clear_stale_index_lock() {
 	return 0
 }
 
+# ---- retired releases and signed tags -------------------------------------------------
+
+# Retiring: a tag cannot be edited, so a release is withdrawn by another tag, an annotated
+# `retired/vX.Y.Z` (or `retired/vX.Y.ZrcN`) whose message is the reason. When the allowed
+# signers hold a key it only counts if it is signed by one, like any release (below); without
+# keys it counts as it is. A lightweight tag, one whose name is not a release or a candidate,
+# or one with a signature that does not verify, retires nothing and is logged. The reason is
+# text for the log, never run.
+RETIRED_TAGS=' '
+RETIRED_INFO=
+RETIRED_BAD=
+
+# retired_ok TAG: the tag object retired/TAG sits on the commit of the release TAG (vX.Y.Z).
+# What it points at is peeled first, so `git tag -s retired/v1.2.3 v1.2.3`, which nests the
+# retirement in the release's own tag object, counts like one made on its commit. A signature
+# covers the object and not the ref it is published under, so without this a signed
+# retirement of one version could be published as the retirement of another.
+retired_ok() {
+	_ro_obj=$(g cat-file tag "refs/tags/retired/$1" 2>/dev/null </dev/null | sed -n -e '/^$/q' -e 's/^object //p' | head -n 1)
+	[ -n "$_ro_obj" ] || return 1
+	_ro_target=$(g rev-parse -q --verify "$_ro_obj^{commit}" 2>/dev/null </dev/null)
+	_ro_commit=$(g rev-parse -q --verify "refs/tags/$1^{commit}" 2>/dev/null </dev/null)
+	[ -n "$_ro_commit" ] && [ "$_ro_target" = "$_ro_commit" ]
+}
+
+# retired_load: the retirements the clone has (it takes them with the daily fetch), the newest
+# versions first. A tag that is no retirement (not annotated, no version for a name, not on
+# the commit of its release) is cheap to turn down and does not count towards the limit; at
+# most RETIRED_MAX that are well formed get their signature checked, so that a pile of bad
+# ones cannot use up the tick's budget, and RETIRED_SCAN tags are looked at in all. Needs
+# signing_setup first.
+retired_load() {
+	RETIRED_TAGS=' '
+	RETIRED_INFO=
+	RETIRED_BAD=
+	_rmore=0
+	_rcount=0
+	_rlines=0
+	_rbadn=0
+	_rf="$STATE_DIR/.retired.$$"
+	g for-each-ref --sort=-v:refname --format='%(refname) %(objecttype) %(taggerdate:short) %(contents:subject)' refs/tags/retired/ 2>/dev/null | head -n "$RETIRED_SCAN" >"$_rf" 2>/dev/null
+	while read -r _rref _rtype _rdate _rreason; do
+		_rlines=$((_rlines + 1))
+		_rtag=${_rref#refs/tags/retired/}
+		_rok=0
+		if rel_key "$_rtag" && [ "$_rtype" = tag ] && retired_ok "$_rtag"; then
+			if [ "$_rcount" -ge "$RETIRED_MAX" ]; then
+				_rmore=1
+				break
+			fi
+			_rcount=$((_rcount + 1))
+			tag_signed "retired/$_rtag" && _rok=1
+		fi
+		if [ "$_rok" = 1 ]; then
+			RETIRED_TAGS="$RETIRED_TAGS$_rtag "
+			RETIRED_INFO="$RETIRED_INFO$_rtag $_rdate $_rreason
+"
+		else
+			_rbadn=$((_rbadn + 1))
+			[ "$_rbadn" -gt 10 ] || RETIRED_BAD="$RETIRED_BAD $_rtag"
+		fi
+	done <"$_rf"
+	rm -f "$_rf"
+	if [ "$_rbadn" -gt 0 ]; then
+		log_daily "retirement tags ignored ($_rbadn: not annotated, not a version, not on that release's commit, or not signed by an allowed key):$RETIRED_BAD"
+	fi
+	if [ "$_rmore" = 1 ]; then
+		log_daily "more than $RETIRED_MAX retirement tags: only the newest $RETIRED_MAX were looked at"
+	elif [ "$_rlines" -ge "$RETIRED_SCAN" ]; then
+		log_daily "only the newest $RETIRED_SCAN retirement tags were scanned"
+	fi
+	return 0
+}
+
+is_retired() {
+	case $RETIRED_TAGS in *" $1 "*) return 0 ;; esac
+	return 1
+}
+
+# retired_why TAG: the date and reason of the retirement.
+retired_why() {
+	printf '%s' "$RETIRED_INFO" | while read -r _w_tag _w_rest; do
+		if [ "$_w_tag" = "$1" ]; then
+			printf '%s' "$_w_rest"
+			break
+		fi
+	done
+}
+
+# ---- signed tags ----------------------------------------------------------------------
+# Whoever controls the maintainer's account could otherwise put code on every device. With an
+# allowed-signers file that holds at least one key, a tag counts (a release, a candidate, a
+# pin, a retirement) only when it carries one SSH signature that `git verify-tag` accepts
+# against that file. The file is warpzone/data/allowed_signers of the version known to work
+# (S_good_sha), read from git into a temporary file: the keys travel with the version that is
+# trusted, and a release cannot change the keys that check it. Without keys nothing is
+# required and the log says so.
+
+SIGN_ON=0
+SIGN_WHY=
+
+# signers_judge: set SIGN_ON from SIGNERS_FILE (and SIGN_WHY when no signature is required).
+signers_judge() {
+	SIGN_ON=0
+	if [ -z "$SIGNERS_FILE" ] || [ ! -e "$SIGNERS_FILE" ]; then
+		SIGN_WHY="there is no allowed signers file"
+	elif [ ! -r "$SIGNERS_FILE" ]; then
+		SIGN_ON=1 # a file that cannot be read is not a file without keys
+	elif grep -Evq '^[[:space:]]*(#|$)' "$SIGNERS_FILE" 2>/dev/null; then
+		SIGN_ON=1
+	else
+		SIGN_WHY="the allowed signers file holds no keys"
+	fi
+}
+
+# keys_older A B: the version A is older than the version B.
+keys_older() {
+	ver_key "$1"
+	_ko_a=$VK
+	ver_key "$2"
+	key_gt "$VK" "$_ko_a"
+}
+
+# signing_setup: once a version with keys has been trusted (`signing` in the state, the keys it
+# had in allowed_signers.last and its version in `signers_version`), signatures stay required
+# for good and the keys never go back: a pin or a retirement that takes the device down to an
+# older release does not turn them off (that release has no file) or bring back the keys it
+# listed and a newer release dropped (it has an older file). The last keys are then the ones
+# used, and with none to use, every tag is refused. Keys are only replaced by those of a
+# version that is as new or newer.
+signing_setup() {
+	rm -f "$SIGNERS_TMP"
+	if [ -n "${WZ_ALLOWED_SIGNERS+x}" ]; then
+		SIGNERS_FILE=$WZ_ALLOWED_SIGNERS
+		SIGNERS_SRC=$WZ_ALLOWED_SIGNERS
+		signers_judge
+	else
+		SIGNERS_FILE=$SIGNERS_TMP
+		SIGNERS_SRC="warpzone/data/allowed_signers of the version known to work"
+		if [ -n "$S_good_sha" ]; then
+			g show "$S_good_sha:warpzone/data/allowed_signers" 2>/dev/null | head -n 1000 >"$SIGNERS_TMP" 2>/dev/null
+		fi
+		[ -s "$SIGNERS_TMP" ] || rm -f "$SIGNERS_TMP"
+		signers_judge
+		_good_ver=
+		[ "$SIGN_ON" = 1 ] && _good_ver=$(version_at "$S_good_sha")
+		if [ "$SIGN_ON" = 1 ] && { [ -z "$S_signers_version" ] || [ ! -s "$SIGNERS_LAST" ] || ! keys_older "$_good_ver" "$S_signers_version"; }; then
+			S_signing=1
+			S_signers_version=$_good_ver
+			if cat "$SIGNERS_TMP" >"$SIGNERS_LAST.new" 2>/dev/null; then
+				mv -f "$SIGNERS_LAST.new" "$SIGNERS_LAST"
+			fi
+		elif [ "$SIGN_ON" = 1 ] || [ "$S_signing" = 1 ]; then
+			SIGN_ON=1
+			SIGNERS_FILE=$SIGNERS_LAST
+			SIGNERS_SRC="the last allowed signers this device trusted"
+			log_daily "the version known to work has older or no allowed signers than ${S_signers_version:-before}: the last ones this device trusted are used"
+		fi
+	fi
+	[ "$SIGN_ON" = 1 ] || log_daily "signatures are not required: $SIGN_WHY ($SIGNERS_SRC)"
+	return 0
+}
+
+# tag_signed TAG: succeeds when no signature is required, or TAG is an annotated tag with
+# exactly one signature block, an SSH one, that verifies, made for a tag of that very name.
+# `verify-tag` chooses the verifier by
+# the block it finds, not by gpg.format: a tag signed with OpenPGP or X.509 would be checked
+# by gpg against the user's keyring and never reach the allowed signers. So any other block is
+# refused, the other verifiers are switched off, and the user's git configuration is not read.
+tag_signed() {
+	[ "$SIGN_ON" = 1 ] || return 0
+	command -v ssh-keygen >/dev/null 2>&1 || return 1
+	_obj=$(g cat-file tag "refs/tags/$1" 2>/dev/null </dev/null) || return 1
+	[ "$(printf '%s\n' "$_obj" | grep -c '^-----BEGIN ')" = 1 ] || return 1
+	[ "$(printf '%s\n' "$_obj" | grep -c '^-----BEGIN SSH SIGNATURE-----$')" = 1 ] || return 1
+	# The signature covers the object, which names the tag it was made for; the ref can say
+	# anything. A signed v0.2.0 published as v0.3.0 is not v0.3.0.
+	[ "$(printf '%s\n' "$_obj" | sed -n -e '/^$/q' -e 's/^tag //p' | head -n 1)" = "$1" ] || return 1
+	run_limited 30 env GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git -C "$CLONE" \
+		-c gpg.format=ssh -c gpg.ssh.program=ssh-keygen -c gpg.program=false \
+		-c gpg.openpgp.program=false -c gpg.x509.program=false \
+		-c "gpg.ssh.allowedSignersFile=$SIGNERS_FILE" verify-tag "refs/tags/$1" >/dev/null 2>&1
+}
+
 # ---- choosing a target ----------------------------------------------------------------
 
-# pick_target prints the highest valid vX.Y.Z tag that is newer than what is checked out.
-# Valid: not bad, an ancestor of origin/main, and its __version__ is the tag without the v.
+# tag_valid TAG: TAG is an ancestor of origin/main, its __version__ is the tag without the v,
+# and its signature verifies when one is required. Says why in the log when the signature
+# is what fails.
+tag_valid() {
+	g merge-base --is-ancestor "refs/tags/$1" origin/main >/dev/null 2>&1 || return 1
+	[ "$(version_at "refs/tags/$1")" = "${1#v}" ] || return 1
+	if ! tag_signed "$1"; then
+		log_daily "$1 is not a candidate: its signature does not verify against the allowed signers ($SIGNERS_SRC)"
+		return 1
+	fi
+	return 0
+}
+
+# pick_pin: the pinned tag is the target whatever the channel, the running version and
+# a retirement, once it is a real, valid tag of the project that is not already checked out.
+pick_pin() {
+	_psha=$(g rev-parse -q --verify "refs/tags/$C_pin^{commit}" 2>/dev/null) || _psha=
+	if [ -z "$_psha" ]; then
+		log_daily "the pinned tag $C_pin does not exist here; staying where it is"
+		return 1
+	fi
+	[ "$_psha" != "$(head_sha)" ] || return 1
+	if is_bad "$C_pin"; then
+		log_daily "the pinned tag $C_pin was marked bad on this device; staying where it is"
+		return 1
+	fi
+	tag_valid "$C_pin" || return 1
+	PICK=$C_pin
+	return 0
+}
+
+# target_ok TAG: TAG may be a target now. With a pin, only the pin (retired or not, of any
+# channel); otherwise it is of the channel, not retired and not bad. Either way it is a valid
+# tag (an ancestor of origin/main, its own version, signed when signatures are required).
+# What was chosen at one tick is asked again at the next, because a retirement, the channel and
+# the keys can change in between.
+target_ok() {
+	if [ -n "$C_pin" ]; then
+		[ "$1" = "$C_pin" ] || return 1
+	else
+		case $C_channel in
+		stable) is_plain_tag "$1" || return 1 ;;
+		esac
+		is_retired "$1" && return 1
+	fi
+	is_bad "$1" && return 1
+	tag_valid "$1"
+}
+
+# pick_target sets PICK to the best valid tag that is newer than what is checked out, or to
+# the pin when there is one. Valid: it is of the channel (stable: vX.Y.Z; rc: those and
+# vX.Y.ZrcN), not bad, not retired, an ancestor of origin/main, its __version__ is the tag
+# without the v, and its signature verifies when one is required. Best is the highest
+# version (rc1 < rc2 < the release). Never down, except when the running version is retired:
+# then the best valid one, wherever it is. Fails when there is none.
+PICK=
 pick_target() {
+	PICK=
 	_cur=$(version_at HEAD)
-	_cur_num=$(printf '%s' "$_cur" | sed -n 's/^\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\).*/\1/p')
-	[ -n "$_cur_num" ] || _cur_num=0.0.0
-	_cur_plain=0
-	[ "$_cur" = "$_cur_num" ] && _cur_plain=1
-	for _tag in $(g tag --list 'v*' --sort=-v:refname 2>/dev/null); do
-		is_plain_tag "$_tag" || continue
-		_ver=${_tag#v}
-		if [ "$_ver" = "$_cur_num" ]; then
-			[ "$_cur_plain" = 0 ] || continue
-		else
-			ver_gt "$_ver" "$_cur_num" || continue
+	ver_key "$_cur"
+	_cur_key=$VK
+	_down=0
+	if [ -n "$_cur" ] && is_retired "v$_cur"; then
+		_down=1
+		log "the running version v$_cur is retired ($(retired_why "v$_cur")); looking for the best valid release, even a lower one"
+	fi
+	if [ -n "$C_pin" ]; then
+		pick_pin
+		return
+	fi
+	for _tag in $(g tag --list 'v*' 2>/dev/null | order_tags); do
+		rel_key "$_tag"
+		if [ "$_down" = 0 ] && ! key_gt "$RK" "$_cur_key"; then
+			break # the rest is lower still
 		fi
-		is_bad "$_tag" && continue
-		g merge-base --is-ancestor "refs/tags/$_tag" origin/main >/dev/null 2>&1 || continue
-		[ "$(version_at "refs/tags/$_tag")" = "$_ver" ] || continue
-		printf '%s\n' "$_tag"
+		target_ok "$_tag" || continue
+		PICK=$_tag
 		return 0
 	done
 	return 1
+}
+
+# move_allowed TAG: moving to TAG is no way down, or is allowed to be one: the running
+# version is retired, or TAG is the pin (and with a pin nothing else is a target).
+move_allowed() {
+	if [ -n "$C_pin" ]; then
+		[ "$1" = "$C_pin" ]
+		return
+	fi
+	_ma_cur=$(version_at HEAD)
+	is_retired "v$_ma_cur" && return 0
+	rel_key "$1" || return 1
+	_ma_key=$RK
+	ver_key "$_ma_cur"
+	key_gt "$_ma_key" "$VK"
 }
 
 fetch_if_due() {
@@ -900,7 +1253,7 @@ sync_good_reference() {
 	S_good_sha=$_head
 	S_good_branch=$BRANCH
 	S_good_tag=$(g describe --exact-match --tags --match 'v[0-9]*' HEAD 2>/dev/null || true)
-	is_plain_tag "$S_good_tag" || S_good_tag=
+	is_release_tag "$S_good_tag" || S_good_tag=
 }
 
 # reconcile_if_needed: run provision once per boot, or when a run was deferred. Sets
@@ -1148,8 +1501,8 @@ attempt() {
 
 # resume: a tick that finds a version being tried knows the last run did not finish.
 resume() {
-	if is_bad "$S_trying_tag"; then
-		log "$S_trying_tag was marked bad in the meantime; going back to the previous version"
+	if ! target_ok "$S_trying_tag"; then
+		log "$S_trying_tag is not a target any more (marked bad, retired, off the channel or not signed); going back to the previous version"
 		back_to_good
 		clear_trying
 		return 0
@@ -1271,6 +1624,22 @@ probation_check() {
 	esac
 }
 
+# conf_check: what the settings say about the channel and the pin, made fit to use.
+conf_check() {
+	case $C_channel in
+	stable | rc) ;;
+	*)
+		log "the channel '$C_channel' is not stable or rc; using stable"
+		C_channel=stable
+		;;
+	esac
+	if [ -n "$C_pin" ] && ! rel_key "$C_pin"; then
+		log "the pin '$C_pin' is not a tag such as v0.3.0 or v0.3.0rc1; ignoring it"
+		C_pin=
+	fi
+	return 0
+}
+
 cmd_tick() {
 	mkdir -p "$STATE_DIR" || {
 		echo "updater: cannot create $STATE_DIR" >&2
@@ -1347,6 +1716,7 @@ cmd_tick() {
 		finish 1
 	fi
 
+	conf_check
 	fetch_if_due
 	detect_kind
 	if [ "$KIND" = dirty ]; then
@@ -1370,15 +1740,25 @@ cmd_tick() {
 
 	sync_good_reference
 
+	# The keys are the ones of the version known to work, so this comes after the reference.
+	signing_setup
+	retired_load
+	S_pin_retired=
+	if [ -n "$C_pin" ] && is_retired "$C_pin"; then
+		S_pin_retired=$C_pin
+		log_daily "the pinned tag $C_pin is retired ($(retired_why "$C_pin")); the pin wins, and it stays"
+	fi
+
 	if [ -n "$S_trying_tag" ]; then
 		resume
 	fi
 	if [ -n "$S_suspect_tag" ]; then
 		# A release that failed once, while the previous version passed, and could not be
 		# looked at again for lack of time: this is that second look, with a whole budget.
-		_cur=$(version_at HEAD | sed -n 's/^\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\).*/\1/p')
-		if is_bad "$S_suspect_tag" || ! ver_gt "${S_suspect_tag#v}" "${_cur:-0.0.0}"; then
-			# bad meanwhile, or not newer than what is checked out any more: never down
+		if ! target_ok "$S_suspect_tag" || ! move_allowed "$S_suspect_tag"; then
+			# bad, retired, off the channel or unsigned meanwhile, or not newer than what is
+			# checked out any more: never down (unless it is the pin, or the running version
+			# has been retired)
 			S_suspect_tag=
 			S_suspect_sha=
 		else
@@ -1399,7 +1779,8 @@ cmd_tick() {
 		finish 0
 	fi
 
-	_target=$(pick_target) || _target=
+	pick_target || true
+	_target=$PICK
 	if [ -n "$_target" ]; then
 		S_trying_tag=$_target
 		S_trying_sha=$(g rev-parse "refs/tags/$_target^{commit}")
@@ -1433,15 +1814,28 @@ cmd_menu() {
 	exit "$_r"
 }
 
+cmd_order() {
+	order_tags
+	exit 0
+}
+
 cmd_selftest() {
 	_bad=0
-	for _c in git sed grep tr cut find cksum sync sleep date kill mkdir mv rm cat head tail wc dirname; do
+	for _c in git sed grep tr cut find cksum sync sleep date kill mkdir mv rm cat head tail wc dirname sort; do
 		if ! command -v "$_c" >/dev/null 2>&1; then
 			echo "selftest: missing command: $_c"
 			_bad=1
 		fi
 	done
-	if ! { ver_gt 0.10.0 0.9.0 && ! ver_gt 0.9.0 0.10.0 && ! ver_gt 1.2.3 1.2.3 && ver_gt 1.0.0 0.99.99; }; then
+	ver_key 0.3.0rc2
+	_k1=$VK
+	ver_key 0.3.0
+	_k2=$VK
+	ver_key 0.10.0rc1
+	_k3=$VK
+	ver_key 0.3.0.dev0
+	_k4=$VK
+	if ! { key_gt "$_k2" "$_k1" && key_gt "$_k3" "$_k2" && key_gt "$_k1" "$_k4" && ! key_gt "$_k2" "$_k2"; }; then
 		echo "selftest: version comparison is wrong"
 		_bad=1
 	fi
@@ -1457,6 +1851,22 @@ cmd_selftest() {
 			_bad=1
 		fi
 	done
+	for _t in v0.1.0 v10.20.30 v0.3.0rc1 v0.3.0rc12; do
+		rel_key "$_t" || {
+			echo "selftest: $_t should be a release or a candidate"
+			_bad=1
+		}
+	done
+	for _t in v0.1 v0.3.0-rc1 v0.3.0rc 0.3.0 v0.3.0rc1rc2 v1.2.3.4 v0.3.0beta1; do
+		if rel_key "$_t"; then
+			echo "selftest: $_t should not be a release or a candidate"
+			_bad=1
+		fi
+	done
+	if [ "$(printf '%s\n' v0.3.0 v0.3.0rc2 v0.10.0rc1 v0.3.0rc10 v0.9.0 | order_tags | tr '\n' ' ')" != "v0.10.0rc1 v0.9.0 v0.3.0 v0.3.0rc10 v0.3.0rc2 " ]; then
+		echo "selftest: the order of the tags is wrong"
+		_bad=1
+	fi
 	_dir="${TMPDIR:-/tmp}/wz-selftest.$$"
 	if mkdir "$_dir" 2>/dev/null; then
 		STATE_DIR=$_dir
@@ -1507,8 +1917,9 @@ case ${1:-} in
 tick) cmd_tick ;;
 menu) cmd_menu ;;
 selftest) cmd_selftest ;;
+order) cmd_order ;;
 *)
-	echo "usage: updater.sh tick|menu|selftest" >&2
+	echo "usage: updater.sh tick|menu|selftest|order" >&2
 	exit 2
 	;;
 esac

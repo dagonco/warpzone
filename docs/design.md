@@ -2163,8 +2163,9 @@ do. Until then `warpzone self-update` behaves as described above.
 | Ordering of release candidates (`tag_key`, `version_key`) | Implemented |
 | `provision device --unattended` and its exit code `3` | Implemented |
 | `warpzone health` | Implemented |
-| `warpzone/data/updater.sh tick`: lock, `enabled`, deferral while the menu is open (72 hours at most), fetch once a day, the target (the highest `vX.Y.Z` tag that is an ancestor of `origin/main` and whose `__version__` matches), the three-step verification with a time limit, the differential verdict and its back-off, `bad/<tag>`, the state file, the attempts loop, probation, the kind of checkout, the stale `index.lock`, `menu` and `selftest` | Implemented (`tests/test_updater_sh.py`) |
-| Everything else in this section (installing the script, the settings file written by `provision`, the Python repair, channels, `RETIRED`, `pin`, signed tags, the timer units, `self-update` as a wrapper, the `doctor` checks, `provision hub --additive`) | Not implemented |
+| `warpzone/data/updater.sh tick`: lock, `enabled`, deferral while the menu is open (72 hours at most), fetch once a day, the target (the best valid tag, see Channels), the three-step verification with a time limit, the differential verdict and its back-off, `bad/<tag>`, the state file, the attempts loop, probation, the kind of checkout, the stale `index.lock`, `menu` and `selftest` | Implemented (`tests/test_updater_sh.py`) |
+| In `updater.sh`: the `rc` channel, retirement by `retired/vX.Y.Z` tags, `pin`, and the check of tag signatures against the `allowed_signers` of the running version | Implemented (`tests/test_updater_sh.py`) |
+| Everything else in this section (installing the script, the settings file written by `provision`, the Python repair, the timer units, `self-update` as a wrapper, the `doctor` checks, `provision hub --additive`) | Not implemented |
 
 **Tag spelling.** A release is `vX.Y.Z` and a release candidate is `vX.Y.ZrcN`: the tag is
 `v` plus `__version__`, in the PEP 440 spelling that [releasing.md](releasing.md) requires
@@ -2213,10 +2214,13 @@ runs), line by line and never with `source`, so a value cannot run anything. The
 `device`, `python` (the interpreter to try first), `enabled` (`false`, `0`, `no` or `off`
 turn it off), `frontend` (the process names of the frontend, separated by spaces; default
 `es-de ES-DE.AppImage`), `clone` (the git checkout; default two folders above the script) and
-`config` (passed as `--config`); `channel` and `pin` are not read yet. For tests every path
+`config` (passed as `--config`), `channel` (`stable` or `rc`; anything else is `stable`, with a
+line in the log) and `pin` (a tag; one that is not a tag is ignored, with a line in the log).
+For tests every path
 can be moved: `WZ_STATE_DIR` (state, settings, `bad/`, lock), `WZ_CONF`, `WZ_LOG`, `WZ_PROC`,
 `WZ_BOOT_ID_FILE`, `WZ_NOW` (the clock), `WZ_FETCH_INTERVAL`, `WZ_STEP_TIMEOUT`,
-`WZ_TICK_BUDGET`, `WZ_FETCH_TIMEOUT`, `WZ_MIN_FREE_KB` and `WZ_PYTHON_FALLBACKS`. A value
+`WZ_TICK_BUDGET`, `WZ_FETCH_TIMEOUT`, `WZ_MIN_FREE_KB`, `WZ_PYTHON_FALLBACKS` and
+`WZ_ALLOWED_SIGNERS`. A value
 that is not a number is replaced by the default. A person installs a device with `git clone` and
 `sh <clone>/warpzone/data/updater.sh install`, which checks out the newest release, creates
 the venv and runs `provision device`. There is one way to install; a `pipx` or wheel install
@@ -2389,7 +2393,10 @@ the version it started from was a clean branch inside `origin/main`, empty for a
 `from_tag` and `from_branch` (with `from_sha`, the version before the last switch, kept while
 the new one is on probation), `last_ok` (when something last went well, for `doctor`) and
 `suspect_tag` with `suspect_sha` (a release that failed once and has to be looked at again,
-see the differential verdict). A tag and its sha go together in `trying` and in `suspect`:
+see the differential verdict), and `pin_retired` (the pinned tag while it is retired,
+empty otherwise), `signing` (`1` once signatures have been required) and
+`signers_version` (the version whose keys are in `allowed_signers.last`). A tag and its sha
+go together in `trying` and in `suspect`:
 one without the other is dropped, and `attempts` with it.
 `last_result` is one of `ok`, `deferred`, `env`, `rolled-back`, `dirty`,
 `dev`, `no-python`, `stuck`. `bad/<tag>` is a file holding `sha=`, `date=` and `reason=`
@@ -2495,23 +2502,56 @@ never deleted.
 
 **Channels.** `channel = "stable"` (default) considers only `vX.Y.Z` tags; `channel = "rc"`
 considers those and `vX.Y.ZrcN`. A candidate is valid when it matches the channel, is not
-under `bad/` and not retired, its tag is an ancestor of `origin/main`, and the `__version__`
-read with `git show <tag>:warpzone/__init__.py` equals the tag without its `v`. That
-reproduces, without a server, the central check of `verify` in `release.yml`. The target is
-the best valid candidate in `tag_key` order (the tests cover this order, also against
-`git -c versionsort.suffix=rc for-each-ref --sort=-v:refname`). A device never moves to a
-lower version than the one it runs, except when that one is retired (below).
+under `bad/` and not retired, its tag is an ancestor of `origin/main`, its `__version__`
+read with `git show <tag>:warpzone/__init__.py` equals the tag without its `v`, and its
+signature verifies when one is required (below). That reproduces, without a server, the
+central check of `verify` in `release.yml`. The target is the best valid candidate that is
+higher than the running version. The order is `tag_key`'s: the script builds a text key from
+the three numbers, the stage and the candidate number, each padded to nine digits (a number
+with more digits is not a version it knows), and sorts it; `updater.sh order` prints tags in
+that order, and the tests compare it with `selfupdate.tag_key` and with
+`git -c versionsort.suffix=rc for-each-ref --sort=-v:refname`. A running version that is not
+a release or a candidate (`0.3.0.dev0`) sorts before every candidate of its numbers, as
+`version_key` does. A device never moves to a lower version than the one it runs, except when
+that one is retired (below) or the tag is the `pin`. A device on a candidate whose channel is
+then set to `stable` moves up to the release when it exists and otherwise stays.
 
-**`RETIRED`.** A tag cannot be edited, so a release is withdrawn in a file named `RETIRED` at
-the root of `main`, one entry per line: `vX.Y.Z YYYY-MM-DD reason`. The script reads it with
-`git fetch origin main` and `git show origin/main:RETIRED`. A retired tag is never a
-candidate. When the running version is retired the device goes to the best valid candidate,
-even a lower one, and a test of the file's format keeps it parseable.
+**Retiring.** A tag cannot be edited, so a release is withdrawn by another tag: an
+annotated `retired/vX.Y.Z` (or `retired/vX.Y.ZrcN`) whose message is the reason, normally on
+the retired release's commit and signed like a release. There is no file to edit: a file in
+`main` would let whoever controls the account (but not the signing key) withdraw the good
+version and force a device down. The script reads the retirements from the clone's tags
+(`git for-each-ref refs/tags/retired/`), which it takes with the daily fetch, so a device sees
+one within a day. When the allowed signers hold a key, a retirement counts only if its tag
+passes the same check as a release (below); without keys it counts unsigned. A lightweight
+tag, a name that is not a release or a candidate (`retired/latest`, `retired/v0.3.0-rc1`), a tag
+that does not sit on the commit of the release it names (what it points at is peeled, so
+`git tag -s retired/v0.3.0 v0.3.0`, which nests it in the release's tag object, counts) and a
+signature that does not verify retire nothing and are logged (once a day). Only the cheap
+checks (a version name, an annotated tag, the commit) count tags towards the limit: the
+signatures of at most 50 well formed `retired/` tags are checked per tick (`RETIRED_MAX`, `WZ_RETIRED_MAX` for tests,
+newest version first), so a pile of tags with invalid signatures cannot use up the tick's
+budget, and tags that are no retirement cannot push a real one out; 500 tags are looked at in
+all (`RETIRED_SCAN`). It logs when there are more. The reason, taken
+from the tag's subject, is only text for the log; nothing in a tag is run. A retired tag is
+never a candidate. When the running version is retired the device goes to the best valid
+candidate of its channel, even a lower one (there is no floor), and stays where it is when
+there is none. A retirement that a device has fetched stays in its clone: it cannot be undone
+from the remote, so a fix is a new release. The `release` workflow only runs on `v*.*.*`, so
+a `retired/` tag does not start it.
 
 **`pin`.** `pin = "vX.Y.Z"` (or `vX.Y.ZrcN`) keeps the device on that tag whatever the
-channel: the target is the pin, even when it is lower than the running version. The tag must
-exist and passes the same verification as any other. A pin wins over `RETIRED`; `doctor`
-warns when the pinned tag is retired.
+channel: the target is the pin, even when it is lower than the running version, and no other
+tag is a target while it is set (the choice is made again at every tick, also for a
+version that was being tried or looked at a second time, which is dropped if it is no longer
+a target). The tag must exist in the clone, be an ancestor of
+`origin/main`, carry its own version and, when signatures are required, a good signature;
+then it passes the same verification as any other tag, with the same differential verdict, so
+a pin is never marked bad without the previous version passing the same check (and when the
+environment is at fault, it is not blamed). A pin that was marked bad is not tried again until
+someone removes `bad/<tag>`. A pin wins over a retirement: it is followed, and the state key
+`pin_retired` holds the pinned tag while it is retired (empty otherwise), with a line in the
+log, so that `doctor` can warn.
 
 **Kind of checkout.** Decided from `git symbolic-ref -q HEAD` and `git merge-base`:
 
@@ -2522,11 +2562,45 @@ warns when the pinned tag is retired.
   it is still reconciled, and `doctor` warns. The script never runs `reset`, `stash` or
   `clean`.
 
-**Signed tags.** Release tags are signed with an SSH key, and the script runs `git verify-tag`
-against an allowed-signers file before it trusts a tag; a tag that does not verify is not a
-candidate. Without it, whoever controls the maintainer's account could run code on every
-device, and each holds the hub's API key. Rotating the key means shipping a new
-allowed-signers file to the devices.
+**Signed tags.** Release tags are signed with an SSH key, and the script trusts a tag
+(a release, a candidate, the pin, a retirement) only when `git verify-tag` accepts it against
+an allowed-signers file. Without it, whoever controls the maintainer's account could run code
+on every device, and each holds the hub's API key. The check is hardened because
+`verify-tag` chooses the verifier by the signature block it finds, not by `gpg.format`: a
+tag signed with OpenPGP would be checked by `gpg` against the user's keyring and never reach
+the allowed signers. A signature also covers only the tag object, not the ref it is
+published under, so the `tag` line of the object must be exactly the tag's name (a signed
+`v0.2.0` published as `v0.3.0`, or a signed `retired/v0.2.0` as `retired/v0.3.0`, is refused;
+`__version__` already covers a release, this covers the rest). So the tag object must be
+annotated and hold exactly one signature block, an SSH one (`-----BEGIN SSH SIGNATURE-----`; any other `-----BEGIN` line refuses the
+tag), the check runs with `gpg.openpgp.program`, `gpg.x509.program` and `gpg.program` set to
+`false`, `gpg.ssh.program=ssh-keygen`, and `GIT_CONFIG_GLOBAL=/dev/null
+GIT_CONFIG_NOSYSTEM=1`, so the user's git configuration does not change the outcome. A tag
+that does not verify (unsigned, lightweight, signed by another key or with another format) is
+not a candidate, and the log says so (once a day).
+
+The keys are `warpzone/data/allowed_signers` (the format of `ssh-keygen -Y`) **of the version
+known to work** (`good_sha`), read with `git show` into a temporary file at every tick. They
+travel with the version that is trusted, a release cannot change the keys that check it, and
+no file next to the script can be missing or swapped. A release signed by a trusted key can
+carry new keys, which apply from the moment a device is running it (rotation). The file ships
+with comments only: no key is in the repository until the maintainer adds one. When the running
+version has no such file, or no line in it that is not a comment, no signature is required
+and the log says so; a file that cannot be read, or a missing `ssh-keygen` while there are
+keys, rejects every tag (fail closed). `WZ_ALLOWED_SIGNERS` replaces the file for tests.
+
+Once a version with keys has been the one known to work, signatures stay required for good:
+the state key `signing` is `1`, the keys it had are kept in `allowed_signers.last` next to
+the state and the key `signers_version` holds its `__version__`. The keys never go back: when
+the version known to work is older than `signers_version` (a `pin`, or a retirement, took the
+device down to an old release), its `allowed_signers`, absent or listing keys that a newer
+release dropped, is ignored and the last keys are used, and the log says so; `.last` is only
+replaced by the keys of a version that is as new or newer. With no copy to use, every tag is
+refused. Trust is by first use: the first release that
+carries keys is taken without a signature check (nothing on the device yet says whom to
+trust), and so is any release before it; from then on a release has to be signed by keys the
+device already trusts, which includes the release that rotates them.
+[releasing.md](releasing.md) says how to sign.
 
 **Never unattended.** `prune --apply`, `inbox --apply` and `settings capture`. The shadPS4
 version is the user's choice and is only read. `ensure_flatpak_access` asks for a Syncthing
