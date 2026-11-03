@@ -2394,7 +2394,7 @@ the version it started from was a clean branch inside `origin/main`, empty for a
 the new one is on probation), `last_ok` (when something last went well, for `doctor`) and
 `suspect_tag` with `suspect_sha` (a release that failed once and has to be looked at again,
 see the differential verdict), and `pin_retired` (the pinned tag while it is retired,
-empty otherwise). A tag and its sha go together in `trying` and in `suspect`:
+empty otherwise) and `signing` (`1` once signatures have been required). A tag and its sha go together in `trying` and in `suspect`:
 one without the other is dropped, and `attempts` with it.
 `last_result` is one of `ok`, `deferred`, `env`, `rolled-back`, `dirty`,
 `dev`, `no-python`, `stuck`. `bad/<tag>` is a file holding `sha=`, `date=` and `reason=`
@@ -2522,8 +2522,11 @@ version and force a device down. The script reads the retirements from the clone
 (`git for-each-ref refs/tags/retired/`), which it takes with the daily fetch, so a device sees
 one within a day. When the allowed signers hold a key, a retirement counts only if its tag
 passes the same check as a release (below); without keys it counts unsigned. A lightweight
-tag, a name that is not a release or a candidate (`retired/latest`, `retired/v0.3.0-rc1`) and a
-signature that does not verify retire nothing and are logged (once a day). The reason, taken
+tag, a name that is not a release or a candidate (`retired/latest`, `retired/v0.3.0-rc1`), a tag
+that does not sit on the commit of the release it names (`v0.3.0`, peeled) and a signature
+that does not verify retire nothing and are logged (once a day). The script looks at the
+newest 50 `retired/` tags at most per tick (`RETIRED_MAX`, newest version first), so a pile of
+tags with invalid signatures cannot use up the tick's budget; it logs when there are more. The reason, taken
 from the tag's subject, is only text for the log; nothing in a tag is run. A retired tag is
 never a candidate. When the running version is retired the device goes to the best valid
 candidate of its channel, even a lower one (there is no floor), and stays where it is when
@@ -2559,8 +2562,11 @@ an allowed-signers file. Without it, whoever controls the maintainer's account c
 on every device, and each holds the hub's API key. The check is hardened because
 `verify-tag` chooses the verifier by the signature block it finds, not by `gpg.format`: a
 tag signed with OpenPGP would be checked by `gpg` against the user's keyring and never reach
-the allowed signers. So the tag object must be annotated and hold exactly one signature
-block, an SSH one (`-----BEGIN SSH SIGNATURE-----`; any other `-----BEGIN` line refuses the
+the allowed signers. A signature also covers only the tag object, not the ref it is
+published under, so the `tag` line of the object must be exactly the tag's name (a signed
+`v0.2.0` published as `v0.3.0`, or a signed `retired/v0.2.0` as `retired/v0.3.0`, is refused;
+`__version__` already covers a release, this covers the rest). So the tag object must be
+annotated and hold exactly one signature block, an SSH one (`-----BEGIN SSH SIGNATURE-----`; any other `-----BEGIN` line refuses the
 tag), the check runs with `gpg.openpgp.program`, `gpg.x509.program` and `gpg.program` set to
 `false`, `gpg.ssh.program=ssh-keygen`, and `GIT_CONFIG_GLOBAL=/dev/null
 GIT_CONFIG_NOSYSTEM=1`, so the user's git configuration does not change the outcome. A tag
@@ -2576,6 +2582,15 @@ with comments only: no key is in the repository until the maintainer adds one. W
 version has no such file, or no line in it that is not a comment, no signature is required
 and the log says so; a file that cannot be read, or a missing `ssh-keygen` while there are
 keys, rejects every tag (fail closed). `WZ_ALLOWED_SIGNERS` replaces the file for tests.
+
+Once a version with keys has been the one known to work, signatures stay required for good:
+the state key `signing` is `1` and the keys it had are kept in `allowed_signers.last` next to
+the state. If the version known to work later has no such file (a `pin`, or a retirement,
+that takes the device down to an old release), the last keys are used and the log says so;
+with no copy to use, every tag is refused. Trust is by first use: the first release that
+carries keys is taken without a signature check (nothing on the device yet says whom to
+trust), and so is any release before it; from then on a release has to be signed by keys the
+device already trusts, which includes the release that rotates them.
 [releasing.md](releasing.md) says how to sign.
 
 **Never unattended.** `prune --apply`, `inbox --apply` and `settings capture`. The shadPS4

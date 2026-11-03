@@ -237,17 +237,24 @@ class Rig:
         *,
         sign: SigningKey | None = None,
         annotated: bool = True,
+        at: str | None = None,
     ) -> None:
-        """Retire a release the way the maintainer does: a tag `retired/<tag>` (annotated, and
-        signed with `sign`) whose message is the reason, published."""
+        """Retire a release the way the maintainer does: a tag `retired/<tag>` on the commit
+        of the release (or of `at`), annotated and signed with `sign`, whose message is the
+        reason, published."""
         name = f"retired/{tag}"
+        target = f"{at or tag}^{{commit}}"
+        try:
+            git(self.work, "rev-parse", "-q", "--verify", target)
+        except AssertionError:
+            target = "HEAD"  # a name that is no release has no commit of its own
         if not annotated:
-            git(self.work, "tag", name)
+            git(self.work, "tag", name, target)
         elif sign is None:
-            git(self.work, "tag", "-a", "-m", reason, name)
+            git(self.work, "tag", "-a", "-m", reason, name, target)
         else:
             signing = ("-c", "gpg.format=ssh", "-c", f"user.signingkey={sign.private}")
-            git(self.work, *signing, "tag", "-s", "-m", reason, name)
+            git(self.work, *signing, "tag", "-s", "-m", reason, name, target)
         git(self.work, "push", "-q", "origin", f"refs/tags/{name}")
 
     def move_to(self, tag: str) -> None:
@@ -1614,6 +1621,19 @@ class RetiredTests(UpdaterCase):
         self.assertEqual(len(rig.calls()), calls)
         self.assertEqual(rig.bad(), [])
 
+    def test_only_the_newest_fifty_retirements_are_looked_at(self) -> None:
+        rig = self.rig
+        rig.release("0.2.0")
+        rig.release("0.3.0")
+        rig.move_to("v0.3.0")
+        for n in range(1, 51):  # tags of no release, which still cost a look each
+            git(rig.work, "update-ref", f"refs/tags/retired/v1.0.{n}", "HEAD")
+        git(rig.work, "push", "-q", "origin", "refs/tags/retired/*:refs/tags/retired/*")
+        rig.retire("v0.3.0", "the 51st by version: too old to be looked at")
+        proc = self.retired_ticks(rig)
+        self.assertEqual(rig.on_tag(), "v0.3.0")
+        self.assertRegex(proc.output, r"more than 50 retirement")
+
     def test_only_an_annotated_tag_with_a_version_name_retires_and_nothing_runs(self) -> None:
         rig = self.rig
         marker = rig.root / "pwned"
@@ -1839,6 +1859,82 @@ class SignatureTests(UpdaterCase):
         self.assertEqual(rig.on_tag(), "v0.1.0")
         self.assertEqual(rig.state()["trying_tag"], "")
         self.assertEqual([c for c in rig.calls() if "@ 0.2.0" in c], [])
+
+
+class SignedNameTests(UpdaterCase):
+    """A signature covers a tag object, and a ref can point at any object."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        if not SSH_KEYGEN:
+            self.skipTest("ssh-keygen is not installed")
+        self.key = SigningKey(self.rig.root / "keys", "maintainer")
+        self.allowed = {"WZ_ALLOWED_SIGNERS": str(self.rig.allow(self.key))}
+
+    def publish_as(self, ref: str, source: str) -> None:
+        """Publish the tag object of `source` under another ref name."""
+        rig = self.rig
+        git(
+            rig.work,
+            "update-ref",
+            f"refs/tags/{ref}",
+            git(rig.work, "rev-parse", f"refs/tags/{source}"),
+        )
+        git(rig.work, "push", "-q", "origin", f"refs/tags/{ref}")
+
+    def test_a_signed_retirement_published_under_another_version_retires_nothing(self) -> None:
+        rig = self.rig
+        rig.release("0.2.0", sign=self.key)
+        rig.release("0.3.0", sign=self.key)
+        rig.move_to("v0.3.0")
+        rig.retire("v0.2.0", "really withdrawn", sign=self.key)
+        self.publish_as("retired/v0.3.0", "retired/v0.2.0")  # its signature is good
+        proc = rig.tick(**self.allowed)
+        self.assertTick(proc, 0)
+        self.assertEqual(rig.on_tag(), "v0.3.0")
+        self.assertRegex(proc.output, r"retirement.*ignored.*v0\.3\.0")
+
+    def test_a_signed_retirement_on_another_commit_retires_nothing(self) -> None:
+        rig = self.rig
+        rig.release("0.2.0", sign=self.key)
+        rig.release("0.3.0", sign=self.key)
+        rig.move_to("v0.3.0")
+        rig.retire("v0.3.0", "it names v0.3.0 but sits on v0.2.0", sign=self.key, at="v0.2.0")
+        self.assertTick(rig.tick(**self.allowed), 0)
+        self.assertEqual(rig.on_tag(), "v0.3.0")
+
+    def test_a_signed_object_published_as_another_release_is_no_release(self) -> None:
+        rig = self.rig
+        # the maintainer signed a tag with a name of their own on a commit whose version is
+        # 0.2.1: with that signature, the version and main all in order, only the name inside
+        # the tag object tells that it is not "v0.2.1"
+        rig.release("0.2.1", tag="scratch-0.2.1", sign=self.key)
+        self.publish_as("v0.2.1", "scratch-0.2.1")
+        proc = rig.tick(**self.allowed)
+        self.assertTick(proc, 0)
+        self.assertEqual(rig.on_tag(), "v0.1.0")
+        self.assertRegex(proc.output, r"v0\.2\.1.*signature")
+
+    def test_signatures_stay_required_when_the_version_known_to_work_has_no_keys(self) -> None:
+        rig = self.rig
+        rig.release("0.1.5", sign=self.key)  # signed, but without the keys in its tree
+        rig.release(
+            "0.2.0",
+            sign=self.key,
+            extra={"warpzone/data/allowed_signers": self.key.allowed},
+        )
+        rig.move_to("v0.2.0")
+        self.assertTick(rig.tick(), 0)
+        self.assertEqual(rig.state()["signing"], "1")
+        rig.write_conf(pin="v0.1.5")  # down to a release that has no allowed_signers
+        self.assertTick(rig.tick(), 0)
+        self.assertEqual(rig.on_tag(), "v0.1.5")
+        rig.write_conf()
+        rig.release("0.3.0")  # nobody signed it
+        proc = rig.tick()
+        self.assertTick(proc, 0)
+        self.assertEqual(rig.on_tag(), "v0.2.0", "v0.3.0 is unsigned; v0.2.0 is signed")
+        self.assertRegex(proc.output, r"v0\.3\.0.*signature")
 
 
 class StaleTargetTests(UpdaterCase):

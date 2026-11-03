@@ -57,7 +57,7 @@ git config gpg.format ssh
 git config user.signingkey ~/.ssh/warpzone-release.pub
 ```
 
-Put the public key in `warpzone/data/allowed_signers` through a normal pull request, one line per key (`<principal> namespaces="git" <key type> <public key>`; the namespace is the one `git` signs with). A device reads the keys from the version it runs, so a key must be added in a release before the first tag signed with it is needed: tags are signed from the release after that. To rotate, add the new key in a release signed with the old one (a release cannot change the keys that check itself); devices that move to it trust both, and then you can sign with the new one. Tags must be signed with SSH: a tag signed with OpenPGP or X.509 is refused.
+Put the public key in `warpzone/data/allowed_signers` through a normal pull request, one line per key (`<principal> namespaces="git" <key type> <public key>`; the namespace is the one `git` signs with). A device reads the keys from the version it runs, so a key must be added in a release before the first tag signed with it is needed: tags are signed from the release after that. The first release that carries keys is taken on trust, with no signature check, because nothing on the device says yet whom to trust: whoever can publish that release chooses the first key. After it, signatures stay required: even if a device later goes down to an old release without the file, it keeps the last keys it trusted. To rotate, add the new key in a release signed with the **previous** key (a release cannot change the keys that check itself, and one signed with the new key alone would be refused); devices that move to it trust both, and then you can sign with the new one. Tags must be signed with SSH: a tag signed with OpenPGP or X.509 is refused.
 
 Sign the tag instead of just annotating it in step 7 of the checklist (`-s` replaces `-a`), and check it before pushing:
 
@@ -82,7 +82,7 @@ git tag -s retired/v0.3.0 v0.3.0^{commit} -m "settings apply overwrote a capture
 git push origin retired/v0.3.0
 ```
 
-There is no file to edit and no pull request: the tag is the retirement, and devices take it with their daily fetch. The `release` workflow does not run for it (it only runs for `v*.*.*`). When the allowed signers hold a key, a retirement that is not signed by one of them (or is only a lightweight tag) is ignored, so nobody without the key can pull a good version. From then on:
+The tag must be named `retired/` plus the exact tag it withdraws and sit on that release's commit (`v0.3.0^{commit}`, as above): a retirement made for another name or another commit is ignored, and so is a signed object published under another name. There is no file to edit and no pull request: the tag is the retirement, and devices take it with their daily fetch. The `release` workflow does not run for it (it only runs for `v*.*.*`). When the allowed signers hold a key, a retirement that is not signed by one of them (or is only a lightweight tag) is ignored, so nobody without the key can pull a good version. From then on:
 
 - no device picks the tag as a target;
 - a device that runs it moves to the best release that is not retired, even a lower one, after verifying it like any update;

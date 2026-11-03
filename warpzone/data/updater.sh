@@ -41,7 +41,7 @@ DAY=86400
 DEFER_MAX=$((72 * 3600))
 MAX_ATTEMPTS=2
 IMPORT_CODE='import os, sys, warpzone.cli, warpzone.provision, warpzone.health; root = os.path.realpath(sys.argv[1]); here = os.path.realpath(warpzone.__file__); sys.exit(0 if here.startswith(root + os.sep) else 7)'
-STATE_KEYS="schema good_tag good_sha good_branch trying_tag trying_sha from_tag from_sha from_branch attempts probation pending deferred_since last_fetch last_boot_id last_result last_ok retry_after env_failures suspect_tag suspect_sha pin_retired"
+STATE_KEYS="schema good_tag good_sha good_branch trying_tag trying_sha from_tag from_sha from_branch attempts probation pending deferred_since last_fetch last_boot_id last_result last_ok retry_after env_failures suspect_tag suspect_sha pin_retired signing"
 
 STATE_DIR=${WZ_STATE_DIR:-${XDG_STATE_HOME:-${HOME:-/nonexistent}/.local/state}/warpzone/updater}
 CONF=${WZ_CONF:-$STATE_DIR/conf}
@@ -53,6 +53,8 @@ PY_FALLBACKS=${WZ_PYTHON_FALLBACKS-/usr/bin/python3 python3}
 SIGNERS_FILE=
 SIGNERS_SRC=
 SIGNERS_TMP=$STATE_DIR/.allowed_signers
+SIGNERS_LAST=$STATE_DIR/allowed_signers.last
+RETIRED_MAX=50
 STEP_TIMEOUT=${WZ_STEP_TIMEOUT:-}
 FETCH_TIMEOUT=${WZ_FETCH_TIMEOUT:-120}
 TICK_BUDGET=${WZ_TICK_BUDGET:-1500}
@@ -386,6 +388,7 @@ state_reset() {
 	S_env_failures=0
 	S_probation=0
 	S_pending=0
+	S_signing=0
 }
 
 # state_assign KEY VALUE: KEY is one of STATE_KEYS and only letters and underscores.
@@ -409,7 +412,7 @@ state_load() {
 		eval "_v=\$S_$_k"
 		is_number "$_v" || state_assign "$_k" 0
 	done
-	for _k in probation pending; do
+	for _k in probation pending signing; do
 		eval "_v=\$S_$_k"
 		[ "$_v" = 1 ] || state_assign "$_k" 0
 	done
@@ -752,17 +755,34 @@ RETIRED_TAGS=' '
 RETIRED_INFO=
 RETIRED_BAD=
 
-# retired_load: the retirements the clone has (it takes them with the daily fetch). Needs
-# signing_setup first.
+# retired_ok TAG: the tag object retired/TAG sits on the commit of the release TAG (vX.Y.Z). A signature
+# covers the object and not the ref it is published under, so without this a signed
+# retirement of one version could be published as the retirement of another.
+retired_ok() {
+	_ro_obj=$(g cat-file tag "refs/tags/retired/$1" 2>/dev/null </dev/null | sed -n -e '/^$/q' -e 's/^object //p' | head -n 1)
+	_ro_commit=$(g rev-parse -q --verify "refs/tags/$1^{commit}" 2>/dev/null </dev/null)
+	[ -n "$_ro_commit" ] && [ "$_ro_obj" = "$_ro_commit" ]
+}
+
+# retired_load: the retirements the clone has (it takes them with the daily fetch), the
+# newest versions first and at most RETIRED_MAX of them, so that a pile of tags with bad
+# signatures cannot use up the tick's budget. Needs signing_setup first.
 retired_load() {
 	RETIRED_TAGS=' '
 	RETIRED_INFO=
 	RETIRED_BAD=
+	_rmore=0
+	_rcount=0
 	_rf="$STATE_DIR/.retired.$$"
-	g for-each-ref --format='%(refname) %(objecttype) %(taggerdate:short) %(contents:subject)' refs/tags/retired/ 2>/dev/null | head -n 2000 >"$_rf" 2>/dev/null
+	g for-each-ref --sort=-v:refname --format='%(refname) %(objecttype) %(taggerdate:short) %(contents:subject)' refs/tags/retired/ 2>/dev/null | head -n $((RETIRED_MAX + 1)) >"$_rf" 2>/dev/null
 	while read -r _rref _rtype _rdate _rreason; do
+		_rcount=$((_rcount + 1))
+		if [ "$_rcount" -gt "$RETIRED_MAX" ]; then
+			_rmore=1
+			break
+		fi
 		_rtag=${_rref#refs/tags/retired/}
-		if ! rel_key "$_rtag" || [ "$_rtype" != tag ] || ! tag_signed "retired/$_rtag"; then
+		if ! rel_key "$_rtag" || [ "$_rtype" != tag ] || ! retired_ok "$_rtag" || ! tag_signed "retired/$_rtag"; then
 			RETIRED_BAD="$RETIRED_BAD $_rtag"
 			continue
 		fi
@@ -772,7 +792,10 @@ retired_load() {
 	done <"$_rf"
 	rm -f "$_rf"
 	if [ -n "$RETIRED_BAD" ]; then
-		log_daily "retirement tags ignored (not annotated, not a version, or not signed by an allowed key):$RETIRED_BAD"
+		log_daily "retirement tags ignored (not annotated, not a version, not on that release's commit, or not signed by an allowed key):$RETIRED_BAD"
+	fi
+	if [ "$_rmore" = 1 ]; then
+		log_daily "more than $RETIRED_MAX retirement tags: only the newest $RETIRED_MAX were looked at"
 	fi
 	return 0
 }
@@ -802,12 +825,32 @@ retired_why() {
 # required and the log says so.
 
 SIGN_ON=0
-signing_setup() {
+SIGN_WHY=
+
+# signers_judge: set SIGN_ON from SIGNERS_FILE (and SIGN_WHY when no signature is required).
+signers_judge() {
 	SIGN_ON=0
+	if [ -z "$SIGNERS_FILE" ] || [ ! -e "$SIGNERS_FILE" ]; then
+		SIGN_WHY="there is no allowed signers file"
+	elif [ ! -r "$SIGNERS_FILE" ]; then
+		SIGN_ON=1 # a file that cannot be read is not a file without keys
+	elif grep -Evq '^[[:space:]]*(#|$)' "$SIGNERS_FILE" 2>/dev/null; then
+		SIGN_ON=1
+	else
+		SIGN_WHY="the allowed signers file holds no keys"
+	fi
+}
+
+# signing_setup: once a version with keys has been trusted (`signing` in the state, and the
+# keys it had in allowed_signers.last), signatures stay required for good: a pin or a
+# retirement that takes the device to an old release without the file does not turn them off.
+# The last keys are then the ones used (and with none to use, every tag is refused).
+signing_setup() {
 	rm -f "$SIGNERS_TMP"
 	if [ -n "${WZ_ALLOWED_SIGNERS+x}" ]; then
 		SIGNERS_FILE=$WZ_ALLOWED_SIGNERS
 		SIGNERS_SRC=$WZ_ALLOWED_SIGNERS
+		signers_judge
 	else
 		SIGNERS_FILE=$SIGNERS_TMP
 		SIGNERS_SRC="warpzone/data/allowed_signers of the version known to work"
@@ -815,21 +858,26 @@ signing_setup() {
 			g show "$S_good_sha:warpzone/data/allowed_signers" 2>/dev/null | head -n 1000 >"$SIGNERS_TMP" 2>/dev/null
 		fi
 		[ -s "$SIGNERS_TMP" ] || rm -f "$SIGNERS_TMP"
+		signers_judge
+		if [ "$SIGN_ON" = 1 ]; then
+			S_signing=1
+			if cat "$SIGNERS_TMP" >"$SIGNERS_LAST.new" 2>/dev/null; then
+				mv -f "$SIGNERS_LAST.new" "$SIGNERS_LAST"
+			fi
+		elif [ "$S_signing" = 1 ]; then
+			SIGN_ON=1
+			SIGNERS_FILE=$SIGNERS_LAST
+			SIGNERS_SRC="the last allowed signers this device trusted"
+			log_daily "the running version has no allowed signers, but signatures were required before and stay so ($SIGNERS_SRC)"
+		fi
 	fi
-	if [ -z "$SIGNERS_FILE" ] || [ ! -e "$SIGNERS_FILE" ]; then
-		log_daily "signatures are not required: there is no allowed signers file ($SIGNERS_SRC)"
-	elif [ ! -r "$SIGNERS_FILE" ]; then
-		SIGN_ON=1 # a file that cannot be read is not a file without keys
-	elif grep -Evq '^[[:space:]]*(#|$)' "$SIGNERS_FILE" 2>/dev/null; then
-		SIGN_ON=1
-	else
-		log_daily "signatures are not required: the allowed signers file holds no keys ($SIGNERS_SRC)"
-	fi
+	[ "$SIGN_ON" = 1 ] || log_daily "signatures are not required: $SIGN_WHY ($SIGNERS_SRC)"
 	return 0
 }
 
 # tag_signed TAG: succeeds when no signature is required, or TAG is an annotated tag with
-# exactly one signature block, an SSH one, that verifies. `verify-tag` chooses the verifier by
+# exactly one signature block, an SSH one, that verifies, made for a tag of that very name.
+# `verify-tag` chooses the verifier by
 # the block it finds, not by gpg.format: a tag signed with OpenPGP or X.509 would be checked
 # by gpg against the user's keyring and never reach the allowed signers. So any other block is
 # refused, the other verifiers are switched off, and the user's git configuration is not read.
@@ -839,6 +887,9 @@ tag_signed() {
 	_obj=$(g cat-file tag "refs/tags/$1" 2>/dev/null </dev/null) || return 1
 	[ "$(printf '%s\n' "$_obj" | grep -c '^-----BEGIN ')" = 1 ] || return 1
 	[ "$(printf '%s\n' "$_obj" | grep -c '^-----BEGIN SSH SIGNATURE-----$')" = 1 ] || return 1
+	# The signature covers the object, which names the tag it was made for; the ref can say
+	# anything. A signed v0.2.0 published as v0.3.0 is not v0.3.0.
+	[ "$(printf '%s\n' "$_obj" | sed -n -e '/^$/q' -e 's/^tag //p' | head -n 1)" = "$1" ] || return 1
 	run_limited 30 env GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git -C "$CLONE" \
 		-c gpg.format=ssh -c gpg.ssh.program=ssh-keygen -c gpg.program=false \
 		-c gpg.openpgp.program=false -c gpg.x509.program=false \
