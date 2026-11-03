@@ -18,7 +18,7 @@ Every new game goes through `warpzone inbox`, without exception. It identifies t
 
 ## Steps
 
-1. Check the setup with `warpzone doctor`. `inbox` needs the `[inbox]` table in the config (`root`, `dats_dir`, optional tool paths) or `--root` and `--dats`. Missing tools are shown with their fix; install only what the dumps need (for example `chdman` for discs, `nsz` plus the user's keys for Switch `.nsz`, `orbis-pkg-util` for PS4 `.pkg`).
+1. Check the setup with `warpzone doctor`. `inbox` needs the `[inbox]` table in the config (`root`, `dats_dir`, optional tool paths) or `--root` and `--dats`. Missing tools are shown with their fix; installing them changes the machine, so ask the user first and install only what the dumps need (for example `chdman` for discs, `nsz` plus the user's keys for Switch `.nsz`, `orbis-pkg-util` for PS4 `.pkg`).
 2. Make sure the dumps are in `inbox/` on the hub's share (the user drops them there). Items modified in the last 30 seconds are skipped on purpose; wait for copies to finish.
 3. Report, which changes nothing:
 
@@ -27,7 +27,7 @@ Every new game goes through `warpzone inbox`, without exception. It identifies t
    ```
 
    Add `--root PATH`, `--dats PATH` or `--work-dir PATH` only when the config does not hold them. Show the user the output.
-4. Go through the report with the user. For each item it states the system, the destination path and the whitelist line (`!/roms/...`). Items for review (no DAT match, incomplete multi-disc, encrypted 3DS, `.xci`, update or DLC packages, "not supported by inbox yet") are not placed. If the format is unsupported, apply the hard rule above.
+4. Go through the report with the user. For each item it states the system, the destination path and the whitelist line (`!/roms/...`). Items for review (no DAT match, incomplete multi-disc, encrypted 3DS, `.xci`, update or DLC packages, "not supported by inbox yet") are not placed. If the format is unsupported, apply the hard rule above; once support has been added, the user moves the item from `inbox/_revisar/` back to `inbox/` to try again.
 5. After the user's explicit OK:
 
    ```bash

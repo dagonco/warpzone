@@ -32,7 +32,7 @@ Never print API keys or the config's secrets. Show the commands you ran and the 
    | Unapplied or held-back emulator settings | `warpzone settings audit` (read only) first, then `settings apply` or `settings capture` |
    | Syncthing not running in Game Mode, flatpak access missing | the unit or `flatpak override` command in the `fix:` text |
    | Updater timer, live copy or settings out of step with the config | `warpzone provision device <device>` |
-   | Recent rollback, `stuck`, `dirty` or `dev` checkout, retired pin, no success for 14 days | read `~/.local/state/warpzone/self-update.log` and `last-verify.log`; see [self-update.md](../../../docs/self-update.md#log) |
+   | Recent rollback, `stuck`, `dirty` or `dev` checkout, retired pin, no success for 14 days | read `~/.local/state/warpzone/self-update.log` and `~/.local/state/warpzone/updater/last-verify.log`; see [self-update.md](../../../docs/self-update.md#log) |
 
 5. Other read-only commands that help: `warpzone check` (config and missing whitelists), `warpzone status` (folder state, outstanding items, receive-only local changes), `warpzone settings audit`, `warpzone bios`. `warpzone self-update` runs one updater tick, which can change the checkout, so treat it as a change and ask first. Exit code `3` from `provision device --unattended` means deferred (something was open), not failure.
 6. After an approved fix, run `warpzone doctor` again and show that the line is now `[ok]`.

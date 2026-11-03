@@ -26,17 +26,24 @@ Keep the `#include` first and the final `*` last; new `!` lines go between them.
 1. Read the current `patterns-<device>.stignore` and show the user the line you will add. Check it is not already covered by a broader line.
 2. Confirm the game exists on the hub (`library/roms/<system>/...`). If it does not, use the `add-games` skill first.
 3. Add the line, keeping the `#include` first and `*` last. Back up the file first (copy it beside itself with a `.bak` suffix, remove the copy once the user is happy).
-4. The edit syncs to the console in seconds and takes effect within 5 minutes (the folder's rescan interval). To see it, run `warpzone status` on the console or press Rescan in its Syncthing GUI.
+4. The edit syncs to the console in seconds and takes effect within the device's `rescan_seconds` (default 300, so 5 minutes; set per device in the config). To see it, run `warpzone status` on the console or press Rescan in its Syncthing GUI.
 
 ## Remove a game
 
 Hard order. Whitelist-first loses the deletion: Syncthing stops syncing an ignored file but leaves the copy on the console.
 
-1. Show the user exactly what will go: the path on the hub, the whitelist line, and which consoles hold it. Say that deleting from the hub propagates to every console that whitelists it, and that the hub is the source of truth (check the user has a snapshot, see [Snapshots](../../../docs/safety.md#snapshots-on-the-hub)).
-2. Wait for the user's explicit OK to delete. A dry run or listing is not an OK.
-3. Delete the game from the hub (library path under the hub root). Re-check the path right before deleting; delete only what was approved.
-4. Wait until the deletion reaches the console (`warpzone status` on the console shows no outstanding items).
-5. Only then remove the whitelist line from `patterns-<device>.stignore`.
+1. A game can be several parts. List every one on the hub and every whitelist line that names it (the lines `inbox` printed for it, and any in other devices' files):
+   - PS4: `roms/ps4/games/<CUSAnnnnn>/` and `roms/ps4/shortcuts/<Title>.desktop`.
+   - PS Vita: `roms/psvita/app/<TITLEID>/`, `roms/psvita/<Title>.psvita` and, if present, `roms/psvita/license/<TITLEID>/`.
+   - Multi-disc (CHD systems): the `<game>.m3u/` folder with its discs and playlist.
+   - Switch: the game in `roms/switch/`, plus its updates in `extras/switch/updates/<Title>/` and DLC in `extras/switch/dlc/<Title>/` (usually whitelisted by folder, so do not remove those lines while other games need them).
+   - Other systems: usually one file or folder under `roms/<system>/`; check the folder for extras.
+
+   Layouts: [inbox.md](../../../docs/inbox.md). Show the user the full list of paths and lines, which consoles hold them, and say that deleting from the hub propagates to every console that whitelists them. The hub is the source of truth: check the user has a snapshot ([Snapshots](../../../docs/safety.md#snapshots-on-the-hub)).
+2. Wait for the user's explicit OK to delete exactly that list. A dry run or listing is not an OK.
+3. Delete every listed part from the hub (library path under the hub root). Re-check each path right before deleting; delete only what was approved.
+4. Wait until the deletion has reached every console that whitelists the game: `warpzone status` on each shows `need 0` for `wz-library` (deletions count in `need`). A console that is offline must reconnect first; removing the line before it does leaves its copy behind.
+5. Only then remove every whitelist line for those parts from every `patterns-*.stignore` that names them.
 
 If the user only wants the game off one console but kept on the hub, there is no deletion: remove the line, then clean that console with prune below.
 

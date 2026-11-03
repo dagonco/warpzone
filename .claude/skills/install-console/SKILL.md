@@ -13,8 +13,13 @@ Never print the contents of the config file or any API key. Show commands and th
 
 1. Confirm the device name. It is a table name under `[devices.<name>]` in the user's config (`$XDG_CONFIG_HOME/warpzone/config.toml`, normally `~/.config/warpzone/config.toml`; `$WARPZONE_CONFIG` or `--config PATH` override it). List the table names only, for example `grep '^\[devices\.' <config>`, and ask the user which one this machine is. Do not guess.
 2. Check the device has Python 3.11 or newer (`python3 --version`), `git`, and a running Syncthing. If anything is missing, stop and tell the user.
-3. Check the config is on this device. If not, it must be copied from the user's other machine (the same file works everywhere); never create one with made-up IDs. The template is [examples/config.example.toml](../../../examples/config.example.toml).
-4. The hub must already be provisioned and its whitelist `patterns-<device>.stignore` must exist on it, or `provision device` stops before touching anything. If unsure, run `warpzone check` from a machine that has the repo (`python3 -m warpzone check`); see Quickstart steps 1 to 3 in the README.
+3. A console new to warpzone has no `[devices.<name>]` table yet. Then, on the admin machine (the one that can reach the hub), with the user doing the edits and you never inventing values:
+   - the user adds the table with the device's real Syncthing ID (Actions > Show ID) and profile; the template is [examples/config.example.toml](../../../examples/config.example.toml);
+   - the user creates `patterns-<name>.stignore` in the hub's `library/` (and `songs/` if it subscribes), from [templates/patterns-device.example.stignore](../../../templates/patterns-device.example.stignore);
+   - run `warpzone check`, then `warpzone provision hub --dry-run` and show it; after the user's OK run `warpzone provision hub` (README Quickstart step 3);
+   - copy the updated config to the device (next point).
+4. The config must be on the device. Copy it from the user's other machine (the same file works everywhere); never create one with made-up IDs. If `[hub]` uses `api_key_file`, copy that key file too, to the path the config names: a missing or empty key file is a config error and `provision device` exits `2`. Give it `chmod 600` and never print it.
+5. The hub must already be provisioned and its whitelist `patterns-<device>.stignore` must exist on it, or `provision device` stops before touching anything.
 
 ## Install
 
@@ -32,9 +37,9 @@ Reading the result of `provision device`:
 
 - Exit `0`: done. Warnings are not failures; read them to the user.
 - Exit `3`: something was deferred because ES-DE, an emulator or a file ES-DE rewrites was open. This is not a failure. Ask the user to close it and run `provision device <device>` again. Exit `3` only comes from `provision device --unattended` (what the updater runs); the install runs it without `--unattended` unless you pass it after `--`.
-- Exit `1` or `2`: a real failure. Report the message and stop; do not retry blindly.
+- Exit `1` or `2`: a real failure. Run through `updater.sh install`, any non-zero exit of `provision device` makes install stop with `provision device failed (exit N)` and exit `1`: read `N` and the message above it, fix the cause, and run the install again. Do not retry blindly.
 
-To preview without changing anything: `~/.local/share/warpzone/venv/bin/warpzone provision device <device> --dry-run`.
+To preview a re-run once the install has made the venv: `~/.local/share/warpzone/venv/bin/warpzone provision device <device> --dry-run` (it prints the REST calls it would make and sends none).
 
 ## Verify
 
