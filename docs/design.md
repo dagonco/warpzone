@@ -2215,16 +2215,21 @@ turn it off), `frontend` (the process names of the frontend, separated by spaces
 `es-de ES-DE.AppImage`), `clone` (the git checkout; default two folders above the script) and
 `config` (passed as `--config`); `channel` and `pin` are not read yet. For tests every path
 can be moved: `WZ_STATE_DIR` (state, settings, `bad/`, lock), `WZ_CONF`, `WZ_LOG`, `WZ_PROC`,
-`WZ_BOOT_ID_FILE`, `WZ_NOW` (the clock), `WZ_FETCH_INTERVAL`, `WZ_STEP_TIMEOUT` and
-`WZ_PYTHON_FALLBACKS`. A person installs a device with `git clone` and
+`WZ_BOOT_ID_FILE`, `WZ_NOW` (the clock), `WZ_FETCH_INTERVAL`, `WZ_STEP_TIMEOUT`,
+`WZ_TICK_BUDGET`, `WZ_FETCH_TIMEOUT`, `WZ_MIN_FREE_KB` and `WZ_PYTHON_FALLBACKS`. A value
+that is not a number is replaced by the default. A person installs a device with `git clone` and
 `sh <clone>/warpzone/data/updater.sh install`, which checks out the newest release, creates
 the venv and runs `provision device`. There is one way to install; a `pipx` or wheel install
 is not a supported device install.
 
 **Verifying a version.** A version passes when all of these exit 0 within a time limit:
 
-1. `python -I -c "import warpzone.cli, warpzone.provision, warpzone.health"`, and
-   `python -I -m warpzone --version` printing `warpzone <tag without v>`.
+1. `python -I -c "import warpzone.cli, warpzone.provision, warpzone.health, ..." <clone>`,
+   which also checks that `warpzone.__file__` is under the clone (`-I` imports the installed
+   package, which is the checkout's only for an editable install; an install somewhere else
+   would pass or fail for reasons that are not the release's, so it exits 7 and counts as
+   the environment, not as a failure of the release), and `python -I -m warpzone --version`
+   printing `warpzone <tag without v>`.
 2. `python -m warpzone provision device <device> --unattended`.
 3. `warpzone health` (see [`warpzone health`](#warpzone-health)): loads the config and the
    profiles, runs `settings apply`, `play-state sync`, `links sync` and `frontend refresh` as
@@ -2232,10 +2237,21 @@ is not a supported device install.
    scripts and units exist with a valid interpreter.
 
 Each step has a time limit (`WZ_STEP_TIMEOUT`, by default 120 s for the import and the
-version, 900 s for `provision` and 300 s for `health`; the whole run stays within the service's
-30 minutes). A step that runs out of time is cut off (SIGTERM, then SIGKILL) and fails. The
-script has no `timeout` command to lean on (macOS has none), so it polls a status file. The
-output of the steps goes to `last-verify.log` next to the state.
+version, 900 s for `provision` and 300 s for `health`), and the whole tick has a **budget**
+of 25 minutes from its start (`WZ_TICK_BUDGET`, 1500 s), under the service's
+`TimeoutStartSec=30min`: the budget cuts down the limit of every step, so two verifications
+(the release and, after a failure, the one it came from) cannot add up to more than the
+service allows. A step that runs out of its own time fails (a release that hangs is a bad
+release). A step that was cut short by the budget says nothing about the release: the
+verification gives up as "could not be judged", the device goes back to the version it came
+from without marking anything bad, and it counts as an environment failure (the back-off
+below). Every step runs in a process group of its own (`setsid` where it exists, job control
+otherwise) and a cut kills the whole group, SIGTERM and then SIGKILL, so a grandchild cannot
+outlive the step; the output of a step goes to a file, never to a `$(...)` that a grandchild
+could hold open (this includes `git fetch`, limited by `WZ_FETCH_TIMEOUT`, 120 s). When the
+tick itself receives SIGTERM it takes the step in progress down with it. The script has no
+`timeout` command to lean on (macOS has none), so it polls a status file. The output of the
+steps goes to `last-verify.log` next to the state.
 
 `doctor` is not used for this because it depends on the environment (DATs, tools). The check
 does not prove that a game starts or that Syncthing syncs; that is what retirement is for.
@@ -2332,12 +2348,19 @@ broken. It knows three outcomes: 0 passed, 3 deferred (the menu opened during th
 anything else failed. After a failure it goes back to the `good` version and runs the same
 check:
 
-- `good` passes: the new version is bad, and `bad/<tag>` is written.
+- `good` passes: the new version is checked once more (it is checked out again and goes
+  through the same three steps), so that a failure that does not repeat, such as a service that
+  was slow to come up, does not burn a release for good. Only if it fails again is it
+  bad, and `bad/<tag>` is written. If it passes the second time it is accepted. The same
+  second look is given to a release that fails its probation check.
 - `good` fails too: the environment is at fault (Syncthing down, a broken config). The tag
   is not marked bad; the device stays on `good` and retries after 1, 2, 4 and then 7 days
   (`env_failures` counts the failures in a row and a success resets it).
 - `good` answers 3 (the menu opened during the second check): nothing can be concluded. The
   tag is not marked bad, `trying` is cleared and the next tick starts again.
+- The verification could not be judged (it ran out of the tick's budget, or python imports
+  a warpzone that is not the checkout's): no tag is blamed, the device goes back to `good`
+  and backs off as for an environment failure.
 - Checking out the target fails (for example a file in the way): that says nothing about the
   release, so it is treated like a broken environment.
 
@@ -2375,7 +2398,19 @@ leaves no status at all.
 - A tag is switched to at most twice without a verdict. When `attempts` reaches 2 and the
   runs keep dying, the device returns to `good` without marking the tag bad, sets
   `retry_after` one day ahead and resets `attempts`.
-- A `bad` tag never comes back.
+- A `bad` tag never comes back, and a tick that finds `trying` set for a tag that has
+  become bad meanwhile goes back to `good` and clears `trying` instead of resuming.
+- **A checkout the updater itself cut in the middle** (a power cut, a full disk during
+  `git checkout`) leaves a tree that is neither one commit nor the other, and every later
+  tick would see a dirty tree. When `trying` is set (or the new version is on probation) and
+  every file that differs from HEAD is one that the two commits involved differ in, the
+  change is the updater's own and the checkout is done again with `--force` onto the target;
+  a failed checkout is repaired the same way, back to `good`. A file that the two commits do
+  not differ in is somebody's work: the tree stays `dirty` and untouched. Before switching,
+  the script checks that the clone's file system has at least `WZ_MIN_FREE_KB` (50 MiB)
+  free, and if not it counts as an environment failure without touching the tree. Every
+  checkout uses `--no-overwrite-ignore`, so an ignored file of the user's that a release
+  also tracks stops the checkout instead of being overwritten.
 - The new version stays on `probation` until it passes the check on the next boot; a
   failure there goes through the differential verdict.
 - After probation there is no automatic rollback: a later failure comes from a change in
@@ -2383,9 +2418,19 @@ leaves no status at all.
 - If checking out `good` fails, the result is `stuck` and nothing else is touched.
 - `.git/index.lock` is removed only when it is older than 10 minutes and no `git` process
   is alive (found in `/proc` like the menu; where `/proc` cannot be read the lock stays).
-- The lock is a folder (`mkdir` is atomic) holding the pid. A tick that finds it held by a live
-  process exits at once; one that finds a dead pid, or a lock older than three hours (a pid
-  can be reused after a restart), takes it over.
+- The lock is a folder (`mkdir` is atomic) holding the pid and the boot id. A tick that
+  finds it held by a live process exits at once; one that finds a dead pid, a lock written
+  before the last boot (the pid may belong to somebody else now) or a lock older than three
+  hours, takes it over: it renames the lock to a name of its own (only one tick wins that),
+  checks that what it moved is the lock it judged stale, and only then makes a new one.
+- Times in the state that lie in the future (a clock without a battery-backed RTC can
+  have been wrong when they were written) are dropped when the state is read: `last_fetch`,
+  `deferred_since` and `last_ok` more than a day ahead, `retry_after` more than 8 days ahead.
+  A tag or a branch in the state that is not a plain `vX.Y.Z` or a plain branch name is
+  dropped as well, because they end up in file names and git commands.
+- If `git fetch` refuses because a tag already here was moved upstream ("would clobber"),
+  `last_fetch` is updated anyway and the refusal is logged, so that it is not retried at
+  every tick.
 - The probation check runs at the first tick after a boot (`boot_id` differs from the one
   recorded when the release was installed) and compares with `from_*`, the version before
   the switch. If the new release fails and the old one passes, the new release is marked bad
@@ -2399,7 +2444,10 @@ that both agree). The names come from `esde.ESDE_PROCESSES` (unconfirmed on a co
 that module says) or from `es_systems.process`, depending on the profile. ES-DE stays alive
 during a game, so nothing updates while playing either. When it is open the tick sets
 `pending=1`, sets `deferred_since` if it was not set, and exits 0; the 15 minute timer tries
-again. If it opens during the check, `--unattended` exits 3: `trying` is kept without a
+again. A tick that finds the menu closed clears `deferred_since`, so the 72 hours are of an
+unbroken wait and a menu that opens again days later starts a new one; an environment failure
+and a failed reconcile clear it too. The frontend's process names are split into words with
+pattern expansion off, so a name is never a glob. If it opens during the check, `--unattended` exits 3: `trying` is kept without a
 rollback and the next tick continues. **The deferral lasts 72 hours at most**: once
 `deferred_since` is older than that, the update runs anyway, because on some devices the
 menu looks open for as long as the console is on, and every write is already guarded by
@@ -2648,8 +2696,13 @@ logic is unit-tested without a network.
   `python` that behaves like warpzone according to the checked-out version, a fake `/proc`
   and a fake clock): a good update, the numeric order of tags, tags that are not ancestors of
   `origin/main` or whose version disagrees, a broken import, a wrong `--version`, a failing
-  `provision`, a failing `health` and a hang (all bad when `good` passes), a broken
-  environment (no tag burned, back-off of 1, 2, 4, 7 and 7 days), a bad tag that never returns,
+  `provision`, a failing `health` and a hang (all bad when `good` passes and the release fails
+  again), a failure that happens once (not bad), a step cut off with a grandchild alive (the
+  grandchild dies and the pipe is free), the tick budget, a python that imports another
+  warpzone, a checkout cut in the middle by a filter that kills the process group or fails
+  (the tree is repaired), too little free space, an ignored file in the way, a menu that
+  closes and opens again, a lock from another boot, times from the future, a moved tag, a
+  broken environment (no tag burned, back-off of 1, 2, 4, 7 and 7 days), a bad tag that never returns,
   a power cut (a fake that kills its own process group; no tag burned, a stale lock taken
   over, the second attempt, the give-up with `retry_after`), a menu that opens during the
   check, the 72 hour limit, probation at the next boot, the kinds of checkout (`dev`, `dirty`,

@@ -13,7 +13,9 @@ import re
 import shutil
 import signal
 import subprocess
+import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -48,18 +50,28 @@ echo "$* @ $(sed -n 's/^__version__ = "\(.*\)"$/\1/p' "$clone/warpzone/__init__.
 version=$(sed -n 's/^__version__ = "\(.*\)"$/\1/p' "$clone/warpzone/__init__.py")
 beh="$(cat "$clone/behaviour" 2>/dev/null) $(cat "$dir/behaviour.$version" 2>/dev/null)"
 has() { case " $beh " in *" $1 "*) return 0 ;; esac; return 1; }
+# a power cut: the updater (its pid is in its lock) dies, and so does this step's group
+power_cut() {
+  kill -s KILL "$(cat "$WZ_STATE_DIR/lock/pid" 2>/dev/null)" 2>/dev/null
+  kill -s KILL 0
+}
 case "$*" in
   *tomllib*) exit 0 ;;
-  *"import warpzone"*)
+  *"warpzone.cli"*)
     if has import_broken; then echo "ImportError: broken" >&2; exit 1; fi
+    # the installed warpzone is not the one in the clone (the updater's check exits 7)
+    [ -e "$dir/wrong_install" ] && [ $# -ge 4 ] && exit 7
     exit 0 ;;
   "-I -m warpzone --version")
+    if has hang_tree_version; then sleep 60 & echo $! >"$dir/grandchild.pid"; exec sleep 60; fi
     if has wrong_version; then echo "warpzone 0.0.0"; else echo "warpzone $version"; fi
     exit 0 ;;
   "-m warpzone provision device "*)
     [ -e "$dir/env_broken" ] && exit 1
-    if has die; then kill -s KILL 0; fi
-    if has die_once && [ ! -e "$dir/died" ]; then : >"$dir/died"; kill -s KILL 0; fi
+    if has hang_tree; then sleep 60 & echo $! >"$dir/grandchild.pid"; exec sleep 60; fi
+    if has flaky && [ ! -e "$dir/flaky_done" ]; then : >"$dir/flaky_done"; exit 1; fi
+    if has die; then power_cut; fi
+    if has die_once && [ ! -e "$dir/died" ]; then : >"$dir/died"; power_cut; fi
     if has hang; then exec sleep 60; fi
     [ -e "$dir/defer" ] && exit 3
     if has provision_fails; then echo "provision failed" >&2; exit 1; fi
@@ -141,10 +153,13 @@ class Rig:
         tag: str | None = None,
         on_main: bool = True,
         file_version: str | None = None,
+        extra: dict[str, str] | None = None,
     ) -> str:
         """Commit a release in the upstream repository, tag it and publish it."""
         if not on_main:
             git(self.work, "checkout", "-q", "--detach")
+        for name, text in (extra or {}).items():
+            (self.work / name).write_text(text)
         (self.work / "warpzone").mkdir(exist_ok=True)
         (self.work / "warpzone" / "__init__.py").write_text(
             f'"""fake"""\n\n__version__ = "{file_version or version}"\n'
@@ -194,6 +209,27 @@ class Rig:
         folder.mkdir(parents=True)
         (folder / "comm").write_text(comm + "\n")
         (folder / "cmdline").write_bytes(b"\0".join(a.encode() for a in (argv or [comm])) + b"\0")
+
+    def cut_checkouts(self, mode: str) -> None:
+        """Make the first checkout that writes `zz.txt` die in the middle, after the files
+        before it were written: `kill` takes the whole process group down (a power cut),
+        `fail` makes git stop with an error (a full disk). Later checkouts work."""
+        marker = self.root / "cut-marker"
+        action = "kill -s KILL 0" if mode == "kill" else "exit 1"
+        script = self.root / "smudge.sh"
+        script.write_text(f'if [ -e "{marker}" ]; then cat; else : >"{marker}"; {action}; fi\n')
+        git(self.clone, "config", "filter.cut.smudge", f"sh {script}")
+        git(self.clone, "config", "filter.cut.clean", "cat")
+        git(self.clone, "config", "filter.cut.required", "true")
+        info = self.clone / ".git" / "info"
+        info.mkdir(exist_ok=True)
+        (info / "attributes").write_text("zz.txt filter=cut\n")
+
+    def age_index_lock(self, minutes: int = 11) -> None:
+        lock = self.clone / ".git" / "index.lock"
+        if lock.exists():
+            old = lock.stat().st_mtime - minutes * 60
+            os.utime(lock, (old, old))
 
     def flag(self, name: str, on: bool = True) -> None:
         path = self.fake_dir / name
@@ -311,7 +347,8 @@ class UpdateTests(UpdaterCase):
                         "-m warpzone health deck",
                     ],
                 )
-                self.assertIn("import warpzone.cli", steps[0])
+                self.assertIn("import os, sys, warpzone.cli", steps[0])
+                self.assertTrue(steps[0].endswith(str(rig.clone)), steps[0])
                 # the checks ran on the new release, not the old one
                 self.assertTrue(all(c.endswith("@ 0.2.0") for c in rig.calls() if "device" in c))
 
@@ -407,12 +444,12 @@ class VerdictTests(UpdaterCase):
                 self.assertEqual(state["trying_tag"], "")
                 self.assertEqual(state["attempts"], "0")
                 # the good version was checked again after the failure
-                self.assertTrue(rig.calls()[-1].endswith("@ 0.1.0"), rig.calls())
+                self.assertIn("health deck @ 0.1.0", " ".join(rig.calls()), rig.calls())
 
     def test_a_release_that_hangs_is_cut_off_and_marked_bad(self) -> None:
         rig = self.rig
         rig.release("0.2.0", "hang")
-        self.assertTick(rig.tick(WZ_STEP_TIMEOUT="2"), 1)
+        self.assertTick(rig.tick(WZ_STEP_TIMEOUT="1"), 1)
         self.assertEqual(rig.bad(), ["v0.2.0"])
         self.assertEqual(rig.on_tag(), "v0.1.0")
 
@@ -513,6 +550,7 @@ class EdgeTests(UpdaterCase):
         rig = self.rig
         rig.release("0.2.0")
         rig.flag("defer")  # provision keeps answering 3
+        rig.add_process(7000001, "es-de")  # the menu has been open since the first deferral
         rig.write_state(pending="1", deferred_since=str(NOW - 80 * HOUR))
         self.assertTick(rig.tick(), 0)
         state = rig.state()
@@ -786,6 +824,367 @@ class ProbationTests(UpdaterCase):
         self.assertEqual(rig.bad(), [])
         self.assertEqual(rig.on_tag(), "v0.2.0")
         self.assertEqual(rig.state()["last_result"], "env")
+
+
+class HalfCheckoutTests(UpdaterCase):
+    def status(self) -> str:
+        return git(self.rig.clone, "status", "--porcelain", "--untracked-files=no")
+
+    def test_a_power_cut_in_the_middle_of_the_checkout_is_repaired(self) -> None:
+        rig = self.rig
+        rig.release("0.2.0", extra={"zz.txt": "later\n"})
+        rig.cut_checkouts("kill")
+        self.assertNotEqual(rig.tick().returncode, 0)
+        self.assertNotEqual(self.status(), "", "the cut left a mixed tree")
+        self.assertEqual(rig.state()["trying_tag"], "v0.2.0")
+        rig.age_index_lock()  # the killed git left its lock; the next tick comes later
+        self.assertTick(rig.tick(now=NOW + 900), 0)
+        self.assertEqual(self.status(), "", "the updater finished its own checkout")
+        self.assertEqual(rig.on_tag(), "v0.2.0")
+        state = rig.state()
+        self.assertEqual((state["good_tag"], state["last_result"]), ("v0.2.0", "ok"))
+        self.assertEqual(rig.bad(), [])
+        self.assertTrue((rig.clone / "zz.txt").exists())
+
+    def test_a_checkout_that_fails_in_the_middle_goes_back_to_the_good_version(self) -> None:
+        rig = self.rig
+        rig.release("0.2.0", extra={"zz.txt": "later\n"})
+        rig.cut_checkouts("fail")
+        self.assertTick(rig.tick(), 1)
+        self.assertEqual(self.status(), "", "no mixed tree is left behind")
+        self.assertEqual(rig.on_tag(), "v0.1.0")
+        state = rig.state()
+        self.assertEqual((state["last_result"], state["trying_tag"]), ("env", ""))
+        self.assertEqual(rig.bad(), [])
+        # and the next try, once the back-off is over, works
+        self.assertTick(rig.tick(now=NOW + DAY), 0)
+        self.assertEqual(rig.on_tag(), "v0.2.0")
+
+    def test_a_mixed_tree_with_a_change_of_the_users_is_left_alone(self) -> None:
+        rig = self.rig
+        sha = rig.release("0.2.0")
+        git(rig.clone, "fetch", "-q", "--tags")
+        (rig.clone / "mine.txt").write_text("mine\n")
+        git(rig.clone, "add", "mine.txt")
+        rig.write_state(
+            good_tag="v0.1.0",
+            good_sha=rig.head(),
+            trying_tag="v0.2.0",
+            trying_sha=sha,
+            attempts="1",
+        )
+        (rig.clone / "mine.txt").write_text("edited\n")
+        before = rig.head()
+        self.assertTick(rig.tick(), 0)
+        self.assertEqual(rig.head(), before)
+        self.assertEqual((rig.clone / "mine.txt").read_text(), "edited\n")
+        self.assertEqual(rig.state()["last_result"], "dirty")
+
+    def test_too_little_free_space_is_an_environment_failure_before_any_checkout(self) -> None:
+        rig = self.rig
+        rig.release("0.2.0")
+        self.assertTick(rig.tick(WZ_MIN_FREE_KB="999999999999"), 1)
+        self.assertEqual(rig.on_tag(), "v0.1.0")
+        state = rig.state()
+        self.assertEqual((state["last_result"], state["trying_tag"]), ("env", ""))
+        self.assertEqual(state["retry_after"], str(NOW + DAY))
+        self.assertEqual(rig.bad(), [])
+        self.assertEqual([c for c in rig.calls() if "@ 0.2.0" in c], [])
+
+    def test_an_ignored_file_in_the_way_is_never_overwritten(self) -> None:
+        rig = self.rig
+        rig.release("0.2.0", extra={"cache.txt": "theirs\n"})
+        info = rig.clone / ".git" / "info"
+        info.mkdir(exist_ok=True)
+        (info / "exclude").write_text("cache.txt\n")
+        (rig.clone / "cache.txt").write_text("mine\n")
+        self.assertTick(rig.tick(), 1)
+        self.assertEqual((rig.clone / "cache.txt").read_text(), "mine\n")
+        self.assertEqual(rig.on_tag(), "v0.1.0")
+        self.assertEqual(rig.bad(), [])
+        self.assertEqual(rig.state()["last_result"], "env")
+
+
+class DeferralClockTests(UpdaterCase):
+    def test_a_menu_that_closes_and_opens_again_starts_a_new_deferral(self) -> None:
+        rig = self.rig
+        rig.add_process(7000001, "es-de")
+        self.assertTick(rig.tick(), 0)
+        self.assertEqual(rig.state()["deferred_since"], str(NOW))
+        shutil.rmtree(rig.proc / "7000001")
+        self.assertTick(rig.tick(now=NOW + HOUR), 0)  # closed, nothing to update
+        self.assertEqual(rig.state()["deferred_since"], "")
+        rig.release("0.2.0")
+        rig.add_process(7000002, "es-de")  # days later somebody is playing
+        later = NOW + 4 * DAY
+        self.assertTick(rig.tick(now=later), 0)
+        self.assertEqual(rig.on_tag(), "v0.1.0", "no update while the user plays")
+        self.assertEqual(rig.state()["deferred_since"], str(later))
+
+    def test_a_failed_reconcile_and_an_environment_failure_end_the_deferral(self) -> None:
+        rig = self.rig
+        rig.release("0.2.0")
+        rig.flag("env_broken")
+        rig.write_state(pending="1", deferred_since=str(NOW - HOUR))
+        self.assertTick(rig.tick(), 1)
+        self.assertEqual(rig.state()["last_result"], "env")
+        self.assertEqual(rig.state()["deferred_since"], "")
+
+
+class ProcessGroupTests(UpdaterCase):
+    def setUp(self) -> None:
+        super().setUp()
+        if os.environ.get("WZ_TEST_SHELL") == "dash" and not shutil.which("setsid"):
+            self.skipTest("dash has no job control and this system has no setsid")
+
+    def gone(self, pid: int) -> bool:
+        for _ in range(40):
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                return True
+            time.sleep(0.1)
+        return False
+
+    def test_a_step_that_is_cut_off_takes_its_grandchildren_with_it(self) -> None:
+        for behaviour in ("hang_tree_version", "hang_tree"):
+            with self.subTest(behaviour=behaviour):
+                rig = Rig(self)
+                rig.release("0.2.0", behaviour)
+                started = time.monotonic()
+                self.assertTick(rig.tick(WZ_STEP_TIMEOUT="1"), 1)
+                self.assertLess(time.monotonic() - started, 30, "a grandchild held the pipe")
+                pid = int((rig.fake_dir / "grandchild.pid").read_text())
+                self.assertTrue(self.gone(pid), "the grandchild survived the cut")
+                self.assertEqual(rig.bad(), ["v0.2.0"])
+
+    def test_a_tick_that_is_terminated_takes_its_step_and_the_grandchildren_down(self) -> None:
+        rig = self.rig
+        rig.release("0.2.0", "hang_tree")
+        shell = os.environ.get("WZ_TEST_SHELL", "sh")
+        proc = subprocess.Popen(
+            [shell, str(rig.updater), "tick"],
+            env=rig.env(WZ_STEP_TIMEOUT="30"),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+        self.addCleanup(proc.wait)
+        self.addCleanup(proc.kill)
+        marker = rig.fake_dir / "grandchild.pid"
+        for _ in range(200):
+            if marker.exists() and marker.read_text().strip():
+                break
+            time.sleep(0.1)
+        pid = int(marker.read_text())
+        proc.terminate()
+        proc.wait(timeout=30)
+        self.assertTrue(self.gone(pid), "the step's grandchild survived the tick")
+
+    def test_the_fetch_cannot_be_held_by_a_grandchild_either(self) -> None:
+        rig = self.rig
+        hook = rig.root / "slow-ssh.sh"
+        hook.write_text("sleep 60 &\nexec sleep 60\n")
+        git(rig.clone, "config", "core.sshCommand", f"sh {hook}")
+        git(rig.clone, "remote", "set-url", "origin", "ssh://nobody@example.invalid/repo.git")
+        started = time.monotonic()
+        self.assertTick(rig.tick(WZ_FETCH_TIMEOUT="2"), 0)
+        self.assertLess(time.monotonic() - started, 30)
+
+
+class BudgetTests(UpdaterCase):
+    def test_the_tick_budget_cuts_a_step_and_counts_as_an_environment_failure(self) -> None:
+        rig = self.rig
+        rig.release("0.2.0", "hang")
+        started = time.monotonic()
+        self.assertTick(rig.tick(WZ_TICK_BUDGET="4", WZ_STEP_TIMEOUT="30"), 1)
+        self.assertLess(time.monotonic() - started, 20)
+        state = rig.state()
+        self.assertEqual(rig.bad(), [], "running out of time says nothing about the release")
+        self.assertEqual(rig.on_tag(), "v0.1.0")
+        self.assertEqual((state["last_result"], state["env_failures"]), ("env", "1"))
+        self.assertEqual(state["retry_after"], str(NOW + DAY))
+        self.assertEqual(state["trying_tag"], "")
+
+    def test_a_step_that_runs_out_of_its_own_time_is_still_the_releases_fault(self) -> None:
+        rig = self.rig
+        rig.release("0.2.0", "hang")
+        self.assertTick(rig.tick(WZ_TICK_BUDGET="600", WZ_STEP_TIMEOUT="1"), 1)
+        self.assertEqual(rig.bad(), ["v0.2.0"])
+
+    def test_numbers_in_the_environment_that_are_not_numbers_do_not_kill_the_script(self) -> None:
+        rig = self.rig
+        rig.release("0.2.0")
+        git(rig.clone, "fetch", "-q", "--tags")
+        rig.write_state(last_fetch=str(NOW - 5))
+        proc = rig.tick(
+            WZ_STEP_TIMEOUT="abc",
+            WZ_FETCH_INTERVAL="x",
+            WZ_MIN_FREE_KB="y",
+            WZ_TICK_BUDGET="z",
+            WZ_FETCH_TIMEOUT="w",
+        )
+        self.assertTick(proc, 0)
+        self.assertEqual(rig.on_tag(), "v0.2.0")
+
+
+class VerificationTests(UpdaterCase):
+    def test_a_trying_tag_that_became_bad_is_dropped_on_resume(self) -> None:
+        rig = self.rig
+        rig.release("0.2.0")
+        rig.flag("defer")
+        self.assertTick(rig.tick(), 0)
+        self.assertEqual(rig.state()["trying_tag"], "v0.2.0")
+        (rig.state_dir / "bad").mkdir()
+        (rig.state_dir / "bad" / "v0.2.0").write_text("sha=x\ndate=x\nreason=test\n")
+        rig.flag("defer", False)
+        calls = len(rig.calls())
+        self.assertTick(rig.tick(now=NOW + 900), 0)
+        self.assertEqual(rig.on_tag(), "v0.1.0")
+        self.assertEqual(rig.state()["trying_tag"], "")
+        self.assertEqual([c for c in rig.calls()[calls:] if "@ 0.2.0" in c], [])
+
+    def test_a_failure_that_does_not_repeat_does_not_burn_the_tag(self) -> None:
+        rig = self.rig
+        rig.release("0.2.0", "flaky")
+        self.assertTick(rig.tick(), 0)
+        self.assertEqual(rig.on_tag(), "v0.2.0")
+        self.assertEqual(rig.bad(), [])
+        self.assertEqual(rig.state()["good_tag"], "v0.2.0")
+
+    def test_a_failure_that_repeats_is_bad_after_one_more_try(self) -> None:
+        rig = self.rig
+        rig.release("0.2.0", "provision_fails")
+        self.assertTick(rig.tick(), 1)
+        self.assertEqual(rig.bad(), ["v0.2.0"])
+        provisions = [c for c in rig.calls() if "provision device" in c and "@ 0.2.0" in c]
+        self.assertEqual(len(provisions), 2, "the release was tried twice")
+
+    def test_a_release_that_fails_after_the_boot_only_once_stays(self) -> None:
+        rig = self.rig
+        rig.release("0.2.0")
+        self.assertTick(rig.tick(), 0)
+        rig.break_version("0.2.0", "flaky")
+        rig.boot_id.write_text("boot-2\n")
+        self.assertTick(rig.tick(now=NOW + 1800), 0)
+        self.assertEqual(rig.bad(), [])
+        self.assertEqual(rig.on_tag(), "v0.2.0")
+        self.assertEqual(rig.state()["probation"], "0")
+
+    def test_a_python_that_imports_warpzone_from_elsewhere_is_the_environment(self) -> None:
+        rig = self.rig
+        rig.release("0.2.0")
+        rig.flag("wrong_install")
+        self.assertTick(rig.tick(), 1)
+        self.assertEqual(rig.bad(), [])
+        self.assertEqual(rig.on_tag(), "v0.1.0")
+        self.assertEqual(rig.state()["last_result"], "env")
+        self.assertIn(str(rig.clone), "".join(c for c in rig.calls() if "warpzone.cli" in c))
+
+    def test_the_import_check_compares_the_location_with_the_clone(self) -> None:
+        code = re.search(r"^IMPORT_CODE='(.*)'$", UPDATER.read_text(), re.M)
+        assert code is not None
+        root = Path(tempfile.mkdtemp(prefix="wz-import-"))
+        self.addCleanup(shutil.rmtree, root, True)
+        for name in ("__init__", "cli", "provision", "health"):
+            (root / "warpzone").mkdir(exist_ok=True)
+            (root / "warpzone" / f"{name}.py").write_text("")
+        elsewhere = root / "elsewhere"
+        elsewhere.mkdir()
+        env = {**os.environ, "PYTHONPATH": str(root)}
+        for clone, expected in ((root, 0), (elsewhere, 7)):
+            proc = subprocess.run(
+                [sys.executable, "-c", code.group(1), str(clone)],
+                env=env,
+                cwd=root,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, expected, proc.stderr)
+
+
+class StateHardeningTests(UpdaterCase):
+    def test_tags_and_branches_in_the_state_are_validated(self) -> None:
+        rig = self.rig
+        rig.write_state(
+            good_tag="not-a-tag",
+            trying_tag="../../escape",
+            trying_sha=rig.head(),
+            attempts="1",
+            good_branch="-x",
+        )
+        self.assertTick(rig.tick(), 0)
+        self.assertEqual(rig.state()["trying_tag"], "")
+        self.assertEqual(rig.state()["last_result"], "ok")
+        self.assertFalse((rig.state_dir.parent / "escape").exists())
+        self.assertEqual(rig.bad(), [])
+
+    def test_times_from_the_future_are_dropped(self) -> None:
+        rig = self.rig
+        rig.release("0.2.0")
+        rig.write_state(
+            last_fetch=str(NOW + 10 * DAY),
+            retry_after=str(NOW + 40 * DAY),
+            deferred_since=str(NOW + 5 * DAY),
+        )
+        self.assertTick(rig.tick(WZ_FETCH_INTERVAL=str(DAY)), 0)
+        self.assertEqual(rig.on_tag(), "v0.2.0")
+        self.assertEqual(rig.state()["retry_after"], "")
+
+    def test_a_moved_tag_upstream_does_not_make_every_tick_fetch_again(self) -> None:
+        rig = self.rig
+        rig.release("0.2.0")
+        git(rig.work, "tag", "-f", "v0.1.0")  # the maintainer moved a published tag
+        git(rig.work, "push", "-q", "-f", "origin", "refs/tags/v0.1.0")
+        proc = rig.tick()
+        self.assertTick(proc, 0)
+        self.assertEqual(rig.state()["last_fetch"], str(NOW))
+        self.assertIn("moved", proc.output)
+
+    def test_a_frontend_name_is_never_expanded_as_a_pattern(self) -> None:
+        rig = self.rig
+        rig.release("0.2.0")
+        rig.write_conf(frontend="*")
+        rig.add_process(7000001, "behaviour")  # a file name in the clone
+        self.assertTick(rig.tick(), 0)
+        self.assertEqual(rig.on_tag(), "v0.2.0")
+
+
+class LockTests(UpdaterCase):
+    def holder(self) -> subprocess.Popen:
+        proc = subprocess.Popen(["sleep", "30"])
+        self.addCleanup(proc.wait)
+        self.addCleanup(proc.kill)
+        return proc
+
+    def test_a_lock_from_another_boot_is_stale_even_if_its_pid_is_alive(self) -> None:
+        rig = self.rig
+        rig.release("0.2.0")
+        holder = self.holder()  # the pid was reused after a restart
+        (rig.state_dir / "lock").mkdir()
+        (rig.state_dir / "lock" / "pid").write_text(f"{holder.pid}\n")
+        (rig.state_dir / "lock" / "boot").write_text("boot-0\n")
+        self.assertTick(rig.tick(), 0)
+        self.assertEqual(rig.on_tag(), "v0.2.0")
+
+    def test_a_live_lock_of_this_boot_is_respected(self) -> None:
+        rig = self.rig
+        rig.release("0.2.0")
+        holder = self.holder()
+        (rig.state_dir / "lock").mkdir()
+        (rig.state_dir / "lock" / "pid").write_text(f"{holder.pid}\n")
+        (rig.state_dir / "lock" / "boot").write_text("boot-1\n")
+        self.assertTick(rig.tick(), 0)
+        self.assertEqual(rig.on_tag(), "v0.1.0")
+
+    def test_taking_over_a_stale_lock_leaves_nothing_behind(self) -> None:
+        rig = self.rig
+        (rig.state_dir / "lock").mkdir()
+        (rig.state_dir / "lock" / "pid").write_text("2999999\n")
+        self.assertTick(rig.tick(), 0)
+        leftovers = [p.name for p in rig.state_dir.iterdir() if p.name.startswith("lock")]
+        self.assertEqual(leftovers, [])
 
 
 class ScriptTests(UpdaterCase):

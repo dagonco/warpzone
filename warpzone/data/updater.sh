@@ -19,6 +19,9 @@
 #   WZ_NOW        the time as seconds since the epoch
 #   WZ_FETCH_INTERVAL  seconds between fetches (default one day)
 #   WZ_STEP_TIMEOUT    seconds for each step of a verification
+#   WZ_TICK_BUDGET     seconds a whole tick may take (default 1500, under the service's 30 min)
+#   WZ_FETCH_TIMEOUT   seconds for the fetch (default 120)
+#   WZ_MIN_FREE_KB     free space in KiB needed before switching (default 51200)
 #   WZ_PYTHON_FALLBACKS  interpreters to try after the one in the settings
 
 UPDATER_ABI=1
@@ -28,7 +31,7 @@ set -u
 DAY=86400
 DEFER_MAX=$((72 * 3600))
 MAX_ATTEMPTS=2
-IMPORT_CODE='import warpzone.cli, warpzone.provision, warpzone.health'
+IMPORT_CODE='import os, sys, warpzone.cli, warpzone.provision, warpzone.health; root = os.path.realpath(sys.argv[1]); here = os.path.realpath(warpzone.__file__); sys.exit(0 if here.startswith(root + os.sep) else 7)'
 STATE_KEYS="schema good_tag good_sha good_branch trying_tag trying_sha from_tag from_sha from_branch attempts probation pending deferred_since last_fetch last_boot_id last_result last_ok retry_after env_failures"
 
 STATE_DIR=${WZ_STATE_DIR:-${XDG_STATE_HOME:-${HOME:-/nonexistent}/.local/state}/warpzone/updater}
@@ -39,10 +42,20 @@ BOOT_ID_FILE=${WZ_BOOT_ID_FILE:-/proc/sys/kernel/random/boot_id}
 FETCH_INTERVAL=${WZ_FETCH_INTERVAL:-$DAY}
 PY_FALLBACKS=${WZ_PYTHON_FALLBACKS-/usr/bin/python3 python3}
 STEP_TIMEOUT=${WZ_STEP_TIMEOUT:-}
+FETCH_TIMEOUT=${WZ_FETCH_TIMEOUT:-120}
+TICK_BUDGET=${WZ_TICK_BUDGET:-1500}
+MIN_FREE_KB=${WZ_MIN_FREE_KB:-51200}
+DEADLINE=
+SETSID=$(command -v setsid 2>/dev/null || true)
 
 export GIT_TERMINAL_PROMPT=0
 
 # ---- small helpers --------------------------------------------------------------------
+
+# real_now: the clock, whatever WZ_NOW says (the time budget is real time).
+real_now() {
+	date +%s
+}
 
 now() {
 	case ${WZ_NOW:-} in
@@ -104,18 +117,31 @@ is_number() {
 	return 0
 }
 
+# Numbers that come from the environment: one that is not a number would stop the script
+# on its first sum.
+case $FETCH_INTERVAL in '' | *[!0-9]*) FETCH_INTERVAL=$DAY ;; esac
+case $STEP_TIMEOUT in '' | 0 | *[!0-9]*) STEP_TIMEOUT= ;; esac
+case $FETCH_TIMEOUT in '' | *[!0-9]*) FETCH_TIMEOUT=120 ;; esac
+case $TICK_BUDGET in '' | *[!0-9]*) TICK_BUDGET=1500 ;; esac
+case $MIN_FREE_KB in '' | *[!0-9]*) MIN_FREE_KB=51200 ;; esac
+
 # ---- run with a time limit ------------------------------------------------------------
 # run_limited SECONDS COMMAND...: the command's exit status, or 124 when it ran out of
-# time (about: the wait is counted in naps). Polls a status file, because neither `timeout`
-# nor a reliable `kill -0` on a child that has already ended is available everywhere.
+# time (about: the wait is counted in naps). Every command runs in a process group of its
+# own (`setsid`, or job control where there is none) and a cut kills the whole group, so a
+# grandchild cannot outlive the step or hold a pipe. The output goes wherever the caller
+# redirects it, never to a `$(...)`. The seconds are cut down to what is left of the tick's
+# budget (DEADLINE); RL_BUDGET_CUT says that happened. Polls a status file, because neither
+# `timeout` nor a reliable `kill -0` on a child that has already ended is available
+# everywhere.
 
 SLEEP_FRACTIONS=0
 if sleep 0.01 2>/dev/null; then
 	SLEEP_FRACTIONS=1
 fi
 
-# rl_nap: wait a little (short naps at first, so a quick command costs little) and set
-# RL_MS to the milliseconds counted, $1 being the milliseconds waited so far.
+# rl_nap SPENT: wait a little (short naps at first, so a quick command costs little) and
+# set RL_MS to the milliseconds counted, SPENT being the milliseconds waited so far.
 rl_nap() {
 	if [ "$SLEEP_FRACTIONS" = 0 ]; then
 		sleep 1
@@ -129,38 +155,69 @@ rl_nap() {
 	fi
 }
 
+# rl_kill SIGNAL PIDFILE: signal the group of the step whose leader's pid is in PIDFILE,
+# or only the leader where groups are not available.
+rl_kill() {
+	_k_pid=$(cat "$2" 2>/dev/null)
+	[ -n "$_k_pid" ] || return 0
+	kill -s "$1" -- "-$_k_pid" 2>/dev/null || kill -s "$1" "$_k_pid" 2>/dev/null
+	return 0
+}
+
+RL_FILE=
+RL_BUDGET_CUT=0
+
+# rl_abort: the tick was told to stop; take the step in progress down with it.
+rl_abort() {
+	[ -n "$RL_FILE" ] || return 0
+	rl_kill TERM "$RL_FILE.pid"
+	sleep 1
+	rl_kill KILL "$RL_FILE.pid"
+}
+
 run_limited() {
 	_rl_secs=$1
 	shift
-	_rl_file="$STATE_DIR/.run.$$"
-	rm -f "$_rl_file" "$_rl_file.pid" "$_rl_file.tmp"
+	RL_BUDGET_CUT=0
+	if [ -n "$DEADLINE" ]; then
+		_rl_rem=$((DEADLINE - $(real_now)))
+		if [ "$_rl_rem" -lt "$_rl_secs" ]; then
+			[ "$_rl_rem" -ge 0 ] || _rl_rem=0
+			_rl_secs=$_rl_rem
+			RL_BUDGET_CUT=1
+		fi
+	fi
+	[ "$_rl_secs" -gt 0 ] || return 124
+	RL_FILE="$STATE_DIR/.run.$$"
+	rm -f "$RL_FILE" "$RL_FILE.pid" "$RL_FILE.tmp"
 	(
-		"$@" &
+		if [ -n "$SETSID" ]; then
+			"$SETSID" "$@" </dev/null &
+		else
+			set -m
+			"$@" </dev/null &
+		fi
 		_p=$!
-		echo "$_p" >"$_rl_file.pid"
+		echo "$_p" >"$RL_FILE.pid"
 		wait "$_p"
 		_c=$?
-		echo "$_c" >"$_rl_file.tmp"
-		mv -f "$_rl_file.tmp" "$_rl_file"
+		echo "$_c" >"$RL_FILE.tmp"
+		mv -f "$RL_FILE.tmp" "$RL_FILE"
 	) &
 	_rl_sub=$!
 	_rl_left=$((_rl_secs * 1000))
 	_rl_spent=0
-	while [ ! -e "$_rl_file" ]; do
+	while [ ! -e "$RL_FILE" ]; do
 		if [ "$_rl_left" -le 0 ]; then
-			_rl_pid=$(cat "$_rl_file.pid" 2>/dev/null)
-			[ -n "$_rl_pid" ] && kill -TERM "$_rl_pid" 2>/dev/null
+			rl_kill TERM "$RL_FILE.pid"
 			_rl_grace=0
-			while [ ! -e "$_rl_file" ] && [ "$_rl_grace" -lt 2000 ]; do
+			while [ ! -e "$RL_FILE" ] && [ "$_rl_grace" -lt 2000 ]; do
 				rl_nap 1000
 				_rl_grace=$((_rl_grace + RL_MS))
 			done
-			if [ ! -e "$_rl_file" ]; then
-				[ -n "$_rl_pid" ] && kill -KILL "$_rl_pid" 2>/dev/null
-				sleep 1
-			fi
+			rl_kill KILL "$RL_FILE.pid"
 			wait "$_rl_sub" 2>/dev/null
-			rm -f "$_rl_file" "$_rl_file.pid" "$_rl_file.tmp"
+			rm -f "$RL_FILE" "$RL_FILE.pid" "$RL_FILE.tmp"
 			return 124
 		fi
 		rl_nap "$_rl_spent"
@@ -168,8 +225,8 @@ run_limited() {
 		_rl_spent=$((_rl_spent + RL_MS))
 	done
 	wait "$_rl_sub" 2>/dev/null
-	_rl_code=$(cat "$_rl_file" 2>/dev/null)
-	rm -f "$_rl_file" "$_rl_file.pid" "$_rl_file.tmp"
+	_rl_code=$(cat "$RL_FILE" 2>/dev/null)
+	rm -f "$RL_FILE" "$RL_FILE.pid" "$RL_FILE.tmp"
 	is_number "$_rl_code" || _rl_code=1
 	return "$_rl_code"
 }
@@ -259,6 +316,32 @@ state_load() {
 	case $S_good_sha$S_trying_sha$S_from_sha in
 	*[!0-9a-f]*) S_good_sha= S_trying_sha= S_from_sha= ;;
 	esac
+	# These end up in file names and in git commands: only what a tag and a branch can be.
+	for _k in good_tag trying_tag from_tag; do
+		eval "_v=\$S_$_k"
+		[ -z "$_v" ] || is_plain_tag "$_v" || state_assign "$_k" ""
+	done
+	for _k in good_branch from_branch; do
+		eval "_v=\$S_$_k"
+		case $_v in
+		'') ;;
+		-* | *[!A-Za-z0-9._/-]*) state_assign "$_k" "" ;;
+		esac
+	done
+}
+
+# state_drop_future: a clock that was wrong (no battery-backed RTC) can leave times in the
+# state that lie ahead of now; they would hold the device back for no reason.
+state_drop_future() {
+	for _k in last_fetch deferred_since last_ok; do
+		eval "_v=\$S_$_k"
+		if [ -n "$_v" ] && [ "$_v" -gt $((NOW + DAY)) ]; then
+			state_assign "$_k" ""
+		fi
+	done
+	if [ -n "$S_retry_after" ] && [ "$S_retry_after" -gt $((NOW + 8 * DAY)) ]; then
+		S_retry_after=
+	fi
 }
 
 # state_save: write every key to a temporary file, flush it and rename it over the state.
@@ -301,24 +384,41 @@ write_bad() {
 LOCK_DIR=$STATE_DIR/lock
 LOCK_HELD=0
 
+lock_claim() {
+	echo "$$" >"$LOCK_DIR/pid"
+	boot_id >"$LOCK_DIR/boot"
+	LOCK_HELD=1
+}
+
 acquire_lock() {
 	if mkdir "$LOCK_DIR" 2>/dev/null; then
-		echo "$$" >"$LOCK_DIR/pid"
-		LOCK_HELD=1
+		lock_claim
 		return 0
 	fi
 	_old=$(cat "$LOCK_DIR/pid" 2>/dev/null)
+	_old_boot=$(cat "$LOCK_DIR/boot" 2>/dev/null)
+	_cur_boot=$(boot_id)
 	if [ -z "$_old" ]; then
 		# Someone is between mkdir and writing the pid, unless the folder is old.
 		[ -n "$(find "$LOCK_DIR" -prune -mmin +1 2>/dev/null)" ] || return 1
+	elif [ -n "$_old_boot" ] && [ -n "$_cur_boot" ] && [ "$_old_boot" != "$_cur_boot" ]; then
+		: # written before the last restart: the pid belongs to somebody else now
 	elif kill -0 "$_old" 2>/dev/null; then
-		# A pid can be reused after a restart; a lock older than any run can last is stale.
+		# A lock older than any run can last is stale even with a live pid.
 		[ -n "$(find "$LOCK_DIR" -prune -mmin +180 2>/dev/null)" ] || return 1
 	fi
-	rm -rf "$LOCK_DIR"
+	# Take it over by renaming it to a name of our own (atomic: only one tick wins), and
+	# check that it is the lock we judged stale and not a fresh one that took its place.
+	_stale="$LOCK_DIR.stale.$$"
+	mv "$LOCK_DIR" "$_stale" 2>/dev/null || return 1
+	if [ "$(cat "$_stale/pid" 2>/dev/null)" != "$_old" ]; then
+		[ -e "$LOCK_DIR" ] || mv "$_stale" "$LOCK_DIR" 2>/dev/null
+		rm -rf "$_stale"
+		return 1
+	fi
+	rm -rf "$_stale"
 	mkdir "$LOCK_DIR" 2>/dev/null || return 1
-	echo "$$" >"$LOCK_DIR/pid"
-	LOCK_HELD=1
+	lock_claim
 	return 0
 }
 
@@ -362,8 +462,11 @@ proc_has() {
 }
 
 menu_open() {
+	set -f # a name is a name, never a pattern for the files of the current folder
 	# shellcheck disable=SC2086
-	proc_has $C_frontend
+	set -- $C_frontend
+	set +f
+	proc_has "$@"
 }
 
 boot_id() {
@@ -396,11 +499,47 @@ checkout_ref() {
 	if [ -n "$1" ]; then
 		_at=$(g rev-parse -q --verify "refs/heads/$1" 2>/dev/null)
 		if [ "$_at" = "$2" ]; then
-			g checkout --quiet "$1" -- >/dev/null 2>&1
+			g checkout --quiet --no-overwrite-ignore "$1" -- >/dev/null 2>&1
 			return $?
 		fi
 	fi
-	g checkout --quiet --detach "$2" >/dev/null 2>&1
+	g checkout --quiet --no-overwrite-ignore --detach "$2" >/dev/null 2>&1
+}
+
+# free_kb prints the free space, in KiB, of the file system of the clone (nothing if unknown).
+free_kb() {
+	set -- $(df -Pk "$CLONE" 2>/dev/null | tail -n 1)
+	if is_number "${4:-}"; then
+		printf '%s' "$4"
+	fi
+}
+
+# heal_half_checkout A B TARGET: a checkout between the commits A and B was cut in the middle
+# (a power cut, a full disk), so the tree is neither one nor the other. When every file that
+# differs from HEAD is one that A and B differ in, the change is the updater's own and the
+# checkout is done again, forced, onto TARGET; anything else is somebody's work and stays.
+# Succeeds when the tree is consistent afterwards.
+heal_half_checkout() {
+	[ -n "$1" ] && [ -n "$2" ] || return 1
+	_changed=$(g diff --name-only "$1" "$2" 2>/dev/null) || return 1
+	_dirty=$(g diff --name-only HEAD 2>/dev/null) || return 1
+	[ -n "$_dirty" ] || return 0
+	_own=1
+	_ifs=$IFS
+	IFS='
+'
+	set -f
+	for _f in $_dirty; do
+		printf '%s\n' "$_changed" | grep -Fxq -- "$_f" || _own=0
+	done
+	set +f
+	IFS=$_ifs
+	if [ "$_own" = 0 ]; then
+		log "the tree has changes that are not part of the update; left alone"
+		return 1
+	fi
+	log "an update was cut in the middle; doing its checkout again"
+	g checkout --quiet --force --no-overwrite-ignore --detach "$3" >/dev/null 2>&1
 }
 
 # detect_kind sets KIND to tag, adopted, dev, dirty or nogit, and BRANCH.
@@ -490,12 +629,23 @@ fetch_if_due() {
 		_jitter=$((_jitter % (FETCH_INTERVAL / 24 + 1)))
 		[ $((NOW - S_last_fetch)) -ge $((FETCH_INTERVAL + _jitter)) ] || return 0
 	fi
-	if _out=$(run_limited 120 git -C "$CLONE" fetch --quiet --tags origin 2>&1); then
+	_ff="$STATE_DIR/.fetch.$$"
+	if run_limited "$FETCH_TIMEOUT" git -C "$CLONE" fetch --tags origin >"$_ff" 2>&1; then
 		S_last_fetch=$NOW
 		FETCHED=1
 	else
-		log "could not fetch the remote ($(printf '%s' "$_out" | head -n 1)); using what is already here"
+		_out=$(head -n 3 "$_ff" 2>/dev/null)
+		case $_out in
+		*"would clobber"*)
+			# A published tag was moved. Git refuses it every time, so asking again at every
+			# tick would only repeat the error: wait for the next fetch time.
+			S_last_fetch=$NOW
+			log "a tag that was already here moved upstream and was not taken ($(printf '%s' "$_out" | head -n 1))"
+			;;
+		*) log "could not fetch the remote ($(printf '%s' "$_out" | head -n 1)); using what is already here" ;;
+		esac
 	fi
+	rm -f "$_ff"
 	return 0
 }
 
@@ -533,8 +683,18 @@ wz_step() {
 	fi
 }
 
+# verify_cut STATUS: the step ended because the tick's budget did. That says nothing about
+# the release, so the verification gives up with 4 (it cannot judge).
+verify_cut() {
+	[ "$1" -eq 124 ] && [ "$RL_BUDGET_CUT" = 1 ] || return 1
+	VERIFY_WHY="ran out of the time budget of this tick"
+	return 0
+}
+
 # verify_version TAG: the three steps. TAG is empty when the version has no tag (then the
-# version at HEAD is expected). 0 passed, 3 deferred, 1 failed (VERIFY_WHY says why).
+# version at HEAD is expected). 0 passed, 3 deferred, 1 failed (VERIFY_WHY says why), 4 could
+# not be judged (out of time for the tick, or python imports another warpzone than the
+# checkout's: both the environment's doing, not the release's).
 verify_version() {
 	VERIFY_WHY=
 	VERIFY_PARTIAL=0
@@ -548,16 +708,25 @@ verify_version() {
 	_t_health=${STEP_TIMEOUT:-300}
 	: >"$VERIFY_LOG" 2>/dev/null
 
-	run_limited "$_t_import" "$PY" -I -c "$IMPORT_CODE" >>"$VERIFY_LOG" 2>&1
+	run_limited "$_t_import" "$PY" -I -c "$IMPORT_CODE" "$CLONE" >>"$VERIFY_LOG" 2>&1
 	_r=$?
 	if [ "$_r" -ne 0 ]; then
+		verify_cut "$_r" && return 4
+		if [ "$_r" -eq 7 ]; then
+			VERIFY_WHY="python imports warpzone from outside $CLONE, not from this checkout"
+			return 4
+		fi
 		VERIFY_WHY="import check failed (exit $_r)"
 		return 1
 	fi
 
-	_got=$(run_limited "$_t_import" "$PY" -I -m warpzone --version 2>>"$VERIFY_LOG")
+	_vf="$STATE_DIR/.version.$$"
+	run_limited "$_t_import" "$PY" -I -m warpzone --version >"$_vf" 2>>"$VERIFY_LOG"
 	_r=$?
+	_got=$(cat "$_vf" 2>/dev/null)
+	rm -f "$_vf"
 	if [ "$_r" -ne 0 ] || [ "$_got" != "warpzone $_expect" ]; then
+		verify_cut "$_r" && return 4
 		VERIFY_WHY="version mismatch: wanted warpzone $_expect, got '$_got' (exit $_r)"
 		return 1
 	fi
@@ -575,6 +744,7 @@ verify_version() {
 		fi
 		;;
 	*)
+		verify_cut "$_r" && return 4
 		VERIFY_WHY="provision device --unattended failed (exit $_r)"
 		return 1
 		;;
@@ -593,6 +763,7 @@ verify_version() {
 		fi
 		;;
 	*)
+		verify_cut "$_r" && return 4
 		VERIFY_WHY="health failed (exit $_r)"
 		return 1
 		;;
@@ -639,6 +810,7 @@ env_backoff() {
 	*) _days=7 ;;
 	esac
 	S_retry_after=$((NOW + _days * DAY))
+	S_deferred_since= # it failed for another reason: whoever waited, waited for nothing
 	S_last_result=env
 }
 
@@ -665,6 +837,7 @@ sync_good_reference() {
 	S_good_sha=$_head
 	S_good_branch=$BRANCH
 	S_good_tag=$(g describe --exact-match --tags --match 'v[0-9]*' HEAD 2>/dev/null || true)
+	is_plain_tag "$S_good_tag" || S_good_tag=
 }
 
 # reconcile_if_needed: run provision once per boot, or when a run was deferred. Sets
@@ -698,6 +871,7 @@ reconcile_if_needed() {
 		RECONCILE=failed
 		S_last_boot_id=$_boot
 		S_pending=0
+		S_deferred_since=
 		log "provision device --unattended failed (exit $_r); see $VERIFY_LOG"
 		;;
 	esac
@@ -744,6 +918,31 @@ differential() {
 	return 0
 }
 
+# retry_suspect TAG SHA: the previous version passes and TAG did not. A failure that does not
+# repeat (a service that was slow to come up) must not burn a release for good, so check
+# it out and verify it once more. Returns the verification's status, or 5 when the checkout
+# failed.
+retry_suspect() {
+	log "$1 failed once and the previous version passes; checking $1 once more before blaming it"
+	g checkout --quiet --no-overwrite-ignore --detach "$2" >/dev/null 2>&1 || return 5
+	verify_version "$1"
+}
+
+# back_to_good: HEAD on the version known to work; stuck when that cannot be done.
+back_to_good() {
+	checkout_ref "$S_good_branch" "$S_good_sha" || stuck "checkout of $S_good_sha failed"
+}
+
+# env_abort MESSAGE: the verification could not judge the release. Back to the version known
+# to work, without blaming the release, and wait.
+env_abort() {
+	log "$1"
+	back_to_good
+	clear_trying
+	env_backoff
+	finish 1
+}
+
 # attempt: S_trying_* and S_attempts are set. Check it out, verify it, decide.
 attempt() {
 	if is_dirty; then
@@ -751,6 +950,13 @@ attempt() {
 		clear_trying
 		S_last_result=dirty
 		finish 0
+	fi
+	_free=$(free_kb)
+	if [ -n "$_free" ] && [ "$_free" -lt "$MIN_FREE_KB" ]; then
+		log "only $_free KiB are free next to $CLONE; not switching to $S_trying_tag"
+		clear_trying
+		env_backoff
+		finish 1
 	fi
 	if ! state_save; then
 		log "the state cannot be saved; not switching"
@@ -760,8 +966,9 @@ attempt() {
 	_sha=$S_trying_sha
 	if [ "$(head_sha)" != "$_sha" ]; then
 		log "switching to $_tag"
-		if ! g checkout --quiet --detach "$_sha" >/dev/null 2>&1; then
+		if ! g checkout --quiet --no-overwrite-ignore --detach "$_sha" >/dev/null 2>&1; then
 			log "cannot check out $_tag; not a verdict on the release"
+			heal_half_checkout "$S_good_sha" "$_sha" "$S_good_sha" || log "the tree is left as it is"
 			clear_trying
 			env_backoff
 			finish 1
@@ -776,14 +983,31 @@ attempt() {
 		mark_deferred
 		finish 0
 		;;
+	4) env_abort "$_tag could not be judged: $VERIFY_WHY" ;;
 	esac
 	_why=$VERIFY_WHY
 	differential "$_tag" "$_sha" "$S_good_tag" "$S_good_branch" "$S_good_sha"
 	case $DV in
 	stuck) stuck "checkout of $S_good_sha failed" ;;
 	bad)
-		write_bad "$_tag" "$_sha" "$_why"
-		log "$_tag is bad ($_why); back on the previous version"
+		retry_suspect "$_tag" "$_sha"
+		case $? in
+		0)
+			log "$_tag passed the second time"
+			promote
+			;;
+		3)
+			log "the second check of $_tag was deferred ($VERIFY_WHY); it continues at the next tick"
+			[ "$S_attempts" -gt 0 ] && S_attempts=$((S_attempts - 1))
+			mark_deferred
+			finish 0
+			;;
+		4) env_abort "$_tag could not be judged the second time: $VERIFY_WHY" ;;
+		5) env_abort "cannot check out $_tag again" ;;
+		esac
+		back_to_good
+		write_bad "$_tag" "$_sha" "$_why (twice)"
+		log "$_tag is bad ($_why, twice); back on the previous version"
 		clear_trying
 		S_env_failures=0
 		S_retry_after=
@@ -808,11 +1032,15 @@ attempt() {
 
 # resume: a tick that finds a version being tried knows the last run did not finish.
 resume() {
+	if is_bad "$S_trying_tag"; then
+		log "$S_trying_tag was marked bad in the meantime; going back to the previous version"
+		back_to_good
+		clear_trying
+		return 0
+	fi
 	if [ "$S_attempts" -ge "$MAX_ATTEMPTS" ]; then
 		log "$S_trying_tag has had $S_attempts attempts without a verdict; going back without marking it bad"
-		if ! checkout_ref "$S_good_branch" "$S_good_sha"; then
-			stuck "checkout of $S_good_sha failed"
-		fi
+		back_to_good
 		clear_trying
 		S_retry_after=$((NOW + DAY))
 		S_last_result=rolled-back
@@ -821,6 +1049,18 @@ resume() {
 	S_attempts=$((S_attempts + 1))
 	log "resuming the check of $S_trying_tag (attempt $S_attempts)"
 	attempt
+}
+
+# probation_pass: the new version is accepted for good.
+probation_pass() {
+	S_probation=0
+	S_from_tag=
+	S_from_sha=
+	S_from_branch=
+	S_last_boot_id=$_boot
+	S_last_ok=$NOW
+	S_last_result=ok
+	settle_pending
 }
 
 # probation_check: after a switch, the new version is checked again at the next boot.
@@ -833,19 +1073,18 @@ probation_check() {
 	verify_version "$S_good_tag"
 	case $? in
 	0)
-		S_probation=0
-		S_from_tag=
-		S_from_sha=
-		S_from_branch=
-		S_last_boot_id=$_boot
-		S_last_ok=$NOW
-		S_last_result=ok
-		settle_pending
+		probation_pass
 		return 0
 		;;
 	3)
 		mark_deferred
 		finish 0
+		;;
+	4)
+		log "$S_good_tag could not be judged after the restart: $VERIFY_WHY"
+		S_last_boot_id=$_boot
+		env_backoff
+		finish 1
 		;;
 	esac
 	_why=$VERIFY_WHY
@@ -855,8 +1094,28 @@ probation_check() {
 	case $DV in
 	stuck) stuck "checkout of $S_from_sha failed" ;;
 	bad)
-		write_bad "$_tag" "$_sha" "$_why"
-		log "$_tag is bad after the restart ($_why); back on the previous version"
+		retry_suspect "$_tag" "$_sha"
+		case $? in
+		0)
+			log "$_tag passed the second time"
+			probation_pass
+			return 0
+			;;
+		3)
+			mark_deferred
+			finish 0
+			;;
+		4)
+			log "$_tag could not be judged the second time: $VERIFY_WHY"
+			S_last_boot_id=$_boot
+			env_backoff
+			finish 1
+			;;
+		5) stuck "checkout of $_sha failed" ;;
+		esac
+		checkout_ref "$S_from_branch" "$S_from_sha" || stuck "checkout of $S_from_sha failed"
+		write_bad "$_tag" "$_sha" "$_why (twice)"
+		log "$_tag is bad after the restart ($_why, twice); back on the previous version"
 		S_good_tag=$S_from_tag
 		S_good_sha=$S_from_sha
 		S_good_branch=$S_from_branch
@@ -901,7 +1160,8 @@ cmd_tick() {
 		exit 0
 	fi
 	trap release_lock EXIT
-	trap 'exit 143' HUP INT TERM
+	trap 'rl_abort; exit 143' HUP INT TERM
+	DEADLINE=$(($(real_now) + TICK_BUDGET))
 	if ! conf_load; then
 		log "no settings at $CONF; nothing to do"
 		exit 0
@@ -926,18 +1186,24 @@ cmd_tick() {
 		log "cannot enter $CLONE"
 		exit 1
 	}
-	state_load
 	NOW=$(now)
+	state_load
+	state_drop_future
 
 	clear_stale_index_lock
 
-	# The menu: wait for it to close, at most 72 hours from the first deferral.
+	# The menu: wait for it to close, at most 72 hours from the first deferral. A menu that
+	# is seen closed ends the deferral: the 72 hours are of an unbroken wait.
+	menu_open
+	_menu=$?
+	if [ "$_menu" = 1 ]; then
+		S_deferred_since=
+	fi
 	OVER=0
 	if [ -n "$S_deferred_since" ] && [ $((NOW - S_deferred_since)) -ge "$DEFER_MAX" ]; then
 		OVER=1
 	fi
-	menu_open
-	case $? in
+	case $_menu in
 	0)
 		if [ "$OVER" = 0 ]; then
 			mark_deferred
@@ -957,6 +1223,18 @@ cmd_tick() {
 
 	fetch_if_due
 	detect_kind
+	if [ "$KIND" = dirty ]; then
+		# A tree that an update of ours left half done is not somebody's work.
+		_healed=0
+		if [ -n "$S_trying_sha" ]; then
+			heal_half_checkout "$S_good_sha" "$S_trying_sha" "$S_trying_sha" && _healed=1
+		elif [ "$S_probation" = 1 ] && [ -n "$S_from_sha" ]; then
+			heal_half_checkout "$S_from_sha" "$S_good_sha" "$S_good_sha" && _healed=1
+		fi
+		if [ "$_healed" = 1 ]; then
+			detect_kind
+		fi
+	fi
 	case $KIND in
 	nogit)
 		log "$CLONE is not a git checkout"
