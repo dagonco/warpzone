@@ -34,7 +34,7 @@ packages = ["warpzone", "warpzone.data", "warpzone.data.profiles"]
 version = { attr = "warpzone.__version__" }
 
 [tool.setuptools.package-data]
-"warpzone.data" = ["*.toml"]
+"warpzone.data" = ["*.toml", "*.sh"]
 "warpzone.data.profiles" = ["*.toml"]
 
 [tool.ruff]
