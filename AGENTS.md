@@ -19,6 +19,8 @@ Guidance for coding agents working on this repository. Humans: see [README.md](R
 
 See "Code layout" in [docs/design.md](docs/design.md). In short: `cli.py` wires argparse and exit codes; `config.py` and `profiles.py` load and validate TOML; `model.py` expands them into desired folder specs (pure); `syncthing.py` is the REST client; `provision.py`, `prune.py` and `bios.py` implement the commands; `warpzone/data/` (with `data/profiles/`) holds shipped TOML data.
 
+Agent skills for common tasks (install a console, add games, edit a whitelist, diagnose, release) live in `.claude/skills/`; keep them in step with the docs they link to.
+
 ## Checks
 
 Run all of these before pushing; CI runs the same:
