@@ -43,7 +43,7 @@ WARPZONE_SKIP_UPDATER_SH=1 python3 -m unittest discover -s tests -v
 WZ_TEST_SHELL=dash python3 -m unittest discover -s tests -p test_updater_sh.py -v
 ```
 
-CI runs unit tests on Python 3.11 to 3.14 on Linux and macOS (the updater script's tests apart); the e2e test runs on Linux only. Behaviour that touches Syncthing can differ between the two (see below), so a local macOS e2e pass is not proof for Linux.
+CI runs unit tests on Linux with Python 3.11 and 3.14 and on macOS with Python 3.14 (the updater script's tests apart); the e2e test runs on Linux only. Behaviour that touches Syncthing can differ between the two (see below), so a local macOS e2e pass is not proof for Linux.
 
 ## Syncthing behaviour worth knowing
 
