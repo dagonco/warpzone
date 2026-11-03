@@ -33,7 +33,7 @@ from warpzone.inbox_mame import (
     parse_sets,
     update_gamelist,
 )
-from warpzone.provision import Reporter
+from warpzone.report import Reporter
 
 # Tiny stand-ins for ROM files. Nothing here is a real dump.
 BIOS_EURO = b"bios euro " * 40

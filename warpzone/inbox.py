@@ -41,7 +41,8 @@ from warpzone.dat import (
     FileInfo,
     GameMatch,
 )
-from warpzone.provision import Reporter
+from warpzone.errors import UsageError
+from warpzone.report import Reporter
 
 DONE_DIR = "_done"
 REVIEW_DIR = "_revisar"
@@ -75,7 +76,7 @@ _SHA1 = re.compile(r"^\s*SHA1:\s*([0-9a-f]{40})\s*$", re.IGNORECASE | re.MULTILI
 _WILDCARDS = re.compile(r"([\\*?\[\]{}])")
 
 
-class InboxError(Exception):
+class InboxError(UsageError):
     """The run cannot start (bad layout, no DATs). Per-item problems are reported instead."""
 
 

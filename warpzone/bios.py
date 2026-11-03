@@ -28,8 +28,9 @@ from pathlib import Path
 from typing import Any
 
 from warpzone.config import Config
+from warpzone.errors import UsageError
+from warpzone.paths import expand_home
 from warpzone.profiles import Profile
-from warpzone.provision import expand_home
 
 CHUNK = 1024 * 1024
 KEYS_SCAN_BYTES = 8 * 1024 * 1024  # a keys file is read this far, to see what it looks like
@@ -54,7 +55,7 @@ _KEY_32 = re.compile(r"^[0-9a-fA-F]{32}(?:[\s#]|$)")
 _KEY = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 
 
-class BiosError(Exception):
+class BiosError(UsageError):
     pass
 
 

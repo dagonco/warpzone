@@ -54,7 +54,7 @@ class FindRuleTests(unittest.TestCase):
 
     def test_a_file_it_does_not_understand_is_refused(self) -> None:
         for text in ("not xml", "<ruleList/>", RULES.replace("SHADPS4", "OTHER")):
-            with self.assertRaises(shadps4.ConfigError, msg=text):
+            with self.assertRaises(shadps4.Shadps4ConfigError, msg=text):
                 shadps4.point_find_rule(text, "SHADPS4", SCRIPT)
 
 

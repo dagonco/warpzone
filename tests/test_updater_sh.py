@@ -23,7 +23,7 @@ from typing import ClassVar
 
 from support import FakeProc
 from warpzone import settings_state
-from warpzone.selfupdate import tag_key
+from warpzone.versions import tag_key
 
 UPDATER = Path(__file__).resolve().parent.parent / "warpzone" / "data" / "updater.sh"
 NOW = 1_700_000_000
@@ -1528,7 +1528,7 @@ class OrderTests(UpdaterCase):
     def valid_best_first(self) -> list[str]:
         return sorted((t for t in self.TAGS if tag_key(t) is not None), key=tag_key, reverse=True)
 
-    def test_the_order_is_the_one_of_selfupdate_tag_key(self) -> None:
+    def test_the_order_is_the_one_of_versions_tag_key(self) -> None:
         for shell in SHELLS:
             with self.subTest(shell=shell):
                 proc = subprocess.run(

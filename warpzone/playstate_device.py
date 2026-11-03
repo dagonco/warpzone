@@ -15,6 +15,7 @@ from pathlib import Path
 
 from warpzone import artwork, esde, playstate, settings_state
 from warpzone.model import ESDE_ID
+from warpzone.paths import expand_home
 from warpzone.playstate import Key, Ledger, LedgerError, Plan, PlayStateError, Seen
 from warpzone.profiles import Profile
 
@@ -22,9 +23,7 @@ Say = Callable[[str], None]
 
 
 def _expand(path: str, home: Path) -> Path:
-    if path == "~":
-        return home
-    return home / path[2:] if path.startswith("~/") else Path(path)
+    return Path(expand_home(path, home))
 
 
 def folder(profile: Profile, home: Path) -> Path | None:

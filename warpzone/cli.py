@@ -23,6 +23,7 @@ from warpzone.config import (
     load_config,
     load_inbox_settings,
 )
+from warpzone.errors import EXIT_DEFERRED, EXIT_OK, EXIT_RUNTIME, EXIT_USAGE, WarpzoneError
 from warpzone.model import ModelError
 from warpzone.profiles import Profile, ProfileError, available_profiles, load_profile
 
@@ -30,12 +31,8 @@ from warpzone.profiles import Profile, ProfileError, available_profiles, load_pr
 # client) is imported inside the command that needs it, so `settings apply`, which ES-DE runs
 # at every start, loads none of it (see "Speed" in docs/design.md).
 if TYPE_CHECKING:
-    from warpzone.provision import Reporter
+    from warpzone.report import Reporter
     from warpzone.syncthing import Client
-
-EXIT_OK, EXIT_RUNTIME, EXIT_USAGE = 0, 1, 2
-# `provision device --unattended`: a write waits for the menu to close; try again later.
-EXIT_DEFERRED = 3
 
 
 def _webhook_url(value: str) -> str:
@@ -508,7 +505,7 @@ def _settings(args: argparse.Namespace, cfg: Config, profiles: dict[str, Profile
 
 def _frontend(args: argparse.Namespace, cfg: Config, profiles: dict[str, Profile]) -> int:
     from warpzone import provision
-    from warpzone.provision import Reporter
+    from warpzone.report import Reporter
 
     name = _device(cfg, args.name) if args.name else None
     client: Client | None = None
@@ -623,7 +620,7 @@ def _run(args: argparse.Namespace) -> int:
     if args.command == "links":  # and so does this one
         return _links(args, *_load(args))
     from warpzone import doctor, provision, prune
-    from warpzone.provision import Reporter
+    from warpzone.report import Reporter
 
     rep = Reporter(print, warn_sink=_eprint)
     if args.command == "self-update":  # needs no config
@@ -727,21 +724,6 @@ def _run(args: argparse.Namespace) -> int:
     return EXIT_DEFERRED if args.unattended and rep.deferred else EXIT_OK
 
 
-def _late_error_code(exc: Exception) -> int | None:
-    """Exit code for an error of a module that is imported on demand, None for any other."""
-    from warpzone.bios import BiosError
-    from warpzone.inbox import InboxError
-    from warpzone.provision import ProvisionError
-    from warpzone.prune import PruneError
-    from warpzone.syncthing import SyncthingError
-
-    if isinstance(exc, (BiosError, InboxError)):
-        return EXIT_USAGE
-    if isinstance(exc, (SyncthingError, ProvisionError, PruneError)):
-        return EXIT_RUNTIME
-    return None
-
-
 def main(argv: Sequence[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
     try:
@@ -751,15 +733,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.command == "settings" and args.settings_command == "apply" and not args.dry_run:
             settings.record_refused_apply(settings_state.state_dir(), EXIT_USAGE)
         return EXIT_USAGE
-    except (localst.LocalSyncthingError, settings.SettingsError) as exc:
+    except WarpzoneError as exc:
         _eprint(f"warpzone: error: {exc}")
-        return EXIT_RUNTIME
-    except Exception as exc:
-        code = _late_error_code(exc)  # the errors of the modules imported on demand
-        if code is None:
-            raise
-        _eprint(f"warpzone: error: {exc}")
-        return code
+        return exc.exit_code
     except KeyboardInterrupt:
         _eprint("warpzone: interrupted")
         return 130

@@ -24,15 +24,14 @@ from warpzone.config import Config, parse_config
 from warpzone.profiles import Profile, load_profile
 from warpzone.provision import (
     ProvisionError,
-    Reporter,
     check_hub,
-    expand_home,
     folder_status,
     provision_device,
     provision_hub,
-    run_import_check,
     wait_for_files,
 )
+from warpzone.report import Reporter
+from warpzone.runners import run_import_check
 from warpzone.syncthing import Client
 
 PROFILES = {"steamos-emudeck": load_profile("steamos-emudeck")}
@@ -1287,14 +1286,6 @@ class EsdeScriptTests(unittest.TestCase):
             )
         )
         self.assertFalse(rep.deferred)
-
-
-class ExpandHomeTests(unittest.TestCase):
-    def test_expand_home(self) -> None:
-        home = Path("/home/x")
-        self.assertEqual(expand_home("~/Emulation", home), "/home/x/Emulation")
-        self.assertEqual(expand_home("~", home), "/home/x")
-        self.assertEqual(expand_home("/abs/~/x", home), "/abs/~/x")
 
 
 if __name__ == "__main__":

@@ -12,10 +12,11 @@ import tomllib
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 
-from .profiles import Profile
-from .settings_formats import Value, is_builtin_secret, match
-from .tomlw import key as toml_key
-from .tomlw import scalar as toml_scalar
+from warpzone.errors import WarpzoneError
+from warpzone.profiles import Profile
+from warpzone.settings_formats import Value, is_builtin_secret, match
+from warpzone.tomlw import key as toml_key
+from warpzone.tomlw import scalar as toml_scalar
 
 LAYER_FORMAT = 1
 HEADER = "# Written by warpzone settings capture. Edit on the hub only; comments are not kept."
@@ -27,7 +28,7 @@ _CONFLICT_MARK = ".sync-conflict-"
 EntryKey = tuple[str, str]
 
 
-class LayerError(Exception):
+class LayerError(WarpzoneError):
     """A layer cannot be used. `errors` lists every problem found."""
 
     def __init__(self, errors: list[str]) -> None:

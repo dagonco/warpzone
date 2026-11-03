@@ -8,6 +8,7 @@ from typing import Any
 
 from warpzone import artwork, ignores
 from warpzone.config import Config, Device
+from warpzone.errors import UsageError
 from warpzone.profiles import Artwork, Profile
 
 # Staggered versioning keeps 30 days of history (maxAge is in seconds).
@@ -21,7 +22,7 @@ ESDE_ID = "wz-esde"
 PLAY_STATE_ID = "wz-play-state"
 
 
-class ModelError(Exception):
+class ModelError(UsageError):
     pass
 
 

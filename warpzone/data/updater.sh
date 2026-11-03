@@ -148,7 +148,7 @@ pad9() {
 	P=${P#"${P%?????????}"}
 }
 
-# rel_key TAG: RK is a key that sorts, as plain text, like selfupdate.tag_key orders the tag
+# rel_key TAG: RK is a key that sorts, as plain text, like versions.tag_key orders the tag
 # vX.Y.Z or vX.Y.ZrcN (v0.3.0rc1 < v0.3.0rc2 < v0.3.0, the numbers as numbers); fails for
 # any other spelling. RK_NUM is the part of the key that is the three numbers.
 RK=
@@ -190,7 +190,7 @@ is_release_tag() {
 	rel_key "$1"
 }
 
-# ver_key VERSION: VK is the key of a package version, as version_key gives it: an rcN or a
+# ver_key VERSION: VK is the key of a package version, as versions.version_key gives it: an rcN or a
 # plain release as for a tag, any other suffix before every rcN, and one that cannot be read
 # before all.
 VK=

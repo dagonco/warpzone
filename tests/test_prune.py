@@ -11,7 +11,6 @@ from unittest import mock
 from support import API_KEY, DECK_ID, DECK_LIBRARY_IGNORES, FakeSyncthing, make_config
 from test_cli import run, write_config
 from warpzone.profiles import load_profile
-from warpzone.provision import Reporter
 from warpzone.prune import (
     Entry,
     FolderReport,
@@ -24,6 +23,7 @@ from warpzone.prune import (
     prune_device,
     rescan,
 )
+from warpzone.report import Reporter
 from warpzone.syncthing import Client
 
 PROFILE = load_profile("steamos-emudeck")

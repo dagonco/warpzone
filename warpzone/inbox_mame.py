@@ -33,6 +33,7 @@ from typing import IO
 from xml.sax.saxutils import escape, unescape
 
 from warpzone import inbox
+from warpzone.errors import WarpzoneError
 from warpzone.inbox import Context, InboxError, ItemFailure, ItemResult, Options, UnitResult
 
 SYSTEM = "mame"  # roms/<system>/ where arcade sets live
@@ -70,7 +71,7 @@ Key = tuple[int, str]  # (size, crc32 as 8 lower-case hex digits)
 Support = Callable[[str], "frozenset[Key] | None"]  # zip name -> its members, None if absent
 
 
-class GamelistError(Exception):
+class GamelistError(WarpzoneError):
     """The ES-DE gamelist cannot be updated; the message says why."""
 
 

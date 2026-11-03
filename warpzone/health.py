@@ -24,7 +24,10 @@ from pathlib import Path
 from warpzone import artwork, esde, localst, settings, settings_state, updatetimer
 from warpzone.config import Config, ConfigError, Device
 from warpzone.model import ModelError
+from warpzone.paths import expand_home
 from warpzone.profiles import Profile, ProfileError
+from warpzone.report import Reporter
+from warpzone.runners import run_import_check, run_systemctl
 from warpzone.syncthing import Client, scrub
 
 # What ES-DE gives each of its startup scripts (`timeout 15` in the script), and so what a dry
@@ -84,7 +87,7 @@ def expected_files(device: Device, profile: Profile, home: Path) -> list[Expecte
     folders = device.folders
     found: list[Expected] = []
     if "esde" in profile.paths:
-        esde_dir = Path(_expand(profile.paths["esde"], home))
+        esde_dir = Path(expand_home(profile.paths["esde"], home))
         for group, name, needed in (
             ("settings", esde.SCRIPT_NAME, True),
             ("library", esde.LINKS_SCRIPT, bool(profile.links)),
@@ -167,25 +170,7 @@ def render(finding: Finding) -> str:
     return f"{finding.status:<5} {finding.name}: {finding.detail}"
 
 
-def _expand(path: str, home: Path) -> str:
-    if path == "~":
-        return str(home)
-    return str(home / path[2:]) if path.startswith("~/") else path
-
-
 # ------------------------------------------------------------------ the edge
-
-
-def _import_check(python: str) -> bool:
-    from warpzone.provision import run_import_check
-
-    return run_import_check(python)
-
-
-def _systemctl(command: Sequence[str]) -> tuple[int, str]:
-    from warpzone.provision import run_systemctl
-
-    return run_systemctl(command)
 
 
 @dataclass
@@ -198,8 +183,8 @@ class Probes:
     # The local Syncthing, or None when this machine has none (it raises when `--syncthing-config`
     # names one that is not usable).
     local: Callable[[], localst.LocalSyncthing | None] = lambda: None
-    import_check: Callable[[str], bool] = _import_check
-    systemctl: Callable[[Sequence[str]], tuple[int, str]] = _systemctl
+    import_check: Callable[[str], bool] = run_import_check
+    systemctl: Callable[[Sequence[str]], tuple[int, str]] = run_systemctl
     clock: Callable[[], float] = time.monotonic
 
 
@@ -300,7 +285,7 @@ def _run_step(
         local = probes.local()
         if local is not None:
             secrets.append(local.api_key)
-        rep = provision.Reporter(_quiet)
+        rep = Reporter(_quiet)
         provision.refresh_artwork(
             cfg,
             name,

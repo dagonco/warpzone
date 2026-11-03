@@ -434,6 +434,105 @@ class SettingsCliTests(unittest.TestCase):
                 self.assertEqual(len(fake.requests), seen)
 
 
+class ExitCodeTests(unittest.TestCase):
+    """What `main` answers when a command fails with one of the project's errors."""
+
+    def fail_with(self, exc: BaseException) -> tuple[int, str]:
+        with mock.patch("warpzone.cli._run", side_effect=exc):
+            code, _, err = run("status")
+        return code, err
+
+    def test_a_configuration_problem_exits_2_and_says_so(self) -> None:
+        from warpzone.config import ConfigError
+        from warpzone.model import ModelError
+        from warpzone.profiles import ProfileError
+
+        for cls in (ConfigError, ProfileError, ModelError):
+            with self.subTest(cls.__name__):
+                code, err = self.fail_with(cls("bad"))
+                self.assertEqual(code, 2)
+                self.assertEqual(err, "warpzone: config error: bad\n")
+
+    def test_the_usage_errors_of_the_commands_exit_2(self) -> None:
+        from warpzone.bios import BiosError
+        from warpzone.inbox import InboxError
+
+        for cls in (BiosError, InboxError):
+            with self.subTest(cls.__name__):
+                code, err = self.fail_with(cls("bad"))
+                self.assertEqual(code, 2)
+                self.assertEqual(err, "warpzone: error: bad\n")
+
+    def test_the_runtime_errors_exit_1(self) -> None:
+        from warpzone.artwork import ArtworkError
+        from warpzone.localst import LocalSyncthingError
+        from warpzone.provision import ProvisionError
+        from warpzone.prune import PruneError
+        from warpzone.settings import SettingsError
+        from warpzone.shadps4 import Shadps4ConfigError
+        from warpzone.syncthing import SyncthingError
+
+        for cls in (
+            ArtworkError,
+            LocalSyncthingError,
+            ProvisionError,
+            PruneError,
+            SettingsError,
+            Shadps4ConfigError,
+            SyncthingError,
+        ):
+            with self.subTest(cls.__name__):
+                code, err = self.fail_with(cls("bad"))
+                self.assertEqual(code, 1)
+                self.assertEqual(err, "warpzone: error: bad\n")
+
+    def test_every_error_class_of_the_project_carries_its_exit_code(self) -> None:
+        import importlib
+        import pkgutil
+
+        import warpzone
+        from warpzone.errors import EXIT_RUNTIME, EXIT_USAGE, WarpzoneError
+
+        usage = {"BiosError", "ConfigError", "InboxError", "ModelError", "ProfileError"}
+        seen = set()
+        for info in pkgutil.iter_modules(warpzone.__path__):
+            if info.name == "__main__":
+                continue  # importing it runs the command line
+            module = importlib.import_module(f"warpzone.{info.name}")
+            for name, obj in vars(module).items():
+                if (
+                    isinstance(obj, type)
+                    and issubclass(obj, WarpzoneError)
+                    and obj.__module__ == module.__name__
+                    and obj.__name__ == name
+                    and obj not in (WarpzoneError,)
+                ):
+                    seen.add(name)
+                    if name in usage or name == "UsageError":
+                        self.assertEqual(obj.exit_code, EXIT_USAGE, name)
+                    else:
+                        self.assertEqual(obj.exit_code, EXIT_RUNTIME, name)
+        self.assertTrue(usage <= seen, usage - seen)
+
+    def test_two_errors_do_not_share_a_name_across_modules(self) -> None:
+        from warpzone import config, shadps4
+
+        self.assertIsNot(shadps4.Shadps4ConfigError, config.ConfigError)
+        self.assertFalse(issubclass(shadps4.Shadps4ConfigError, config.ConfigError))
+
+    def test_ctrl_c_exits_130_without_a_traceback(self) -> None:
+        code, err = self.fail_with(KeyboardInterrupt())
+        self.assertEqual(code, 130)
+        self.assertEqual(err, "warpzone: interrupted\n")
+
+    def test_an_error_that_is_not_the_projects_still_raises(self) -> None:
+        with (
+            mock.patch("warpzone.cli._run", side_effect=RuntimeError("bug")),
+            self.assertRaises(RuntimeError),
+        ):
+            run("status")
+
+
 if __name__ == "__main__":
     unittest.main()
 

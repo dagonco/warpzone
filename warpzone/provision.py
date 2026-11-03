@@ -2,16 +2,13 @@
 
 from __future__ import annotations
 
-import contextlib
 import dataclasses
 import os
-import signal
 import subprocess
 import sys
 import tempfile
 import time
 from collections.abc import Callable, Iterable, Sequence
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -28,50 +25,28 @@ from warpzone import (
     updatetimer,
 )
 from warpzone.config import DEFAULT_WAIT_SECONDS, HUB_WAIT_SECONDS, Config, Device
+from warpzone.errors import WarpzoneError
 from warpzone.model import ESDE_ID, MEDIA_ID, FolderSpec, device_specs, hub_specs
+from warpzone.paths import expand_home
 from warpzone.profiles import Profile
+from warpzone.report import Reporter
+from warpzone.runners import (
+    FlatpakRunner,
+    ImportCheck,
+    SystemctlRunner,
+    run_flatpak,
+    run_import_check,
+    run_script_check,
+    run_systemctl,
+    run_user_systemctl,
+)
 from warpzone.syncthing import Client, SyncthingError
 
 PREFIX = "wz-"
 
 
-class ProvisionError(Exception):
+class ProvisionError(WarpzoneError):
     pass
-
-
-@dataclass
-class Reporter:
-    out: Callable[[str], None] = print
-    warnings: list[str] = field(default_factory=list)
-    warn_sink: Callable[[str], None] | None = None
-    # A write was held back because the menu (or an emulator) is open: an unattended run
-    # reports it to its caller as "try again later" instead of "done".
-    deferred: bool = False
-    _notes: dict[str, list[str]] = field(default_factory=dict)
-
-    def note(self, folder_id: str, text: str) -> None:
-        """Collect what happened to one folder; `flush` prints it as a single line."""
-        self._notes.setdefault(folder_id, []).append(text)
-
-    def flush(self, folder_id: str) -> None:
-        notes = self._notes.pop(folder_id, [])
-        self.out(f"{folder_id}: {', '.join(notes) if notes else 'unchanged'}")
-
-    def defer(self) -> None:
-        self.deferred = True
-
-    def warn(self, message: str) -> None:
-        self.warnings.append(message)
-        if self.warn_sink:
-            self.warn_sink(f"warning: {message}")
-
-
-def expand_home(path: str, home: Path) -> str:
-    if path == "~":
-        return str(home)
-    if path.startswith("~/"):
-        return str(home / path[2:])
-    return path
 
 
 def _same_path(a: str, b: str) -> bool:
@@ -544,23 +519,6 @@ def _create_target(spec: FolderSpec, dry_run: bool, rep: Reporter) -> bool:
     return True
 
 
-FlatpakRunner = Callable[[Sequence[str]], tuple[int, str]]
-
-
-def run_flatpak(command: Sequence[str]) -> tuple[int, str]:
-    """(exit code, stdout and stderr) of a `flatpak` command; raises OSError if it cannot run."""
-    proc = subprocess.run(
-        list(command),
-        capture_output=True,
-        text=True,
-        errors="replace",
-        timeout=60,
-        stdin=subprocess.DEVNULL,
-        check=False,
-    )
-    return proc.returncode, (proc.stdout or "") + (proc.stderr or "")
-
-
 RESTART_SYNCTHING = (
     "restart Syncthing for this to take effect (`systemctl --user restart syncthing`, or "
     "quit and reopen SyncThingy)"
@@ -628,32 +586,6 @@ def ensure_flatpak_access(
         return
     rep.out(f"syncthing flatpak: granted {names}")
     rep.warn(RESTART_SYNCTHING)
-
-
-ImportCheck = Callable[[str], bool]
-
-
-def run_import_check(python: str) -> bool:
-    """Whether `python` imports warpzone from outside the current folder.
-
-    Run from `/` and without the variables the startup script drops, so a clone in the
-    current folder or on PYTHONPATH does not make an interpreter look good that ES-DE's
-    script could not use.
-    """
-    env = {k: v for k, v in os.environ.items() if k not in ("PYTHONPATH", "PYTHONHOME")}
-    try:
-        proc = subprocess.run(
-            [python, "-c", "import warpzone"],
-            cwd="/",
-            env=env,
-            capture_output=True,
-            timeout=60,
-            stdin=subprocess.DEVNULL,
-            check=False,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return False
-    return proc.returncode == 0
 
 
 def _write_script(path: Path, text: str, mode: int = 0o755) -> None:
@@ -906,38 +838,9 @@ def _install_startup_script(
     _enable_event_scripts(name, esde_dir, rep, dry_run=dry_run, proc=proc, state_root=root)
 
 
-def run_systemctl(command: Sequence[str]) -> tuple[int, str]:
-    """(exit code, stdout and stderr) of a `systemctl` command; raises OSError if it cannot run."""
-    return run_flatpak(command)
-
-
 UPDATER_SOURCE = selfupdate.UPDATER_SOURCE
 # `sh -n` and the script's `selftest` each get this long; the selftest takes a few seconds.
 UPDATER_CHECK_SECONDS = 120
-
-
-def run_script_check(command: Sequence[str], timeout: float) -> tuple[int, str]:
-    """(exit code, output) of a command that is cut off after `timeout` seconds, with all
-    its children: its output goes to a file, so a child that outlives it cannot hold a pipe
-    open. The exit code is 124 when it ran out of time."""
-    with tempfile.TemporaryFile() as out:
-        proc = subprocess.Popen(
-            list(command),
-            stdin=subprocess.DEVNULL,
-            stdout=out,
-            stderr=subprocess.STDOUT,
-            start_new_session=True,
-        )
-        try:
-            code = proc.wait(timeout)
-        except subprocess.TimeoutExpired:
-            with contextlib.suppress(OSError):
-                os.killpg(proc.pid, signal.SIGKILL)
-            proc.wait()
-            code = 124
-        out.seek(0)
-        text = out.read().decode("utf-8", errors="replace")
-    return code, text
 
 
 def _read_text(path: Path) -> str | None:
@@ -1384,7 +1287,7 @@ def ensure_shadps4_dirs(
         seen += 1
         try:
             gap = shadps4.missing(kind, text, wants)
-        except shadps4.ConfigError as exc:
+        except shadps4.Shadps4ConfigError as exc:
             rep.warn(f"{path} was left alone: {exc}")
             continue
         if gap:
@@ -1412,7 +1315,7 @@ def ensure_shadps4_dirs(
             return
         try:
             new = shadps4.apply(kind, text, wants)
-        except shadps4.ConfigError as exc:
+        except shadps4.Shadps4ConfigError as exc:
             rep.warn(f"{path} was left alone: {exc}")
             continue
         if not settings_state.atomic_write(path, new.encode("utf-8"), expect=before):
@@ -1500,7 +1403,7 @@ def ensure_shadps4_launch(
         rep.out(f"shadps4: wrote the launch script {script}")
     try:
         new = shadps4.point_find_rule(rules, launch.emulator, str(script))
-    except shadps4.ConfigError as exc:
+    except shadps4.Shadps4ConfigError as exc:
         rep.warn(f"{path} was left alone: {exc}")
         return
     if new == rules:
@@ -1714,24 +1617,6 @@ def ensure_gamelists(
             rep.out(f"gamelists: wrote {item.path} ({item.games} games, was {item.state})")
     if not dry_run:
         rep.out(f"gamelists: {len(plan.items) - len(pending)} current")
-
-
-SystemctlRunner = Callable[[Sequence[str]], bool]
-
-
-def run_user_systemctl(args: Sequence[str]) -> bool:
-    """Whether `systemctl --user <args>` succeeded."""
-    try:
-        proc = subprocess.run(
-            ["systemctl", "--user", *args],
-            capture_output=True,
-            timeout=60,
-            stdin=subprocess.DEVNULL,
-            check=False,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return False
-    return proc.returncode == 0
 
 
 def ensure_artwork_timer(

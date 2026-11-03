@@ -9,7 +9,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from .selfupdate import tag_key
+from warpzone.errors import UsageError
+from warpzone.versions import tag_key
 
 # Syncthing applies a changed whitelist only on a full scan of the folder, and a
 # freshly synced whitelist file does not trigger one reliably (see design.md).
@@ -30,7 +31,7 @@ _DEVICE_ID_RE = re.compile(r"^[A-Z2-7]{7}(-[A-Z2-7]{7}){7}$")
 _NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 
 
-class ConfigError(Exception):
+class ConfigError(UsageError):
     pass
 
 
