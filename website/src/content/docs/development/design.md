@@ -1,4 +1,6 @@
-# warpzone design
+---
+title: "warpzone design"
+---
 
 warpzone keeps one game library on a home server (the **hub**, typically a NAS)
 and delivers it to every console you own (the **devices**: Steam Deck, Steam
@@ -96,7 +98,7 @@ Folder-level settings:
 
 - Save folders, `wz-settings` and `wz-play-state` on the hub: versioning `staggered`, `maxAge` 30 days.
 - Everything else: no versioning (the hub is the authority; filesystem
-  snapshots on the hub are recommended in [safety.md](safety.md) instead).
+  snapshots on the hub are recommended in [Safety](/warpzone/operation/safety/) instead).
 - `fsWatcherEnabled: true` everywhere.
 - `ignorePerms: true` on every folder of a device whose profile sets `ignore_perms`
   (the library sits on exFAT, which has no POSIX permissions). It is set on the device's
@@ -365,7 +367,7 @@ is the same on both ends, so the folder cannot be shared once and received at
 two paths; two hub folders over one directory would share its `.stfolder` and
 `.stignore` and scan and index the same files twice, which is the overlap the
 placements exist to avoid. Giving Ryujinx its own hub copy (`bios/ryujinx/keys`)
-would duplicate the keys. So the [EmuDeck guide](emudeck.md#manual-steps) tells the user to copy the
+would duplicate the keys. So the [EmuDeck guide](/warpzone/guides/emudeck/#manual-steps) tells the user to copy the
 two files once. Ryujinx firmware is installed from the emulator (Tools > Install
 Firmware, pointing at the Eden firmware folder), not delivered as files, like
 the PS3 firmware in RPCS3.
@@ -2250,7 +2252,7 @@ do.
 | `provision hub --additive` | Not implemented |
 
 **Tag spelling.** A release is `vX.Y.Z` and a release candidate is `vX.Y.ZrcN`: the tag is
-`v` plus `__version__`, in the PEP 440 spelling that [releasing.md](releasing.md) requires
+`v` plus `__version__`, in the PEP 440 spelling that [Releasing](/warpzone/development/releasing/) requires
 (`v0.3.0-rc1` is not a tag warpzone knows). They order as `v0.3.0rc1` < `v0.3.0rc2` <
 `v0.3.0`, and every number is compared as a number (`rc10` is after `rc2`).
 `versions.tag_key` returns that key, or None for any other spelling; `version_key` gives
@@ -2684,7 +2686,7 @@ refused. Trust is by first use: the first release that
 carries keys is taken without a signature check (nothing on the device yet says whom to
 trust), and so is any release before it; from then on a release has to be signed by keys the
 device already trusts, which includes the release that rotates them.
-[releasing.md](releasing.md) says how to sign.
+[Releasing](/warpzone/development/releasing/) says how to sign.
 
 **Never unattended.** `prune --apply`, `inbox --apply` and `settings capture`. The shadPS4
 version is the user's choice and is only read. `ensure_flatpak_access` asks for a Syncthing
@@ -2780,7 +2782,8 @@ templates/
 examples/config.example.toml
 examples/bios.example.toml
 tests/               unittest; unit tests + e2e (two real Syncthing instances)
-docs/design.md       this file
+website/             documentation site (Starlight); this file is
+                     website/src/content/docs/development/design.md
 ```
 
 `model.py` is pure: config + profiles in, list of desired folder specs out. All

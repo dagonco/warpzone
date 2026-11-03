@@ -1,4 +1,6 @@
-# Releasing
+---
+title: "Releasing"
+---
 
 Releases are cut by pushing a `vX.Y.Z` tag on `main`. The tag triggers `.github/workflows/release.yml`, which verifies, builds and publishes the GitHub Release. Nothing is uploaded to PyPI.
 
@@ -20,7 +22,7 @@ Versions follow [SemVer](https://semver.org/). The single source of the version 
    git push origin vX.Y.Z
    ```
 
-8. Watch the `release` workflow in the Actions tab, then open the release and check its notes and assets. Devices with the updater timer ([self-update.md](self-update.md)) fetch once a day and check out the new tag at the tick after that.
+8. Watch the `release` workflow in the Actions tab, then open the release and check its notes and assets. Devices with the updater timer ([Updating a device](/warpzone/operation/self-update/)) fetch once a day and check out the new tag at the tick after that.
 
 ## What the workflow does
 

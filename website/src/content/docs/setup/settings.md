@@ -1,4 +1,6 @@
-# Emulator settings
+---
+title: "Emulator settings"
+---
 
 How to keep the same language, region and graphics choices on every console, without copying whole config files.
 
@@ -26,7 +28,7 @@ format = 1
 savestate_auto_save = "true"
 ```
 
-Each table is `[<emulator>.<file>]`, and each entry is a key of that file with its value. The device layer wins over common, and a device cannot unset a common key, only give it another value. Removing a key from the layers stops managing it: the console keeps the value last written. `capture` writes these files for you; you can also edit them on the hub. [design.md](design.md#emulator-settings) has the full format.
+Each table is `[<emulator>.<file>]`, and each entry is a key of that file with its value. The device layer wins over common, and a device cannot unset a common key, only give it another value. Removing a key from the layers stops managing it: the console keeps the value last written. `capture` writes these files for you; you can also edit them on the hub. [the design document](/warpzone/development/design/#emulator-settings) has the full format.
 
 The folder is two-way (unlike `tools`, which is receive-only on devices), because captures are written on a console. The hub keeps 30 days of versions of every layer, which is the history of each change.
 
@@ -34,7 +36,7 @@ Eleven emulators are covered by the `steamos-emudeck` profile: Eden, RetroArch (
 
 ## Set up
 
-1. Add `"settings"` to `folders` for each device in the config (see [`examples/config.example.toml`](../examples/config.example.toml)).
+1. Add `"settings"` to `folders` for each device in the config (see [`examples/config.example.toml`](https://github.com/dagonco/warpzone/blob/main/examples/config.example.toml)).
 2. On the hub: `warpzone provision hub`. On each console: `warpzone provision device <name>`.
 3. Wait until Syncthing reports `wz-settings` idle and in sync on the console. Capture refuses to run before that.
 
@@ -158,7 +160,7 @@ To undo a bad apply, copy the file back from `backups/`, with the emulator close
 
 Some settings live outside the config files, so the profile keeps a few whole files on the hub, in `settings/files/<emulator>/<id>`, and `apply` delivers them like keys. The xemu EEPROM is one of them: it holds the language and video mode, but also the serial number, MAC address and hard disk key. Sharing it gives every console the same Xbox identity, with the same serial and signing key.
 
-xemu's hard disk image stays per console and is not synced. A console that already had its own EEPROM may therefore refuse saves signed with the old key that sit inside its own xemu HDD image, after the first apply. If you care about those saves, leave the EEPROM out: do not choose it at capture, or discard it. See also [emudeck.md](emudeck.md).
+xemu's hard disk image stays per console and is not synced. A console that already had its own EEPROM may therefore refuse saves signed with the old key that sit inside its own xemu HDD image, after the first apply. If you care about those saves, leave the EEPROM out: do not choose it at capture, or discard it. See also [the EmuDeck guide](/warpzone/guides/emudeck/).
 
 ## Troubleshooting
 
@@ -173,4 +175,4 @@ xemu's hard disk image stays per console and is not synced. A console that alrea
 | A change made in RetroArch never shows up in `capture` | EmuDeck turns `config_save_on_exit` off, so RetroArch forgets menu changes on exit. Use Main Menu > Configuration File > Save Current Configuration before you quit. |
 | `capture` or `apply` refuses on macOS | Both need `/proc` to detect running emulators, so they run on Linux consoles only. |
 
-`warpzone doctor` checks the layers, the startup script and the last apply ([doctor.md](doctor.md)).
+`warpzone doctor` checks the layers, the startup script and the last apply ([the doctor guide](/warpzone/operation/doctor/)).
