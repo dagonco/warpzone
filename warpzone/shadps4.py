@@ -18,12 +18,14 @@ import xml.etree.ElementTree as ET
 from collections.abc import Sequence
 from typing import Any
 
+from warpzone.errors import WarpzoneError
+
 JSON, TOML = "json", "toml"
 _HEADER = re.compile(r"^\s*\[([^\[\]]+)\]\s*(?:#.*)?$")
 _KEY = re.compile(r"^[ \t]*installDirs[ \t]*=[ \t]*", re.MULTILINE)
 
 
-class ConfigError(Exception):
+class Shadps4ConfigError(WarpzoneError):
     """The file is not one this module can read or edit safely."""
 
 
@@ -46,15 +48,15 @@ def _json_load(text: str) -> tuple[dict[str, Any], dict[str, Any], list[dict[str
     try:
         data = json.loads(text)
     except ValueError as exc:
-        raise ConfigError(f"not valid JSON ({exc})") from exc
+        raise Shadps4ConfigError(f"not valid JSON ({exc})") from exc
     general = data.get("General") if isinstance(data, dict) else None
     if not isinstance(general, dict):
-        raise ConfigError("it has no General table")
+        raise Shadps4ConfigError("it has no General table")
     dirs = general.get("install_dirs", [])
     if not isinstance(dirs, list) or not all(
         isinstance(d, dict) and isinstance(d.get("path"), str) for d in dirs
     ):
-        raise ConfigError("General.install_dirs is not a list of {enabled, path} entries")
+        raise Shadps4ConfigError("General.install_dirs is not a list of {enabled, path} entries")
     return data, general, dirs
 
 
@@ -67,7 +69,9 @@ def _json_apply(text: str, wants: Sequence[str]) -> str:
     # A layout other than the one shadPS4 writes would be rewritten wholesale.
     dumped = json.dumps(data, indent=2, ensure_ascii=False)
     if dumped != text.rstrip("\n") and dumped != text.rstrip("\r\n"):
-        raise ConfigError("the file layout is not the one shadPS4 writes, so it was not edited")
+        raise Shadps4ConfigError(
+            "the file layout is not the one shadPS4 writes, so it was not edited"
+        )
     have = _json_enabled(dirs)
     changed = False
     for want in wants:
@@ -93,11 +97,11 @@ def _toml_load(text: str) -> tuple[dict[str, Any], list[str]]:
     try:
         data = tomllib.loads(text)
     except tomllib.TOMLDecodeError as exc:
-        raise ConfigError(f"not valid TOML ({exc})") from exc
+        raise Shadps4ConfigError(f"not valid TOML ({exc})") from exc
     gui = data.get("GUI", {})
     dirs = gui.get("installDirs", []) if isinstance(gui, dict) else None
     if not isinstance(dirs, list) or not all(isinstance(d, str) for d in dirs):
-        raise ConfigError("GUI.installDirs is not a list of strings")
+        raise Shadps4ConfigError("GUI.installDirs is not a list of strings")
     return data, dirs
 
 
@@ -120,7 +124,7 @@ def _array_end(text: str, start: int) -> int:
             if depth == 0:
                 return i
         i += 1
-    raise ConfigError("GUI.installDirs is not closed")
+    raise Shadps4ConfigError("GUI.installDirs is not closed")
 
 
 def _gui_span(text: str) -> tuple[int, int] | None:
@@ -156,7 +160,7 @@ def _toml_apply(text: str, wants: Sequence[str]) -> str:
         key = _KEY.search(text, start, end)
         if key is not None:
             if text[key.end() : key.end() + 1] != "[":
-                raise ConfigError("GUI.installDirs is not an array")
+                raise Shadps4ConfigError("GUI.installDirs is not an array")
             close = _array_end(text, key.end())
             new = text[: key.end()] + value + text[close + 1 :]
         else:
@@ -171,9 +175,9 @@ def _toml_apply(text: str, wants: Sequence[str]) -> str:
     expected.setdefault("GUI", {})["installDirs"] = merged
     try:
         if tomllib.loads(new) != expected:
-            raise ConfigError("the edit would change more than the list, so it was not made")
+            raise Shadps4ConfigError("the edit would change more than the list, so it was not made")
     except tomllib.TOMLDecodeError as exc:
-        raise ConfigError(f"the edit would not read back ({exc})") from exc
+        raise Shadps4ConfigError(f"the edit would not read back ({exc})") from exc
     return new
 
 
@@ -260,24 +264,24 @@ def _find_entry(text: str, emulator: str) -> re.Match[str]:
     try:
         root = ET.fromstring(text.encode())
     except ET.ParseError as exc:
-        raise ConfigError(f"not well-formed XML ({exc})") from exc
+        raise Shadps4ConfigError(f"not well-formed XML ({exc})") from exc
     blocks = [e for e in root.iter("emulator") if e.get("name") == emulator]
     rule = next((r for b in blocks for r in b.iter("rule") if r.get("type") == "staticpath"), None)
     if rule is None or rule.find("entry") is None:
-        raise ConfigError(f"it has no staticpath rule for {emulator}")
+        raise Shadps4ConfigError(f"it has no staticpath rule for {emulator}")
     block = re.search(
         rf'<emulator\b[^>]*\bname\s*=\s*["\']{re.escape(emulator)}["\'][^>]*>.*?</emulator\s*>',
         text,
         re.DOTALL,
     )
     if block is None:
-        raise ConfigError(f"it has no staticpath rule for {emulator}")
+        raise Shadps4ConfigError(f"it has no staticpath rule for {emulator}")
     entry = re.compile(
         r'(<rule\b[^>]*\btype\s*=\s*["\']staticpath["\'][^>]*>.*?<entry>)([^<]*)(</entry>)',
         re.DOTALL,
     ).search(text, block.start(), block.end())
     if entry is None:
-        raise ConfigError(f"it has no staticpath rule for {emulator}")
+        raise Shadps4ConfigError(f"it has no staticpath rule for {emulator}")
     return entry
 
 
@@ -294,5 +298,5 @@ def point_find_rule(text: str, emulator: str, target: str) -> str:
     escaped = target.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
     new = text[: entry.start(2)] + escaped + text[entry.end(2) :]
     if find_rule_target(new, emulator) != target:
-        raise ConfigError("the edit would change more than the entry, so it was not made")
+        raise Shadps4ConfigError("the edit would change more than the entry, so it was not made")
     return new

@@ -26,9 +26,12 @@ from pathlib import Path
 from typing import Any
 
 from warpzone.config import DEFAULT_MAX_GIB, DEFAULT_RESCAN_TIMEOUT, Config
+from warpzone.errors import WarpzoneError
 from warpzone.model import FolderSpec, device_specs
+from warpzone.paths import expand_home
 from warpzone.profiles import Profile
-from warpzone.provision import Reporter, expand_home, in_sync
+from warpzone.provision import in_sync
+from warpzone.report import Reporter
 from warpzone.syncthing import Client, SyncthingError, scrub
 
 GIB = 1024**3
@@ -47,7 +50,7 @@ _TYPE_SYMLINK = "FILE_INFO_TYPE_SYMLINK"
 _TIME = re.compile(r"^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(?:\.(\d+))?(Z|[+-]\d\d:\d\d)$")
 
 
-class PruneError(Exception):
+class PruneError(WarpzoneError):
     pass
 
 

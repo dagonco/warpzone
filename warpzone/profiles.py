@@ -10,6 +10,7 @@ from importlib import resources
 from pathlib import Path
 from typing import Any
 
+from warpzone.errors import UsageError
 from warpzone.shadps4 import kind_of
 
 PATH_KEYS = ("library", "songs", "tools", "media", "esde", "settings", "play_state")
@@ -32,7 +33,7 @@ ARTWORK_SYSTEMS = ("library",)
 _INTERVAL_RE = re.compile(r"^[1-9][0-9]*(min|h)$")
 
 
-class ProfileError(Exception):
+class ProfileError(UsageError):
     pass
 
 

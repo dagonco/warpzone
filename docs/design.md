@@ -2109,9 +2109,8 @@ is one way to install a device, from the clone itself: `git clone` the repositor
 supported device install.
 
 `selfupdate.py` holds what warpzone knows about the script, as pure functions apart from
-`run_tick`: the order of release tags (`version_key`, `tag_key`), where the live copy, the
-settings, the state and the `bad/` folder are (`live_path`, `conf_path`, `state_path`,
-`bad_dir`), `render_conf` and `parse_kv` for the settings file, `updater_abi` and
+`run_tick`: where the live copy, the settings, the state and the `bad/` folder are
+(`live_path`, `conf_path`, `state_path`, `bad_dir`), `render_conf` and `parse_kv` for the settings file, `updater_abi` and
 `install_decision` for renewing the live copy, `parse_bad`, `frontend_names`, and the wrapper
 `run_tick`. The tests use real git repositories for the script and fakes for the rest.
 
@@ -2254,7 +2253,7 @@ do.
 `v` plus `__version__`, in the PEP 440 spelling that [releasing.md](releasing.md) requires
 (`v0.3.0-rc1` is not a tag warpzone knows). They order as `v0.3.0rc1` < `v0.3.0rc2` <
 `v0.3.0`, and every number is compared as a number (`rc10` is after `rc2`).
-`selfupdate.tag_key` returns that key, or None for any other spelling; `version_key` gives
+`versions.tag_key` returns that key, or None for any other spelling; `version_key` gives
 the same key for a package version, so a tag and the version it carries compare equal.
 `parse_tag`, `newest_tag` and `decide` still look at plain releases only.
 
@@ -2594,7 +2593,7 @@ central check of `verify` in `release.yml`. The target is the best valid candida
 higher than the running version. The order is `tag_key`'s: the script builds a text key from
 the three numbers, the stage and the candidate number, each padded to nine digits (a number
 with more digits is not a version it knows), and sorts it; `updater.sh order` prints tags in
-that order, and the tests compare it with `selfupdate.tag_key` and with
+that order, and the tests compare it with `versions.tag_key` and with
 `git -c versionsort.suffix=rc for-each-ref --sort=-v:refname`. A running version that is not
 a release or a candidate (`0.3.0.dev0`) sorts before every candidate of its numbers, as
 `version_key` does. A device never moves to a lower version than the one it runs, except when
@@ -2729,6 +2728,10 @@ warpzone/
   __init__.py        version
   __main__.py        python3 -m warpzone
   cli.py             argparse, exit codes, output
+  errors.py          `WarpzoneError` (every error carries its `exit_code`) and the `EXIT_*` codes
+  paths.py           `expand_home`: `~` against a given home (pure)
+  report.py          `Reporter`: the per-folder notes, warnings and deferred flag a command hands back
+  runners.py         the subprocess edge: flatpak, systemctl, the import check, the cut-off script check
   config.py          private config loading + validation (tomllib), dataclasses
   profiles.py        profile loading + validation
   model.py           folder specs: expands config + profiles into the desired state
@@ -2747,7 +2750,8 @@ warpzone/
   titlelinks.py      symlinks from the library's game folders into an emulator's own (pure plan)
   inbox_n3ds.py      3DS images (`.3ds`, `.cci`): NCSD / NCCH header check, placed as `.cci`
   flatpak.py         the SyncThingy flatpak: app id and the unit's commands
-  selfupdate.py      the updater's side in Python: tag order, paths, settings file, live copy rule, `self-update` wrapper
+  selfupdate.py      the updater's side in Python: paths, settings file, live copy rule, `self-update` wrapper
+  versions.py        order of package versions and release tags (`version_key`, `tag_key`; pure)
   updatetimer.py     the systemd user units that start `updater.sh tick` (pure)
   settings.py        `settings apply`, `capture`, `audit`: loading, prompts, output
   settings_formats.py  format handlers ini, qt-ini, retroarch-cfg, yaml-flat (pure)

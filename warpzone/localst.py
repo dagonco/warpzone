@@ -9,10 +9,11 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from warpzone.errors import WarpzoneError
 from warpzone.flatpak import sandbox_dir
 
 
-class LocalSyncthingError(Exception):
+class LocalSyncthingError(WarpzoneError):
     pass
 
 

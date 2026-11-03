@@ -13,6 +13,8 @@ from dataclasses import dataclass
 from functools import lru_cache
 from typing import Protocol
 
+from warpzone.errors import WarpzoneError
+
 Value = str | int | float | bool
 
 BUILTIN_SECRET_WORDS = ("token", "password", "passwd", "secret", "apikey", "api_key")
@@ -32,7 +34,7 @@ class NotWritable(Exception):
         self.key = key
 
 
-class FormatError(Exception):
+class FormatError(WarpzoneError):
     """The text cannot be parsed (including text that is not UTF-8)."""
 
 
@@ -82,7 +84,7 @@ def handler(name: str) -> Handler:
     if name in _HANDLERS:
         return _HANDLERS[name]
     if name in ("json", "toml"):
-        from . import settings_tree
+        from warpzone import settings_tree
 
         return settings_tree.JSON if name == "json" else settings_tree.TOML
     raise ValueError(f"unknown settings format {name!r}")

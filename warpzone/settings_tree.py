@@ -15,8 +15,8 @@ import tomllib
 from collections.abc import Mapping
 from dataclasses import dataclass
 
-from . import tomlw
-from .settings_formats import FormatError, NotWritable, ReadResult, Value
+from warpzone import tomlw
+from warpzone.settings_formats import FormatError, NotWritable, ReadResult, Value
 
 _BOM = "﻿"
 _SCALARS = (str, int, float, bool)

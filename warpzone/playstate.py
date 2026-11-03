@@ -15,6 +15,7 @@ from datetime import UTC, datetime, tzinfo
 from xml.etree import ElementTree as ET
 
 from warpzone import artwork
+from warpzone.errors import WarpzoneError
 
 VERSION = 1
 # The change time of a favourite a device already had when it first ran: older than any
@@ -36,11 +37,11 @@ _SHARED_FIELDS = ("playcount", "favorite", "lastplayed")
 Key = tuple[str, str]  # hub system, ROM path relative to it
 
 
-class PlayStateError(Exception):
+class PlayStateError(WarpzoneError):
     """A gamelist cannot be edited safely."""
 
 
-class LedgerError(Exception):
+class LedgerError(WarpzoneError):
     """A ledger file cannot be trusted."""
 
 

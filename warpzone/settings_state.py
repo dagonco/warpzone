@@ -22,13 +22,15 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from warpzone.errors import WarpzoneError
+
 BACKUPS_KEPT = 10
 LOG_MAX_BYTES = 1024 * 1024
 TMP_SUFFIX = ".wz-tmp"
 COMM_MAX = 15  # the kernel keeps at most 15 characters of a process name
 
 
-class StateError(Exception):
+class StateError(WarpzoneError):
     """A state file exists but cannot be trusted (corrupt, wrong shape)."""
 
 

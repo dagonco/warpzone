@@ -102,15 +102,15 @@ class JsonTests(unittest.TestCase):
 
     def test_a_file_it_does_not_understand_is_refused(self) -> None:
         for text in ("not json", "[]", '{"General": 3}', '{"Other": {}}', "{}"):
-            with self.assertRaises(shadps4.ConfigError, msg=text):
+            with self.assertRaises(shadps4.Shadps4ConfigError, msg=text):
                 shadps4.missing("json", text, [GAMES])
-        with self.assertRaises(shadps4.ConfigError):
+        with self.assertRaises(shadps4.Shadps4ConfigError):
             shadps4.missing("json", '{"General": {"install_dirs": [3]}}', [GAMES])
 
     def test_a_layout_that_would_be_rewritten_is_refused(self) -> None:
         compact = json.dumps(json.loads(JSON_TEXT))
         self.assertEqual(shadps4.missing("json", compact, [GAMES]), [GAMES])
-        with self.assertRaisesRegex(shadps4.ConfigError, "layout"):
+        with self.assertRaisesRegex(shadps4.Shadps4ConfigError, "layout"):
             shadps4.apply("json", compact, [GAMES])
 
 
@@ -157,7 +157,7 @@ class TomlTests(unittest.TestCase):
 
     def test_a_file_it_does_not_understand_is_refused(self) -> None:
         for text in ("[GUI\ninstallDirs =", '[GUI]\ninstallDirs = "x"\n'):
-            with self.assertRaises(shadps4.ConfigError, msg=text):
+            with self.assertRaises(shadps4.Shadps4ConfigError, msg=text):
                 shadps4.missing("toml", text, [GAMES])
 
     def test_similar_keys_and_sub_tables_are_untouched(self) -> None:

@@ -22,6 +22,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from warpzone import settings_state
+from warpzone.paths import expand_home
 from warpzone.profiles import Profile, TitleLinks
 
 Say = Callable[[str], None]
@@ -164,9 +165,7 @@ class Resolved:
 
 
 def _expand(path: str, home: Path) -> Path:
-    if path == "~":
-        return home
-    return home / path[2:] if path.startswith("~/") else Path(path)
+    return Path(expand_home(path, home))
 
 
 def resolve(profile: Profile, home: Path) -> list[Resolved]:

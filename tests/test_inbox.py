@@ -34,7 +34,7 @@ from warpzone.inbox import (
     unsupported_reason,
     whitelist_line,
 )
-from warpzone.provision import Reporter
+from warpzone.report import Reporter
 
 TODAY = date(2026, 10, 27)
 NES_ROM = b"NES\x1a" + b"adventure" * 100

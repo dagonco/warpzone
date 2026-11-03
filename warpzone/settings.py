@@ -28,6 +28,8 @@ from warpzone import settings_layers as layers_mod
 from warpzone import settings_plan as plan
 from warpzone import settings_state as state
 from warpzone.config import ConfigError
+from warpzone.errors import WarpzoneError
+from warpzone.paths import expand_home
 from warpzone.profiles import DataFile, EmulatorSettings, Profile, SettingsFile
 from warpzone.settings_formats import Value
 from warpzone.settings_layers import Layer, LayerError
@@ -40,7 +42,7 @@ DATA_DIR = "files"
 _SKIP_DIRS = (FOLDER_MARKER, ".stversions")
 
 
-class SettingsError(Exception):
+class SettingsError(WarpzoneError):
     """A settings run cannot go on (no /proc, unreadable folder). Exit code 1."""
 
 
@@ -62,19 +64,11 @@ class Context:
     folder: Path  # the local copy of wz-settings
 
 
-def expand(path: str, home: Path) -> str:
-    if path == "~":
-        return str(home)
-    if path.startswith("~/"):
-        return str(home / path[2:])
-    return path
-
-
 def make_context(device: str, profile: Profile, env: Env) -> Context:
     raw = profile.paths.get("settings")
     if not raw:
         raise ConfigError(f"profile {profile.name!r} has no paths.settings")
-    return Context(env, device, profile, Path(expand(raw, env.home)))
+    return Context(env, device, profile, Path(expand_home(raw, env.home)))
 
 
 def select_emulators(profile: Profile, ids: Iterable[str]) -> list[EmulatorSettings]:
@@ -190,7 +184,7 @@ def _valid_name(name: str) -> bool:
 
 def template_names(template: str, home: Path) -> list[str]:
     """The names for which the templated path exists as a file (every `{name}` is the same)."""
-    parts = expand(template, home).split("/")
+    parts = expand_home(template, home).split("/")
     found: set[str] = set()
 
     def walk(i: int, base: str, name: str | None) -> None:
@@ -236,7 +230,7 @@ def targets_for(
     for spec in emulator.files.values():
         if not spec.templated:
             targets.append(
-                Target(emulator.id, spec.id, spec, Path(expand(spec.path, home)), spec.path)
+                Target(emulator.id, spec.id, spec, Path(expand_home(spec.path, home)), spec.path)
             )
             continue
         names = set(template_names(spec.path, home))
@@ -252,7 +246,7 @@ def targets_for(
                     emulator.id,
                     f"{spec.id}:{name}",
                     spec,
-                    Path(expand(shown, home)),
+                    Path(expand_home(shown, home)),
                     shown,
                 )
             )
@@ -329,7 +323,7 @@ class DataState:
 
 def read_data(ctx: Context, emulator: str, entry: DataFile) -> DataState:
     """The local file of a system data entry and its hub copy, each read once."""
-    path = Path(expand(entry.path, ctx.env.home))
+    path = Path(expand_home(entry.path, ctx.env.home))
     stamp = data = None
     try:
         stamp = state.stamp(path)
@@ -351,7 +345,7 @@ def read_data(ctx: Context, emulator: str, entry: DataFile) -> DataState:
     if hub_data is not None and len(hub_data) > MAX_DATA_BYTES:
         raise FileProblem("hub copy is larger than 1 MiB")
     creatable = bool(entry.create_when) and os.path.isdir(
-        expand(entry.create_when or "", ctx.env.home)
+        expand_home(entry.create_when or "", ctx.env.home)
     )
     return DataState(
         path,

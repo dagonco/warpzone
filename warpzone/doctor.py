@@ -71,9 +71,11 @@ from warpzone.flatpak import (
     show_command,
 )
 from warpzone.model import ModelError
+from warpzone.paths import expand_home
 from warpzone.profiles import Profile, ProfileError, available_profiles, load_profile
 from warpzone.settings_layers import LayerError, conflict_copies, parse_layer, validate
 from warpzone.syncthing import _is_loopback
+from warpzone.versions import tag_key
 
 OK, WARN, FAIL, OPTIONAL = "ok", "warn", "fail", "optional"
 MARKS = {OK: "[ok]", WARN: "[! ]", FAIL: "[!!]", OPTIONAL: "[--]"}
@@ -976,12 +978,6 @@ def check_game_mode(ctx: Context) -> list[Result]:
     return [Result("Game Mode", G_SYNCTHING, status, detail, fix)]
 
 
-def _expand(path: str, home: Path) -> str:
-    if path == "~":
-        return str(home)
-    return str(home / path[2:]) if path.startswith("~/") else path
-
-
 def _shipped_sync_paths() -> tuple[str, ...]:
     """Save and BIOS folders of every shipped profile (with `~`)."""
     paths: list[str] = []
@@ -1009,7 +1005,7 @@ def check_flatpak_access(ctx: Context) -> list[Result]:
     paths = ctx.config.sync_paths or _shipped_sync_paths()
     apps = [
         app
-        for app in app_ids((_expand(path, p.home) for path in paths), p.home)
+        for app in app_ids((expand_home(path, p.home) for path in paths), p.home)
         if p.is_dir(p.home / ".var" / "app" / app)
     ]
     if not apps:
@@ -1353,7 +1349,7 @@ def judge_shadps4_dirs(
     for path, kind, text in present:
         try:
             gap = shadps4.missing(kind, text, wants)
-        except shadps4.ConfigError as exc:
+        except shadps4.Shadps4ConfigError as exc:
             parts.append((WARN, f"{path}: {exc}", "fix the file by hand, or start shadPS4 again"))
             continue
         if gap:
@@ -1395,7 +1391,7 @@ def judge_shadps4_launch(
     else:
         try:
             target = shadps4.find_rule_target(rules_text, emulator)
-        except shadps4.ConfigError as exc:
+        except shadps4.Shadps4ConfigError as exc:
             problems.append(f"{rules_path}: {exc}")
         else:
             if target != script:
@@ -1518,7 +1514,7 @@ def _local_device(
         return None
     here = (folder.get("path") or "").rstrip("/")
     for device in candidates:
-        wanted = _expand(device.profile.paths[path_key], p.home).rstrip("/")
+        wanted = expand_home(device.profile.paths[path_key], p.home).rstrip("/")
         if device.device_id in ids and wanted == here:
             return device
     return None
@@ -1544,7 +1540,7 @@ def check_settings(ctx: Context) -> list[Result]:
         return []
     p = ctx.probes
     profile = device.profile
-    folder = Path(_expand(profile.paths["settings"], p.home))
+    folder = Path(expand_home(profile.paths["settings"], p.home))
 
     def layer_text(name: str) -> str | None:
         path = folder / name
@@ -1564,7 +1560,7 @@ def check_settings(ctx: Context) -> list[Result]:
     results = [Result("Settings layers", G_SETTINGS, *verdict)]
 
     if "esde" in profile.paths:
-        esde_dir = Path(_expand(profile.paths["esde"], p.home))
+        esde_dir = Path(expand_home(profile.paths["esde"], p.home))
         script = esde.script_path(esde_dir)
         found = p.is_file(script)
         interpreter = esde.script_interpreter(p.read_text(script)) if found else None
@@ -1611,12 +1607,12 @@ def check_play_state(ctx: Context) -> list[Result]:
     if device is None:
         return []
     p, profile = ctx.probes, device.profile
-    folder = Path(_expand(profile.paths["play_state"], p.home))
+    folder = Path(expand_home(profile.paths["play_state"], p.home))
     units = p.home / ".config" / "systemd" / "user"
     script = timer = None
     if "esde" in profile.paths:
         path = esde.script_path(
-            Path(_expand(profile.paths["esde"], p.home)), esde.PLAY_STATE_SCRIPT
+            Path(expand_home(profile.paths["esde"], p.home)), esde.PLAY_STATE_SCRIPT
         )
         script = None if p.is_file(path) else str(path)
     if profile.play_state is not None and profile.play_state.refresh is not None:
@@ -1640,10 +1636,10 @@ def check_frontend(ctx: Context) -> list[Result]:
         return []
     p = ctx.probes
     profile = device.profile
-    library = _expand(profile.paths["library"], p.home).rstrip("/")
+    library = expand_home(profile.paths["library"], p.home).rstrip("/")
     results: list[Result] = []
     if (rule := profile.es_systems) is not None:
-        source, override = (Path(_expand(x, p.home)) for x in (rule.source, rule.override))
+        source, override = (Path(expand_home(x, p.home)) for x in (rule.source, rule.override))
         verdict = judge_systems_override(
             device=device.name,
             source=p.read_text(source) if p.is_file(source) else None,
@@ -1658,7 +1654,7 @@ def check_frontend(ctx: Context) -> list[Result]:
     if profile.artwork is not None and "frontend" in device.folders:
         results += _check_artwork(ctx, device, library)
     if (pins := profile.retroarch) is not None:
-        paths = [Path(_expand(raw, p.home)) for raw in pins.cfg]
+        paths = [Path(expand_home(raw, p.home)) for raw in pins.cfg]
         verdict = judge_retroarch_paths(
             device=device.name,
             files=[(str(x), p.read_text(x) if p.is_file(x) else None) for x in paths],
@@ -1668,7 +1664,7 @@ def check_frontend(ctx: Context) -> list[Result]:
     if (dirs := profile.shadps4) is not None:
         files = []
         for raw in dirs.config:
-            path = Path(_expand(raw, p.home))
+            path = Path(expand_home(raw, p.home))
             files.append(
                 (
                     str(path),
@@ -1679,8 +1675,10 @@ def check_frontend(ctx: Context) -> list[Result]:
         verdict = judge_shadps4_dirs(device=device.name, files=files, wants=dirs.wants(library))
         results.append(Result("shadPS4 install folder", G_FRONTEND, *verdict))
         if (launch := dirs.launch) is not None:
-            script, rules = (Path(_expand(x, p.home)) for x in (launch.script, launch.find_rules))
-            qt_ini, versions = (_expand(x, p.home) for x in (launch.qt_ini, launch.versions))
+            script, rules = (
+                Path(expand_home(x, p.home)) for x in (launch.script, launch.find_rules)
+            )
+            qt_ini, versions = (expand_home(x, p.home) for x in (launch.qt_ini, launch.versions))
             verdict = judge_shadps4_launch(
                 device=device.name,
                 script=str(script),
@@ -1710,7 +1708,7 @@ def _check_links(ctx: Context, device: SettingsDevice) -> list[Result]:
     script = None
     if "esde" in device.profile.paths:
         path = esde.script_path(
-            Path(_expand(device.profile.paths["esde"], p.home)), esde.LINKS_SCRIPT
+            Path(expand_home(device.profile.paths["esde"], p.home)), esde.LINKS_SCRIPT
         )
         script = None if p.is_file(path) else str(path)
     results = []
@@ -1738,16 +1736,16 @@ def _check_artwork(ctx: Context, device: SettingsDevice, library: str) -> list[R
     assert art is not None
     layout = artwork.Layout(
         Path(library) / "roms",
-        Path(_expand(art.media, p.home)),
-        Path(_expand(art.metadata, p.home)),
-        Path(_expand(art.gamelists, p.home)),
+        Path(expand_home(art.media, p.home)),
+        Path(expand_home(art.metadata, p.home)),
+        Path(expand_home(art.gamelists, p.home)),
     )
     plan: artwork.GamelistPlan | None = None
     error: str | None = None
     if rule is None:
         error = "the profile has no [es_systems], so the systems of the frontend are unknown"
     else:
-        source = Path(_expand(rule.source, p.home))
+        source = Path(expand_home(rule.source, p.home))
         if not p.is_file(source):
             error = f"the system list {source} was not found, so the gamelists cannot be checked"
         else:
@@ -2093,7 +2091,7 @@ def check_updater(ctx: Context) -> list[Result]:
     bad: dict[str, selfupdate.Bad] = {}
     folder = selfupdate.bad_dir(base)
     for name in p.list_dir(folder):
-        if selfupdate.tag_key(name) is not None:
+        if tag_key(name) is not None:
             bad[name] = selfupdate.parse_bad(p.read_text(folder / name))
     results += [
         Result("Updater state", G_UPDATE, *found)
@@ -2153,7 +2151,7 @@ def check_tool(ctx: Context, spec: ToolSpec) -> Result:
             )
         if not path:
             for raw in spec.known_paths:
-                known = str(p.home / raw[2:]) if raw.startswith("~/") else raw
+                known = expand_home(raw, p.home)
                 if p.is_executable(known):
                     return Result(
                         spec.key,

@@ -18,6 +18,7 @@ from pathlib import Path
 from xml.etree import ElementTree as ET
 
 from warpzone import frontend
+from warpzone.errors import WarpzoneError
 
 # A system folder that can be written as an ignore pattern as it is.
 _PLAIN = re.compile(r"^[A-Za-z0-9_-][A-Za-z0-9._-]*$")
@@ -28,7 +29,7 @@ _ILLEGAL = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f\ud800-\udfff￾￿]")
 STATE_TAGS = {"favorite": "favorite", "playcount": "playcount", "lastplayed": "lastplayed"}
 
 
-class ArtworkError(Exception):
+class ArtworkError(WarpzoneError):
     pass
 
 

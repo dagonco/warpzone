@@ -39,6 +39,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from warpzone import inbox
+from warpzone.errors import WarpzoneError
 from warpzone.inbox import Context, InboxError, ItemFailure, ItemResult, Options, UnitResult
 
 EXTENSIONS = frozenset({".nsp", ".nsz", ".xci", ".xcz"})
@@ -89,7 +90,7 @@ def default_keys(home: Path) -> Path:
     return home / ".switch" / "prod.keys"
 
 
-class SwitchError(Exception):
+class SwitchError(WarpzoneError):
     """One file cannot be placed; the message is the reason given for review."""
 
 

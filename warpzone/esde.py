@@ -13,6 +13,8 @@ import shlex
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
+from warpzone.errors import WarpzoneError
+
 SCRIPT_NAME = "warpzone-settings.sh"
 PLAY_STATE_SCRIPT = "warpzone-play-state.sh"
 LINKS_SCRIPT = "warpzone-links.sh"
@@ -32,7 +34,7 @@ _LINE = re.compile(r"[^\n]*\n|[^\n]+")
 Element = tuple[str, tuple[tuple[str, str], ...]]
 
 
-class EsdeError(Exception):
+class EsdeError(WarpzoneError):
     """`es_settings.xml` cannot be read or edited safely."""
 
 

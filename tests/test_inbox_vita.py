@@ -9,7 +9,7 @@ from test_inbox import Base
 from warpzone import inbox, inbox_vita
 from warpzone.config import InboxSettings
 from warpzone.inbox import Tools
-from warpzone.provision import Reporter
+from warpzone.report import Reporter
 
 TITLE_ID = "PCSF00024"
 CONTENT_ID = f"EP9000-{TITLE_ID}_00-PDEUAP1648614960"
