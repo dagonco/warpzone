@@ -238,12 +238,14 @@ class Rig:
         sign: SigningKey | None = None,
         annotated: bool = True,
         at: str | None = None,
+        nested: bool = False,
     ) -> None:
         """Retire a release the way the maintainer does: a tag `retired/<tag>` on the commit
         of the release (or of `at`), annotated and signed with `sign`, whose message is the
-        reason, published."""
+        reason, published. With `nested` it is made on the release's own tag, as
+        `git tag -s retired/v1.2.3 v1.2.3` does, and so it points at a tag object."""
         name = f"retired/{tag}"
-        target = f"{at or tag}^{{commit}}"
+        target = (at or tag) if nested else f"{at or tag}^{{commit}}"
         try:
             git(self.work, "rev-parse", "-q", "--verify", target)
         except AssertionError:
@@ -1621,18 +1623,35 @@ class RetiredTests(UpdaterCase):
         self.assertEqual(len(rig.calls()), calls)
         self.assertEqual(rig.bad(), [])
 
-    def test_only_the_newest_fifty_retirements_are_looked_at(self) -> None:
+    def test_tags_that_are_no_retirement_do_not_use_up_the_limit(self) -> None:
         rig = self.rig
         rig.release("0.2.0")
         rig.release("0.3.0")
         rig.move_to("v0.3.0")
-        for n in range(1, 51):  # tags of no release, which still cost a look each
+        for n in range(1, 5):  # lightweight: they sort first and are no retirement at all
             git(rig.work, "update-ref", f"refs/tags/retired/v1.0.{n}", "HEAD")
         git(rig.work, "push", "-q", "origin", "refs/tags/retired/*:refs/tags/retired/*")
-        rig.retire("v0.3.0", "the 51st by version: too old to be looked at")
-        proc = self.retired_ticks(rig)
+        rig.retire("v0.3.0", "the real one, after four that are not")
+        proc = rig.tick(WZ_RETIRED_MAX="3")
+        self.assertTick(proc, 0)
+        self.assertEqual(rig.on_tag(), "v0.2.0")
+
+    def test_only_the_newest_well_formed_retirements_are_looked_at(self) -> None:
+        rig = self.rig
+        rig.release("0.2.0")
+        rig.release("0.3.0")
+        rig.move_to("v0.3.0")
+        for n in range(1, 5):  # well formed retirements of tags that are no candidates
+            git(rig.work, "update-ref", f"refs/tags/v1.0.{n}", "HEAD")
+            git(rig.work, "tag", "-a", "-m", "x", f"retired/v1.0.{n}", "HEAD")
+        git(rig.work, "push", "-q", "origin", "refs/tags/*:refs/tags/*")
+        rig.retire("v0.3.0", "the fifth by version: too old to be looked at")
+        proc = rig.tick(WZ_RETIRED_MAX="3")
+        self.assertTick(proc, 0)
         self.assertEqual(rig.on_tag(), "v0.3.0")
-        self.assertRegex(proc.output, r"more than 50 retirement")
+        self.assertRegex(proc.output, r"more than 3 retirement")
+        self.assertTick(rig.tick(), 0)  # with the default limit it is looked at
+        self.assertEqual(rig.on_tag(), "v0.2.0")
 
     def test_only_an_annotated_tag_with_a_version_name_retires_and_nothing_runs(self) -> None:
         rig = self.rig
@@ -1935,6 +1954,48 @@ class SignedNameTests(UpdaterCase):
         self.assertTick(proc, 0)
         self.assertEqual(rig.on_tag(), "v0.2.0", "v0.3.0 is unsigned; v0.2.0 is signed")
         self.assertRegex(proc.output, r"v0\.3\.0.*signature")
+
+
+class KeysNeverGoBackTests(UpdaterCase):
+    def setUp(self) -> None:
+        super().setUp()
+        if not SSH_KEYGEN:
+            self.skipTest("ssh-keygen is not installed")
+        self.old = SigningKey(self.rig.root / "keys", "old")
+        self.new = SigningKey(self.rig.root / "keys", "new")
+
+    def test_going_down_to_an_older_release_does_not_trust_its_older_keys(self) -> None:
+        rig = self.rig
+        both = {"warpzone/data/allowed_signers": self.old.allowed + self.new.allowed}
+        only_new = {"warpzone/data/allowed_signers": self.new.allowed}
+        rig.release("0.3.5", sign=self.new, extra=both)  # still trusts the old key
+        rig.move_to("v0.3.5")
+        self.assertTick(rig.tick(), 0)
+        rig.release("0.4.0", sign=self.new, extra=only_new)  # the old key is dropped
+        self.assertTick(rig.tick(), 0)
+        self.assertEqual(rig.on_tag(), "v0.4.0")
+        rig.retire("v0.4.0", "withdrawn", sign=self.new)
+        self.assertTick(rig.tick(), 0)
+        self.assertEqual(rig.on_tag(), "v0.3.5", "down, to a release that lists both keys")
+        # the old key may have been the one that leaked: nothing it signs is installed
+        rig.release("0.9.0", sign=self.old, extra=both)
+        proc = rig.tick()
+        self.assertTick(proc, 0)
+        self.assertEqual(rig.on_tag(), "v0.3.5")
+        self.assertRegex(proc.output, r"v0\.9\.0.*signature")
+        rig.release("0.9.1", sign=self.new, extra=only_new)
+        self.assertTick(rig.tick(), 0)
+        self.assertEqual(rig.on_tag(), "v0.9.1", "the newer key still works")
+
+    def test_a_retirement_made_on_the_release_tag_itself_counts(self) -> None:
+        rig = self.rig
+        allowed = {"WZ_ALLOWED_SIGNERS": str(rig.allow(self.new))}
+        rig.release("0.2.0", sign=self.new)
+        rig.release("0.3.0", sign=self.new)  # annotated: `git tag -s retired/v0.3.0 v0.3.0` nests
+        rig.move_to("v0.3.0")
+        rig.retire("v0.3.0", "withdrawn the natural way", sign=self.new, nested=True)
+        self.assertTick(rig.tick(**allowed), 0)
+        self.assertEqual(rig.on_tag(), "v0.2.0")
 
 
 class StaleTargetTests(UpdaterCase):

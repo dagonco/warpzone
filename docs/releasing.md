@@ -75,14 +75,14 @@ A release candidate is a normal release with a PEP 440 version. Set `__version__
 
 ## Retiring a release
 
-A tag cannot be edited, and a published release must never be moved or reused. If a release turns out to be harmful, withdraw it with a second tag, `retired/vX.Y.Z` (or `retired/vX.Y.ZrcN`), annotated and signed like a release, on the commit of the release it withdraws, with the reason as its message:
+A tag cannot be edited, and a published release must never be moved or reused. If a release turns out to be harmful, withdraw it with a second tag, `retired/vX.Y.Z` (or `retired/vX.Y.ZrcN`), annotated and signed like a release, on the release it withdraws, with the reason as its message:
 
 ```bash
-git tag -s retired/v0.3.0 v0.3.0^{commit} -m "settings apply overwrote a captured key"
+git tag -s retired/v0.3.0 v0.3.0 -m "settings apply overwrote a captured key"
 git push origin retired/v0.3.0
 ```
 
-The tag must be named `retired/` plus the exact tag it withdraws and sit on that release's commit (`v0.3.0^{commit}`, as above): a retirement made for another name or another commit is ignored, and so is a signed object published under another name. There is no file to edit and no pull request: the tag is the retirement, and devices take it with their daily fetch. The `release` workflow does not run for it (it only runs for `v*.*.*`). When the allowed signers hold a key, a retirement that is not signed by one of them (or is only a lightweight tag) is ignored, so nobody without the key can pull a good version. From then on:
+The tag must be named `retired/` plus the exact tag it withdraws and point at that release (its tag or its commit, which is the same to a device): a retirement made for another name or another release is ignored, and so is a signed object published under another name. There is no file to edit and no pull request: the tag is the retirement, and devices take it with their daily fetch. The `release` workflow does not run for it (it only runs for `v*.*.*`). When the allowed signers hold a key, a retirement that is not signed by one of them (or is only a lightweight tag) is ignored, so nobody without the key can pull a good version. From then on:
 
 - no device picks the tag as a target;
 - a device that runs it moves to the best release that is not retired, even a lower one, after verifying it like any update;

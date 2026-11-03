@@ -25,6 +25,7 @@
 #   WZ_FETCH_TIMEOUT   seconds for the fetch (default 120)
 #   WZ_MIN_FREE_KB     free space in KiB needed before switching (default 51200)
 #   WZ_PYTHON_FALLBACKS  interpreters to try after the one in the settings
+#   WZ_RETIRED_MAX       retirement tags whose signature is checked per tick (default 50)
 #   WZ_ALLOWED_SIGNERS   the allowed-signers file (ssh-keygen -Y format) that tags must be
 #                        signed against, for tests (default: the one in the version known to
 #                        work, warpzone/data/allowed_signers; empty or without keys, no
@@ -41,7 +42,7 @@ DAY=86400
 DEFER_MAX=$((72 * 3600))
 MAX_ATTEMPTS=2
 IMPORT_CODE='import os, sys, warpzone.cli, warpzone.provision, warpzone.health; root = os.path.realpath(sys.argv[1]); here = os.path.realpath(warpzone.__file__); sys.exit(0 if here.startswith(root + os.sep) else 7)'
-STATE_KEYS="schema good_tag good_sha good_branch trying_tag trying_sha from_tag from_sha from_branch attempts probation pending deferred_since last_fetch last_boot_id last_result last_ok retry_after env_failures suspect_tag suspect_sha pin_retired signing"
+STATE_KEYS="schema good_tag good_sha good_branch trying_tag trying_sha from_tag from_sha from_branch attempts probation pending deferred_since last_fetch last_boot_id last_result last_ok retry_after env_failures suspect_tag suspect_sha pin_retired signing signers_version"
 
 STATE_DIR=${WZ_STATE_DIR:-${XDG_STATE_HOME:-${HOME:-/nonexistent}/.local/state}/warpzone/updater}
 CONF=${WZ_CONF:-$STATE_DIR/conf}
@@ -54,7 +55,8 @@ SIGNERS_FILE=
 SIGNERS_SRC=
 SIGNERS_TMP=$STATE_DIR/.allowed_signers
 SIGNERS_LAST=$STATE_DIR/allowed_signers.last
-RETIRED_MAX=50
+RETIRED_MAX=${WZ_RETIRED_MAX:-50}
+RETIRED_SCAN=500
 STEP_TIMEOUT=${WZ_STEP_TIMEOUT:-}
 FETCH_TIMEOUT=${WZ_FETCH_TIMEOUT:-120}
 TICK_BUDGET=${WZ_TICK_BUDGET:-1500}
@@ -225,6 +227,7 @@ case $STEP_TIMEOUT in '' | 0 | *[!0-9]*) STEP_TIMEOUT= ;; esac
 case $FETCH_TIMEOUT in '' | *[!0-9]*) FETCH_TIMEOUT=120 ;; esac
 case $TICK_BUDGET in '' | *[!0-9]*) TICK_BUDGET=1500 ;; esac
 case $MIN_FREE_KB in '' | *[!0-9]*) MIN_FREE_KB=51200 ;; esac
+case $RETIRED_MAX in '' | 0 | *[!0-9]*) RETIRED_MAX=50 ;; esac
 
 # ---- run with a time limit ------------------------------------------------------------
 # run_limited SECONDS COMMAND...: the command's exit status, or 124 when it ran out of
@@ -434,6 +437,7 @@ state_load() {
 		[ -z "$_v" ] || is_release_tag "$_v" || state_assign "$_k" ""
 	done
 	[ -z "$S_pin_retired" ] || is_release_tag "$S_pin_retired" || S_pin_retired=
+	case $S_signers_version in *[!A-Za-z0-9._+-]*) S_signers_version= ;; esac
 	# A tag and its commit go together: one without the other is nothing.
 	if [ -z "$S_trying_tag" ] || [ -z "$S_trying_sha" ]; then
 		S_trying_tag=
@@ -755,47 +759,64 @@ RETIRED_TAGS=' '
 RETIRED_INFO=
 RETIRED_BAD=
 
-# retired_ok TAG: the tag object retired/TAG sits on the commit of the release TAG (vX.Y.Z). A signature
+# retired_ok TAG: the tag object retired/TAG sits on the commit of the release TAG (vX.Y.Z).
+# What it points at is peeled first, so `git tag -s retired/v1.2.3 v1.2.3`, which nests the
+# retirement in the release's own tag object, counts like one made on its commit. A signature
 # covers the object and not the ref it is published under, so without this a signed
 # retirement of one version could be published as the retirement of another.
 retired_ok() {
 	_ro_obj=$(g cat-file tag "refs/tags/retired/$1" 2>/dev/null </dev/null | sed -n -e '/^$/q' -e 's/^object //p' | head -n 1)
+	[ -n "$_ro_obj" ] || return 1
+	_ro_target=$(g rev-parse -q --verify "$_ro_obj^{commit}" 2>/dev/null </dev/null)
 	_ro_commit=$(g rev-parse -q --verify "refs/tags/$1^{commit}" 2>/dev/null </dev/null)
-	[ -n "$_ro_commit" ] && [ "$_ro_obj" = "$_ro_commit" ]
+	[ -n "$_ro_commit" ] && [ "$_ro_target" = "$_ro_commit" ]
 }
 
-# retired_load: the retirements the clone has (it takes them with the daily fetch), the
-# newest versions first and at most RETIRED_MAX of them, so that a pile of tags with bad
-# signatures cannot use up the tick's budget. Needs signing_setup first.
+# retired_load: the retirements the clone has (it takes them with the daily fetch), the newest
+# versions first. A tag that is no retirement (not annotated, no version for a name, not on
+# the commit of its release) is cheap to turn down and does not count towards the limit; at
+# most RETIRED_MAX that are well formed get their signature checked, so that a pile of bad
+# ones cannot use up the tick's budget, and RETIRED_SCAN tags are looked at in all. Needs
+# signing_setup first.
 retired_load() {
 	RETIRED_TAGS=' '
 	RETIRED_INFO=
 	RETIRED_BAD=
 	_rmore=0
 	_rcount=0
+	_rlines=0
+	_rbadn=0
 	_rf="$STATE_DIR/.retired.$$"
-	g for-each-ref --sort=-v:refname --format='%(refname) %(objecttype) %(taggerdate:short) %(contents:subject)' refs/tags/retired/ 2>/dev/null | head -n $((RETIRED_MAX + 1)) >"$_rf" 2>/dev/null
+	g for-each-ref --sort=-v:refname --format='%(refname) %(objecttype) %(taggerdate:short) %(contents:subject)' refs/tags/retired/ 2>/dev/null | head -n "$RETIRED_SCAN" >"$_rf" 2>/dev/null
 	while read -r _rref _rtype _rdate _rreason; do
-		_rcount=$((_rcount + 1))
-		if [ "$_rcount" -gt "$RETIRED_MAX" ]; then
-			_rmore=1
-			break
-		fi
+		_rlines=$((_rlines + 1))
 		_rtag=${_rref#refs/tags/retired/}
-		if ! rel_key "$_rtag" || [ "$_rtype" != tag ] || ! retired_ok "$_rtag" || ! tag_signed "retired/$_rtag"; then
-			RETIRED_BAD="$RETIRED_BAD $_rtag"
-			continue
+		_rok=0
+		if rel_key "$_rtag" && [ "$_rtype" = tag ] && retired_ok "$_rtag"; then
+			if [ "$_rcount" -ge "$RETIRED_MAX" ]; then
+				_rmore=1
+				break
+			fi
+			_rcount=$((_rcount + 1))
+			tag_signed "retired/$_rtag" && _rok=1
 		fi
-		RETIRED_TAGS="$RETIRED_TAGS$_rtag "
-		RETIRED_INFO="$RETIRED_INFO$_rtag $_rdate $_rreason
+		if [ "$_rok" = 1 ]; then
+			RETIRED_TAGS="$RETIRED_TAGS$_rtag "
+			RETIRED_INFO="$RETIRED_INFO$_rtag $_rdate $_rreason
 "
+		else
+			_rbadn=$((_rbadn + 1))
+			[ "$_rbadn" -gt 10 ] || RETIRED_BAD="$RETIRED_BAD $_rtag"
+		fi
 	done <"$_rf"
 	rm -f "$_rf"
-	if [ -n "$RETIRED_BAD" ]; then
-		log_daily "retirement tags ignored (not annotated, not a version, not on that release's commit, or not signed by an allowed key):$RETIRED_BAD"
+	if [ "$_rbadn" -gt 0 ]; then
+		log_daily "retirement tags ignored ($_rbadn: not annotated, not a version, not on that release's commit, or not signed by an allowed key):$RETIRED_BAD"
 	fi
 	if [ "$_rmore" = 1 ]; then
 		log_daily "more than $RETIRED_MAX retirement tags: only the newest $RETIRED_MAX were looked at"
+	elif [ "$_rlines" -ge "$RETIRED_SCAN" ]; then
+		log_daily "only the newest $RETIRED_SCAN retirement tags were scanned"
 	fi
 	return 0
 }
@@ -841,10 +862,21 @@ signers_judge() {
 	fi
 }
 
-# signing_setup: once a version with keys has been trusted (`signing` in the state, and the
-# keys it had in allowed_signers.last), signatures stay required for good: a pin or a
-# retirement that takes the device to an old release without the file does not turn them off.
-# The last keys are then the ones used (and with none to use, every tag is refused).
+# keys_older A B: the version A is older than the version B.
+keys_older() {
+	ver_key "$1"
+	_ko_a=$VK
+	ver_key "$2"
+	key_gt "$VK" "$_ko_a"
+}
+
+# signing_setup: once a version with keys has been trusted (`signing` in the state, the keys it
+# had in allowed_signers.last and its version in `signers_version`), signatures stay required
+# for good and the keys never go back: a pin or a retirement that takes the device down to an
+# older release does not turn them off (that release has no file) or bring back the keys it
+# listed and a newer release dropped (it has an older file). The last keys are then the ones
+# used, and with none to use, every tag is refused. Keys are only replaced by those of a
+# version that is as new or newer.
 signing_setup() {
 	rm -f "$SIGNERS_TMP"
 	if [ -n "${WZ_ALLOWED_SIGNERS+x}" ]; then
@@ -859,16 +891,19 @@ signing_setup() {
 		fi
 		[ -s "$SIGNERS_TMP" ] || rm -f "$SIGNERS_TMP"
 		signers_judge
-		if [ "$SIGN_ON" = 1 ]; then
+		_good_ver=
+		[ "$SIGN_ON" = 1 ] && _good_ver=$(version_at "$S_good_sha")
+		if [ "$SIGN_ON" = 1 ] && { [ -z "$S_signers_version" ] || [ ! -s "$SIGNERS_LAST" ] || ! keys_older "$_good_ver" "$S_signers_version"; }; then
 			S_signing=1
+			S_signers_version=$_good_ver
 			if cat "$SIGNERS_TMP" >"$SIGNERS_LAST.new" 2>/dev/null; then
 				mv -f "$SIGNERS_LAST.new" "$SIGNERS_LAST"
 			fi
-		elif [ "$S_signing" = 1 ]; then
+		elif [ "$SIGN_ON" = 1 ] || [ "$S_signing" = 1 ]; then
 			SIGN_ON=1
 			SIGNERS_FILE=$SIGNERS_LAST
 			SIGNERS_SRC="the last allowed signers this device trusted"
-			log_daily "the running version has no allowed signers, but signatures were required before and stay so ($SIGNERS_SRC)"
+			log_daily "the version known to work has older or no allowed signers than ${S_signers_version:-before}: the last ones this device trusted are used"
 		fi
 	fi
 	[ "$SIGN_ON" = 1 ] || log_daily "signatures are not required: $SIGN_WHY ($SIGNERS_SRC)"

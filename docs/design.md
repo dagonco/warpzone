@@ -2394,7 +2394,9 @@ the version it started from was a clean branch inside `origin/main`, empty for a
 the new one is on probation), `last_ok` (when something last went well, for `doctor`) and
 `suspect_tag` with `suspect_sha` (a release that failed once and has to be looked at again,
 see the differential verdict), and `pin_retired` (the pinned tag while it is retired,
-empty otherwise) and `signing` (`1` once signatures have been required). A tag and its sha go together in `trying` and in `suspect`:
+empty otherwise), `signing` (`1` once signatures have been required) and
+`signers_version` (the version whose keys are in `allowed_signers.last`). A tag and its sha
+go together in `trying` and in `suspect`:
 one without the other is dropped, and `attempts` with it.
 `last_result` is one of `ok`, `deferred`, `env`, `rolled-back`, `dirty`,
 `dev`, `no-python`, `stuck`. `bad/<tag>` is a file holding `sha=`, `date=` and `reason=`
@@ -2523,10 +2525,14 @@ version and force a device down. The script reads the retirements from the clone
 one within a day. When the allowed signers hold a key, a retirement counts only if its tag
 passes the same check as a release (below); without keys it counts unsigned. A lightweight
 tag, a name that is not a release or a candidate (`retired/latest`, `retired/v0.3.0-rc1`), a tag
-that does not sit on the commit of the release it names (`v0.3.0`, peeled) and a signature
-that does not verify retire nothing and are logged (once a day). The script looks at the
-newest 50 `retired/` tags at most per tick (`RETIRED_MAX`, newest version first), so a pile of
-tags with invalid signatures cannot use up the tick's budget; it logs when there are more. The reason, taken
+that does not sit on the commit of the release it names (what it points at is peeled, so
+`git tag -s retired/v0.3.0 v0.3.0`, which nests it in the release's tag object, counts) and a
+signature that does not verify retire nothing and are logged (once a day). Only the cheap
+checks (a version name, an annotated tag, the commit) count tags towards the limit: the
+signatures of at most 50 well formed `retired/` tags are checked per tick (`RETIRED_MAX`, `WZ_RETIRED_MAX` for tests,
+newest version first), so a pile of tags with invalid signatures cannot use up the tick's
+budget, and tags that are no retirement cannot push a real one out; 500 tags are looked at in
+all (`RETIRED_SCAN`). It logs when there are more. The reason, taken
 from the tag's subject, is only text for the log; nothing in a tag is run. A retired tag is
 never a candidate. When the running version is retired the device goes to the best valid
 candidate of its channel, even a lower one (there is no floor), and stays where it is when
@@ -2584,10 +2590,13 @@ and the log says so; a file that cannot be read, or a missing `ssh-keygen` while
 keys, rejects every tag (fail closed). `WZ_ALLOWED_SIGNERS` replaces the file for tests.
 
 Once a version with keys has been the one known to work, signatures stay required for good:
-the state key `signing` is `1` and the keys it had are kept in `allowed_signers.last` next to
-the state. If the version known to work later has no such file (a `pin`, or a retirement,
-that takes the device down to an old release), the last keys are used and the log says so;
-with no copy to use, every tag is refused. Trust is by first use: the first release that
+the state key `signing` is `1`, the keys it had are kept in `allowed_signers.last` next to
+the state and the key `signers_version` holds its `__version__`. The keys never go back: when
+the version known to work is older than `signers_version` (a `pin`, or a retirement, took the
+device down to an old release), its `allowed_signers`, absent or listing keys that a newer
+release dropped, is ignored and the last keys are used, and the log says so; `.last` is only
+replaced by the keys of a version that is as new or newer. With no copy to use, every tag is
+refused. Trust is by first use: the first release that
 carries keys is taken without a signature check (nothing on the device yet says whom to
 trust), and so is any release before it; from then on a release has to be signed by keys the
 device already trusts, which includes the release that rotates them.
