@@ -24,6 +24,9 @@
 #   WZ_MIN_FREE_KB     free space in KiB needed before switching (default 51200)
 #   WZ_PYTHON_FALLBACKS  interpreters to try after the one in the settings
 
+# Every S_* variable is the state; state_save writes them to the file through eval, which
+# the linter cannot follow, so it takes them for unused.
+# shellcheck disable=SC2034
 UPDATER_ABI=1
 
 set -u
@@ -81,8 +84,9 @@ log() {
 	[ -n "$LOG" ] || return 0
 	mkdir -p "$(dirname "$LOG")" 2>/dev/null || return 0
 	if [ -f "$LOG" ]; then
-		set -- $(wc -c <"$LOG" 2>/dev/null || echo 0)
-		if [ "${1:-0}" -gt 65536 ] 2>/dev/null; then
+		_size=$(wc -c <"$LOG" 2>/dev/null || echo 0)
+		_size=${_size##* } # some wc print the number after spaces
+		if is_number "$_size" && [ "$_size" -gt 65536 ]; then
 			tail -n 200 "$LOG" >"$LOG.tmp" 2>/dev/null && mv -f "$LOG.tmp" "$LOG"
 		fi
 	fi
@@ -179,6 +183,7 @@ RL_FILE=
 RL_BUDGET_CUT=0
 
 # rl_abort: the tick was told to stop; take the step in progress down with it.
+# shellcheck disable=SC2329 # it is run by the trap of cmd_tick, in a string
 rl_abort() {
 	[ -n "$RL_FILE" ] || return 0
 	rl_kill TERM "$RL_FILE.pid"
@@ -325,7 +330,12 @@ state_load() {
 		is_number "$_v" || state_assign "$_k" ""
 	done
 	case $S_good_sha$S_trying_sha$S_from_sha$S_suspect_sha in
-	*[!0-9a-f]*) S_good_sha= S_trying_sha= S_from_sha= S_suspect_sha= ;;
+	*[!0-9a-f]*)
+		S_good_sha=''
+		S_trying_sha=''
+		S_from_sha=''
+		S_suspect_sha=''
+		;;
 	esac
 	# These end up in file names and in git commands: only what a tag and a branch can be.
 	for _k in good_tag trying_tag from_tag suspect_tag; do
@@ -445,6 +455,7 @@ acquire_lock() {
 	return $?
 }
 
+# shellcheck disable=SC2329 # it is run by the trap of cmd_tick
 release_lock() {
 	if [ "$LOCK_HELD" = 1 ]; then
 		rm -rf "$LOCK_DIR"
@@ -531,9 +542,12 @@ checkout_ref() {
 
 # free_kb prints the free space, in KiB, of the file system of the clone (nothing if unknown).
 free_kb() {
-	set -- $(df -Pk "$CLONE" 2>/dev/null | tail -n 1)
-	if is_number "${4:-}"; then
-		printf '%s' "$4"
+	_df=$(df -Pk "$CLONE" 2>/dev/null | tail -n 1)
+	read -r _fs _blocks _used _avail _rest <<EOF
+$_df
+EOF
+	if is_number "$_avail"; then
+		printf '%s' "$_avail"
 	fi
 }
 
@@ -858,7 +872,7 @@ env_backoff() {
 	esac
 	S_retry_after=$((NOW + _days * DAY))
 	S_deferred_since= # it failed for another reason: whoever waited, waited for nothing
-	S_last_result=env
+	S_last_result="env"
 }
 
 stuck() {
@@ -880,6 +894,8 @@ sync_good_reference() {
 		S_from_tag=
 		S_from_sha=
 		S_from_branch=
+		S_suspect_tag=
+		S_suspect_sha=
 	fi
 	S_good_sha=$_head
 	S_good_branch=$BRANCH
@@ -961,9 +977,18 @@ differential() {
 	case $? in
 	0) DV=bad ;;
 	3) DV=deferred ;;
-	*) DV=env ;;
+	4) DV=budget ;;
+	*) DV="env" ;;
 	esac
 	return 0
+}
+
+# keep_suspect: in a second look, the release stays under suspicion for another one.
+keep_suspect() {
+	if [ "$SECOND_LOOK" = 1 ]; then
+		S_suspect_tag=$_tag
+		S_suspect_sha=$_sha
+	fi
 }
 
 # retry_suspect TAG SHA: the previous version passes and TAG did not. A failure that does not
@@ -1039,21 +1064,21 @@ attempt() {
 	4) env_abort "$_tag could not be judged: $VERIFY_WHY" ;;
 	esac
 	_why=$VERIFY_WHY
-	if [ "$SECOND_LOOK" = 1 ]; then
-		back_to_good
-		write_bad "$_tag" "$_sha" "$_why (second look)"
-		log "$_tag is bad ($_why, again); back on the previous version"
-		clear_trying
-		S_env_failures=0
-		S_retry_after=
-		S_last_result=rolled-back
-		settle_pending
-		finish 1
-	fi
 	differential "$_tag" "$_sha" "$S_good_tag" "$S_good_branch" "$S_good_sha"
 	case $DV in
 	stuck) stuck "checkout of $S_good_sha failed" ;;
 	bad)
+		if [ "$SECOND_LOOK" = 1 ]; then
+			# It failed a second time and the previous version passes just now: bad.
+			write_bad "$_tag" "$_sha" "$_why (second look)"
+			log "$_tag is bad ($_why, again); back on the previous version"
+			clear_trying
+			S_env_failures=0
+			S_retry_after=
+			S_last_result=rolled-back
+			settle_pending
+			finish 1
+		fi
 		retry_suspect "$_tag" "$_sha"
 		_rr=$?
 		case $_rr in
@@ -1093,9 +1118,24 @@ attempt() {
 		;;
 	deferred)
 		log "the previous version could not be checked now either; $_tag is not marked bad"
+		keep_suspect
 		clear_trying
 		mark_deferred
 		finish 0
+		;;
+	budget)
+		if [ "$SECOND_LOOK" = 1 ]; then
+			# Nothing proves it either way: it stays under suspicion, with no back-off.
+			log "the previous version could not be checked in the time left; $_tag stays under suspicion"
+			keep_suspect
+			clear_trying
+			S_last_result=rolled-back
+			finish 1
+		fi
+		log "no time left to tell a bad release from a broken environment; $_tag is not marked bad"
+		clear_trying
+		env_backoff
+		finish 1
 		;;
 	*)
 		log "the previous version fails too, so the environment is at fault; $_tag is not marked bad"
@@ -1298,7 +1338,7 @@ cmd_tick() {
 
 	if ! find_python; then
 		if [ "$PY_CUT" = 1 ]; then
-			S_last_result=env
+			S_last_result="env"
 			log "the time budget ran out while looking for python; that is not a missing python"
 			finish 1
 		fi
@@ -1336,7 +1376,9 @@ cmd_tick() {
 	if [ -n "$S_suspect_tag" ]; then
 		# A release that failed once, while the previous version passed, and could not be
 		# looked at again for lack of time: this is that second look, with a whole budget.
-		if is_bad "$S_suspect_tag"; then
+		_cur=$(version_at HEAD | sed -n 's/^\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\).*/\1/p')
+		if is_bad "$S_suspect_tag" || ! ver_gt "${S_suspect_tag#v}" "${_cur:-0.0.0}"; then
+			# bad meanwhile, or not newer than what is checked out any more: never down
 			S_suspect_tag=
 			S_suspect_sha=
 		else
@@ -1433,21 +1475,22 @@ cmd_selftest() {
 			echo "selftest: the state does not survive a save and a load"
 			_bad=1
 		fi
-		run_limited 5 true
-		[ $? -eq 0 ] || {
+		if ! run_limited 5 true; then
 			echo "selftest: cannot run a command"
 			_bad=1
-		}
+		fi
 		run_limited 5 sh -c 'exit 3'
-		[ $? -eq 3 ] || {
+		_rc=$?
+		if [ "$_rc" -ne 3 ]; then
 			echo "selftest: lost an exit status"
 			_bad=1
-		}
+		fi
 		run_limited 1 sleep 30
-		[ $? -eq 124 ] || {
+		_rc=$?
+		if [ "$_rc" -ne 124 ]; then
 			echo "selftest: a command that hangs is not cut off"
 			_bad=1
-		}
+		fi
 		rm -rf "$_dir"
 	else
 		echo "selftest: cannot create a temporary folder"

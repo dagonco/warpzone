@@ -68,6 +68,11 @@ case "$*" in
     exit 0 ;;
   "-m warpzone provision device "*)
     [ -e "$dir/env_broken" ] && exit 1
+    if has spend; then
+      # this step "takes" 99 seconds of the tick's budget (the uptime is the budget's clock)
+      up=$(cut -d. -f1 "$WZ_PROC/uptime")
+      echo "$((up + 99)).00 0" >"$WZ_PROC/uptime"
+    fi
     if has hang_tree; then sleep 60 & echo $! >"$dir/grandchild.pid"; exec sleep 60; fi
     if has flaky && [ ! -e "$dir/flaky_done" ]; then : >"$dir/flaky_done"; exit 1; fi
     if has die; then power_cut; fi
@@ -317,6 +322,8 @@ class UpdaterCase(unittest.TestCase):
     maxDiff = None
 
     def setUp(self) -> None:
+        if os.environ.get("WARPZONE_SKIP_UPDATER_SH"):
+            self.skipTest("WARPZONE_SKIP_UPDATER_SH is set (CI runs this file in its own job)")
         if not GIT:
             self.skipTest("git is not installed")
         if not UPDATER.exists():
@@ -451,13 +458,6 @@ class VerdictTests(UpdaterCase):
                 self.assertEqual(state["attempts"], "0")
                 # the good version was checked again after the failure
                 self.assertIn("health deck @ 0.1.0", " ".join(rig.calls()), rig.calls())
-
-    def test_a_release_that_hangs_is_cut_off_and_marked_bad(self) -> None:
-        rig = self.rig
-        rig.release("0.2.0", "hang")
-        self.assertTick(rig.tick(WZ_STEP_TIMEOUT="1"), 1)
-        self.assertEqual(rig.bad(), ["v0.2.0"])
-        self.assertEqual(rig.on_tag(), "v0.1.0")
 
     def test_a_bad_tag_never_comes_back_but_a_newer_one_is_tried(self) -> None:
         rig = self.rig
@@ -1016,7 +1016,7 @@ class ProcessGroupTests(UpdaterCase):
         git(rig.clone, "config", "core.sshCommand", f"sh {hook}")
         git(rig.clone, "remote", "set-url", "origin", "ssh://nobody@example.invalid/repo.git")
         started = time.monotonic()
-        self.assertTick(rig.tick(WZ_FETCH_TIMEOUT="2"), 0)
+        self.assertTick(rig.tick(WZ_FETCH_TIMEOUT="1"), 0)
         self.assertLess(time.monotonic() - started, 30)
 
 
@@ -1252,13 +1252,27 @@ class UsersEditsTests(UpdaterCase):
 
 
 class SuspectTests(UpdaterCase):
+    def suspect(self, rig, version: str = "0.2.0") -> None:
+        """The state of a device whose `version` failed once and has to be looked at again."""
+        git(rig.clone, "fetch", "-q", "--tags")
+        rig.write_state(
+            good_tag="v0.1.0",
+            good_sha=rig.head(),
+            suspect_tag=f"v{version}",
+            suspect_sha=git(rig.work, "rev-parse", f"v{version}^{{commit}}"),
+        )
+
     def test_a_release_that_hangs_is_looked_at_again_with_a_whole_budget(self) -> None:
+        # The budget is counted on a fake uptime that only the fake python moves (`spend`
+        # takes 99 of the 100 seconds), so nothing here depends on how fast the machine is.
         rig = self.rig
-        rig.release("0.2.0", "hang")
-        slow = {"WZ_STEP_TIMEOUT": "3", "WZ_TICK_BUDGET": "6"}
-        # The first look fails at its own limit, the previous version passes, and the second
-        # look is cut by what is left of the budget: the release stays under suspicion.
-        self.assertTick(rig.tick(**slow), 1)
+        (rig.proc / "uptime").write_text("1000.00 0\n")
+        rig.release("0.2.0", "hang spend")
+        budget = {"WZ_STEP_TIMEOUT": "2", "WZ_TICK_BUDGET": "100"}
+        # The first look fails at its own limit, the previous version passes (one second is
+        # left, and it is enough), and the second look is cut by that second: the release
+        # stays under suspicion.
+        self.assertTick(rig.tick(**budget), 1)
         state = rig.state()
         self.assertEqual(rig.on_tag(), "v0.1.0")
         self.assertEqual(rig.bad(), [])
@@ -1266,10 +1280,62 @@ class SuspectTests(UpdaterCase):
         self.assertEqual(state["env_failures"], "0", "this is not the environment's fault")
         self.assertEqual(state["retry_after"], "")
         # The next tick looks at it first thing, with the whole budget, and it fails again.
-        self.assertTick(rig.tick(now=NOW + 900, **slow), 1)
+        self.assertTick(rig.tick(now=NOW + 900, **budget), 1)
         self.assertEqual(rig.bad(), ["v0.2.0"])
         self.assertEqual(rig.on_tag(), "v0.1.0")
         self.assertEqual(rig.state().get("suspect_tag"), "")
+
+    def test_a_second_look_that_fails_in_a_broken_environment_burns_nothing(self) -> None:
+        rig = self.rig
+        rig.release("0.2.0")  # the release is fine; it was the environment that failed it
+        self.suspect(rig)
+        rig.flag("env_broken")
+        self.assertTick(rig.tick(), 1)
+        state = rig.state()
+        self.assertEqual(rig.bad(), [])
+        self.assertEqual(rig.on_tag(), "v0.1.0")
+        self.assertEqual((state["last_result"], state["env_failures"]), ("env", "1"))
+        self.assertEqual(state.get("suspect_tag"), "", "the back-off decides when to try again")
+
+    def test_a_second_look_that_cannot_check_the_previous_version_stays_suspect(self) -> None:
+        rig = self.rig
+        (rig.proc / "uptime").write_text("1000.00 0\n")
+        rig.release("0.2.0", "provision_fails spend")
+        rig.break_version("0.1.0", "hang")  # the check of the previous version never ends
+        self.suspect(rig)
+        self.assertTick(rig.tick(WZ_STEP_TIMEOUT="2", WZ_TICK_BUDGET="100"), 1)
+        self.assertEqual(rig.bad(), [], "nothing proves the release is bad")
+        self.assertEqual(rig.on_tag(), "v0.1.0")
+        self.assertEqual(rig.state().get("suspect_tag"), "v0.2.0")
+        self.assertEqual(rig.state()["env_failures"], "0")
+
+    def test_a_suspect_older_than_what_is_checked_out_is_dropped(self) -> None:
+        rig = self.rig
+        rig.release("0.1.5")
+        rig.release("0.2.0")
+        self.suspect(rig, "0.1.5")
+        git(rig.clone, "checkout", "-q", "--detach", "v0.2.0")
+        rig.write_state(
+            good_tag="v0.2.0",
+            good_sha=rig.head(),
+            suspect_tag="v0.1.5",
+            suspect_sha=git(rig.work, "rev-parse", "v0.1.5^{commit}"),
+        )
+        self.assertTick(rig.tick(), 0)
+        self.assertEqual(rig.on_tag(), "v0.2.0", "never down to a suspect")
+        self.assertEqual(rig.state().get("suspect_tag"), "")
+        self.assertEqual(rig.bad(), [])
+
+    def test_a_suspect_is_dropped_when_somebody_moves_the_checkout(self) -> None:
+        rig = self.rig
+        rig.release("0.2.0")
+        rig.release("0.3.0")
+        self.suspect(rig, "0.2.0")  # good is still v0.1.0 in the state
+        git(rig.clone, "checkout", "-q", "--detach", "v0.3.0")
+        self.assertTick(rig.tick(), 0)
+        self.assertEqual(rig.on_tag(), "v0.3.0")
+        self.assertEqual(rig.state().get("suspect_tag"), "")
+        self.assertEqual(rig.bad(), [])
 
     def test_a_suspect_that_passes_the_second_look_is_accepted(self) -> None:
         rig = self.rig
@@ -1313,9 +1379,17 @@ class ClockTests(UpdaterCase):
         rig = self.rig
         rig.release("0.2.0", "hang")
         (rig.proc / "uptime").write_text("100.00 400.00\n")  # it does not advance
-        # The two hangs and the check of the previous version take longer than 2 seconds of
-        # wall clock, which would cut the second look; the uptime did not move.
-        self.assertTick(rig.tick(WZ_TICK_BUDGET="2", WZ_STEP_TIMEOUT="1"), 1)
+        git(rig.clone, "fetch", "-q", "--tags")
+        rig.write_state(
+            good_tag="v0.1.0",
+            good_sha=rig.head(),
+            suspect_tag="v0.2.0",
+            suspect_sha=git(rig.work, "rev-parse", "v0.2.0^{commit}"),
+        )
+        # A budget of one second is the step's whole limit. The second look and the check of
+        # the previous version take longer than that on the wall clock, which would have
+        # cut them; the uptime did not move, so the hang is the release's own fault.
+        self.assertTick(rig.tick(WZ_TICK_BUDGET="1", WZ_STEP_TIMEOUT="1"), 1)
         self.assertEqual(rig.bad(), ["v0.2.0"])
 
     def test_a_budget_that_is_already_spent_is_not_reported_as_a_missing_python(self) -> None:

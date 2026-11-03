@@ -48,9 +48,55 @@ jobs:
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: ${{ matrix.python }}
+      # The updater script's tests (tests/test_updater_sh.py) take minutes on their own and
+      # run in the `updater` job; WARPZONE_SKIP_UPDATER_SH makes them skip here.
       - name: Run the tests
         timeout-minutes: 6
+        env:
+          WARPZONE_SKIP_UPDATER_SH: "1"
         run: python -X faulthandler -m unittest discover -s tests -v
+
+  # tests/test_updater_sh.py runs warpzone/data/updater.sh against real git repositories and
+  # takes a couple of minutes (more on macOS), so it has a job of its own, in parallel.
+  # Ubuntu runs it with dash as sh (what the devices have) and shellcheck, macOS with the
+  # system sh (bash in POSIX mode), on one Python version.
+  updater:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            shell: dash
+          - os: macos-latest
+            shell: sh
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.13"
+      - name: Install shellcheck
+        timeout-minutes: 5
+        run: |
+          if command -v shellcheck >/dev/null 2>&1; then
+            exit 0
+          fi
+          if [ "$RUNNER_OS" = Linux ]; then
+            sudo apt-get update
+            sudo apt-get install -y shellcheck
+          else
+            brew install shellcheck
+          fi
+      - name: Run the updater script tests
+        timeout-minutes: 10
+        env:
+          WZ_TEST_SHELL: ${{ matrix.shell }}
+        run: |
+          shellcheck --version
+          python -X faulthandler -m unittest discover -s tests -p test_updater_sh.py -v
 
   e2e:
     runs-on: ubuntu-latest

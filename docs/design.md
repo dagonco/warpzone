@@ -2361,8 +2361,13 @@ check:
   left in the tick for the second look (a release that hangs spends 900 s on the first), or
   the checkout for it fails, the release is only **under suspicion**: `suspect_tag` and
   `suspect_sha` go in the state, the device stays on `good` without a back-off, and the
-  next tick (15 minutes later) looks at it first thing, with the whole budget; if it fails
-  again it is bad, if it passes it is accepted. Without this, a release that hangs `provision`
+  next tick (15 minutes later) looks at it first thing, with the whole budget. If it passes it
+  is accepted. If it fails, the previous version is checked again as in any first look: it
+  passes, and the release is bad; it fails too, and the environment is at fault (back-off,
+  nothing burned, since the release may have been fine and the environment is what changed
+  in between); there is no time left to tell, and the release stays under suspicion. A
+  suspicion is dropped when somebody moves the checkout by hand or when the suspect is no
+  longer newer than what is checked out: the second look never goes down. Without this, a release that hangs `provision`
   would never be burned and would cost 25 minutes of every back-off.
 - `good` fails too: the environment is at fault (Syncthing down, a broken config). The tag
   is not marked bad; the device stays on `good` and retries after 1, 2, 4 and then 7 days
@@ -2733,7 +2738,9 @@ logic is unit-tested without a network.
   a loose commit, an adopted branch that comes back to its branch), the stale `index.lock`, the
   daily fetch, state and settings that contain shell syntax, and `selftest`. The syntax check,
   `selftest` and a full update run with every shell found among `sh`, `dash` and `bash`
-  (`WZ_TEST_SHELL` picks the shell for all the others), and shellcheck runs when installed.
+  (`WZ_TEST_SHELL` picks the shell for all the others), and shellcheck runs when installed. CI
+  runs this file in its own `updater` job (Ubuntu with dash as `sh`, and macOS), apart from the
+  `test` job, which skips it with `WARPZONE_SKIP_UPDATER_SH=1`.
 - Self-update tests (`test_selfupdate.py`, `test_update_timer.py`): tag and version
   comparison as pure functions (including the order `rc1` < `rc2` < release); whole runs against a bare repository used as the remote
   (update, up to date, ahead, dirty tree, untracked files, dry-run, remote gone, timeout,
