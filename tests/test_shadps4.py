@@ -10,7 +10,7 @@ import unittest
 from pathlib import Path
 from unittest import addModuleCleanup, mock
 
-from support import API_KEY, DECK_ID, HUB_ID, FakeSyncthing, config_data
+from support import API_KEY, DECK_ID, HUB_ID, FakeProc, FakeSyncthing, config_data
 from test_doctor import by_name, context
 from test_provision import reporter
 from warpzone import provision as provision_mod
@@ -218,8 +218,7 @@ class Device:
         tmp = Path(self._tmp.name)
         self.home = tmp / "home"
         self.state = tmp / "state"
-        self.proc = tmp / "proc"
-        self.proc.mkdir()
+        self.proc = FakeProc(tmp / "proc")
         self.folder = self.home / ".local/share/shadPS4"
         self.folder.mkdir(parents=True)
         self.json = self.folder / "config.json"
@@ -231,11 +230,7 @@ class Device:
         self.profile = dataclasses.replace(PROFILE, retroarch=None, es_systems=None, artwork=None)
 
     def start(self, comm: str) -> None:
-        d = self.proc / "4242"
-        d.mkdir()
-        (d / "comm").write_text(comm + "\n")
-        (d / "cmdline").write_bytes(comm.encode() + b"\0")
-        (d / "stat").write_text("4242 (x) S 1 0 0 0\n")
+        self.proc.add(4242, comm)
 
     @staticmethod
     def mine(rep) -> list[str]:
@@ -249,7 +244,7 @@ class Device:
     def provision(self, *, dry_run=False, **kw):
         cfg = parse_config(config_data())
         rep, lines = reporter()
-        kw.setdefault("proc", self.proc)
+        kw.setdefault("proc", self.proc.path)
         with FakeSyncthing(DECK_ID) as local:
             for name in ("patterns-common.stignore", "patterns-deck.stignore"):
                 local.arrives_after[("wz-library", name)] = 0
@@ -309,11 +304,11 @@ class ProvisionTests(Device, unittest.TestCase):
                 (warning,) = [w for w in rep.warnings if "is running" in w and "shadPS4" in w]
                 self.assertIn("provision device deck", warning)
                 self.assertEqual(self.backups(), [])
-                shutil.rmtree(self.proc / "4242")
+                shutil.rmtree(self.proc.path / "4242")
 
     def test_without_proc_nothing_is_edited_and_it_says_why(self) -> None:
         before = self.json.read_text()
-        rep, _ = self.provision(proc=self.proc / "missing")
+        rep, _ = self.provision(proc=self.proc.path / "missing")
         self.assertEqual(self.json.read_text(), before)
         self.assertTrue(any("/proc" in w and "shadPS4" in w for w in rep.warnings))
 
@@ -358,7 +353,7 @@ class ProvisionTests(Device, unittest.TestCase):
             provision_device(
                 cfg, "deck", self.profile, client, None, rep, home=self.home,
                 wait_timeout=0.0, poll=1.0, sleep=lambda s: None, state_root=self.state,
-                proc=self.proc,
+                proc=self.proc.path,
             )  # fmt: skip
         self.assertEqual(self.json.read_text(), before)
 

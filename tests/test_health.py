@@ -9,7 +9,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from support import API_KEY, DECK_ID, FakeSyncthing, config_data
+from support import API_KEY, DECK_ID, FakeProc, FakeSyncthing, config_data
 from test_anbernic import ARK_ID, ark_config
 from test_artwork_device import Art
 from warpzone import artwork, esde, health, localst, provision, selfupdate, updatetimer
@@ -219,8 +219,7 @@ class Base:
         tmp = Path(self._tmp.name)
         self.home = tmp / "home"
         self.state = tmp / "state" / "settings"
-        self.proc = tmp / "proc"
-        self.proc.mkdir()
+        self.proc = FakeProc(tmp / "proc")
         self.home.mkdir()
         self.python = sys.executable
         self.clock = Clock()
@@ -240,7 +239,7 @@ class Base:
         return health.Probes(
             home=self.home,
             state=self.state,
-            proc=self.proc,
+            proc=self.proc.path,
             local=lambda: self.local,
             import_check=self.import_check,
             systemctl=self.systemctl,

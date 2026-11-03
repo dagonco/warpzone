@@ -12,7 +12,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from support import API_KEY, HUB_ID, FakeSyncthing, config_data
+from support import API_KEY, HUB_ID, FakeProc, FakeSyncthing, config_data
 from test_anbernic import ARK_ID
 from test_artwork import source_xml
 from test_artwork_device import Art
@@ -68,8 +68,7 @@ class Shared(unittest.TestCase):
         tmp = Path(self._tmp.name)
         self.home = tmp / "home"
         self.state = tmp / "state" / "settings"
-        self.proc = tmp / "proc"
-        self.proc.mkdir()
+        self.proc = FakeProc(tmp / "proc")
         self.folder = self.home / ".local/share/warpzone/play-state"
         self.folder.mkdir(parents=True)
         (self.folder / ".stfolder").mkdir()
@@ -86,7 +85,7 @@ class Shared(unittest.TestCase):
         path.write_bytes(b"rom")
 
     def sync(self, **kw) -> None:
-        kw.setdefault("proc", self.proc)
+        kw.setdefault("proc", self.proc.path)
         kw.setdefault("now", lambda: NOW)
         playstate_device.sync_shared(
             "deck",
@@ -107,11 +106,7 @@ class Shared(unittest.TestCase):
         (self.folder / f"{name}.jsonl").write_text(text, encoding="utf-8")
 
     def start(self, comm: str, pid: int = 4242, parent: int = 1) -> None:
-        d = self.proc / str(pid)
-        d.mkdir()
-        (d / "comm").write_text(comm + "\n")
-        (d / "cmdline").write_bytes(comm.encode() + b"\0")
-        (d / "stat").write_text(f"{pid} (x) S {parent} 0 0 0\n")
+        self.proc.add(pid, comm, ppid=parent)
 
 
 class SharedPublishTests(Shared):
@@ -247,7 +242,7 @@ class FrontendStateTests(Shared):
         self.start("es-de")
         self.peer("ark", "ark", {ALPHA: Record(plays=3)})
         self.sync()
-        shutil.rmtree(self.proc / "4242")
+        shutil.rmtree(self.proc.path / "4242")
         self.sync()
         self.assertIn("<playcount>5</playcount>", self.gamelist.read_text(encoding="utf-8"))
 
@@ -275,7 +270,7 @@ class FrontendStateTests(Shared):
 
     def test_without_proc_the_gamelist_is_left_alone(self) -> None:
         self.peer("ark", "ark", {ALPHA: Record(plays=3)})
-        self.sync(proc=self.proc / "missing")
+        self.sync(proc=self.proc.path / "missing")
         self.assertEqual(self.gamelist.read_text(encoding="utf-8"), GAMELIST)
 
     def test_a_held_lock_skips_the_run(self) -> None:
@@ -443,7 +438,7 @@ class BothKindsTests(Art, unittest.TestCase):
             self.steam_home,
             say=lambda _: None,
             warn=self.warned.append,
-            proc=self.proc,
+            proc=self.proc.path,
             state_root=self.state,
         )
 
@@ -557,8 +552,7 @@ class WiringTests(unittest.TestCase):
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
         self.home = Path(self._tmp.name) / "home"
-        self.proc = Path(self._tmp.name) / "proc"
-        self.proc.mkdir()
+        self.proc = FakeProc(Path(self._tmp.name) / "proc")
         self.settings = esde.settings_path(self.home / "ES-DE")
         self.settings.parent.mkdir(parents=True)
         self.settings.write_text('<bool name="CustomEventScripts" value="false" />\n')
@@ -573,7 +567,7 @@ class WiringTests(unittest.TestCase):
             dry_run=False,
             python="/opt/wz/bin/python",
             import_check=lambda _: True,
-            proc=self.proc,
+            proc=self.proc.path,
             state_root=Path(self._tmp.name) / "state",
         )
         script = esde.script_path(self.home / "ES-DE", esde.PLAY_STATE_SCRIPT)
@@ -638,7 +632,7 @@ class WiringTests(unittest.TestCase):
                         home=home,
                         python="/p",
                         import_check=lambda _: True,
-                        proc=self.proc,
+                        proc=self.proc.path,
                         state_root=Path(self._tmp.name) / "state",
                         systemctl=lambda _: True,
                         flatpak_run=lambda _: (0, ""),

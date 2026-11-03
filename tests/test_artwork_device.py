@@ -104,7 +104,7 @@ class Art(Device):
 
     def ensure(self, *, dry_run=False, **kw):
         rep, lines = reporter()
-        kw.setdefault("proc", self.proc)
+        kw.setdefault("proc", self.proc.path)
         ensure_gamelists("ark", self.profile, self.home, rep, dry_run=dry_run, **kw)
         return rep, lines
 
@@ -198,7 +198,7 @@ class GamelistTests(Art, unittest.TestCase):
         self.assertEqual(rep.warnings, [])
 
     def test_without_proc_nothing_is_written_and_it_says_why(self) -> None:
-        rep, _ = self.ensure(proc=self.proc / "missing")
+        rep, _ = self.ensure(proc=self.proc.path / "missing")
         self.assertFalse(self.out("gba").exists())
         self.assertTrue(any("cannot tell whether" in w for w in rep.warnings))
 
@@ -244,7 +244,7 @@ class GamelistTests(Art, unittest.TestCase):
     def test_a_profile_without_artwork_does_nothing(self) -> None:
         rep, lines = reporter()
         bare = dataclasses.replace(self.profile, artwork=None)
-        ensure_gamelists("ark", bare, self.home, rep, dry_run=False, proc=self.proc)
+        ensure_gamelists("ark", bare, self.home, rep, dry_run=False, proc=self.proc.path)
         self.assertEqual((rep.warnings, lines), ([], []))
 
     def test_a_missing_system_list_warns(self) -> None:
@@ -411,7 +411,7 @@ class ScopeTests(Art, unittest.TestCase):
         cfg = ark_config(("library", "frontend"))
         rep, _ = reporter()
         refresh_artwork(
-            cfg, "ark", self.profile, self.home, rep, local=None, dry_run=False, proc=self.proc
+            cfg, "ark", self.profile, self.home, rep, local=None, dry_run=False, proc=self.proc.path
         )
         self.assertTrue(self.out("gba").is_file())
         self.assertTrue(any("Syncthing" in w for w in rep.warnings))  # no client: scope unchecked

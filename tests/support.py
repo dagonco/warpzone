@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import json
+import shutil
 import socketserver
 import threading
+from collections.abc import Sequence
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
@@ -21,6 +24,44 @@ DECK_LIBRARY_IGNORES = list(
     ignores.device_whitelist("deck", load_profile("steamos-emudeck").library_excludes())
 )
 API_KEY = "fake-key"  # gitleaks:allow (test fixture, not a real key)
+
+
+_UNSET: Any = object()
+
+
+class FakeProc:
+    """A fake /proc under `path`: one folder per process with `comm`, `cmdline` and `stat`."""
+
+    def __init__(self, path: Path) -> None:
+        self.path = path
+        path.mkdir(parents=True, exist_ok=True)
+
+    def add(
+        self,
+        pid: int,
+        comm: str | None,
+        argv: Sequence[str] | str | None = _UNSET,
+        *,
+        ppid: int = 1,
+    ) -> None:
+        """Add process `pid`. `argv` is a list of arguments (or one string for a single
+        argument) and defaults to just `comm`. None for `comm` or `argv` leaves that file
+        out, like an entry that cannot be read."""
+        if argv is _UNSET:
+            argv = None if comm is None else [comm]
+        entry = self.path / str(pid)
+        entry.mkdir(parents=True, exist_ok=True)
+        if comm is not None:
+            (entry / "comm").write_text(comm + "\n")
+        if argv is not None:
+            args = [argv] if isinstance(argv, str) else argv
+            (entry / "cmdline").write_bytes(b"".join(a.encode() + b"\0" for a in args))
+        (entry / "stat").write_text(f"{pid} (x) S {ppid} 0 0 0\n")
+
+    def clear(self) -> None:
+        """Remove every process, keeping the (now empty) /proc."""
+        shutil.rmtree(self.path)
+        self.path.mkdir()
 
 
 def config_data(api_url: str = "http://127.0.0.1:1") -> dict[str, Any]:

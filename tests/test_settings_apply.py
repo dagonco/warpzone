@@ -206,7 +206,7 @@ class SkipTests(ApplyBase):
         self.assertIsNone(self.snapshot("beta", "config"))
 
     def test_no_proc_refuses(self) -> None:
-        self.proc.rmdir()
+        self.proc.path.rmdir()
         with self.assertRaises(settings.SettingsError):
             self.run_apply()
         self.assertEqual(self.text(ALPHA), ALPHA_INI)

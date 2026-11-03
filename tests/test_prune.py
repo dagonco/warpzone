@@ -447,7 +447,9 @@ class Receiver:
 
         self.server = HTTPServer(("127.0.0.1", 0), Handler)
         self.url = f"http://127.0.0.1:{self.server.server_address[1]}/api/webhook/secret-id"
-        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread = threading.Thread(
+            target=self.server.serve_forever, kwargs={"poll_interval": 0.02}, daemon=True
+        )
 
     def __enter__(self) -> "Receiver":
         self.thread.start()
