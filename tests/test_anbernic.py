@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 from unittest import addModuleCleanup, mock
 
-from support import API_KEY, HUB_ID, FakeSyncthing, config_data
+from support import API_KEY, HUB_ID, FakeProc, FakeSyncthing, config_data
 from test_doctor import by_name, context
 from test_provision import reporter
 from warpzone import frontend
@@ -176,8 +176,7 @@ class Device:
         tmp = Path(self._tmp.name)
         self.home = tmp / "home"
         self.state = tmp / "state"
-        self.proc = tmp / "proc"
-        self.proc.mkdir()
+        self.proc = FakeProc(tmp / "proc")
         self.system_list = tmp / "etc/es_systems.cfg"
         self.system_list.parent.mkdir()
         self.system_list.write_text(SOURCE)
@@ -193,11 +192,7 @@ class Device:
         )
 
     def start(self, comm: str) -> None:
-        d = self.proc / "4242"
-        d.mkdir()
-        (d / "comm").write_text(comm + "\n")
-        (d / "cmdline").write_bytes(comm.encode() + b"\0")
-        (d / "stat").write_text("4242 (x) S 1 0 0 0\n")
+        self.proc.add(4242, comm)
 
     def backups(self, name: str) -> list[Path]:
         folder = self.state / "backups" / name
@@ -206,7 +201,7 @@ class Device:
     def provision(self, *, dry_run=False, folders=("library", "saves"), **kw):
         cfg = ark_config(folders)
         rep, lines = reporter()
-        kw.setdefault("proc", self.proc)
+        kw.setdefault("proc", self.proc.path)
         with FakeSyncthing(ARK_ID) as local:
             for name in ("patterns-common.stignore", "patterns-ark.stignore"):
                 local.arrives_after[("wz-library", name)] = 0
@@ -298,7 +293,7 @@ class ProvisionTests(Device, unittest.TestCase):
         self.assertEqual(len([w for w in rep.warnings if "RetroArch" in w]), 1)
 
     def test_without_proc_nothing_is_edited_and_it_says_why(self) -> None:
-        rep, _ = self.provision(proc=self.proc / "missing")
+        rep, _ = self.provision(proc=self.proc.path / "missing")
         self.assertFalse(self.override.exists())
         self.assertEqual(self.cfg.read_text(), RETROARCH)
         self.assertTrue(any("cannot tell whether" in w for w in rep.warnings))

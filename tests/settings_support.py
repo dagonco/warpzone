@@ -7,6 +7,7 @@ import unittest
 from datetime import datetime
 from pathlib import Path
 
+from support import FakeProc
 from warpzone import settings
 from warpzone.profiles import DataFile, EmulatorSettings, Profile, SettingsFile
 
@@ -96,11 +97,10 @@ class SettingsCase(unittest.TestCase):
         root = Path(self._tmp.name)
         self.home = root / "home"
         self.state = root / "state"
-        self.proc = root / "proc"
+        self.proc = FakeProc(root / "proc")
         self.home.mkdir()
-        self.proc.mkdir()
         self.clock_value = datetime(2026, 1, 2, 3, 4, 5)
-        self.env = settings.Env(self.home, self.state, self.proc, lambda: self.clock_value)
+        self.env = settings.Env(self.home, self.state, self.proc.path, lambda: self.clock_value)
         self.ctx = settings.make_context(DEVICE, profile(), self.env)
         self.folder = self.ctx.folder
         self.folder.mkdir(parents=True)
@@ -129,10 +129,7 @@ class SettingsCase(unittest.TestCase):
         path.write_bytes(data)
 
     def fake_process(self, pid: int, comm: str, argv: str | None = None) -> None:
-        entry = self.proc / str(pid)
-        entry.mkdir(parents=True, exist_ok=True)
-        (entry / "comm").write_text(comm + "\n")
-        (entry / "cmdline").write_bytes((argv or comm).encode() + b"\0")
+        self.proc.add(pid, comm, argv or comm)
 
     # -- state ----------------------------------------------------------------------------
 
