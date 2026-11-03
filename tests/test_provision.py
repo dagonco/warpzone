@@ -1,5 +1,4 @@
 import dataclasses
-import shutil
 import stat
 import subprocess
 import tempfile
@@ -14,6 +13,7 @@ from support import (
     DECK_LIBRARY_IGNORES,
     HUB_ID,
     MACHINE_ID,
+    FakeProc,
     FakeSyncthing,
     config_data,
     make_config,
@@ -114,7 +114,20 @@ class HubTests(unittest.TestCase):
                     "global": {"version": ["X:1"]},
                 }
             rep, lines = reporter()
-            run_hub(cfg, PROFILES, Client(fake.url, API_KEY), rep, wait_timeout=5.0)
+            now = [0.0]  # wz-library never gets its whitelists: wait for it on a fake clock
+
+            def sleep(seconds: float) -> None:
+                now[0] += seconds
+
+            run_hub(
+                cfg,
+                PROFILES,
+                Client(fake.url, API_KEY),
+                rep,
+                wait_timeout=5.0,
+                sleep=sleep,
+                clock=lambda: now[0],
+            )
             songs = [
                 (m, b)
                 for m, p, b in fake.writes()
@@ -958,8 +971,7 @@ class EsdeScriptTests(unittest.TestCase):
         tmp = Path(self._tmp.name)
         self.home = tmp / "home"
         self.state = tmp / "state"
-        self.proc = tmp / "proc"
-        self.proc.mkdir()
+        self.proc = FakeProc(tmp / "proc")
         self.esde = self.home / "ES-DE"
         self.script = esde.script_path(self.esde)
         self.settings = esde.settings_path(self.esde)
@@ -969,11 +981,7 @@ class EsdeScriptTests(unittest.TestCase):
         self.settings.write_bytes(text.encode())
 
     def start_esde(self, comm: str = "es-de", argv0: str | None = None) -> None:
-        d = self.proc / "4242"
-        d.mkdir()
-        (d / "comm").write_text(comm + "\n")
-        (d / "cmdline").write_bytes((argv0 or comm).encode() + b"\0")
-        (d / "stat").write_text("4242 (x) S 1 0 0 0\n")
+        self.proc.add(4242, comm, argv0 or comm)
 
     def provision(self, *, folders=("settings",), dry_run=False, profile=None, **kw):
         data = config_data()
@@ -981,7 +989,7 @@ class EsdeScriptTests(unittest.TestCase):
         cfg = parse_config(data)
         rep, lines = reporter()
         kw.setdefault("import_check", lambda python: True)
-        kw.setdefault("proc", self.proc)
+        kw.setdefault("proc", self.proc.path)
         with FakeSyncthing(DECK_ID) as local:
             client = Client(local.url, API_KEY, label="local", dry_run=dry_run, sink=lines.append)
             provision_device(
@@ -1168,8 +1176,7 @@ class EsdeScriptTests(unittest.TestCase):
     def test_left_alone_while_esde_runs(self) -> None:
         for comm, argv0 in (("es-de", None), ("AppRun.wrapped", "/x/ES-DE.AppImage")):
             with self.subTest(comm=comm):
-                shutil.rmtree(self.proc)
-                self.proc.mkdir()
+                self.proc.clear()
                 self.start_esde(comm, argv0)
                 self.write_settings() if not self.settings.exists() else None
                 rep, _ = self.provision()
@@ -1182,7 +1189,7 @@ class EsdeScriptTests(unittest.TestCase):
 
     def test_without_proc_it_is_left_alone_and_says_why(self) -> None:
         self.write_settings()
-        rep, _ = self.provision(proc=self.proc / "missing")
+        rep, _ = self.provision(proc=self.proc.path / "missing")
         self.assertEqual(self.settings.read_text(), ES_SETTINGS)
         (warning,) = rep.warnings
         self.assertIn("cannot tell whether ES-DE is running", warning)
@@ -1246,7 +1253,7 @@ class EsdeScriptTests(unittest.TestCase):
 
     def test_without_proc_the_run_is_not_deferred(self) -> None:
         self.write_settings()
-        rep, _ = self.provision(unattended=True, proc=self.proc / "missing")
+        rep, _ = self.provision(unattended=True, proc=self.proc.path / "missing")
         self.assertFalse(rep.deferred)
         self.assertTrue(rep.warnings)
 
@@ -1267,14 +1274,17 @@ class EsdeScriptTests(unittest.TestCase):
         self.start_esde()
         rep, _ = reporter()
         self.assertTrue(
-            provision_mod._busy(esde.ESDE_PROCESSES, "ES-DE", "a file", "run again", rep, self.proc)
+            provision_mod._busy(
+                esde.ESDE_PROCESSES, "ES-DE", "a file", "run again", rep, self.proc.path
+            )
         )
         self.assertTrue(rep.deferred)
         rep, _ = reporter()
-        shutil.rmtree(self.proc)
-        self.proc.mkdir()
+        self.proc.clear()
         self.assertFalse(
-            provision_mod._busy(esde.ESDE_PROCESSES, "ES-DE", "a file", "run again", rep, self.proc)
+            provision_mod._busy(
+                esde.ESDE_PROCESSES, "ES-DE", "a file", "run again", rep, self.proc.path
+            )
         )
         self.assertFalse(rep.deferred)
 

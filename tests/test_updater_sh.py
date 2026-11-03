@@ -8,6 +8,7 @@ the timer does. They run with whatever shells exist (`sh`, `dash`, `bash`) so a 
 Linux run both cover the bashisms that would break on the other.
 """
 
+import atexit
 import os
 import re
 import shutil
@@ -20,6 +21,7 @@ import unittest
 from pathlib import Path
 from typing import ClassVar
 
+from support import FakeProc
 from warpzone import settings_state
 from warpzone.selfupdate import tag_key
 
@@ -131,6 +133,39 @@ class SigningKey:
         self.allowed = f'test@example.invalid namespaces="git" {public}\n'
 
 
+_TEMPLATE: Path | None = None
+
+
+def _repos_template() -> Path:
+    """A folder holding `origin.git`, `work` and `clone` with release 0.1.0 published and the
+    clone on it, built once per run: every `Rig` copies it instead of running about ten git
+    processes to build the same three repositories."""
+    global _TEMPLATE
+    if _TEMPLATE is None:
+        template = Path(tempfile.mkdtemp(prefix="wz-updater-template-"))
+        atexit.register(shutil.rmtree, template, True)
+        builder = Rig.__new__(Rig)  # only the repositories, none of the rest of a rig
+        builder.root = template
+        builder.origin = template / "origin.git"
+        builder.work = template / "work"
+        builder.clone = template / "clone"
+        for args in (
+            ["git", "init", "-q", "--bare", "-b", "main", str(builder.origin)],
+            ["git", "init", "-q", "-b", "main", str(builder.work)],
+        ):
+            subprocess.run(args, check=True, env={**os.environ, **GIT_ENV})
+        git(builder.work, "remote", "add", "origin", str(builder.origin))
+        builder.release("0.1.0")
+        subprocess.run(
+            ["git", "clone", "-q", str(builder.origin), str(builder.clone)],
+            check=True,
+            env={**os.environ, **GIT_ENV},
+        )
+        git(builder.clone, "checkout", "-q", "--detach", "v0.1.0")
+        _TEMPLATE = template
+    return _TEMPLATE
+
+
 class Rig:
     """An upstream repository, a clone of it, a fake Python and the updater's folders."""
 
@@ -143,12 +178,12 @@ class Rig:
         self.clone = self.root / "clone"
         self.state_dir = self.root / "state" / "updater"
         self.conf = self.state_dir / "conf"
-        self.proc = self.root / "proc"
+        self.proc = FakeProc(self.root / "proc")
         self.fake_dir = self.root / "fake"
         self.boot_id = self.root / "boot_id"
         self.updater = self.root / "live" / "updater.sh"
         self.python = self.root / "bin" / "python"
-        for folder in (self.proc, self.fake_dir, self.state_dir, self.updater.parent):
+        for folder in (self.fake_dir, self.state_dir, self.updater.parent):
             folder.mkdir(parents=True)
         self.python.parent.mkdir()
         self.python.write_text(FAKE_PYTHON)
@@ -160,25 +195,20 @@ class Rig:
         nosync.chmod(0o755)
         self.boot_id.write_text("boot-1\n")
         shutil.copy(UPDATER, self.updater)
-        subprocess.run(
-            ["git", "init", "-q", "--bare", "-b", "main", str(self.origin)],
-            check=True,
-            env={**os.environ, **GIT_ENV},
-        )
-        subprocess.run(
-            ["git", "init", "-q", "-b", "main", str(self.work)],
-            check=True,
-            env={**os.environ, **GIT_ENV},
-        )
-        git(self.work, "remote", "add", "origin", str(self.origin))
-        self.release("0.1.0")
-        subprocess.run(
-            ["git", "clone", "-q", str(self.origin), str(self.clone)],
-            check=True,
-            env={**os.environ, **GIT_ENV},
-        )
-        git(self.clone, "checkout", "-q", "--detach", "v0.1.0")
+        self._copy_repos()
         self.write_conf()
+
+    def _copy_repos(self) -> None:
+        """Give this rig its own copy of the repositories, pointing at its own origin."""
+        template = _repos_template()
+        for name in ("origin.git", "work", "clone"):
+            shutil.copytree(template / name, self.root / name, symlinks=True)
+        # the only place a copy still names the template is where it remembers its origin
+        for repo in (self.work, self.clone):
+            for name in ("config", "FETCH_HEAD"):
+                path = repo / ".git" / name
+                if path.exists():
+                    path.write_text(path.read_text().replace(str(template), str(self.root)))
 
     # --- the repositories -------------------------------------------------------------
 
@@ -306,12 +336,6 @@ class Rig:
         conf.update(values)
         self.conf.write_text("".join(f"{k}={v}\n" for k, v in conf.items() if v is not None))
 
-    def add_process(self, pid: int, comm: str, argv: list[str] | None = None) -> None:
-        folder = self.proc / str(pid)
-        folder.mkdir(parents=True)
-        (folder / "comm").write_text(comm + "\n")
-        (folder / "cmdline").write_bytes(b"\0".join(a.encode() for a in (argv or [comm])) + b"\0")
-
     def cut_checkouts(self, mode: str) -> None:
         """Make the first checkout that writes `zz.txt` die in the middle, after the files
         before it were written: `kill` takes the whole process group down (a power cut),
@@ -361,7 +385,7 @@ class Rig:
             "HOME": str(self.root / "home"),
             "WZ_STATE_DIR": str(self.state_dir),
             "WZ_CONF": str(self.conf),
-            "WZ_PROC": str(self.proc),
+            "WZ_PROC": str(self.proc.path),
             "WZ_BOOT_ID_FILE": str(self.boot_id),
             "WZ_FAKE_CLONE": str(self.clone),
             "WZ_FAKE_DIR": str(self.fake_dir),
@@ -650,7 +674,7 @@ class EdgeTests(UpdaterCase):
         rig = self.rig
         rig.release("0.2.0")
         rig.flag("defer")  # provision keeps answering 3
-        rig.add_process(7000001, "es-de")  # the menu has been open since the first deferral
+        rig.proc.add(7000001, "es-de")  # the menu has been open since the first deferral
         rig.write_state(pending="1", deferred_since=str(NOW - 80 * HOUR))
         self.assertTick(rig.tick(), 0)
         state = rig.state()
@@ -719,7 +743,7 @@ class MenuTests(UpdaterCase):
     def test_an_open_menu_defers_for_72_hours_and_then_updates_anyway(self) -> None:
         rig = self.rig
         rig.release("0.2.0")
-        rig.add_process(7000001, "es-de")
+        rig.proc.add(7000001, "es-de")
         self.assertTick(rig.tick(), 0)
         state = rig.state()
         self.assertEqual((state["pending"], state["last_result"]), ("1", "deferred"))
@@ -739,9 +763,9 @@ class MenuTests(UpdaterCase):
     def test_a_deferral_that_ends_when_the_menu_closes_updates_at_once(self) -> None:
         rig = self.rig
         rig.release("0.2.0")
-        rig.add_process(7000001, "ES-DE.AppImage")
+        rig.proc.add(7000001, "ES-DE.AppImage")
         rig.tick()
-        shutil.rmtree(rig.proc / "7000001")
+        shutil.rmtree(rig.proc.path / "7000001")
         self.assertTick(rig.tick(now=NOW + 900), 0)
         self.assertEqual(rig.on_tag(), "v0.2.0")
         self.assertEqual(rig.state()["deferred_since"], "")
@@ -762,9 +786,9 @@ class MenuTests(UpdaterCase):
             with self.subTest(names=names, procs=procs):
                 rig = Rig(self)
                 for pid, (comm, argv) in enumerate(procs, start=7000001):
-                    rig.add_process(pid, comm, argv)
+                    rig.proc.add(pid, comm, argv)
                 rig.write_conf(frontend=" ".join(names))
-                expected = settings_state.running(names, rig.proc)
+                expected = settings_state.running(names, rig.proc.path)
                 proc = rig.run("menu")
                 self.assertEqual(proc.returncode == 0, expected, proc.output)
                 self.assertIn(proc.returncode, (0, 1))
@@ -772,7 +796,7 @@ class MenuTests(UpdaterCase):
     def test_a_missing_proc_is_not_a_reason_to_wait(self) -> None:
         rig = self.rig
         rig.release("0.2.0")
-        shutil.rmtree(rig.proc)
+        shutil.rmtree(rig.proc.path)
         self.assertTick(rig.tick(), 0)
         self.assertEqual(rig.on_tag(), "v0.2.0")
 
@@ -875,7 +899,7 @@ class IndexLockTests(UpdaterCase):
     def test_an_old_lock_stays_while_git_is_alive(self) -> None:
         lock = self.lock()
         self.age(lock, 30)
-        self.rig.add_process(7000001, "git", ["git", "gc"])
+        self.rig.proc.add(7000001, "git", ["git", "gc"])
         self.assertTick(self.rig.tick(), 0)
         self.assertTrue(lock.exists())
 
@@ -1008,14 +1032,14 @@ class HalfCheckoutTests(UpdaterCase):
 class DeferralClockTests(UpdaterCase):
     def test_a_menu_that_closes_and_opens_again_starts_a_new_deferral(self) -> None:
         rig = self.rig
-        rig.add_process(7000001, "es-de")
+        rig.proc.add(7000001, "es-de")
         self.assertTick(rig.tick(), 0)
         self.assertEqual(rig.state()["deferred_since"], str(NOW))
-        shutil.rmtree(rig.proc / "7000001")
+        shutil.rmtree(rig.proc.path / "7000001")
         self.assertTick(rig.tick(now=NOW + HOUR), 0)  # closed, nothing to update
         self.assertEqual(rig.state()["deferred_since"], "")
         rig.release("0.2.0")
-        rig.add_process(7000002, "es-de")  # days later somebody is playing
+        rig.proc.add(7000002, "es-de")  # days later somebody is playing
         later = NOW + 4 * DAY
         self.assertTick(rig.tick(now=later), 0)
         self.assertEqual(rig.on_tag(), "v0.1.0", "no update while the user plays")
@@ -1027,7 +1051,7 @@ class DeferralClockTests(UpdaterCase):
         rig = self.rig
         rig.release("0.2.0")
         rig.flag("env_broken")
-        rig.add_process(7000001, "es-de")
+        rig.proc.add(7000001, "es-de")
         rig.write_state(pending="1", deferred_since=str(NOW - 80 * HOUR))
         self.assertTick(rig.tick(), 1)
         self.assertEqual(rig.state()["last_result"], "env")
@@ -1036,7 +1060,7 @@ class DeferralClockTests(UpdaterCase):
     def test_a_failed_reconcile_ends_the_deferral_with_the_menu_still_open(self) -> None:
         rig = self.rig
         rig.flag("env_broken")
-        rig.add_process(7000001, "es-de")
+        rig.proc.add(7000001, "es-de")
         rig.write_state(pending="1", deferred_since=str(NOW - 80 * HOUR))
         self.assertTick(rig.tick(), 0)
         self.assertEqual(len(rig.provisions()), 1)
@@ -1263,7 +1287,7 @@ class StateHardeningTests(UpdaterCase):
         rig = self.rig
         rig.release("0.2.0")
         rig.write_conf(frontend="*")
-        rig.add_process(7000001, "behaviour")  # a file name in the clone
+        rig.proc.add(7000001, "behaviour")  # a file name in the clone
         self.assertTick(rig.tick(), 0)
         self.assertEqual(rig.on_tag(), "v0.2.0")
 
@@ -1360,7 +1384,7 @@ class SuspectTests(UpdaterCase):
         # The budget is counted on a fake uptime that only the fake python moves (`spend`
         # takes 99 of the 100 seconds), so nothing here depends on how fast the machine is.
         rig = self.rig
-        (rig.proc / "uptime").write_text("1000.00 0\n")
+        (rig.proc.path / "uptime").write_text("1000.00 0\n")
         rig.release("0.2.0", "hang spend")
         budget = {"WZ_STEP_TIMEOUT": "2", "WZ_TICK_BUDGET": "100"}
         # The first look fails at its own limit, the previous version passes (one second is
@@ -1393,7 +1417,7 @@ class SuspectTests(UpdaterCase):
 
     def test_a_second_look_that_cannot_check_the_previous_version_stays_suspect(self) -> None:
         rig = self.rig
-        (rig.proc / "uptime").write_text("1000.00 0\n")
+        (rig.proc.path / "uptime").write_text("1000.00 0\n")
         rig.release("0.2.0", "provision_fails spend")
         rig.break_version("0.1.0", "hang")  # the check of the previous version never ends
         self.suspect(rig)
@@ -1472,7 +1496,7 @@ class ClockTests(UpdaterCase):
     def test_the_budget_runs_on_the_uptime_not_on_the_wall_clock(self) -> None:
         rig = self.rig
         rig.release("0.2.0", "hang")
-        (rig.proc / "uptime").write_text("100.00 400.00\n")  # it does not advance
+        (rig.proc.path / "uptime").write_text("100.00 400.00\n")  # it does not advance
         git(rig.clone, "fetch", "-q", "--tags")
         rig.write_state(
             good_tag="v0.1.0",

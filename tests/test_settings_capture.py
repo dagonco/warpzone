@@ -689,7 +689,9 @@ class EndToEndTests(CaptureBase):
         self.capture(["", ""])
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            env = settings.Env(root / "home", root / "state", self.proc, lambda: self.clock_value)
+            env = settings.Env(
+                root / "home", root / "state", self.proc.path, lambda: self.clock_value
+            )
             env.home.mkdir()
             ctx = settings.make_context("tablet", profile(), env)
             ctx.folder.mkdir(parents=True)
