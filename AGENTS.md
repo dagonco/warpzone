@@ -35,7 +35,15 @@ The end-to-end test starts two real Syncthing instances and is skipped unless `W
 WARPZONE_E2E_SYNCTHING=/path/to/syncthing python3 -m unittest discover -s tests -k EndToEnd -v
 ```
 
-CI runs unit tests on Python 3.11 to 3.14 on Linux and macOS; the e2e test runs on Linux only. Behaviour that touches Syncthing can differ between the two (see below), so a local macOS e2e pass is not proof for Linux.
+The tests of the updater script (`tests/test_updater_sh.py`) run `warpzone/data/updater.sh` against real git repositories, take about two minutes, and use shellcheck when it is installed (`brew install shellcheck` or `apt install shellcheck`). CI runs them in their own `updater` job (Ubuntu with dash as `sh`, and macOS), and the `test` job skips them through `WARPZONE_SKIP_UPDATER_SH=1`. Locally the plain command above runs everything, that file included; to run only that suite, or everything else, or that suite with another shell as `sh`:
+
+```bash
+python3 -m unittest discover -s tests -p test_updater_sh.py -v
+WARPZONE_SKIP_UPDATER_SH=1 python3 -m unittest discover -s tests -v
+WZ_TEST_SHELL=dash python3 -m unittest discover -s tests -p test_updater_sh.py -v
+```
+
+CI runs unit tests on Python 3.11 to 3.14 on Linux and macOS (the updater script's tests apart); the e2e test runs on Linux only. Behaviour that touches Syncthing can differ between the two (see below), so a local macOS e2e pass is not proof for Linux.
 
 ## Syncthing behaviour worth knowing
 

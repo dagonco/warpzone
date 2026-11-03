@@ -77,6 +77,30 @@ It does not depend on ES-DE or on any other part of the profile. `provision devi
 
 `warpzone doctor` warns on a device when the timer is not installed, not enabled or not running.
 
+### The updater script
+
+`warpzone/data/updater.sh` is the script that will replace `warpzone self-update` as what the timer runs. It is POSIX `sh` and needs only `git` and the usual tools, so that it can put a working release back even when warpzone itself no longer starts. **It is not installed or started by anything yet**: `provision device` does not copy it, and the timer still runs `warpzone self-update`. The rules it follows are the contract in [design.md](design.md#autonomous-updates-contract); this is what you can run today.
+
+```bash
+sh warpzone/data/updater.sh tick       # one run of the timer
+sh warpzone/data/updater.sh menu       # open (exit 0), closed (1) or unknown (2)
+sh warpzone/data/updater.sh selftest   # its tools and helpers; prints "selftest: ok abi=N"
+```
+
+It reads `~/.local/state/warpzone/updater/conf` (`device`, `python`, `clone`, `enabled`, `frontend`, `config`, one `key=value` per line) and keeps its state in `state` and `bad/` next to it, a log in `~/.local/state/warpzone/self-update.log` and the output of the last check in `last-verify.log`. A tick:
+
+1. Takes a lock and stops if another tick holds it, or if `enabled` is `false`.
+2. Defers if the frontend (ES-DE) is running, for at most 72 hours from the first deferral; after that it goes on.
+3. Fetches the remote at most once a day, then picks the highest plain `vX.Y.Z` tag that is newer than the checkout, is an ancestor of `origin/main`, carries the same `__version__`, and is not marked bad. It never goes down, and it ignores release candidates for now.
+4. Checks the tag out (after checking there is room for it) and verifies it in three steps with a time limit each, and 25 minutes for the whole tick: warpzone imports from the checkout and `--version` is the tag; `provision device <device> --unattended`; `warpzone health <device>`. A step that is cut off takes its whole process group with it.
+5. If a step fails it goes back to the version it came from and runs the same check. If that passes, the new tag is checked once more, and only if it fails again is it bad and never tried again (`bad/<tag>`). If the previous version fails too, the environment is at fault: the tag is not blamed and the device waits 1, 2, 4 and then 7 days. Running out of the tick's time counts as the environment too.
+6. A power cut or a kill halfway never counts against a tag: after two attempts without a verdict it goes back and waits a day. A checkout that was cut in the middle is finished again by the next tick, as long as the only changed files are the update's own.
+7. A new release is checked once more after the next boot (probation), against the version it replaced.
+
+It only moves a checkout that is on a release tag or on a clean branch contained in `origin/main`. A branch with commits of its own, a loose commit or a tree with changes is left exactly as it is (the script never runs `reset`, `stash` or `clean`) and only gets `provision device --unattended` once per boot. An `index.lock` older than 10 minutes with no `git` running is removed.
+
+Not done yet: installing the script and its settings (`provision`), the venv repair, channels (`rc`), `pin`, `RETIRED`, signed tags, the timer units that run it, and the `doctor` checks.
+
 ### Channel and pin
 
 `channel` (`"stable"`, the default, or `"rc"`) and `pin` (a tag such as `v0.3.0` or `v0.3.0rc1`) can be set under `[devices.<name>]` next to `self_update`; the config is rejected when they are malformed. `warpzone self-update` does not use them yet: it still follows plain `vX.Y.Z` releases. The planned behaviour is in [design.md](design.md#autonomous-updates-contract).
