@@ -8,16 +8,27 @@ import tempfile
 import unittest
 import unittest.mock
 from pathlib import Path
+from unittest import addModuleCleanup, mock
 
 import test_shadps4
-from support import DECK_ID, HUB_ID
+from support import DECK_ID, HUB_ID, FakeProc
 from test_cli import run, write_config
 from test_doctor import by_name
 from test_shadps4 import PROFILE
 from warpzone import esde, titlelinks
+from warpzone import provision as provision_mod
 from warpzone.doctor import OK, WARN
 from warpzone.profiles import ProfileError, parse_profile
 from warpzone.titlelinks import Entry
+
+
+def setUpModule() -> None:
+    """provision_device would install the updater and its timer, which runs a real self-test
+    of the script (seconds, inside a clone): tests/test_update_timer.py covers that."""
+    patcher = mock.patch.object(provision_mod, "ensure_self_update")
+    patcher.start()
+    addModuleCleanup(patcher.stop)
+
 
 SOURCE = "/lib/roms/psvita/app"
 TITLE = "PCSF00024"
@@ -96,7 +107,7 @@ class Helpers:
         return folder
 
     def sync(self, **kw) -> int:
-        kw.setdefault("proc", self.proc)
+        kw.setdefault("proc", self.proc.path)
         return titlelinks.sync(
             "deck", self.profile, self.home, say=self.said.append, warn=self.warned.append, **kw
         )
@@ -111,17 +122,12 @@ class Home(Helpers, unittest.TestCase):
         self.addCleanup(self._tmp.cleanup)
         tmp = Path(self._tmp.name)
         self.home = tmp / "home"
-        self.proc = tmp / "proc"
-        self.proc.mkdir()
+        self.proc = FakeProc(tmp / "proc")
         self.profile = PROFILE
         self.lay_out()
 
     def start(self, comm: str) -> None:
-        d = self.proc / "4242"
-        d.mkdir()
-        (d / "comm").write_text(comm + "\n")
-        (d / "cmdline").write_bytes(comm.encode() + b"\0")
-        (d / "stat").write_text("4242 (x) S 1 0 0 0\n")
+        self.proc.add(4242, comm)
 
 
 class SyncTests(Home):
@@ -228,7 +234,7 @@ class SyncTests(Home):
 
     def test_nothing_is_done_when_it_cannot_be_told(self) -> None:
         self.game()
-        self.sync(proc=self.proc / "missing")
+        self.sync(proc=self.proc.path / "missing")
         self.assertEqual(list(self.target.iterdir()), [])
 
     def test_a_missing_vita3k_folder_is_not_created(self) -> None:

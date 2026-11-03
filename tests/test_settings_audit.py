@@ -135,7 +135,7 @@ class AuditTests(AuditBase):
             self.assertNotIn(secret, out)
 
     def test_works_without_proc(self) -> None:
-        self.proc.rmdir()
+        self.proc.path.rmdir()
         code, out = self.run_audit()
         self.assertEqual(code, 1)
         self.assertIn("pending", out)
