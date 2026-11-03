@@ -2140,7 +2140,10 @@ settings, the state and the `bad/` folder are (`live_path`, `conf_path`, `state_
   hold, stays the same. Everything runs with `-m warpzone`. `--clear` is run only on a folder
   that is called `venv`, does not exist or holds the mark `warpzone-venv` (which the script
   writes when it makes one, so a venv of the user's, or the one of an older install, is never
-  cleared: `install` refuses it and a tick logs it and leaves it), is not a symlink and does not
+  cleared: `install` refuses it and a tick logs it and leaves it; the mark is also noted in
+  `venv-owned` in the state folder before the `--clear`, so a power cut between the clear and
+  the mark still leaves a venv that may be repaired, and `install` marks a working venv that
+  has `warpzone-clone.pth` and no mark), is not a symlink and does not
   hold the clone; never on the folder around it, which holds `play-state`. A venv that works
   is left alone (it is judged by finding `warpzone` without importing it). A tick repairs only
   a checkout on a release (a tag or a clean branch inside `origin/main`), never a `dev` or
@@ -2166,8 +2169,14 @@ settings, the state and the `bad/` folder are (`live_path`, `conf_path`, `state_
   trial finds the candidate's script live) and, whenever it goes back to the previous version
   (a bad release, an environment failure, a trial given up, a failed probation), it puts that
   copy back with a rename, whatever the ABI of the script it replaces. The copy is dropped at
-  the next tick when no trial or probation is on, and when probation passes. A script that is
-  run from inside the clone is never replaced.
+  the next tick when no trial or probation is on, and when probation passes. It is written to
+  a temporary file, flushed with `sync` and renamed, and a live script is only kept, and a kept
+  one only put back, when it is not empty, has its `UPDATER_ABI=` line and passes `sh -n`
+  (a power cut can leave a file of no bytes); otherwise the live one is left as it is and the
+  log says so. Only the live copy itself is ever kept or replaced: the running script, with
+  every symlink resolved (`cd -P`, `pwd -P`), must be `~/.local/share/warpzone/updater/updater.sh`
+  (`WZ_LIVE` moves it for tests), so the clone's own script, run by hand or through a symlink,
+  is never touched.
 - **The settings.** `provision.ensure_self_update` writes
   `~/.local/state/warpzone/updater/conf` from the device's table in `config.toml`:
   `device`, `config` (the absolute path of the config file), `clone` (the git checkout warpzone

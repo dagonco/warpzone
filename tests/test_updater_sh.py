@@ -75,6 +75,10 @@ case "$*" in
       cp "$clone/warpzone/data/updater.sh" "$WZ_FAKE_LIVE.new"
       mv -f "$WZ_FAKE_LIVE.new" "$WZ_FAKE_LIVE"
     fi
+    # a power cut left the kept copy of the updater empty or damaged
+    if has corrupt_good; then
+      printf '%s' "$(cat "$dir/good_content")" >"$WZ_STATE_DIR/updater.sh.good"
+    fi
     [ -e "$dir/env_broken" ] && exit 1
     if has spend; then
       # this step "takes" 99 seconds of the tick's budget (the uptime is the budget's clock)
@@ -362,6 +366,7 @@ class Rig:
             "WZ_FAKE_CLONE": str(self.clone),
             "WZ_FAKE_DIR": str(self.fake_dir),
             "WZ_FAKE_LIVE": str(self.updater),
+            "WZ_LIVE": str(self.updater),
             "WZ_FETCH_INTERVAL": "0",
             "WZ_STEP_TIMEOUT": "20",
             "PATH": f"{self.python.parent}{os.pathsep}{os.environ['PATH']}",
@@ -2126,23 +2131,58 @@ class LiveCopyTests(UpdaterCase):
         self.assertEqual(rig.updater.read_text(), original)
         self.assertEqual(rig.bad(), [])
 
-    def test_a_copy_that_is_inside_the_clone_is_never_replaced(self) -> None:
+    def test_a_kept_copy_that_is_empty_or_damaged_is_not_put_back(self) -> None:
+        # what an ext4 volume can hold after a power cut: a file of no bytes
+        for content in ("", "UPDATER_ABI=1\nif then fi (\n", "echo no abi line\n"):
+            with self.subTest(content=content):
+                rig = Rig(self)
+                (rig.fake_dir / "good_content").write_text(content)
+                rig.release(
+                    "0.2.0",
+                    "install_updater corrupt_good health_fails",
+                    extra={"warpzone/data/updater.sh": self.BROKEN},
+                )
+                proc = rig.tick()
+                self.assertEqual(rig.updater.read_text(), self.BROKEN, proc.output)
+                self.assertIn("not put back", proc.output)
+
+    def test_only_the_live_copy_itself_is_ever_kept_or_replaced(self) -> None:
+        # the clone's own script, reached through a symlink, is not the live copy
         rig = self.rig
         rig.release("0.2.0", "health_fails")
         inside = rig.clone / "warpzone" / "data" / "updater.sh"
         inside.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy(UPDATER, inside)
         before = inside.read_bytes()
-        proc = subprocess.run(
-            ["sh", str(inside), "tick"],
+        link = rig.root / "clone-link"
+        link.symlink_to(rig.clone)
+        run = subprocess.run(
+            ["sh", str(link / "warpzone" / "data" / "updater.sh"), "tick"],
             env=rig.env(),
             stdin=subprocess.DEVNULL,
             capture_output=True,
             text=True,
             check=False,
         )
-        self.assertEqual(inside.read_bytes(), before, proc.stdout)
-        self.assertFalse(self.good_copy().exists())
+        self.assertEqual(inside.read_bytes(), before, run.stdout)
+        self.assertFalse(self.good_copy().exists(), run.stdout)
+
+    def test_a_live_copy_reached_through_a_symlink_is_still_put_back(self) -> None:
+        rig = self.rig
+        original = rig.updater.read_text()
+        rig.release(
+            "0.2.0", "install_updater health_fails", extra={"warpzone/data/updater.sh": self.BROKEN}
+        )
+        link = rig.root / "live-link"
+        link.symlink_to(rig.updater.parent)
+        subprocess.run(
+            ["sh", str(link / "updater.sh"), "tick"],
+            env=rig.env(),
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(rig.updater.read_text(), original)
 
 
 # A release that a real Python can import and run: the empty modules the import check names, and
@@ -2256,21 +2296,19 @@ class InstallTests(RealPythonCase):
                 )
 
     def test_the_venv_has_no_pip_a_pth_to_the_clone_and_a_shim(self) -> None:
-        self.assertEqual(self.install("deck").returncode, 0)
-        pths = list(self.venv.glob("lib/python*/site-packages/*.pth"))
+        other = (
+            self.base / "elsewhere" / "venv"
+        )  # --venv picks the folder; none is made beside the clone
+        self.assertEqual(self.install("deck", "--venv", str(other)).returncode, 0)
+        self.assertFalse(self.venv.exists())
+        pths = list(other.glob("lib/python*/site-packages/*.pth"))
         self.assertEqual([p.read_text().strip() for p in pths], [str(self.src)])
-        self.assertEqual(list(self.venv.glob("lib/python*/site-packages/pip")), [])
-        shim = self.venv / "bin" / "warpzone"
+        self.assertEqual(list(other.glob("lib/python*/site-packages/pip")), [])
+        shim = other / "bin" / "warpzone"
         self.assertTrue(os.access(shim, os.X_OK))
         text = shim.read_text()
         self.assertTrue(text.startswith("#!/bin/sh\n"))
-        self.assertIn(f"'{self.venv}/bin/python' -m warpzone", text)
-
-    def test_the_venv_is_a_sibling_of_the_clone_unless_told_otherwise(self) -> None:
-        other = self.base / "elsewhere" / "venv"
-        self.assertEqual(self.install("deck", "--venv", str(other)).returncode, 0)
-        self.assertTrue(self.venv_python(other).exists())
-        self.assertFalse(self.venv.exists())
+        self.assertIn(f"'{other}/bin/python' -m warpzone", text)
 
     def test_the_channel_option_picks_a_candidate(self) -> None:
         self.rig.release("0.3.0rc1", extra=with_updater())
@@ -2364,8 +2402,12 @@ class InstallTests(RealPythonCase):
         self.assertEqual(self.install("deck").returncode, 0)
         marker = self.venv / "marker"
         marker.write_text("mine")
+        # one that warpzone made, but whose mark a power cut kept from being written
+        (self.venv / "warpzone-venv").unlink()
+        (self.rig.state_dir / "venv-owned").unlink()
         self.assertEqual(self.install("deck").returncode, 0)
         self.assertEqual(marker.read_text(), "mine")
+        self.assertTrue((self.venv / "warpzone-venv").exists(), "marked now")
 
     def test_the_folder_that_holds_the_venv_is_never_cleared(self) -> None:
         keep = self.base / "play-state"
@@ -2462,6 +2504,8 @@ class RepairTests(RealPythonCase):
         proc = self.tick()
         self.assertTick(proc, 0)
         self.assert_mended()
+        owned = (self.rig.state_dir / "venv-owned").read_text().split("\n")
+        self.assertIn(str(self.venv), owned, "noted outside the venv, which --clear empties")
         self.assertIn("venv", proc.output)
         self.assertEqual(self.rig.state()["last_result"], "ok")
 
@@ -2489,6 +2533,13 @@ class RepairTests(RealPythonCase):
         self.assertEqual((self.venv / "marker").read_text(), "mine")
         self.assertEqual((self.venv / "pyvenv.cfg").stat().st_mtime_ns, cfg)
         self.assertNotIn("repair", proc.output)
+
+    def test_a_venv_noted_as_made_by_warpzone_is_repaired_without_its_mark(self) -> None:
+        # a power cut between --clear and the mark: the note outside the venv remembers
+        self.make_venv(pth=False, ours=False)
+        (self.rig.state_dir / "venv-owned").write_text(f"{self.venv}\n")
+        self.assertTick(self.tick(), 0)
+        self.assert_mended()
 
     def test_a_venv_that_warpzone_did_not_make_is_left_alone(self) -> None:
         self.make_venv(pth=False, ours=False)  # it runs, but cannot find the clone

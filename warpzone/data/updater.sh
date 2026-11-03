@@ -1105,22 +1105,44 @@ case $SELF in
 esac
 LIVE_GOOD=$STATE_DIR/updater.sh.good
 
-# live_usable: this script is a file outside the clone (run by hand from the clone, it is
-# the clone's own file and must not be replaced).
+# resolve_file PATH: the physical path of a file (its folder with every symlink resolved).
+resolve_file() {
+	_rf_dir=$(cd -P "$(dirname "$1")" 2>/dev/null && pwd -P) || return 1
+	printf '%s/%s' "$_rf_dir" "${1##*/}"
+}
+
+# live_usable: this script is the live copy itself, WZ_LIVE or
+# ~/.local/share/warpzone/updater/updater.sh, compared by physical path. Anything else (the
+# clone's own script run by hand, a copy somewhere else, a path that reaches either through
+# a symlink) is never kept or replaced.
 live_usable() {
 	[ -f "$SELF" ] || return 1
-	case $SELF in
-	"$CLONE"/*) return 1 ;;
-	esac
-	return 0
+	_lu_live=${WZ_LIVE:-${HOME:-/nonexistent}/.local/share/warpzone/updater/updater.sh}
+	_lu_self=$(resolve_file "$SELF") || return 1
+	_lu_live=$(resolve_file "$_lu_live") || return 1
+	[ "$_lu_self" = "$_lu_live" ]
+}
+
+# live_valid FILE: a script worth running: not empty (a power cut can leave a file of no
+# bytes), with its UPDATER_ABI line, and that `sh -n` parses.
+live_valid() {
+	[ -s "$1" ] || return 1
+	grep -q '^UPDATER_ABI=[0-9][0-9]*[[:space:]]*$' "$1" 2>/dev/null || return 1
+	sh -n "$1" >/dev/null 2>&1
 }
 
 # live_save: keep the live copy as it is before the first switch of a trial. Not again while
-# a copy is kept: a trial that is resumed finds the candidate's script live by then.
+# a copy is kept: a trial that is resumed finds the candidate's script live by then. Written
+# to a temporary file, flushed and renamed, as the state is.
 live_save() {
 	[ ! -e "$LIVE_GOOD" ] || return 0
 	live_usable || return 0
-	if cp "$SELF" "$LIVE_GOOD.tmp" 2>/dev/null && mv -f "$LIVE_GOOD.tmp" "$LIVE_GOOD"; then
+	if ! live_valid "$SELF"; then
+		log "the live updater is empty or damaged; no copy of it is kept for the trial"
+		return 0
+	fi
+	if cp "$SELF" "$LIVE_GOOD.tmp" 2>/dev/null && sync && mv -f "$LIVE_GOOD.tmp" "$LIVE_GOOD"; then
+		sync
 		return 0
 	fi
 	rm -f "$LIVE_GOOD.tmp"
@@ -1129,13 +1151,19 @@ live_save() {
 }
 
 # live_restore: put the kept copy back as the live one, atomically (a rename: this very run
-# keeps reading the file it started with), whatever the ABI of the one it replaces.
+# keeps reading the file it started with), whatever the ABI of the one it replaces. A kept
+# copy that is empty or damaged is not put back, and the live one is left as it is.
 live_restore() {
 	[ -f "$LIVE_GOOD" ] || return 0
 	live_usable || return 0
 	cmp -s "$LIVE_GOOD" "$SELF" && return 0
+	if ! live_valid "$LIVE_GOOD"; then
+		log "the kept copy of the updater is empty or damaged; not put back, the live one is left as it is"
+		return 0
+	fi
 	_lr_tmp="$SELF.restore.$$"
-	if cp "$LIVE_GOOD" "$_lr_tmp" 2>/dev/null && chmod 755 "$_lr_tmp" && mv -f "$_lr_tmp" "$SELF"; then
+	if cp "$LIVE_GOOD" "$_lr_tmp" 2>/dev/null && chmod 755 "$_lr_tmp" && sync && mv -f "$_lr_tmp" "$SELF"; then
+		sync
 		log "put back the updater script that was live before the trial"
 	else
 		rm -f "$_lr_tmp"
@@ -1150,13 +1178,41 @@ live_restore() {
 # setuptools, so it can be made again whenever the interpreter it was made with is gone (an
 # operating system update), and the path of its Python, which units and ES-DE scripts hold,
 # stays the same. `--clear` is only ever run on a folder that is called `venv`, does not exist
-# or holds the mark `warpzone-venv` that this script writes when it makes one (so never a venv
-# of the user's, or the one of an older install), is not a symlink, and does not hold the clone:
-# never on the folder around it, where the play state lives.
+# or holds the mark `warpzone-venv` that this script writes when it makes one, or is noted in
+# `venv-owned` in the state folder (written before `--clear`, so a power cut between the clear
+# and the mark loses nothing), so never a venv of the user's or the one of an older install;
+# is not a symlink, and does not hold the clone: never on the folder around it, where the play
+# state lives.
 
 LOCATE_CODE='import importlib.util, os, sys; s = importlib.util.find_spec("warpzone"); root = os.path.realpath(sys.argv[1]); here = os.path.realpath(s.origin) if s is not None and s.origin else ""; sys.exit(0 if here.startswith(root + os.sep) else 7)'
 VENV_LOG=$STATE_DIR/last-venv.log
 VENV_MARK=warpzone-venv
+VENV_OWNED=$STATE_DIR/venv-owned
+
+# venv_noted VENV: warpzone made VENV, as the note in the state folder says.
+venv_noted() {
+	[ -f "$VENV_OWNED" ] && grep -Fxq -- "$1" "$VENV_OWNED"
+}
+
+# venv_note VENV: write that warpzone makes VENV (flushed: it must survive the cut that the
+# `--clear` that follows may be).
+venv_note() {
+	venv_noted "$1" && return 0
+	printf '%s\n' "$1" >>"$VENV_OWNED" && sync
+}
+
+# venv_adopt VENV: a venv that works, that has the `warpzone-clone.pth` only this script
+# writes, and lacks the mark (a cut kept it from being written), gets the mark and the note.
+venv_adopt() {
+	[ -f "$1/$VENV_MARK" ] && return 0
+	for _va_p in "$1"/lib/python*/site-packages/warpzone-clone.pth; do
+		[ -f "$_va_p" ] || continue
+		venv_note "$1" || return 0
+		printf 'made by warpzone updater.sh; it may make this venv again (--clear)\n' >"$1/$VENV_MARK"
+		return 0
+	done
+	return 0
+}
 
 # sh_quote S: S in single quotes, for a line of a script.
 sh_quote() {
@@ -1192,8 +1248,12 @@ make_venv() {
 		return 1
 		;;
 	esac
-	if [ -e "$_mv_venv" ] && { [ ! -d "$_mv_venv" ] || [ ! -f "$_mv_venv/$VENV_MARK" ]; }; then
+	if [ -e "$_mv_venv" ] && { [ ! -d "$_mv_venv" ] || { [ ! -f "$_mv_venv/$VENV_MARK" ] && ! venv_noted "$_mv_venv"; }; }; then
 		log "not repairing $_mv_venv: it was not made by warpzone (it has no $VENV_MARK mark), so it is left as it is; move it away, or choose another folder with --venv"
+		return 1
+	fi
+	if ! venv_note "$_mv_venv"; then
+		log "not repairing $_mv_venv: cannot note it in $VENV_OWNED"
 		return 1
 	fi
 	log "making the venv $_mv_venv again with $_mv_base"
@@ -2101,6 +2161,7 @@ cmd_install() {
 	case $_i_venv in /*) ;; *) _i_venv=$_i_start/$_i_venv ;; esac
 	if venv_works "$_i_venv/bin/python"; then
 		log "the venv $_i_venv works; keeping it"
+		venv_adopt "$_i_venv"
 	else
 		make_venv "$_i_py" "$_i_venv" || install_fail "the venv $_i_venv could not be made (see $VENV_LOG)"
 	fi
