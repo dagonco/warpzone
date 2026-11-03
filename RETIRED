@@ -1,8 +1,0 @@
-# Releases withdrawn after they were published. One entry per line:
-#
-#   vX.Y.Z YYYY-MM-DD reason
-#
-# A device that updates itself never moves to a retired tag, and one that runs a retired
-# version moves to the best release that is not retired, even a lower one (docs/releasing.md,
-# "Retiring a release"). A tag cannot be edited, so this file is how a release is taken back.
-# It is read as words, never run: keep the three fields on one line and the reason short.

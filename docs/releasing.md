@@ -47,7 +47,7 @@ Users can verify a download with `sha256sum -c SHA256SUMS` and `gh attestation v
 
 ## Signing a tag
 
-Devices that update themselves accept only tags signed with the maintainer's SSH key, once its public key is in `warpzone/data/allowed_signers`. Until a key is there they accept unsigned tags and say so in their log.
+Devices that update themselves accept only tags signed with the maintainer's SSH key, once its public key is in `warpzone/data/allowed_signers` of the version they are running. Until a key is there they accept unsigned tags and say so in their log. This covers release and candidate tags, a `pin` and the `retired/` tags below.
 
 One-time setup, with a key used only for this (an `ed25519` key is enough):
 
@@ -57,7 +57,7 @@ git config gpg.format ssh
 git config user.signingkey ~/.ssh/warpzone-release.pub
 ```
 
-Put the public key in `warpzone/data/allowed_signers` through a normal pull request, one line per key (`<principal> namespaces="git" <key type> <public key>`; the namespace is the one `git` signs with). A device gets the file with the release that carries it (the installer that copies it next to the updater is not written yet), so a key must be added in a release before the first tag signed with it: tags are signed from the release after that. To rotate, add the new key in a release signed with the old one, then sign with the new one.
+Put the public key in `warpzone/data/allowed_signers` through a normal pull request, one line per key (`<principal> namespaces="git" <key type> <public key>`; the namespace is the one `git` signs with). A device reads the keys from the version it runs, so a key must be added in a release before the first tag signed with it is needed: tags are signed from the release after that. To rotate, add the new key in a release signed with the old one (a release cannot change the keys that check itself); devices that move to it trust both, and then you can sign with the new one. Tags must be signed with SSH: a tag signed with OpenPGP or X.509 is refused.
 
 Sign the tag instead of just annotating it in step 7 of the checklist (`-s` replaces `-a`), and check it before pushing:
 
@@ -75,16 +75,17 @@ A release candidate is a normal release with a PEP 440 version. Set `__version__
 
 ## Retiring a release
 
-A tag cannot be edited, and a published release must never be moved or reused. If a release turns out to be harmful, withdraw it by adding a line to the `RETIRED` file at the root of `main`, through a normal pull request:
+A tag cannot be edited, and a published release must never be moved or reused. If a release turns out to be harmful, withdraw it with a second tag, `retired/vX.Y.Z` (or `retired/vX.Y.ZrcN`), annotated and signed like a release, on the commit of the release it withdraws, with the reason as its message:
 
-```text
-v0.3.0 2026-11-20 settings apply overwrote a captured key
+```bash
+git tag -s retired/v0.3.0 v0.3.0^{commit} -m "settings apply overwrote a captured key"
+git push origin retired/v0.3.0
 ```
 
-The line is `vX.Y.Z` (or `vX.Y.ZrcN`), the date, and a short reason, separated by blanks. Lines that start with `#` and blank lines are ignored; a line in any other shape retires nothing (`python3 -m unittest tests.test_retired` checks the file). Devices read `RETIRED` from `origin/main` after their daily fetch, so the pull request has to be merged for it to take effect. From then on:
+There is no file to edit and no pull request: the tag is the retirement, and devices take it with their daily fetch. The `release` workflow does not run for it (it only runs for `v*.*.*`). When the allowed signers hold a key, a retirement that is not signed by one of them (or is only a lightweight tag) is ignored, so nobody without the key can pull a good version. From then on:
 
 - no device picks the tag as a target;
 - a device that runs it moves to the best release that is not retired, even a lower one, after verifying it like any update;
 - a device with `pin` set to the tag stays on it (a pin wins) and records it in its state so that `doctor` can warn.
 
-Publish a fixed version as well, as a new patch release, so devices have something to move up to.
+A retirement cannot be undone on a device that has already fetched it, so publish a fixed version as a new patch release, so devices have something to move up to.

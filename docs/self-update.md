@@ -86,14 +86,13 @@ sh warpzone/data/updater.sh tick       # one run of the timer
 sh warpzone/data/updater.sh menu       # open (exit 0), closed (1) or unknown (2)
 sh warpzone/data/updater.sh selftest   # its tools and helpers; prints "selftest: ok abi=N"
 git tag --list | sh warpzone/data/updater.sh order   # the release tags, best first
-sh warpzone/data/updater.sh retired < RETIRED        # the tags it retires, the lines it refuses
 ```
 
 It reads `~/.local/state/warpzone/updater/conf` (`device`, `python`, `clone`, `enabled`, `frontend`, `config`, `channel`, `pin`, one `key=value` per line) and keeps its state in `state` and `bad/` next to it, a log in `~/.local/state/warpzone/self-update.log` and the output of the last check in `last-verify.log`. A tick:
 
 1. Takes a lock and stops if another tick holds it, or if `enabled` is `false`.
 2. Defers if the frontend (ES-DE) is running, for at most 72 hours from the first deferral; after that it goes on.
-3. Fetches the remote at most once a day, then picks the best tag of its channel (`stable`: `vX.Y.Z`; `rc`: those and `vX.Y.ZrcN`, where `v0.3.0rc1` < `v0.3.0rc2` < `v0.3.0`) that is newer than the checkout, is an ancestor of `origin/main`, carries the same `__version__`, is not marked bad, is not listed in `RETIRED` (a file at the root of `main`) and, when `warpzone/data/allowed_signers` holds a key, has a tag signed by it. It never goes down, except when the version it runs has been retired: then it goes to the best valid one, even a lower one. With a `pin` the pinned tag is the target instead, whatever the channel, the running version or `RETIRED`; the log and the `pin_retired` key of the state say when the pin is retired.
+3. Fetches the remote at most once a day, then picks the best tag of its channel (`stable`: `vX.Y.Z`; `rc`: those and `vX.Y.ZrcN`, where `v0.3.0rc1` < `v0.3.0rc2` < `v0.3.0`) that is newer than the checkout, is an ancestor of `origin/main`, carries the same `__version__`, is not marked bad, is not retired (a signed tag `retired/vX.Y.Z`, see [releasing.md](releasing.md#retiring-a-release)) and, when the `warpzone/data/allowed_signers` of the version it runs holds a key, has a tag signed by it with SSH. What was chosen at one tick is checked again at the next, so a version that is retired, or off the channel, or no longer signed, while it was being tried is dropped. It never goes down, except when the version it runs has been retired: then it goes to the best valid one, even a lower one. With a `pin` the pinned tag is the target instead, whatever the channel, the running version or a retirement; the log and the `pin_retired` key of the state say when the pin is retired.
 4. Checks the tag out (after checking there is room for it) and verifies it in three steps with a time limit each, and 25 minutes for the whole tick: warpzone imports from the checkout and `--version` is the tag; `provision device <device> --unattended`; `warpzone health <device>`. A step that is cut off takes its whole process group with it.
 5. If a step fails it goes back to the version it came from and runs the same check. If that passes, the new tag is checked once more, and only if it fails again is it bad and never tried again (`bad/<tag>`). If the previous version fails too, the environment is at fault: the tag is not blamed and the device waits 1, 2, 4 and then 7 days. Running out of the tick's time counts as the environment too.
 6. A power cut or a kill halfway never counts against a tag: after two attempts without a verdict it goes back and waits a day. A checkout that was cut in the middle is finished again by the next tick, as long as the only changed files are the update's own.
@@ -101,7 +100,7 @@ It reads `~/.local/state/warpzone/updater/conf` (`device`, `python`, `clone`, `e
 
 It only moves a checkout that is on a release tag or on a clean branch contained in `origin/main`. A branch with commits of its own, a loose commit or a tree with changes is left exactly as it is (the script never runs `reset`, `stash` or `clean`) and only gets `provision device --unattended` once per boot. An `index.lock` older than 10 minutes with no `git` running is removed.
 
-Without a key in the allowed-signers file (the repository ships it with comments only) no signature is required and the log says so. Not done yet: installing the script, the allowed-signers file and the settings (`provision`), the venv repair, the timer units that run it, and the `doctor` checks.
+Without a key in the allowed-signers file (the repository ships it with comments only) no signature is required and the log says so. Not done yet: installing the script and the settings (`provision`), the venv repair, the timer units that run it, and the `doctor` checks.
 
 ### Channel and pin
 

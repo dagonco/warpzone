@@ -183,11 +183,13 @@ class Rig:
         file_version: str | None = None,
         extra: dict[str, str] | None = None,
         sign: SigningKey | None = None,
+        raw_tag: str | None = None,
     ) -> str:
         """Commit a release in the upstream repository, tag it and publish it."""
         if not on_main:
             git(self.work, "checkout", "-q", "--detach")
         for name, text in (extra or {}).items():
+            (self.work / name).parent.mkdir(parents=True, exist_ok=True)
             (self.work / name).write_text(text)
         (self.work / "warpzone").mkdir(exist_ok=True)
         (self.work / "warpzone" / "__init__.py").write_text(
@@ -197,7 +199,20 @@ class Rig:
         git(self.work, "add", "-A")
         git(self.work, "commit", "-q", "-m", f"Release {version}")
         name = tag or f"v{version}"
-        if sign is None:
+        if raw_tag is not None:
+            # A tag object written by hand ({sha} and {name} are filled in): git mktag does not
+            # look at the signature, so it can hold any kind of block.
+            body = raw_tag.format(sha=git(self.work, "rev-parse", "HEAD"), name=name)
+            made = subprocess.run(
+                ["git", "-C", str(self.work), "mktag"],
+                input=body,
+                capture_output=True,
+                text=True,
+                env={**os.environ, **GIT_ENV},
+                check=True,
+            )
+            git(self.work, "update-ref", f"refs/tags/{name}", made.stdout.strip())
+        elif sign is None:
             git(self.work, "tag", name)
         else:
             git(
@@ -215,12 +230,25 @@ class Rig:
     def head(self) -> str:
         return git(self.clone, "rev-parse", "HEAD")
 
-    def retire(self, *lines: str) -> None:
-        """Publish a RETIRED file on main (a commit that is not a release)."""
-        (self.work / "RETIRED").write_text("".join(line + "\n" for line in lines))
-        git(self.work, "add", "-A")
-        git(self.work, "commit", "-q", "-m", "Retire")
-        git(self.work, "push", "-q", "origin", "main")
+    def retire(
+        self,
+        tag: str,
+        reason: str = "it is withdrawn",
+        *,
+        sign: SigningKey | None = None,
+        annotated: bool = True,
+    ) -> None:
+        """Retire a release the way the maintainer does: a tag `retired/<tag>` (annotated, and
+        signed with `sign`) whose message is the reason, published."""
+        name = f"retired/{tag}"
+        if not annotated:
+            git(self.work, "tag", name)
+        elif sign is None:
+            git(self.work, "tag", "-a", "-m", reason, name)
+        else:
+            signing = ("-c", "gpg.format=ssh", "-c", f"user.signingkey={sign.private}")
+            git(self.work, *signing, "tag", "-s", "-m", reason, name)
+        git(self.work, "push", "-q", "origin", f"refs/tags/{name}")
 
     def move_to(self, tag: str) -> None:
         """Put the clone on a tag by hand, as if the device had been installed there."""
@@ -236,7 +264,9 @@ class Rig:
     def on_tag(self) -> str:
         """The release tag the clone is on, or '' when it is not exactly on one."""
         try:
-            return git(self.clone, "describe", "--exact-match", "--tags", "HEAD")
+            return git(
+                self.clone, "describe", "--exact-match", "--tags", "--match", "v[0-9]*", "HEAD"
+            )
         except AssertionError:
             return ""
 
@@ -1554,7 +1584,7 @@ class RetiredTests(UpdaterCase):
         rig = self.rig
         rig.release("0.2.0")
         rig.release("0.3.0")
-        rig.retire("# withdrawn", "", "v0.3.0 2026-11-03 broke the settings merge")
+        rig.retire("v0.3.0", "broke the settings merge")
         self.retired_ticks(rig)
         self.assertEqual(rig.on_tag(), "v0.2.0")
         self.assertEqual(rig.bad(), [], "retired is not bad")
@@ -1566,7 +1596,7 @@ class RetiredTests(UpdaterCase):
         rig.move_to("v0.3.0")
         self.retired_ticks(rig)
         self.assertEqual(rig.state()["good_tag"], "v0.3.0")
-        rig.retire("v0.3.0 2026-11-03 data loss")
+        rig.retire("v0.3.0", "data loss")
         proc = self.retired_ticks(rig)
         self.assertEqual(rig.on_tag(), "v0.2.0")
         self.assertEqual(rig.state()["good_tag"], "v0.2.0")
@@ -1574,42 +1604,35 @@ class RetiredTests(UpdaterCase):
         self.assertIn("data loss", proc.output)
         self.retired_ticks(rig)
         self.assertEqual(rig.on_tag(), "v0.2.0", "it does not bounce")
-        rig.retire("v0.3.0 2026-11-03 a", "v0.2.0 2026-11-04 b")
+        rig.retire("v0.2.0", "b")
         self.retired_ticks(rig)
         self.assertEqual(rig.on_tag(), "v0.1.0")
-        rig.retire("v0.3.0 2026-11-03 a", "v0.2.0 2026-11-04 b", "v0.1.0 2026-11-05 c")
+        rig.retire("v0.1.0", "c")
         calls = len(rig.calls())
         self.retired_ticks(rig)
         self.assertEqual(rig.on_tag(), "v0.1.0", "nothing valid is left: it stays")
         self.assertEqual(len(rig.calls()), calls)
         self.assertEqual(rig.bad(), [])
 
-    def test_only_origin_main_counts_not_the_working_tree(self) -> None:
-        rig = self.rig
-        rig.release("0.2.0")
-        (rig.clone / "RETIRED").write_text("v0.2.0 2026-11-03 not from main\n")
-        self.retired_ticks(rig)
-        self.assertEqual(rig.on_tag(), "v0.2.0")
-
-    def test_a_line_that_is_not_in_the_format_retires_nothing_and_runs_nothing(self) -> None:
+    def test_only_an_annotated_tag_with_a_version_name_retires_and_nothing_runs(self) -> None:
         rig = self.rig
         marker = rig.root / "pwned"
-        rig.release("0.2.0")
+        # the old RETIRED file is not read any more, even on main
+        rig.release("0.2.0", extra={"RETIRED": "v0.2.0 2026-11-03 old way\n"})
         rig.release("0.3.0")
-        rig.retire(
-            f"v0.3.0 2026-11-03 $(touch {marker}) `touch {marker}`",
-            "v0.2.0 2026-11-03",  # no reason
-            "v0.1.0\t2026-11-02\tseparated by tabs",
-        )
-        (rig.work / "RETIRED").write_bytes(
-            (rig.work / "RETIRED").read_bytes().replace(b"\n", b"\r\n")
-        )
-        git(rig.work, "commit", "-q", "-am", "CRLF")
-        git(rig.work, "push", "-q", "origin", "main")
+        rig.retire("v0.3.0", f"$(touch {marker}) `touch {marker}`", annotated=False)
+        rig.retire("v0.2.0;touch", "a name that is no version")
+        rig.retire("latest", "neither")
+        rig.retire("v0.2.0-rc1", "nor the wrong spelling")
         proc = self.retired_ticks(rig)
         self.assertFalse(marker.exists())
-        self.assertEqual(rig.on_tag(), "v0.2.0", "v0.3.0 is retired and v0.2.0's line is no line")
-        self.assertRegex(proc.output, r"RETIRED.*line.*\b2\b")
+        self.assertEqual(rig.on_tag(), "v0.3.0", "a lightweight tag has no reason: no retirement")
+        self.assertRegex(proc.output, r"retire.*ignor")
+        rig.retire("v0.2.0", f"$(touch {marker})")  # a reason is text
+        rig.move_to("v0.2.0")
+        self.retired_ticks(rig)
+        self.assertFalse(marker.exists())
+        self.assertEqual(rig.on_tag(), "v0.3.0", "the retired version moves up")
 
 
 class PinTests(UpdaterCase):
@@ -1627,10 +1650,11 @@ class PinTests(UpdaterCase):
         self.assertTick(rig.tick(), 0)
         self.assertEqual(rig.on_tag(), "v0.2.0", "v0.3.0 exists and the pin holds")
         self.assertEqual(len(rig.calls()), calls)
-        rig.retire("v0.2.0 2026-11-03 bad one", "v0.1.0 2026-11-03 old")
+        rig.retire("v0.2.0", "bad one")
+        rig.retire("v0.1.0", "old")
         proc = rig.tick()
         self.assertTick(proc, 0)
-        self.assertEqual(rig.on_tag(), "v0.2.0", "the pin wins over RETIRED")
+        self.assertEqual(rig.on_tag(), "v0.2.0", "the pin wins over a retirement")
         self.assertEqual(rig.state()["pin_retired"], "v0.2.0")
         self.assertIn("pin", proc.output)
         self.assertIn("retired", proc.output)
@@ -1722,19 +1746,146 @@ class SignatureTests(UpdaterCase):
                 self.assertEqual(rig.on_tag(), f"v{version}")
                 self.assertRegex(proc.output, r"signatures are not required")
 
-    def test_the_file_next_to_the_script_is_the_default_and_a_pin_needs_a_signature(self) -> None:
+    def trusted(self, rig, version: str = "0.2.0") -> None:
+        """A device whose running version is signed and carries the allowed signers."""
+        rig.release(
+            version,
+            sign=self.key,
+            extra={"warpzone/data/allowed_signers": self.key.allowed},
+        )
+        rig.move_to(f"v{version}")
+
+    def test_the_keys_are_the_ones_of_the_running_version_not_a_file_next_to_the_script(
+        self,
+    ) -> None:
         rig = self.rig
-        (rig.updater.parent / "allowed_signers").write_text(rig.allow(self.key).read_text())
-        rig.release("0.2.0")
+        self.trusted(rig)
+        self.assertFalse((rig.updater.parent / "allowed_signers").exists())
+        # a release that trusts its own signer, and one that nobody signed
+        rig.release(
+            "0.3.0",
+            sign=self.other,
+            extra={"warpzone/data/allowed_signers": self.other.allowed},
+        )
+        rig.release("0.4.0")
+        proc = rig.tick()
+        self.assertTick(proc, 0)
+        self.assertEqual(rig.on_tag(), "v0.2.0")
+        self.assertRegex(proc.output, r"v0\.3\.0.*signature")
+        rig.write_conf(pin="v0.4.0")
         self.assertTick(rig.tick(), 0)
-        self.assertEqual(rig.on_tag(), "v0.1.0")
-        rig.write_conf(pin="v0.2.0")
+        self.assertEqual(rig.on_tag(), "v0.2.0", "an unsigned pin is no target")
+        rig.write_conf()
+        # a release signed by the trusted key can change the keys for the ones after it
+        both = self.key.allowed + self.other.allowed
+        rig.release("0.5.0", sign=self.key, extra={"warpzone/data/allowed_signers": both})
         self.assertTick(rig.tick(), 0)
-        self.assertEqual(rig.on_tag(), "v0.1.0", "an unsigned pin is no target")
+        self.assertEqual(rig.on_tag(), "v0.5.0")
+        rig.release("0.6.0", sign=self.other, extra={"warpzone/data/allowed_signers": both})
+        self.assertTick(rig.tick(), 0)
+        self.assertEqual(rig.on_tag(), "v0.6.0")
+
+    def test_a_retirement_needs_the_same_signature_when_there_are_keys(self) -> None:
+        rig = self.rig
+        allowed = {"WZ_ALLOWED_SIGNERS": str(rig.allow(self.key))}
+        rig.release("0.2.0", sign=self.key)
         rig.release("0.3.0", sign=self.key)
-        rig.write_conf(pin="v0.3.0")
-        self.assertTick(rig.tick(), 0)
-        self.assertEqual(rig.on_tag(), "v0.3.0")
+        rig.retire("v0.3.0", "withdrawn by a stranger", sign=self.other)
+        rig.retire("v0.2.0", "not signed")
+        self.assertTick(rig.tick(**allowed), 0)
+        self.assertEqual(rig.on_tag(), "v0.3.0", "neither retirement counts")
+        rig.release("0.4.0", sign=self.key)
+        rig.retire("v0.4.0", "signed by the maintainer", sign=self.key)
+        self.assertTick(rig.tick(**allowed), 0)
+        self.assertEqual(rig.on_tag(), "v0.3.0", "this one does")
+
+    def test_a_tag_signed_with_openpgp_is_not_accepted(self) -> None:
+        rig = self.rig
+        # a gpg that vouches for anything: `verify-tag` picks the verifier by the signature
+        # block, not by gpg.format, so a PGP block would never reach allowed_signers
+        gpg = rig.python.parent / "gpg"
+        gpg.write_text(
+            "#!/bin/sh\n"
+            "echo '[GNUPG:] NEWSIG'\n"
+            "echo '[GNUPG:] GOODSIG 0123456789ABCDEF Maintainer <m@example.invalid>'\n"
+            "echo '[GNUPG:] VALIDSIG AAAA 2023-11-14 1700000000 0 4 0 1 10 00 AAAA'\n"
+            "echo '[GNUPG:] TRUST_ULTIMATE 0 pgp'\n"
+        )
+        gpg.chmod(0o755)
+        pgp = (
+            "object {sha}\ntype commit\ntag {name}\n"
+            "tagger T <t@example.invalid> 1700000000 +0000\n\nrelease\n"
+            "-----BEGIN PGP SIGNATURE-----\n\niQEzBAABCAAdFiEE\n=abcd\n"
+            "-----END PGP SIGNATURE-----\n"
+        )
+        allowed = {"WZ_ALLOWED_SIGNERS": str(rig.allow(self.key))}
+        rig.release("0.2.0", sign=self.key)
+        rig.release("0.3.0", raw_tag=pgp)
+        self.assertTick(rig.tick(**allowed), 0)
+        self.assertEqual(rig.on_tag(), "v0.2.0", "v0.3.0 is not signed by an allowed key")
+
+    def test_a_version_being_tried_that_is_not_signed_any_more_is_not_promoted(self) -> None:
+        rig = self.rig
+        rig.release("0.2.0")
+        git(rig.clone, "fetch", "-q", "--tags")
+        rig.write_state(
+            good_tag="v0.1.0",
+            good_sha=rig.head(),
+            trying_tag="v0.2.0",
+            trying_sha=git(rig.work, "rev-parse", "v0.2.0^{commit}"),
+            attempts="1",
+        )
+        rig.tick(WZ_ALLOWED_SIGNERS=str(rig.allow(self.key)))
+        self.assertEqual(rig.on_tag(), "v0.1.0")
+        self.assertEqual(rig.state()["trying_tag"], "")
+        self.assertEqual([c for c in rig.calls() if "@ 0.2.0" in c], [])
+
+
+class StaleTargetTests(UpdaterCase):
+    """A version that was chosen at one tick and is checked at a later one is chosen again."""
+
+    def prepare(self, rig, version: str, **state: str) -> None:
+        git(rig.clone, "fetch", "-q", "--tags")
+        rig.write_state(
+            good_tag="v0.1.0",
+            good_sha=rig.head(),
+            **{
+                k: v.format(sha=git(rig.work, "rev-parse", f"v{version}^{{commit}}"))
+                for k, v in state.items()
+            },
+        )
+
+    def assert_left_alone(self, rig, version: str) -> None:
+        self.assertEqual(rig.on_tag(), "v0.1.0")
+        state = rig.state()
+        self.assertEqual(state["good_tag"], "v0.1.0")
+        self.assertEqual(state["trying_tag"], "")
+        self.assertEqual(state["suspect_tag"], "")
+        self.assertEqual([c for c in rig.calls() if f"@ {version}" in c], [])
+
+    def test_a_version_being_tried_that_gets_retired_is_not_promoted(self) -> None:
+        rig = self.rig
+        rig.release("0.2.0")
+        self.prepare(rig, "0.2.0", trying_tag="v0.2.0", trying_sha="{sha}", attempts="1")
+        rig.retire("v0.2.0", "found out in the meantime")
+        rig.tick()
+        self.assert_left_alone(rig, "0.2.0")
+
+    def test_a_suspect_that_gets_retired_is_not_installed(self) -> None:
+        rig = self.rig
+        rig.release("0.2.0")
+        self.prepare(rig, "0.2.0", suspect_tag="v0.2.0", suspect_sha="{sha}")
+        rig.retire("v0.2.0", "found out in the meantime")
+        rig.tick()
+        self.assert_left_alone(rig, "0.2.0")
+
+    def test_a_suspect_candidate_is_dropped_when_the_channel_goes_back_to_stable(self) -> None:
+        rig = self.rig
+        rig.release("0.2.0rc1")
+        rig.write_conf(channel="stable")
+        self.prepare(rig, "0.2.0rc1", suspect_tag="v0.2.0rc1", suspect_sha="{sha}")
+        rig.tick()
+        self.assert_left_alone(rig, "0.2.0rc1")
 
 
 class ScriptTests(UpdaterCase):
