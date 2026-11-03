@@ -55,8 +55,9 @@ folders = ["library", "tools", "saves", "frontend", "bios", "settings"]
 # songs) are rescanned this often. Default 300 (5 minutes), minimum 5.
 # rescan_seconds = 300
 
-# Optional. `provision device` installs a systemd user timer that runs `warpzone
-# self-update` every day. Set false to skip it on this device (docs/self-update.md).
+# Optional. `provision device` installs the updater and a systemd user timer that starts
+# it after boot and every 15 minutes. Set false to skip it on this device
+# (docs/self-update.md).
 # self_update = true
 
 # Optional. Which releases this device follows once the updater picks them by channel:

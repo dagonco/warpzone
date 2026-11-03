@@ -8,11 +8,12 @@ import tempfile
 import unittest
 from collections.abc import Mapping, Sequence
 from pathlib import Path
+from typing import ClassVar
 from unittest import mock
 
 from support import API_KEY, DECK_ID, HUB_ID
 from test_cli import run
-from warpzone import __version__, doctor, esde
+from warpzone import __version__, doctor, esde, provision, selfupdate, updatetimer
 from warpzone.doctor import (
     FAIL,
     GIB,
@@ -39,6 +40,7 @@ from warpzone.doctor import (
     check_syncthing_unit,
     check_tool,
     check_update_timer,
+    check_updater,
     check_vita3k,
     collapse_inbox,
     exit_code,
@@ -51,6 +53,9 @@ from warpzone.doctor import (
     judge_settings_layers,
     judge_unit_state,
     judge_update_timer,
+    judge_updater_conf,
+    judge_updater_script,
+    judge_updater_state,
     judge_vita3k_user,
     load_config_state,
     platform_family,
@@ -1560,7 +1565,7 @@ class UpdateTimerJudgeTests(unittest.TestCase):
     def test_installed_and_running_is_ok(self) -> None:
         status, detail, fix = self.judge()
         self.assertEqual((status, fix), (OK, ""))
-        self.assertIn("daily", detail)
+        self.assertIn("15 minutes", detail)
 
     def test_missing_units_are_a_warning_that_names_the_fix(self) -> None:
         status, detail, fix = self.judge(files=False, enabled=False, active=False)
@@ -1579,6 +1584,13 @@ class UpdateTimerJudgeTests(unittest.TestCase):
         status, detail, _ = self.judge(enabled=None, active=None)
         self.assertEqual(status, WARN)
         self.assertIn("cannot ask systemd", detail)
+
+    def test_a_service_that_does_not_run_the_updater_is_a_warning(self) -> None:
+        # An old unit that still runs `python -m warpzone self-update` every day.
+        status, detail, fix = self.judge(command_ok=False)
+        self.assertEqual(status, WARN)
+        self.assertIn("updater", detail)
+        self.assertIn("warpzone provision device deck", fix)
 
 
 class UpdateTimerCheckTests(TmpCase):
@@ -1619,7 +1631,11 @@ class UpdateTimerCheckTests(TmpCase):
         )
 
     def both(self) -> None:
-        self.units("warpzone-self-update.service", "warpzone-self-update.timer")
+        self.units("warpzone-self-update.timer")
+        live = selfupdate.live_path(self.home)
+        (self.home / updatetimer.UNIT_DIR / updatetimer.SERVICE).write_text(
+            updatetimer.render_service(str(live))
+        )
 
     def test_a_device_with_the_timer_running_is_ok(self) -> None:
         self.both()
@@ -1628,6 +1644,15 @@ class UpdateTimerCheckTests(TmpCase):
         self.assertIn(
             ("systemctl", "--user", "is-enabled", "warpzone-self-update.timer"), self.commands
         )
+
+    def test_a_service_that_runs_something_else_gets_a_warning(self) -> None:
+        self.units("warpzone-self-update.timer")
+        (self.home / updatetimer.UNIT_DIR / updatetimer.SERVICE).write_text(
+            "[Service]\nExecStart=/usr/bin/python3 -m warpzone self-update\n"
+        )
+        (r,) = self.check()
+        self.assertEqual(r.status, WARN)
+        self.assertIn("updater", r.detail)
 
     def test_a_device_without_the_timer_gets_a_warning(self) -> None:
         (r,) = self.check(enabled=False, active=False)
@@ -1661,6 +1686,315 @@ class UpdateTimerCheckTests(TmpCase):
 
     def test_runs_with_the_other_checks(self) -> None:
         self.assertIn(check_update_timer, doctor.CHECKS)
+
+
+NOW = 1_800_000_000  # 2027-01-15T08:00:00Z
+DAY = 86400
+
+
+class UpdaterStateJudgeTests(unittest.TestCase):
+    STATE: ClassVar[dict[str, str]] = {
+        "last_result": "ok",
+        "last_ok": str(NOW - 3600),
+        "signing": "1",
+        "pin_retired": "",
+    }
+
+    def judge(self, state="default", *, bad=None, now=NOW):
+        state = dict(self.STATE) if state == "default" else state
+        return judge_updater_state(state=state, bad=bad or {}, now=now, device="deck")
+
+    def statuses(self, *args, **kw) -> list[str]:
+        return [status for status, _, _ in self.judge(*args, **kw)]
+
+    def test_a_healthy_updater_is_one_ok_line(self) -> None:
+        ((status, detail, fix),) = self.judge()
+        self.assertEqual((status, fix), (OK, ""))
+        self.assertIn("ok", detail)
+
+    def test_an_updater_that_has_not_run_yet_is_a_warning(self) -> None:
+        ((status, detail, fix),) = self.judge(None)
+        self.assertEqual(status, WARN)
+        self.assertIn("has not run", detail)
+        self.assertIn("warpzone self-update", fix)
+
+    def test_a_recent_rollback_names_the_tag_and_the_reason(self) -> None:
+        bad = {"v0.3.1": selfupdate.Bad("abc", NOW - 2 * DAY, "health failed (exit 1)")}
+        found = self.judge(bad=bad)
+        self.assertEqual([s for s, _, _ in found], [WARN])
+        self.assertIn("v0.3.1", found[0][1])
+        self.assertIn("health failed", found[0][1])
+
+    def test_a_last_result_of_rolled_back_is_a_warning_too(self) -> None:
+        state = {**self.STATE, "last_result": "rolled-back"}
+        self.assertEqual(self.statuses(state), [WARN])
+
+    def test_an_old_bad_tag_is_not_a_recent_rollback(self) -> None:
+        bad = {"v0.3.1": selfupdate.Bad("abc", NOW - 20 * DAY, "x")}
+        self.assertEqual(self.statuses(bad=bad), [OK])
+
+    def test_a_bad_tag_with_no_date_counts_as_recent(self) -> None:
+        bad = {"v0.3.1": selfupdate.Bad("abc", None, "x")}
+        self.assertEqual(self.statuses(bad=bad), [WARN])
+
+    def test_stuck_is_a_failure_that_needs_a_person(self) -> None:
+        found = self.judge({**self.STATE, "last_result": "stuck"})
+        self.assertEqual(found[0][0], FAIL)
+        self.assertIn("stuck", found[0][1])
+        self.assertIn("git", found[0][2])
+
+    def test_a_dirty_or_dev_checkout_is_a_warning_that_says_it_is_not_moved(self) -> None:
+        for result in ("dirty", "dev"):
+            with self.subTest(result=result):
+                found = self.judge({**self.STATE, "last_result": result})
+                self.assertEqual([s for s, _, _ in found], [WARN])
+                self.assertIn(result, found[0][1])
+                self.assertIn("not moved", found[0][1])
+
+    def test_no_python_is_a_warning(self) -> None:
+        self.assertEqual(self.statuses({**self.STATE, "last_result": "no-python"}), [WARN])
+
+    def test_a_retired_pin_is_a_warning_that_names_it(self) -> None:
+        found = self.judge({**self.STATE, "pin_retired": "v0.3.0"})
+        self.assertEqual([s for s, _, _ in found], [WARN])
+        self.assertIn("v0.3.0", found[0][1])
+        self.assertIn("pin", found[0][1])
+
+    def test_signatures_that_are_not_required_are_a_warning(self) -> None:
+        found = self.judge({**self.STATE, "signing": "0"})
+        self.assertEqual([s for s, _, _ in found], [WARN])
+        self.assertIn("signature", found[0][1])
+
+    def test_more_than_fourteen_days_without_a_success_is_a_warning(self) -> None:
+        old = {**self.STATE, "last_ok": str(NOW - 15 * DAY)}
+        found = self.judge(old)
+        self.assertEqual([s for s, _, _ in found], [WARN])
+        self.assertIn("15 days", found[0][1])
+        self.assertEqual(self.statuses({**self.STATE, "last_ok": str(NOW - 13 * DAY)}), [OK])
+
+    def test_no_success_at_all_is_a_warning(self) -> None:
+        state = {k: v for k, v in self.STATE.items() if k != "last_ok"}
+        found = self.judge(state)
+        self.assertEqual([s for s, _, _ in found], [WARN])
+        self.assertIn("never", found[0][1])
+
+    def test_a_deferred_or_env_last_result_is_not_a_problem_by_itself(self) -> None:
+        for result in ("deferred", "env"):
+            self.assertEqual(self.statuses({**self.STATE, "last_result": result}), [OK])
+
+    def test_several_problems_give_several_lines(self) -> None:
+        state = {**self.STATE, "last_result": "dirty", "signing": "0"}
+        self.assertEqual(self.statuses(state), [WARN, WARN])
+
+    def test_a_last_ok_from_the_future_is_not_old(self) -> None:
+        self.assertEqual(self.statuses({**self.STATE, "last_ok": str(NOW + 5 * DAY)}), [OK])
+
+
+class UpdaterFilesJudgeTests(unittest.TestCase):
+    EXPECTED: ClassVar[dict[str, str]] = {
+        "device": "deck",
+        "config": "/c/config.toml",
+        "channel": "stable",
+        "pin": "",
+        "enabled": "true",
+        "frontend": "es-de ES-DE.AppImage",
+    }
+
+    def conf(self, **change):
+        return {**self.EXPECTED, "clone": "/s", "python": "/v/python", **change}
+
+    def judge_conf(self, actual="same", **kw):
+        values = {"python_ok": True, "clone_ok": True, "device": "deck"}
+        actual = self.conf() if actual == "same" else actual
+        return judge_updater_conf(actual=actual, expected=self.EXPECTED, **{**values, **kw})
+
+    def test_matching_settings_are_ok(self) -> None:
+        status, _, fix = self.judge_conf()
+        self.assertEqual((status, fix), (OK, ""))
+
+    def test_missing_settings_are_a_warning_with_the_fix(self) -> None:
+        status, detail, fix = self.judge_conf(None)
+        self.assertEqual(status, WARN)
+        self.assertIn("missing", detail)
+        self.assertIn("warpzone provision device deck", fix)
+
+    def test_settings_that_differ_name_the_keys(self) -> None:
+        status, detail, fix = self.judge_conf(self.conf(channel="rc", pin="v0.3.0"))
+        self.assertEqual(status, WARN)
+        self.assertIn("channel", detail)
+        self.assertIn("pin", detail)
+        self.assertNotIn("device", detail)
+        self.assertIn("warpzone provision device deck", fix)
+
+    def test_a_python_or_a_clone_that_is_gone_is_a_warning(self) -> None:
+        for kw, word in (({"python_ok": False}, "python"), ({"clone_ok": False}, "clone")):
+            status, detail, _ = self.judge_conf(**kw)
+            self.assertEqual(status, WARN)
+            self.assertIn(word, detail)
+
+    def test_a_missing_key_is_a_difference(self) -> None:
+        actual = self.conf()
+        del actual["frontend"]
+        status, detail, _ = self.judge_conf(actual)
+        self.assertEqual(status, WARN)
+        self.assertIn("frontend", detail)
+
+    def test_the_live_copy_is_ok_when_it_is_the_shipped_one(self) -> None:
+        status, _, fix = judge_updater_script(
+            live="UPDATER_ABI=1\nx\n", shipped="UPDATER_ABI=1\nx\n", path="/u", device="deck"
+        )
+        self.assertEqual((status, fix), (OK, ""))
+
+    def test_a_missing_live_copy_is_a_warning_with_the_fix(self) -> None:
+        status, detail, fix = judge_updater_script(
+            live=None, shipped="UPDATER_ABI=1\n", path="/u/updater.sh", device="deck"
+        )
+        self.assertEqual(status, WARN)
+        self.assertIn("/u/updater.sh", detail)
+        self.assertIn("warpzone provision device deck", fix)
+
+    def test_a_live_copy_of_a_higher_abi_is_fine_after_a_rollback(self) -> None:
+        status, detail, _ = judge_updater_script(
+            live="UPDATER_ABI=2\n", shipped="UPDATER_ABI=1\n", path="/u", device="deck"
+        )
+        self.assertEqual(status, OK)
+        self.assertIn("newer", detail)
+
+    def test_a_live_copy_that_differs_from_the_shipped_one_is_a_warning(self) -> None:
+        status, detail, fix = judge_updater_script(
+            live="UPDATER_ABI=1\na\n", shipped="UPDATER_ABI=1\nb\n", path="/u", device="deck"
+        )
+        self.assertEqual(status, WARN)
+        self.assertIn("differs", detail)
+        self.assertIn("provision device deck", fix)
+
+    def test_a_shipped_script_that_cannot_be_read_is_not_a_reason_to_warn(self) -> None:
+        status, _, _ = judge_updater_script(
+            live="UPDATER_ABI=1\n", shipped=None, path="/u", device="deck"
+        )
+        self.assertEqual(status, OK)
+
+
+class UpdaterCheckTests(TmpCase):
+    def setUp(self) -> None:
+        super().setUp()
+        self.home = self.tmp / "home"
+        folder = self.home / ".config/syncthing"
+        folder.mkdir(parents=True)
+        (folder / "config.xml").write_text(
+            f'<configuration><folder id="wz-library" path="{self.home}/Emulation/">'
+            f'<device id="{HUB_ID}"/></folder><device id="{DECK_ID}" name="x"/>'
+            f"<gui><address>127.0.0.1:8384</address><apikey>{ST_KEY}</apikey></gui>"
+            "</configuration>"
+        )
+        self.clone = self.tmp / "clone"
+        (self.clone / ".git").mkdir(parents=True)
+        self.python = self.tmp / "venv/bin/python"
+        self.python.parent.mkdir(parents=True)
+        self.python.write_text("")
+        self.config = FULL.replace(
+            "BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB", DECK_ID
+        )
+        self.base = self.home / ".local/state/warpzone"
+        self.live = selfupdate.live_path(self.home)
+        self.shipped = provision.UPDATER_SOURCE.read_text(encoding="utf-8")
+
+    def install(self, *, state: str | None = "default", conf: str | None = "default") -> None:
+        self.live.parent.mkdir(parents=True, exist_ok=True)
+        self.live.write_text(self.shipped)
+        selfupdate.conf_path(self.base).parent.mkdir(parents=True, exist_ok=True)
+        if conf == "default":
+            conf = selfupdate.render_conf(
+                device="deck",
+                config=str(self.tmp / "config.toml"),
+                clone=str(self.clone),
+                python=str(self.python),
+                channel="stable",
+                pin=None,
+                enabled=True,
+                frontend=("es-de", "ES-DE.AppImage"),
+            )
+        if conf is not None:
+            selfupdate.conf_path(self.base).write_text(conf)
+        if state == "default":
+            state = f"schema=1\nlast_result=ok\nlast_ok={NOW - 60}\nsigning=1\n"
+        if state is not None:
+            selfupdate.state_path(self.base).write_text(state)
+
+    def check(self, **kw):
+        return check_updater(
+            context(
+                self.tmp,
+                kw.pop("config", self.config),
+                system="Linux",
+                home=self.home,
+                now=lambda: NOW,
+                executables=[str(self.python)] if self.python.exists() else [],
+                **kw,
+            )
+        )
+
+    def test_a_working_install_has_three_ok_lines(self) -> None:
+        self.install()
+        results = self.check()
+        self.assertEqual([r.status for r in results], [OK, OK, OK], results)
+        self.assertEqual(
+            [r.name for r in results], ["Updater script", "Updater settings", "Updater state"]
+        )
+        self.assertTrue(all(r.group == doctor.G_UPDATE for r in results))
+
+    def test_nothing_installed_is_warnings_with_the_fix(self) -> None:
+        results = self.check()
+        self.assertEqual([r.status for r in results], [WARN, WARN, WARN])
+        self.assertIn("warpzone provision device deck", results[0].fix)
+
+    def test_settings_that_say_another_channel_are_a_warning(self) -> None:
+        self.install()
+        self.config = self.config.replace(
+            'folders = ["library", "saves"]', 'folders = ["library", "saves"]\nchannel = "rc"'
+        )
+        results = self.check()
+        self.assertEqual(by_name(results, "Updater settings").status, WARN)
+        self.assertIn("channel", by_name(results, "Updater settings").detail)
+
+    def test_a_python_that_is_gone_is_a_warning(self) -> None:
+        self.install()
+        self.python.unlink()
+        self.assertEqual(by_name(self.check(), "Updater settings").status, WARN)
+
+    def test_a_state_with_a_stuck_updater_fails(self) -> None:
+        self.install(state=f"last_result=stuck\nlast_ok={NOW}\nsigning=1\n")
+        results = [r for r in self.check() if r.name == "Updater state"]
+        self.assertEqual([r.status for r in results], [FAIL])
+
+    def test_recent_bad_tags_are_read_from_the_state_folder(self) -> None:
+        self.install()
+        bad = selfupdate.bad_dir(self.base)
+        bad.mkdir()
+        (bad / "v0.3.1").write_text(
+            "sha=abc\ndate=2027-01-15T07:59:00Z\nreason=health failed (exit 1)\n"
+        )
+        (bad / ".v0.3.2.tmp.1").write_text("sha=x\n")
+        results = [r for r in self.check() if r.name == "Updater state"]
+        self.assertEqual([r.status for r in results], [WARN])
+        self.assertIn("v0.3.1", results[0].detail)
+        self.assertNotIn("v0.3.2", results[0].detail)
+
+    def test_silent_when_the_config_turns_it_off(self) -> None:
+        self.install()
+        off = self.config.replace(
+            'folders = ["library", "saves"]', 'folders = ["library", "saves"]\nself_update = false'
+        )
+        self.assertEqual(self.check(config=off), [])
+
+    def test_silent_off_linux_and_on_a_machine_that_is_not_a_device(self) -> None:
+        self.install()
+        self.assertEqual(check_updater(context(self.tmp, self.config, home=self.home)), [])
+        (self.home / ".config/syncthing/config.xml").unlink()
+        self.assertEqual(self.check(), [])
+
+    def test_runs_with_the_other_checks(self) -> None:
+        self.assertIn(check_updater, doctor.CHECKS)
 
 
 RA_APP = "org.libretro.RetroArch"

@@ -37,7 +37,7 @@ Inbox tools
 - shadPS4's install folder (`~/Emulation/roms/ps4/games` in its config files), on a device whose profile declares it (`steamos-emudeck`).
 - The shadPS4 launcher: warpzone's launch script exists, is executable and is the text `provision device` writes, and ES-DE's `SHADPS4` find rule runs it (EmuDeck can put its own entry back). The fix is `warpzone provision device <name>` with ES-DE closed.
 - Vita3K's game links (`~/Emulation/storage/Vita3K/ux0/app/<TITLEID>`) and licence links (`ux0/license/<TITLEID>`), the ES-DE startup script that keeps them, and dangling links, on a device whose profile declares `[links.*]` (`steamos-emudeck`). The fix is `warpzone links sync <name>` with Vita3K closed.
-- The `warpzone self-update` timer, on a Linux device (a warning when it is not installed or not enabled).
+- The updater, on a Linux device (see [self-update.md](self-update.md)): its timer (installed, running the updater, enabled), the live copy of the script, its settings against the config, and its state. A warning for a rollback in the last 14 days, a `dirty` or `dev` checkout, a retired `pin`, signatures not required, and more than 14 days without a successful run; a problem when it is `stuck`.
 - The frontend's system list override and RetroArch's paths, on a device whose profile sets them (`anbernic-rg351mp`).
 - The inbox tools (`chdman`, `bsdtar`, `RAHasher`, `dolphin-tool`, `nsz`, `orbis-pkg-util`), the Switch titledb folder and keys file (presence only).
 - The DAT folder and how old the newest DAT is, and the optional arcade DAT files.

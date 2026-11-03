@@ -135,10 +135,12 @@ def judge_file(
     program: str | None,
     program_ok: bool,
     imports: bool,
+    script: str | None = None,
 ) -> Finding:
     """Verdict on one installed file. `program` is what it runs (a script's interpreter, a
     service's first `ExecStart` word); `imports` says that it can import warpzone, and is only
-    looked at when the file runs `python -m warpzone`."""
+    looked at when the file runs `python -m warpzone`. `script` is the file a service hands to its
+    program (the updater's live copy, run by `sh`) when it is not there."""
     name, where = item.path.name, item.path
     if text is None:
         return Finding(name, FAIL, f"the {item.label} {where} is missing")
@@ -150,6 +152,8 @@ def judge_file(
         return Finding(name, FAIL, "does not run a program warpzone knows (edited by hand?)")
     if not program_ok:
         return Finding(name, FAIL, f"runs {program}, which is gone or not executable")
+    if script is not None:
+        return Finding(name, FAIL, f"runs {program} {script}, and that script is missing")
     if not imports:
         return Finding(name, FAIL, f"{program} cannot import warpzone from outside this folder")
     return Finding(name, OK, f"runs {program}")
@@ -356,6 +360,7 @@ def _check_files(
                 continue
         text = _read(item.path)
         program: str | None = None
+        script: str | None = None
         runs_warpzone = False
         if text is not None and item.kind == SCRIPT:
             program, runs_warpzone = esde.script_interpreter(text), True
@@ -363,6 +368,13 @@ def _check_files(
             words = updatetimer.exec_command(text) or []
             program = words[0] if words else None
             runs_warpzone = words[1:3] == ["-m", "warpzone"]
+            if (
+                item.path.name == updatetimer.SERVICE
+                and words[:1] == [updatetimer.SHELL]
+                and len(words) > 1
+                and not os.path.isfile(words[1])
+            ):
+                script = words[1]
         program_ok = program is not None and shutil.which(program) is not None
         works = True
         if program_ok and runs_warpzone:
@@ -378,6 +390,7 @@ def _check_files(
                 program=program,
                 program_ok=program_ok,
                 imports=works,
+                script=script,
             )
         )
 

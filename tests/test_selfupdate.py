@@ -1,48 +1,19 @@
-import os
-import shutil
-import subprocess
+"""The pieces of `warpzone self-update` that are not the updater script: version keys, the
+settings file written for the script, the live copy and the wrapper command."""
+
 import tempfile
 import unittest
-from collections.abc import Sequence
 from pathlib import Path
-from unittest import mock
+from typing import ClassVar
 
 from warpzone import selfupdate
-from warpzone.selfupdate import (
-    Decision,
-    decide,
-    newest_tag,
-    parse_tag,
-    run_self_update,
-    tag_key,
-    version_key,
-)
+from warpzone.selfupdate import tag_key, version_key
 
-GIT = shutil.which("git")
-GIT_ENV = {
-    **os.environ,
-    "GIT_CONFIG_GLOBAL": os.devnull,
-    "GIT_CONFIG_SYSTEM": os.devnull,
-    "GIT_AUTHOR_NAME": "Test",
-    "GIT_AUTHOR_EMAIL": "test@example.invalid",
-    "GIT_COMMITTER_NAME": "Test",
-    "GIT_COMMITTER_EMAIL": "test@example.invalid",
-}
+UPDATER = Path(__file__).resolve().parent.parent / "warpzone" / "data" / "updater.sh"
+HOME = Path("/home/deck")
 
 
 class VersionTests(unittest.TestCase):
-    def test_parse_tag_takes_only_plain_releases(self) -> None:
-        self.assertEqual(parse_tag("v0.2.0"), (0, 2, 0))
-        self.assertEqual(parse_tag("v10.0.12"), (10, 0, 12))
-        for tag in ("0.2.0", "v0.2", "v0.3.0rc1", "v1.0.0-rc.1", "latest", "v1.0.0.1", ""):
-            self.assertIsNone(parse_tag(tag), tag)
-
-    def test_newest_tag_compares_numbers_not_text(self) -> None:
-        tags = ["v0.9.0", "v0.10.0", "v0.2.0", "v0.11.0rc1", "nightly"]
-        self.assertEqual(newest_tag(tags), "v0.10.0")
-        self.assertIsNone(newest_tag(["nightly", "v1"]))
-        self.assertIsNone(newest_tag([]))
-
     def test_version_key_puts_a_pre_release_before_its_release(self) -> None:
         assert version_key("0.3.0rc1") is not None
         assert version_key("0.3.0") is not None
@@ -84,218 +55,179 @@ class VersionTests(unittest.TestCase):
         for version in ("0.3.0", "0.3.0rc1", "10.0.12rc7"):
             self.assertEqual(tag_key(f"v{version}"), version_key(version))
 
-    def test_rc_tags_are_still_not_a_release_to_move_to(self) -> None:
-        # Choosing by channel is not wired in yet: `self-update` follows plain releases.
-        self.assertIsNone(parse_tag("v0.3.0rc1"))
-        self.assertEqual(newest_tag(["v0.2.0", "v0.3.0rc1", "v0.3.0rc2"]), "v0.2.0")
-        self.assertEqual(decide("0.2.0", ["v0.2.0", "v0.3.0rc2"]), Decision("current", "v0.2.0"))
 
-    def test_decide(self) -> None:
-        self.assertEqual(decide("0.2.0", ["v0.3.0", "v0.2.0"]), Decision("update", "v0.3.0"))
-        self.assertEqual(decide("0.3.0", ["v0.3.0", "v0.2.0"]), Decision("current", "v0.3.0"))
-        self.assertEqual(decide("0.4.0", ["v0.3.0", "v0.2.0"]), Decision("ahead", "v0.3.0"))
-        self.assertEqual(decide("0.3.0rc1", ["v0.3.0"]), Decision("update", "v0.3.0"))
-        self.assertEqual(decide("0.3.0", ["v0.3.0rc1"]), Decision("no-tags", None))
-        self.assertEqual(decide("0.2.0", []), Decision("no-tags", None))
-        self.assertEqual(decide("weird", ["v0.3.0"]), Decision("bad-version", None))
+class PathTests(unittest.TestCase):
+    def test_the_live_copy_is_outside_the_clone_under_the_share_folder(self) -> None:
+        self.assertEqual(
+            selfupdate.live_path(HOME), HOME / ".local/share/warpzone/updater/updater.sh"
+        )
+
+    def test_the_settings_and_the_state_sit_in_the_updater_folder_of_the_state_base(self) -> None:
+        base = HOME / ".local/state/warpzone"
+        self.assertEqual(selfupdate.conf_path(base), base / "updater/conf")
+        self.assertEqual(selfupdate.state_path(base), base / "updater/state")
+        self.assertEqual(selfupdate.bad_dir(base), base / "updater/bad")
 
 
-@unittest.skipUnless(GIT, "git is not installed")
-class SelfUpdateTests(unittest.TestCase):
+class ConfTests(unittest.TestCase):
+    VALUES: ClassVar[dict[str, object]] = {
+        "device": "deck",
+        "config": "/home/deck/.config/warpzone/config.toml",
+        "clone": "/home/deck/.local/share/warpzone/src",
+        "python": "/home/deck/.local/share/warpzone/venv/bin/python",
+        "channel": "stable",
+        "pin": None,
+        "enabled": True,
+        "frontend": ("es-de", "ES-DE.AppImage"),
+    }
+
+    def render(self, **change) -> str:
+        return selfupdate.render_conf(**{**self.VALUES, **change})
+
+    def test_the_settings_are_one_key_per_line_in_a_fixed_order(self) -> None:
+        self.assertEqual(
+            self.render(),
+            "# Written by warpzone provision device, which rewrites it.\n"
+            "device=deck\n"
+            "config=/home/deck/.config/warpzone/config.toml\n"
+            "clone=/home/deck/.local/share/warpzone/src\n"
+            "python=/home/deck/.local/share/warpzone/venv/bin/python\n"
+            "channel=stable\n"
+            "pin=\n"
+            "enabled=true\n"
+            "frontend=es-de ES-DE.AppImage\n",
+        )
+
+    def test_a_pin_a_channel_and_a_disabled_device(self) -> None:
+        parsed = selfupdate.parse_kv(self.render(channel="rc", pin="v0.3.0rc1", enabled=False))
+        self.assertEqual(
+            (parsed["channel"], parsed["pin"], parsed["enabled"]), ("rc", "v0.3.0rc1", "false")
+        )
+
+    def test_a_config_that_is_not_given_leaves_the_key_empty(self) -> None:
+        self.assertEqual(selfupdate.parse_kv(self.render(config=None))["config"], "")
+
+    def test_it_reads_back_what_it_wrote_and_runs_nothing(self) -> None:
+        text = self.render(device="my deck", python="/opt/$(touch x)/`id`/py")
+        parsed = selfupdate.parse_kv(text)
+        self.assertEqual(parsed["device"], "my deck")
+        self.assertEqual(parsed["python"], "/opt/$(touch x)/`id`/py")
+        self.assertEqual(
+            set(parsed),
+            {"device", "config", "clone", "python", "channel", "pin", "enabled", "frontend"},
+        )
+
+    def test_a_value_with_a_line_break_is_refused(self) -> None:
+        for key in ("device", "python", "clone", "config", "pin"):
+            for bad in ("a\nenabled=false", "a\rb", "a\0b"):
+                with self.subTest(key=key, bad=bad), self.assertRaises(ValueError):
+                    self.render(**{key: bad})
+
+    def test_parse_kv_skips_comments_and_lines_without_an_equals_sign(self) -> None:
+        text = "# note\n\nnonsense\na=1\nb = 2\r\na=3\n=x\n"
+        self.assertEqual(selfupdate.parse_kv(text), {"a": "3", "b ": " 2", "": "x"})
+
+
+class AbiTests(unittest.TestCase):
+    def test_the_abi_is_read_from_the_script(self) -> None:
+        self.assertEqual(selfupdate.updater_abi("#!/bin/sh\nUPDATER_ABI=7\nset -u\n"), 7)
+
+    def test_the_shipped_script_has_one(self) -> None:
+        abi = selfupdate.updater_abi(UPDATER.read_text(encoding="utf-8"))
+        self.assertIsNotNone(abi)
+        self.assertGreaterEqual(abi, 1)
+
+    def test_no_abi_or_a_garbled_one_is_none(self) -> None:
+        for text in ("", "echo hi\n", "UPDATER_ABI=\n", "UPDATER_ABI=x1\n", "  UPDATER_ABI=2\n"):
+            self.assertIsNone(selfupdate.updater_abi(text), repr(text))
+
+    def test_only_the_first_assignment_counts(self) -> None:
+        self.assertEqual(selfupdate.updater_abi("UPDATER_ABI=1\nUPDATER_ABI=9\n"), 1)
+
+
+class InstallDecisionTests(unittest.TestCase):
+    def decide(self, candidate: str, live: str | None) -> str:
+        return selfupdate.install_decision(candidate, live)
+
+    def test_no_live_copy_installs(self) -> None:
+        self.assertEqual(self.decide("UPDATER_ABI=1\n", None), "install")
+
+    def test_the_same_text_is_current(self) -> None:
+        self.assertEqual(self.decide("UPDATER_ABI=1\nx\n", "UPDATER_ABI=1\nx\n"), "current")
+
+    def test_a_higher_or_equal_abi_with_other_text_replaces(self) -> None:
+        self.assertEqual(self.decide("UPDATER_ABI=2\nb\n", "UPDATER_ABI=1\na\n"), "install")
+        self.assertEqual(self.decide("UPDATER_ABI=1\nb\n", "UPDATER_ABI=1\na\n"), "install")
+
+    def test_a_lower_abi_never_replaces_a_higher_one(self) -> None:
+        self.assertEqual(self.decide("UPDATER_ABI=1\nb\n", "UPDATER_ABI=2\na\n"), "older")
+
+    def test_a_live_copy_with_no_abi_is_replaced(self) -> None:
+        self.assertEqual(self.decide("UPDATER_ABI=1\n", "garbage\n"), "install")
+
+    def test_a_candidate_with_no_abi_is_refused_whatever_is_there(self) -> None:
+        self.assertEqual(self.decide("echo\n", None), "invalid")
+        self.assertEqual(self.decide("echo\n", "UPDATER_ABI=1\n"), "invalid")
+
+
+class StateTests(unittest.TestCase):
+    def test_the_state_is_read_like_the_script_reads_it(self) -> None:
+        text = "schema=1\ngood_tag=v0.3.0\nlast_result=ok\nlast_ok=1700000000\n"
+        self.assertEqual(
+            selfupdate.parse_kv(text),
+            {"schema": "1", "good_tag": "v0.3.0", "last_result": "ok", "last_ok": "1700000000"},
+        )
+
+    def test_a_bad_tag_file(self) -> None:
+        text = "sha=abc123\ndate=2026-11-01T10:00:00Z\nreason=health failed (exit 1)\n"
+        bad = selfupdate.parse_bad(text)
+        self.assertEqual(bad.sha, "abc123")
+        self.assertEqual(bad.reason, "health failed (exit 1)")
+        self.assertEqual(bad.when, 1_793_527_200)
+
+    def test_a_bad_tag_file_with_no_readable_date(self) -> None:
+        self.assertIsNone(selfupdate.parse_bad("sha=a\ndate=yesterday\nreason=x\n").when)
+        self.assertIsNone(selfupdate.parse_bad("").when)
+
+
+class WrapperTests(unittest.TestCase):
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
-        self.tmp = Path(self._tmp.name)
-        self.origin = self.tmp / "origin.git"
-        self.root = self.tmp / "src"
-        self.log = self.tmp / "state" / "warpzone" / "self-update.log"
+        self.live = Path(self._tmp.name) / "updater.sh"
         self.lines: list[str] = []
-        self.calls: list[list[str]] = []
-        self.git_in(self.tmp, "init", "--bare", "--initial-branch=main", str(self.origin))
-        seed = self.tmp / "seed"
-        self.git_in(self.tmp, "clone", "--quiet", str(self.origin), str(seed))
-        self.seed = seed
-        self.release(seed, "v0.2.0", "0.2.0")
-        self.git_in(self.tmp, "clone", "--quiet", str(self.origin), str(self.root))
-        self.git_in(self.root, "checkout", "--quiet", "--detach", "v0.2.0")
+        self.commands: list[list[str]] = []
 
-    def git_in(self, cwd: Path, *args: str) -> str:
-        proc = subprocess.run(
-            ["git", *args], cwd=cwd, env=GIT_ENV, capture_output=True, text=True, check=True
-        )
-        return proc.stdout.strip()
+    def run_tick(self, code: int = 0) -> int:
+        def run(command):
+            self.commands.append(list(command))
+            return code
 
-    def release(self, clone: Path, tag: str, version: str, pyproject: str = "[project]\n") -> None:
-        (clone / "VERSION").write_text(version)
-        (clone / "pyproject.toml").write_text(pyproject)
-        self.git_in(clone, "add", "-A")
-        self.git_in(clone, "commit", "--quiet", "-m", f"release {version}")
-        self.git_in(clone, "tag", tag)
-        self.git_in(clone, "push", "--quiet", "origin", "HEAD:main", tag)
+        return selfupdate.run_tick(self.live, self.lines.append, run=run)
 
-    def head(self) -> str:
-        return self.git_in(self.root, "rev-parse", "HEAD")
+    def test_it_runs_the_live_copy_with_sh_and_returns_its_exit_code(self) -> None:
+        self.live.write_text("UPDATER_ABI=1\n")
+        self.assertEqual(self.run_tick(0), 0)
+        self.assertEqual(self.commands, [["sh", str(self.live), "tick"]])
+        self.assertEqual(self.run_tick(3), 3)
+        self.assertEqual(self.lines, [])
 
-    def runner(self, command: Sequence[str]) -> tuple[int, str]:
-        """Real git; anything else is recorded and succeeds."""
-        self.calls.append(list(command))
-        if command[0] == "git":
-            proc = subprocess.run(
-                list(command), env=GIT_ENV, capture_output=True, text=True, check=False
-            )
-            return proc.returncode, proc.stdout + proc.stderr
-        return 0, "0.3.0\n"
+    def test_without_a_live_copy_it_says_so_and_runs_nothing(self) -> None:
+        self.assertEqual(self.run_tick(), 1)
+        self.assertEqual(self.commands, [])
+        (message,) = self.lines
+        self.assertIn(str(self.live), message)
+        self.assertIn("warpzone provision device", message)
+        self.assertIn("updater.sh install", message)
 
-    def update(self, version: str = "0.2.0", **kw) -> int:
-        kw.setdefault("run", self.runner)
-        return run_self_update(
-            self.root, version, self.lines.append, log=self.log, python="/venv/bin/python", **kw
-        )
+    def test_a_shell_that_cannot_be_started_is_a_failure_with_a_message(self) -> None:
+        self.live.write_text("UPDATER_ABI=1\n")
 
-    def said(self) -> str:
-        return "\n".join(self.lines)
+        def run(command):
+            raise OSError("sh: not found")
 
-    def test_a_folder_that_is_not_a_checkout_exits_cleanly(self) -> None:
-        plain = self.tmp / "site-packages"
-        plain.mkdir()
-        code = run_self_update(plain, "0.2.0", self.lines.append, log=self.log, run=self.runner)
-        self.assertEqual(code, 0)
-        self.assertIn("not a git checkout", self.said())
-
-    def test_a_package_inside_some_other_repository_is_not_a_checkout(self) -> None:
-        inner = self.root / "vendor" / "site-packages"
-        inner.mkdir(parents=True)
-        code = run_self_update(inner, "0.2.0", self.lines.append, log=self.log, run=self.runner)
-        self.assertEqual(code, 0)
-        self.assertIn("not a git checkout", self.said())
-
-    def test_missing_git_exits_cleanly(self) -> None:
-        def no_git(command: Sequence[str]) -> tuple[int, str]:
-            raise FileNotFoundError("git")
-
-        self.assertEqual(self.update(run=no_git), 0)
-        self.assertIn("git", self.said())
-
-    def test_moves_to_the_newest_tag(self) -> None:
-        self.release(self.seed, "v0.2.5", "0.2.5")
-        self.release(self.seed, "v0.3.0", "0.3.0")
-        self.release(self.seed, "v0.3.1rc1", "0.3.1rc1")  # not a release
-        code = self.update()
-        self.assertEqual(code, 0, self.said())
-        self.assertEqual(self.head(), self.git_in(self.root, "rev-parse", "v0.3.0^{commit}"))
-        self.assertEqual((self.root / "VERSION").read_text(), "0.3.0")
-        self.assertIn("0.2.0 -> 0.3.0", self.said())
-        self.assertIn("0.2.0 -> 0.3.0", self.log.read_text())
-
-    def test_reports_the_version_the_checkout_reports_now(self) -> None:
-        self.release(self.seed, "v0.3.0", "0.3.0")
-        self.update()
-        probe = [c for c in self.calls if c[0] == "/venv/bin/python" and "-c" in c]
-        self.assertEqual(len(probe), 1)
-        self.assertIn("now 0.3.0", self.said())
-
-    def test_a_pyproject_change_reinstalls_the_editable_package(self) -> None:
-        self.release(self.seed, "v0.3.0", "0.3.0", pyproject="[project]\nname = 'x'\n")
-        self.assertEqual(self.update(), 0)
-        pip = [c for c in self.calls if "pip" in c]
-        self.assertEqual(len(pip), 1)
-        self.assertEqual(pip[0][:4], ["/venv/bin/python", "-m", "pip", "install"], pip[0])
-        self.assertIn(str(self.root), pip[0])
-
-    def test_no_reinstall_when_pyproject_is_unchanged(self) -> None:
-        self.release(self.seed, "v0.3.0", "0.3.0")
-        self.assertEqual(self.update(), 0)
-        self.assertEqual([c for c in self.calls if "pip" in c], [])
-
-    def test_a_failed_reinstall_says_how_to_do_it_by_hand(self) -> None:
-        self.release(self.seed, "v0.3.0", "0.3.0", pyproject="[project]\nname = 'x'\n")
-
-        def failing(command: Sequence[str]) -> tuple[int, str]:
-            if "pip" in command:
-                return 1, "no network"
-            return self.runner(command)
-
-        self.assertEqual(self.update(run=failing), 1)
-        self.assertIn("pip install -e", self.said())
-
-    def test_up_to_date_changes_nothing(self) -> None:
-        before = self.head()
-        self.assertEqual(self.update(), 0)
-        self.assertEqual(self.head(), before)
-        self.assertIn("up to date", self.said())
-
-    def test_a_device_ahead_of_the_newest_tag_stays_put(self) -> None:
-        self.git_in(self.root, "checkout", "--quiet", "main")
-        before = self.head()
-        self.assertEqual(self.update(version="0.9.0"), 0)
-        self.assertEqual(self.head(), before)
-        self.assertIn("ahead", self.said())
-
-    def test_a_dirty_tree_is_refused(self) -> None:
-        self.release(self.seed, "v0.3.0", "0.3.0")
-        (self.root / "VERSION").write_text("edited")
-        before = self.head()
-        self.assertEqual(self.update(), 1)
-        self.assertEqual(self.head(), before)
-        self.assertEqual((self.root / "VERSION").read_text(), "edited")
-        self.assertIn("local changes", self.said())
-
-    def test_untracked_files_do_not_block_the_update(self) -> None:
-        self.release(self.seed, "v0.3.0", "0.3.0")
-        (self.root / "notes.txt").write_text("mine")
-        self.assertEqual(self.update(), 0, self.said())
-        self.assertEqual((self.root / "VERSION").read_text(), "0.3.0")
-
-    def test_dirty_tree_is_not_mentioned_when_nothing_is_due(self) -> None:
-        (self.root / "VERSION").write_text("edited")
-        self.assertEqual(self.update(), 0)
-        self.assertNotIn("local changes", self.said())
-
-    def test_dry_run_reports_and_changes_nothing(self) -> None:
-        self.release(self.seed, "v0.3.0", "0.3.0")
-        before = self.head()
-        self.assertEqual(self.update(dry_run=True), 0)
-        self.assertEqual(self.head(), before)
-        self.assertIn("would update 0.2.0 -> 0.3.0", self.said())
-        self.assertFalse(self.log.exists())
-        self.assertEqual([c for c in self.calls if c[0] != "git"], [])
-
-    def test_no_network_is_a_short_message_and_exit_0(self) -> None:
-        shutil.rmtree(self.origin)
-        before = self.head()
-        self.assertEqual(self.update(), 0)
-        self.assertEqual(self.head(), before)
-        self.assertIn("could not reach", self.said())
-        self.assertIn("could not reach", self.log.read_text())
-
-    def test_a_timeout_counts_as_no_network(self) -> None:
-        def slow(command: Sequence[str]) -> tuple[int, str]:
-            if "fetch" in command:
-                raise subprocess.TimeoutExpired(command, 1)
-            return self.runner(command)
-
-        self.assertEqual(self.update(run=slow), 0)
-        self.assertIn("could not reach", self.said())
-
-    def test_an_unreadable_version_is_an_error(self) -> None:
-        self.assertEqual(self.update(version="dev"), 1)
-
-    def test_the_log_is_appended_with_timestamps_and_stays_small(self) -> None:
-        self.log.parent.mkdir(parents=True)
-        self.log.write_text("".join(f"old line {i}\n" for i in range(5000)))
-        self.update()
-        lines = self.log.read_text().splitlines()
-        self.assertLess(len(lines), 1000)
-        self.assertRegex(lines[-1], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ ")
-
-    def test_the_real_runner_has_a_timeout_and_never_asks_for_a_password(self) -> None:
-        with mock.patch.object(selfupdate.subprocess, "run") as run:
-            run.return_value = mock.Mock(returncode=0, stdout="", stderr="")
-            selfupdate.run_command(["git", "fetch"])
-        kwargs = run.call_args.kwargs
-        self.assertGreater(kwargs["timeout"], 0)
-        self.assertEqual(kwargs["env"]["GIT_TERMINAL_PROMPT"], "0")
-        self.assertEqual(kwargs["stdin"], subprocess.DEVNULL)
+        self.assertEqual(selfupdate.run_tick(self.live, self.lines.append, run=run), 1)
+        self.assertIn("not found", self.lines[0])
 
 
 if __name__ == "__main__":

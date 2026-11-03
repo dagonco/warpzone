@@ -7,7 +7,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
-from unittest import mock
+from unittest import addModuleCleanup, mock
 
 from support import API_KEY, HUB_ID, FakeSyncthing
 from test_anbernic import ARK_ID, PROFILE, Device, ark_config
@@ -15,6 +15,7 @@ from test_artwork import source_xml
 from test_doctor import by_name, context
 from test_provision import reporter
 from warpzone import artwork, settings_state
+from warpzone import provision as provision_mod
 from warpzone.cli import main
 from warpzone.doctor import OK, WARN, Context, check_frontend
 from warpzone.model import device_specs
@@ -25,6 +26,15 @@ from warpzone.provision import (
     sync_artwork_scope,
 )
 from warpzone.syncthing import Client
+
+
+def setUpModule() -> None:
+    """provision_device would install the updater and its timer: tests/test_update_timer.py
+    covers that."""
+    patcher = mock.patch.object(provision_mod, "ensure_self_update")
+    patcher.start()
+    addModuleCleanup(patcher.stop)
+
 
 SYSTEM_LIST = """<?xml version="1.0"?>
 <systemList>

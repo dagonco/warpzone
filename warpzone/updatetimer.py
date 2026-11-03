@@ -1,7 +1,10 @@
-"""The systemd user timer that runs `warpzone self-update`. Pure: no I/O.
+"""The systemd user timer that starts one tick of the updater. Pure: no I/O.
 
 `provision device` writes the two units and enables the timer on every device, whatever its
-profile; `doctor` looks for them. See docs/self-update.md.
+profile; `doctor` looks for them. The unit keeps the name `warpzone-self-update`, so writing it
+leaves no orphan unit. The timer is a piece of its own, apart from the script it starts
+(`updater.sh tick` does not know what ran it): a platform without systemd can start the same
+tick from another launcher. See docs/self-update.md.
 """
 
 from __future__ import annotations
@@ -12,8 +15,11 @@ NAME = "warpzone-self-update"
 SERVICE = f"{NAME}.service"
 TIMER = f"{NAME}.timer"
 UNIT_DIR = ".config/systemd/user"
-BOOT_DELAY_MINUTES = 5
-SPREAD_MINUTES = 30
+# No random delay: it also pushes back the start after boot, when the menu may not be open yet.
+BOOT_SEC = "45s"
+INTERVAL = "15min"
+TIMEOUT_START = "30min"
+SHELL = "/bin/sh"
 
 _PLAIN = re.compile(r"[A-Za-z0-9_@+=:,./-]+")
 
@@ -65,30 +71,36 @@ def _words(line: str) -> list[str]:
     return [w.replace("%%", "%").replace("$$", "$") for w in words]
 
 
-def render_service(python: str) -> str:
+def expected_command(updater: str) -> list[str]:
+    """The words of the `ExecStart=` line `render_service` writes."""
+    return [SHELL, updater, "tick"]
+
+
+def render_service(updater: str) -> str:
+    """The one-shot service: one tick of the live copy of the script, run by `sh` so that the
+    script needs no execute bit and no interpreter line. The tick keeps itself inside 25
+    minutes, under `TimeoutStartSec`."""
     return (
         "[Unit]\n"
-        "Description=Update warpzone to the newest release\n"
+        "Description=Keep warpzone on a release that works\n"
         "# Written by warpzone provision device, which rewrites it.\n"
         "\n"
         "[Service]\n"
         "Type=oneshot\n"
-        f"ExecStart={exec_word(python)} -m warpzone self-update\n"
+        f"TimeoutStartSec={TIMEOUT_START}\n"
+        f"ExecStart={SHELL} {exec_word(updater)} tick\n"
     )
 
 
 def render_timer() -> str:
     return (
         "[Unit]\n"
-        "Description=Look for a new warpzone release every day\n"
+        "Description=Run the warpzone updater after boot and every few minutes\n"
         "# Written by warpzone provision device, which rewrites it.\n"
         "\n"
         "[Timer]\n"
-        "OnCalendar=daily\n"
-        # A device that was off at the usual time runs it as soon as it is on again.
-        "Persistent=true\n"
-        f"OnBootSec={BOOT_DELAY_MINUTES}min\n"
-        f"RandomizedDelaySec={SPREAD_MINUTES}min\n"
+        f"OnBootSec={BOOT_SEC}\n"
+        f"OnUnitActiveSec={INTERVAL}\n"
         "\n"
         "[Install]\n"
         "WantedBy=timers.target\n"

@@ -66,23 +66,25 @@ Each `library/` and `songs/` folder holds one `patterns-<device>.stignore` per d
 
 ## Install
 
-From the [v0.2.0 release](https://github.com/dagonco/warpzone/releases/tag/v0.2.0):
+**On a console or any other device** that keeps itself up to date, there is one way to install: from a clone, with Python 3.11 or newer, git and Syncthing running, the private config in place and the hub provisioned (Quickstart, steps 1 to 3):
 
 ```bash
-pipx install https://github.com/dagonco/warpzone/releases/download/v0.2.0/warpzone-0.2.0-py3-none-any.whl
-# or, without pipx:
-python3 -m pip install --user https://github.com/dagonco/warpzone/releases/download/v0.2.0/warpzone-0.2.0-py3-none-any.whl
-warpzone --version
+mkdir -p ~/.local/share/warpzone && cd ~/.local/share/warpzone
+git clone https://github.com/dagonco/warpzone.git src
+sh src/warpzone/data/updater.sh install deck
+~/.local/share/warpzone/venv/bin/warpzone --version
 ```
 
-Each release also lists a `SHA256SUMS` file and carries a build provenance attestation (`gh attestation verify <file> --repo dagonco/warpzone`).
+`deck` is the device's name in the config. The script checks out the newest release, makes a venv next to the clone (no pip, no network beyond git), and runs `warpzone provision device deck`, which also installs the updater and its timer (step 4 of the Quickstart). Every step, the options (`--config`, `--venv`, `--channel rc`) and what the updater does afterwards are in [docs/self-update.md](docs/self-update.md). A `pipx` or wheel install is not a supported device install.
 
-From a clone, with nothing to install:
+**On the machine that only runs `provision hub`, `inbox` and the like**, from a clone, with nothing to install:
 
 ```bash
 git clone https://github.com/dagonco/warpzone.git && cd warpzone
 python3 -m warpzone --help
 ```
+
+Each release lists a `SHA256SUMS` file and carries a build provenance attestation (`gh attestation verify <file> --repo dagonco/warpzone`).
 
 ## Quickstart
 
@@ -100,10 +102,10 @@ python3 -m warpzone --help
 4. **Provision each device, on the device.**
 
    ```bash
-   warpzone provision device deck
+   warpzone provision device deck   # the install above already ran it once
    ```
 
-   It finds the local Syncthing's API key in its `config.xml` (including the SyncThingy flatpak), adds the hub, and creates the subscribed folders. Save folders whose directory does not exist yet are skipped with a warning and picked up by the next run. With the SyncThingy flatpak it also grants it access to the emulators' `~/.var/app` folders (flatpak hides them) and asks you to restart Syncthing. Use `--syncthing-config PATH` if your `config.xml` is somewhere unusual. On a device with systemd it also installs a daily timer that runs `warpzone self-update` (see [docs/self-update.md](docs/self-update.md); `self_update = false` in the device's config turns it off).
+   It finds the local Syncthing's API key in its `config.xml` (including the SyncThingy flatpak), adds the hub, and creates the subscribed folders. Save folders whose directory does not exist yet are skipped with a warning and picked up by the next run. With the SyncThingy flatpak it also grants it access to the emulators' `~/.var/app` folders (flatpak hides them) and asks you to restart Syncthing. Use `--syncthing-config PATH` if your `config.xml` is somewhere unusual. On a device with systemd it also installs the updater script and a timer that starts it 45 seconds after boot and every 15 minutes (see [docs/self-update.md](docs/self-update.md); `self_update = false` in the device's config turns it off).
 
 ## Commands
 
@@ -123,12 +125,12 @@ python3 -m warpzone --help
 | `warpzone settings apply` | On a console: writes the emulator settings from the hub's layers. ES-DE runs it at startup. |
 | `warpzone settings capture` | On a console: takes settings changed in an emulator to the hub's layers. |
 | `warpzone settings audit` | Reports drift between the layers and this console (read only). |
-| `warpzone self-update` | On a device: moves the git clone to the newest release tag (never a downgrade). A daily timer runs it, see [docs/self-update.md](docs/self-update.md). |
+| `sh <clone>/warpzone/data/updater.sh install <device>` | On a device, from a fresh `git clone`: checks out the newest release, makes the venv and runs `provision device`. The one way to install a device, see [docs/self-update.md](docs/self-update.md#installing-a-device). |
+| `warpzone self-update` | On a device: runs one tick of the updater now, as its timer does (look for a release, switch to it, verify it, go back if it fails). See [docs/self-update.md](docs/self-update.md). |
 | `warpzone health [device]` | On a device: checks that this version works (config, dry runs of what ES-DE and the timers run, startup scripts and units); writes nothing. Exit 0 when it works. See [docs/self-update.md](docs/self-update.md#checking-a-version). |
 | `warpzone doctor` | Checks this machine and prints the fix for each problem. |
 
 `provision`, `frontend refresh` and `links sync` support `--dry-run`. `prune` and `inbox` report first and act only with `--apply`. `settings apply` and `settings capture` support `--dry-run`.
-`provision` and `self-update` support `--dry-run`. `prune` and `inbox` report first and act only with `--apply`. `settings apply` and `settings capture` support `--dry-run`.
 
 ## Safety
 
@@ -148,7 +150,7 @@ Turn on filesystem snapshots for the hub's share. The full list of rules is in [
 | [docs/inbox.md](docs/inbox.md) | Adding games: DAT-based discs and cartridges, Switch, 3DS, PS3, PS4, PS Vita and Xbox, arcade. |
 | [docs/bios.md](docs/bios.md) | The BIOS and firmware check. |
 | [docs/doctor.md](docs/doctor.md) | Checking a machine. |
-| [docs/self-update.md](docs/self-update.md) | Updating a device: `self-update`, its daily timer, turning it off. |
+| [docs/self-update.md](docs/self-update.md) | Installing and updating a device: `updater.sh install`, the updater and its timer, `self-update`, turning it off. |
 | [docs/emudeck.md](docs/emudeck.md) | The EmuDeck profile, the symlink gotcha, manual steps. |
 | [docs/anbernic.md](docs/anbernic.md) | The Anbernic RG351MP (dArkOS) profile: exFAT card, system list override, RetroArch paths. |
 | [docs/safety.md](docs/safety.md) | Safety rules and hub snapshots. |

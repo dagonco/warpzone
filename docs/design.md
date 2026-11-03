@@ -803,12 +803,13 @@ error messages; the RetroAchievements key is read from `RA_API_KEY`, never from 
 | `warpzone provision device <name>` | on the device | Reads the local Syncthing API key from the local `config.xml` (searching the default locations, including the SyncThingy flatpak; `--syncthing-config PATH` overrides), adds the hub device, creates the subscribed folders with the bootstrap above (`--timeout SECONDS`). `--unattended` is for a run nobody watches and changes the rules as described in [Autonomous updates](#autonomous-updates-contract); it exits `3` when a write waits for the menu to close. When that Syncthing is the SyncThingy flatpak it first grants it the missing `flatpak override --user --filesystem=~/.var/app/<app>` for every folder under `~/.var/app` (flatpak hides other apps' data), and asks for a Syncthing restart. When the device subscribes to `settings`, it installs the ES-DE startup script that runs `settings apply` (see [ES-DE startup script](#es-de-startup-script)). When the device subscribes to `library` and its profile has `[es_systems]` or `[retroarch]`, it also writes the frontend's system list override and pins RetroArch's paths (see [Frontend and RetroArch overrides](#frontend-and-retroarch-overrides)). When the profile has `[shadps4]` it also lists the PS4 games folder in shadPS4's install directories (see [shadPS4 install directories](#shadps4-install-directories)). When the profile has `[links.*]` and the device lists `library`, it links the library games into the emulator's game folder and installs the ES-DE startup script that keeps them linked (see [Title links](#title-links)). When it lists `frontend` and the profile has `[artwork]`, it limits the artwork folders to the systems on the device, writes the gamelists and installs the refresh timer (see [Frontend artwork](#frontend-artwork)). Idempotent. |
 | `warpzone frontend refresh [device]` | on the device | For a device whose profile has `[artwork]` and that lists `frontend`: widens the artwork folders' ignores to the systems that have games now (when the local Syncthing is found) and rewrites the frontend's gamelists from the synced ES-DE data, only while the frontend is closed. `--dry-run` prints what it would do. See [Frontend artwork](#frontend-artwork). |
 | `warpzone play-state sync <device>` | on the device | For a device with ES-DE that lists `play-state`: publishes what its gamelists say and merges the other devices' ledgers into them, only while ES-DE is closed or starting (`--frontend-starting`, which its startup script passes). `--dry-run`, `--quiet`. Needs no network. See [Play state](#play-state). |
-| `warpzone provision device <name>` | on the device | Reads the local Syncthing API key from the local `config.xml` (searching the default locations, including the SyncThingy flatpak; `--syncthing-config PATH` overrides), adds the hub device, creates the subscribed folders with the bootstrap above (`--timeout SECONDS`). When that Syncthing is the SyncThingy flatpak it first grants it the missing `flatpak override --user --filesystem=~/.var/app/<app>` for every folder under `~/.var/app` (flatpak hides other apps' data), and asks for a Syncthing restart. When the device subscribes to `settings`, it installs the ES-DE startup script that runs `settings apply` (see [ES-DE startup script](#es-de-startup-script)). When the device subscribes to `library` and its profile has `[es_systems]` or `[retroarch]`, it also writes the frontend's system list override and pins RetroArch's paths (see [Frontend and RetroArch overrides](#frontend-and-retroarch-overrides)). It then installs the self-update timer, for every profile (see [Self-update](#self-update)). Idempotent. |
+| `warpzone provision device <name>` | on the device | Reads the local Syncthing API key from the local `config.xml` (searching the default locations, including the SyncThingy flatpak; `--syncthing-config PATH` overrides), adds the hub device, creates the subscribed folders with the bootstrap above (`--timeout SECONDS`). When that Syncthing is the SyncThingy flatpak it first grants it the missing `flatpak override --user --filesystem=~/.var/app/<app>` for every folder under `~/.var/app` (flatpak hides other apps' data), and asks for a Syncthing restart. When the device subscribes to `settings`, it installs the ES-DE startup script that runs `settings apply` (see [ES-DE startup script](#es-de-startup-script)). When the device subscribes to `library` and its profile has `[es_systems]` or `[retroarch]`, it also writes the frontend's system list override and pins RetroArch's paths (see [Frontend and RetroArch overrides](#frontend-and-retroarch-overrides)). It then writes the updater's settings, installs the live copy of the updater script and the timer that starts it, for every profile (see [Self-update](#self-update)). Idempotent. |
 | `warpzone links sync <device>` | on the device | For a profile with `[links.*]` and a device that lists `library`: makes each rule's `target` hold a symlink per library title, never while the emulator runs (see [Title links](#title-links)). `--dry-run` only says what it would do, `--quiet` prints nothing. ES-DE runs it at startup. |
 | `warpzone prune [device]` | on the device | Reports, and with `--apply` deletes, the files of the whitelisted folders that the device no longer whitelists (see [Pruning](#pruning)). Report only by default. |
 | `warpzone bios` | on a device or the hub | Reports which BIOS and firmware files a library has, lacks or has wrong (see [BIOS check](#bios-check)). Read-only. Exit 1 if a required item is missing or wrong. |
 | `warpzone inbox` | a desktop that mounts the hub's share | Identifies, converts and files new games dropped in `inbox/` (see [Inbox](#inbox)). Report only by default, `--apply` acts. Exit 1 if any item needs review. |
-| `warpzone self-update` | on the device | Moves the git checkout warpzone runs from to the newest `vX.Y.Z` tag when it is newer than `__version__` (see [Self-update](#self-update)). Needs no config. `--dry-run` reports only. Exit 0 for every outcome that needs no attention (including no network and not a checkout), 1 when a due update was refused or failed. |
+| `sh <clone>/warpzone/data/updater.sh install <device>` | on the device, from a fresh `git clone` | The one way to install a device: checks out the best release of the channel, makes the venv next to the clone, and runs `provision device` (see [Self-update](#self-update)). |
+| `warpzone self-update` | on the device | Runs one tick of the updater script's live copy (`sh ~/.local/share/warpzone/updater/updater.sh tick`), as the timer does, and exits with its code (see [Self-update](#self-update)). Needs no config. Without a live copy it says so and exits 1. |
 | `warpzone health [device]` | on the device | Checks that this version works here: loads the config and the profiles, runs `settings apply`, `play-state sync`, `links sync` and `frontend refresh` as dry runs within the 15 seconds ES-DE gives its startup scripts, and checks that the startup scripts and the units exist with an interpreter that imports warpzone (see [`warpzone health`](#warpzone-health)). Writes no user data, needs no DATs or tools. Exit 0 when it works, 1 when a check failed. |
 | `warpzone doctor` | any machine | Checklist of this machine: tools, config, local Syncthing, DATs, hub folder (see [Doctor](#doctor)). Offline, never changes anything. Exit 1 if a required check fails. |
 | `warpzone settings apply` | on the device | Writes the layered emulator settings into each emulator's config file: only the layered keys, with a backup, never while the emulator runs (see [Emulator settings](#emulator-settings)). Run by ES-DE at startup and by hand. |
@@ -2101,61 +2102,139 @@ for every problem, the exact fix for this platform.
 
 ## Self-update
 
-Devices run warpzone from a git clone with an editable install, so updating is moving the
-clone to a release tag. `selfupdate.py` holds the decisions as pure functions (`parse_tag`,
-`newest_tag`, `version_key`, `tag_key`, `decide`) and a runner-based `run_self_update`, so the tests use
-a real repository on disk (a bare repository as the remote) and no network.
+A device runs warpzone from a git clone with a venv next to it, and an updater script keeps the
+clone on a release that works (the contract is in "Autonomous updates (contract)" below). There
+is one way to install a device, from the clone itself: `git clone` the repository, then
+`sh <clone>/warpzone/data/updater.sh install <device>`. A `pipx` or wheel install is not a
+supported device install.
 
-- **Checkout.** The root is the folder that holds the `warpzone` package. It must be the
-  top level of a git work tree (`git rev-parse --show-toplevel`); otherwise (a wheel, a
-  package folder inside another repository, no git) the command says so and exits 0.
-- **Which tag.** `git fetch --tags`, then the highest tag matching `vX.Y.Z` exactly,
-  compared as numbers. Pre-release tags are ignored (until the channels of "Autonomous
-  updates" are implemented). A pre-release running version (`0.3.0rc1`) sorts before its
-  release, and `rc1` before `rc2`. A fetch that fails or times out (300 s) is "could
-  not reach the remote": a message and exit 0.
-- **Never a downgrade.** If the running `__version__` is the same as or newer than the
-  newest tag, nothing happens.
-- **Dirty tree.** Only when an update is due: local changes to tracked files
-  (`git status --porcelain --untracked-files=no`) make it refuse with exit 1.
-- **Update.** `git checkout --detach refs/tags/<tag>`. The editable install follows the
-  clone, so `warpzone --version` (which prints `__version__`) shows the new version in the
-  next process. `python -m pip install -e <root>` with the running interpreter is run only
-  when `pyproject.toml` differs between the old and the new commit (entry points and the
-  package list are the only install metadata that can go stale); a failure prints that
-  command and exits 1. The command ends by asking the interpreter which version it imports.
-- **Log.** Each message, with a UTC timestamp, is appended to
-  `~/.local/state/warpzone/self-update.log` (`$XDG_STATE_HOME` when set), cut to its last 200
-  lines past 64 KiB. `--dry-run` writes none.
+`selfupdate.py` holds what warpzone knows about the script, as pure functions apart from
+`run_tick`: the order of release tags (`version_key`, `tag_key`), where the live copy, the
+settings, the state and the `bad/` folder are (`live_path`, `conf_path`, `state_path`,
+`bad_dir`), `render_conf` and `parse_kv` for the settings file, `updater_abi` and
+`install_decision` for renewing the live copy, `parse_bad`, `frontend_names`, and the wrapper
+`run_tick`. The tests use real git repositories for the script and fakes for the rest.
+
+- **Install (`updater.sh install DEVICE [--config FILE] [--venv DIR] [--channel stable|rc] [-- ARGS...]`).**
+  Run from the clone, with a Python 3.11 or newer. Everything that can be refused is refused
+  before anything changes: the clone must be on a release tag or on a clean branch inside
+  `origin/main` (a tree with changes or commits of its own is refused, with no `reset`,
+  `stash` or `clean`), a Python must exist, and a release must pass the rules of a tick
+  (channel, ancestor of `origin/main`, its `__version__`, not retired, signed when signatures
+  are required) and carry `warpzone/data/updater.sh`. The tags are fetched first when the
+  remote answers. It then checks out the best such release of the channel (`stable` unless
+  `--channel rc`), makes the venv (see below) unless it already works, checks that the release
+  imports with it, and runs `python -m warpzone provision device DEVICE [--config FILE]
+  [ARGS...]` from the clone, which installs the live copy, writes the settings and starts the
+  timer. It takes the same lock as a tick. The venv is `venv` next to the clone unless
+  `--venv` says another folder; a relative `--config` is taken from the folder the person ran
+  it in. Exit `0` when it all worked, `2` for a usage error, `1` otherwise (and `provision`'s
+  own code when it fails).
+- **Python repair.** The settings name the venv's interpreter (`python`). At each tick, when
+  that is `<folder>/venv/bin/python` and it does not run, or the venv no longer finds the clone,
+  and another Python 3.11 or newer exists, the script makes the venv again with
+  `python -m venv --without-pip --clear <folder>`, adds `warpzone-clone.pth` (the clone's path)
+  to its `site-packages` and writes `bin/warpzone`, a shim that runs
+  `python -m warpzone "$@"`. That needs no network and no setuptools (unlike `pip install -e`,
+  which wants `setuptools>=77`), and the path of the venv's Python, which units and ES-DE scripts
+  hold, stays the same. Everything runs with `-m warpzone`. `--clear` is run only on a folder
+  that is called `venv`, does not exist or holds the mark `warpzone-venv` (which the script
+  writes when it makes one, so a venv of the user's, or the one of an older install, is never
+  cleared: `install` refuses it and a tick logs it and leaves it; the mark is also noted in
+  `venv-owned` in the state folder before the `--clear`, so a power cut between the clear and
+  the mark still leaves a venv that may be repaired, and `install` marks a working venv that
+  has `warpzone-clone.pth` and no mark), is not a symlink and does not
+  hold the clone; never on the folder around it, which holds `play-state`. A venv that works
+  is left alone (it is judged by finding `warpzone` without importing it). A tick repairs only
+  a checkout on a release (a tag or a clean branch inside `origin/main`), never a `dev` or
+  `dirty` one.
+- **The live copy.** `provision.ensure_updater` puts the script that ships with the running
+  version at `~/.local/share/warpzone/updater/updater.sh`, outside the clone. The new text is
+  written beside it, checked with `sh -n` and with `sh <copy> selftest` (which must print
+  `selftest: ok abi=N` for the script's own `UPDATER_ABI`), then the old file is saved as
+  `updater.sh.prev` and the copy replaces it with a rename, so a tick that is running keeps the
+  file it started with. `selfupdate.install_decision` is the rule: no live copy, or another
+  script of an ABI that is not lower, installs; the same text is current; a copy of a lower ABI
+  than the live one is never installed (a rollback to an older release does not downgrade the
+  script); a script with no `UPDATER_ABI` is refused. A failed check leaves the live copy as
+  it was and warns. The new text goes to a temporary file with a name of its own in the same
+  folder, and what is live is read again, and judged by the same rule, just before the rename,
+  so two `provision` runs at once cannot install a script that the other has not checked.
+  **A copy that is kept during a trial.** The `provision --unattended` of a release under trial
+  installs that release's updater, and a script with a fault `selftest` does not see would
+  then stop the device from updating, with the previous version's `provision` unable to put the
+  old one back (a lower ABI is never installed over a higher one, and a rollback may not run
+  `provision`). So before the first switch of a trial the tick copies the live script to
+  `updater/updater.sh.good` in the state folder (not again while it is there, since a resumed
+  trial finds the candidate's script live) and, whenever it goes back to the previous version
+  (a bad release, an environment failure, a trial given up, a failed probation), it puts that
+  copy back with a rename, whatever the ABI of the script it replaces. The copy is dropped at
+  the next tick when no trial or probation is on, and when probation passes. It is written to
+  a temporary file, flushed with `sync` and renamed, and a live script is only kept, and a kept
+  one only put back, when it is not empty, has its `UPDATER_ABI=` line and passes `sh -n`
+  (a power cut can leave a file of no bytes); otherwise the live one is left as it is and the
+  log says so. Only the live copy itself is ever kept or replaced: the running script, with
+  every symlink resolved (`cd -P`, `pwd -P`), must be `~/.local/share/warpzone/updater/updater.sh`
+  (`WZ_LIVE` moves it for tests), so the clone's own script, run by hand or through a symlink,
+  is never touched.
+- **The settings.** `provision.ensure_self_update` writes
+  `~/.local/state/warpzone/updater/conf` from the device's table in `config.toml`:
+  `device`, `config` (the absolute path of the config file), `clone` (the git checkout warpzone
+  runs from), `python` (the interpreter that ran `provision`), `channel`, `pin` (empty for
+  none), `enabled` (from `self_update`) and `frontend` (the process names of the frontend:
+  `[es_systems].process` of the profile, else ES-DE's). `selfupdate.render_conf` writes one
+  `key=value` per line and raises on a value with a line break, so nothing in it can be
+  executed. The file is rewritten only when its content differs. A device with
+  `self_update = false` gets no updater, and one that already has settings gets `enabled=false`
+  there, so its timer's ticks stop. Nothing is installed, with a warning, when the clone is not
+  a git checkout or the interpreter cannot import warpzone from outside the current folder.
+- **`warpzone self-update`.** A wrapper: it runs `sh <live copy> tick`, as the timer does, and
+  exits with its code. It needs no config and has no `--dry-run`. Without a live copy it says
+  so and exits `1`.
 
 ### Timer
 
-`provision device` calls `ensure_update_timer` for every device, whatever its profile and
-folders. `updatetimer.py` renders the two units (pure): `warpzone-self-update.service`
-(`Type=oneshot`, `ExecStart=<python> -m warpzone self-update`, the interpreter that ran
-`provision device`, quoted for systemd) and `warpzone-self-update.timer` (`OnCalendar=daily`,
-`Persistent=true`, `OnBootSec=5min`, `RandomizedDelaySec=30min`, `WantedBy=timers.target`)
-in `~/.config/systemd/user/`. The units are rewritten only when their content differs
-(mode 0644, atomically); `daemon-reload`, `enable --now` and, when the timer was already
-running with other units, `restart` follow only when something changed or the timer is not
-enabled and active. It installs nothing, with a warning, when the interpreter cannot import
-warpzone from outside the current folder or `systemctl --user show-environment` fails (no
-user manager); `--dry-run` runs only the read-only `systemctl` queries and prints what it
-would do. `self_update = false` under `[devices.<name>]` skips it (and `doctor` stays
-silent); an installed timer is never removed by `provision`.
+`provision device` calls `ensure_self_update` for every device, whatever its profile and
+folders; its last step is `ensure_update_timer`. `updatetimer.py` renders the two units (pure):
+`warpzone-self-update.service` (`Type=oneshot`, `TimeoutStartSec=30min`,
+`ExecStart=/bin/sh <live copy> tick`, the path quoted for systemd) and
+`warpzone-self-update.timer` (`OnBootSec=45s`, `OnUnitActiveSec=15min`, no random delay,
+`WantedBy=timers.target`) in `~/.config/systemd/user/`. The timer is a piece of its own, apart
+from the script: another launcher can start the same `tick`. The units are rewritten only when
+their content differs (mode 0644, atomically); `daemon-reload`, `enable --now` and, when the
+timer was already running with other units, `restart` follow only when something changed or the
+timer is not enabled and active. It installs nothing, with a warning, when the live copy is not
+there or `systemctl --user show-environment` fails (no user manager); `--dry-run` runs only the
+read-only `systemctl` queries and prints what it would do. `self_update = false` under
+`[devices.<name>]` skips it; an installed timer is never removed by `provision`.
 
-`doctor` has `Self-update timer` (group `Updates`): on a Linux machine that is a configured
-device subscribed to `library` without `self_update = false` (found through the local
-`wz-library` folder, as for the frontend), `judge_update_timer` is `[ok]` when both units
-exist and the timer is enabled and active, and `[! ]` when the units are missing, the timer
-is not enabled or not active, or systemd cannot be asked.
+`doctor` checks the updater in group `Updates`, on a Linux machine that is a configured device
+subscribed to `library` without `self_update = false` (found through the local `wz-library`
+folder, as for the frontend):
+
+- `Self-update timer` (`judge_update_timer`): `[ok]` when both units exist, the service runs
+  `/bin/sh <live copy> tick`, and the timer is enabled and active; `[! ]` when the units are
+  missing, the service runs something else (an old unit that ran `python -m warpzone
+  self-update`), the timer is not enabled or not active, or systemd cannot be asked.
+- `Updater script` (`judge_updater_script`): `[! ]` when the live copy is missing or differs
+  from the one that ships with this version; `[ok]` when it is the same, or has a higher ABI
+  (after a rollback).
+- `Updater settings` (`judge_updater_conf`): `[! ]` when the file is missing, when `device`,
+  `config`, `channel`, `pin`, `enabled` or `frontend` differ from what the config says, or when
+  `python` is not executable or `clone` is not a git checkout.
+- `Updater state` (`judge_updater_state`): reads `state` and `bad/`. One line per problem,
+  `[! ]` unless noted: the updater has not run yet; a rollback in the last 14 days (a `bad/<tag>`
+  file that recent, or `last_result=rolled-back`); `stuck` (`[!!]`); a `dirty` or `dev`
+  checkout, which the updater does not move; `no-python`; `pin_retired`; signatures not required
+  (`signing` is not `1`); no successful run (`last_ok`) in more than 14 days, or none at all.
+  When none applies, one `[ok]` line.
 
 ### Autonomous updates (contract)
 
 This section is the contract for making a device keep itself on a working release with no
 person logged in. Each piece says whether it exists. **Implemented** means it is in the code
 today; **Not implemented** means the code does not do it yet and this text is what it must
-do. Until then `warpzone self-update` behaves as described above.
+do.
 
 | Piece | State |
 | --- | --- |
@@ -2165,7 +2244,11 @@ do. Until then `warpzone self-update` behaves as described above.
 | `warpzone health` | Implemented |
 | `warpzone/data/updater.sh tick`: lock, `enabled`, deferral while the menu is open (72 hours at most), fetch once a day, the target (the best valid tag, see Channels), the three-step verification with a time limit, the differential verdict and its back-off, `bad/<tag>`, the state file, the attempts loop, probation, the kind of checkout, the stale `index.lock`, `menu` and `selftest` | Implemented (`tests/test_updater_sh.py`) |
 | In `updater.sh`: the `rc` channel, retirement by `retired/vX.Y.Z` tags, `pin`, and the check of tag signatures against the `allowed_signers` of the running version | Implemented (`tests/test_updater_sh.py`) |
-| Everything else in this section (installing the script, the settings file written by `provision`, the Python repair, the timer units, `self-update` as a wrapper, the `doctor` checks, `provision hub --additive`) | Not implemented |
+| `updater.sh install` (the human install from a `git clone`), the Python repair (`venv --without-pip --clear`, a `.pth` to the clone, the `bin/warpzone` shim), `UPDATER_ABI` | Implemented (`tests/test_updater_sh.py`) |
+| The live copy `~/.local/share/warpzone/updater/updater.sh` (`provision.ensure_updater`: atomic, after `sh -n` and `selftest`, `.prev` kept, never a lower ABI) and the settings file written by `provision device` (`selfupdate.render_conf`) | Implemented (`tests/test_update_timer.py`, `tests/test_selfupdate.py`) |
+| The timer units that start `updater.sh tick`, and `warpzone self-update` as a wrapper of one tick | Implemented (`tests/test_update_timer.py`, `tests/test_cli.py`) |
+| The `doctor` checks of the updater (timer, script, settings, state) | Implemented (`tests/test_doctor.py`) |
+| `provision hub --additive` | Not implemented |
 
 **Tag spelling.** A release is `vX.Y.Z` and a release candidate is `vX.Y.ZrcN`: the tag is
 `v` plus `__version__`, in the PEP 440 spelling that [releasing.md](releasing.md) requires
@@ -2179,20 +2262,20 @@ the same key for a package version, so a tag and the version it carries compare 
 `warpzone-self-update`, so rewriting it leaves no orphan unit. The timer has `OnBootSec=45s`
 and `OnUnitActiveSec=15min` and no random delay (a delay also pushes back the start after
 boot, when the menu may not be open yet); the service is a one-shot with
-`TimeoutStartSec=30min` and `ExecStart=/bin/sh <updater> tick` (the units are not written
-yet; `updater.sh tick` exists and nothing starts it). The timer is a piece of its
+`TimeoutStartSec=30min` and `ExecStart=/bin/sh <updater> tick` (`updatetimer.py`, written by
+`provision device`). The timer is a piece of its
 own, separate from `updater.sh tick`: the script does not know what started it, so a platform
 without systemd can start the same `tick` from another launcher. Each tick, in this order:
 
 1. Take a lock; a tick that finds it held exits at once.
 2. Read the configuration; if the device is not `enabled` (`self_update = false`), stop.
 3. If the menu is open, defer (see below).
-4. Repair the Python environment (see below). Today the script only looks for an
-   interpreter that can run it (`no-python` when none).
+4. Look for an interpreter that can run warpzone (`no-python` when none).
 5. Fetch the remote at most once a day. The moment is offset by a number derived from the
    device name (a delay of up to a twenty-fourth of the interval, `cksum` of the name modulo
    that), so devices do not all arrive together. A fetch that fails is logged and tried again
-   at the next tick; the tags already fetched are still used.
+   at the next tick; the tags already fetched are still used. Then repair the venv when it no
+   longer works (see "Python repair" under Self-update).
 6. Pick the target tag. When there is one, switch to it and verify it. When there is none,
    reconcile (`provision device --unattended`) only if `/proc/sys/kernel/random/boot_id`
    differs from the last tick's, or `pending` is set. While the device waits out a back-off
@@ -2222,9 +2305,10 @@ can be moved: `WZ_STATE_DIR` (state, settings, `bad/`, lock), `WZ_CONF`, `WZ_LOG
 `WZ_TICK_BUDGET`, `WZ_FETCH_TIMEOUT`, `WZ_MIN_FREE_KB`, `WZ_PYTHON_FALLBACKS` and
 `WZ_ALLOWED_SIGNERS`. A value
 that is not a number is replaced by the default. A person installs a device with `git clone` and
-`sh <clone>/warpzone/data/updater.sh install`, which checks out the newest release, creates
-the venv and runs `provision device`. There is one way to install; a `pipx` or wheel install
-is not a supported device install.
+`sh <clone>/warpzone/data/updater.sh install <device>`, which checks out the newest release,
+creates the venv and runs `provision device` (see "Self-update" above). There is one way to
+install; a `pipx` or wheel install is not a supported device install. The tests add
+`WZ_PYTHON_FALLBACKS` pointing at a Python that can make a venv for `install` and the repair.
 
 **Verifying a version.** A version passes when all of these exit 0 within a time limit:
 
@@ -2329,7 +2413,8 @@ number of failed checks. `--config` and `--syncthing-config` work as elsewhere. 
    artwork and play state timers when the profile sets `refresh`, and the self-update units
    unless `self_update = false`. A script must exist, be executable and run an interpreter that
    exists and imports `warpzone` from outside the current folder. A service must exist and its
-   first `ExecStart` word must exist (and import `warpzone` when it runs `-m warpzone`). A
+   first `ExecStart` word must exist (and import `warpzone` when it runs `-m warpzone`); the
+   self-update service runs `/bin/sh <live copy> tick`, so the live copy must exist too. A
    timer must exist. Services and timers are `skip`ped, not failed, when there is no systemd
    user manager (`systemctl --user show-environment` fails), since `provision device` installs
    none there. Enabled or active timers are not checked.
@@ -2662,8 +2747,8 @@ warpzone/
   titlelinks.py      symlinks from the library's game folders into an emulator's own (pure plan)
   inbox_n3ds.py      3DS images (`.3ds`, `.cci`): NCSD / NCCH header check, placed as `.cci`
   flatpak.py         the SyncThingy flatpak: app id and the unit's commands
-  selfupdate.py      `self-update`: newest release tag, checkout, log (decisions pure)
-  updatetimer.py     the systemd user units of the self-update timer (pure)
+  selfupdate.py      the updater's side in Python: tag order, paths, settings file, live copy rule, `self-update` wrapper
+  updatetimer.py     the systemd user units that start `updater.sh tick` (pure)
   settings.py        `settings apply`, `capture`, `audit`: loading, prompts, output
   settings_formats.py  format handlers ini, qt-ini, retroarch-cfg, yaml-flat (pure)
   settings_tree.py   format handlers json, toml (pure)
@@ -2810,18 +2895,29 @@ logic is unit-tested without a network.
   over, the second attempt, the give-up with `retry_after`), a menu that opens during the
   check, the 72 hour limit, probation at the next boot, the kinds of checkout (`dev`, `dirty`,
   a loose commit, an adopted branch that comes back to its branch), the stale `index.lock`, the
-  daily fetch, state and settings that contain shell syntax, and `selftest`. The syntax check,
+  daily fetch, state and settings that contain shell syntax, `install` (the best valid release
+  of the channel that carries the script, the venv without pip with its `.pth` and shim,
+  `provision device` and its arguments, every refusal before any change) and the venv repair (a
+  venv that is gone, whose Python is gone, that cannot find the clone or whose `.pth` points
+  elsewhere; one that works is left alone; `--clear` never reaches a folder not called `venv`, one
+  that is not a venv, the clone's folder or the folder around the venv), and `selftest`. The syntax check,
   `selftest` and a full update run with every shell found among `sh`, `dash` and `bash`
   (`WZ_TEST_SHELL` picks the shell for all the others), and shellcheck runs when installed. CI
   runs this file in its own `updater` job (Ubuntu with dash as `sh`, and macOS), apart from the
   `test` job, which skips it with `WARPZONE_SKIP_UPDATER_SH=1`.
 - Self-update tests (`test_selfupdate.py`, `test_update_timer.py`): tag and version
-  comparison as pure functions (including the order `rc1` < `rc2` < release); whole runs against a bare repository used as the remote
-  (update, up to date, ahead, dirty tree, untracked files, dry-run, remote gone, timeout,
-  not a checkout, `pyproject.toml` changed or not, the log); the units' rendering and
-  `ensure_update_timer` with a fake `systemctl` (first run, second run, changed unit,
-  switched off, dry-run, no user manager, failed enable); `provision device` for both shipped
-  profiles and with `self_update = false`; the doctor judge and check.
+  comparison as pure functions (including the order `rc1` < `rc2` < release); the settings
+  file (`render_conf`, which refuses a line break, and `parse_kv`), `updater_abi`,
+  `install_decision` and the wrapper with a fake runner; the units' rendering and
+  `ensure_update_timer` with a fake `systemctl` (first run, second run, an old unit rewritten,
+  switched off, dry-run, no user manager, no live copy, failed enable); `ensure_updater` in
+  temporary folders (first install, atomic renewal with `.prev`, the same script, a lower ABI,
+  a syntax error, a failing, wrong or hanging `selftest`, no ABI, dry-run);
+  `ensure_self_update` and `provision device` for both shipped profiles, with
+  `self_update = false` and with a clone that is not a git checkout.
+- `doctor` tests of the updater: the judges as pure functions (state, settings, script) and the
+  check over a temporary home (healthy, nothing installed, another channel, a Python that is
+  gone, stuck, recent bad tags, silent when the config turns it off).
 - `doctor` tests: the renderer and exit code as pure functions; every check with fake
   probes (tool present, missing per platform, unrunnable, unrecognizable version; config
   missing, partial or invalid; Syncthing absent, answering, refusing, not on loopback;
