@@ -2310,6 +2310,7 @@ class InstallTests(RealPythonCase):
                 self.assertTrue(self.venv_python(self.venv).exists())
                 shown = subprocess.run(
                     [str(self.venv / "bin" / "warpzone"), "--version"],
+                    cwd=self.rig.root,
                     capture_output=True,
                     text=True,
                     check=False,
@@ -2513,6 +2514,7 @@ class RepairTests(RealPythonCase):
         self.assertEqual(list(self.venv.glob("lib/python*/site-packages/pip")), [])
         shown = subprocess.run(
             [str(self.venv / "bin" / "warpzone"), "--version"],
+            cwd=self.rig.root,
             capture_output=True,
             text=True,
             check=False,
