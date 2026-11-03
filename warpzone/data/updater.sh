@@ -1089,17 +1089,74 @@ find_python() {
 	return 1
 }
 
+# ---- the live copy of this script ----------------------------------------------------
+# While a release is under trial, its `provision device` installs its own updater as the live
+# copy (the file this script runs from). If the release is then rejected, the previous
+# version's `provision` would not put the old one back (a lower ABI is never installed over a
+# higher one, and a rollback may not run `provision` at all), and a script with a fault that
+# `selftest` does not see would stop the device from ever updating again. So the live copy
+# is kept in the state folder before a trial and put back, with no look at its ABI, whenever
+# the device goes back; it is dropped when no trial or probation is on.
+
+SELF=$0
+case $SELF in
+/*) ;;
+*) SELF=$(pwd)/$SELF ;;
+esac
+LIVE_GOOD=$STATE_DIR/updater.sh.good
+
+# live_usable: this script is a file outside the clone (run by hand from the clone, it is
+# the clone's own file and must not be replaced).
+live_usable() {
+	[ -f "$SELF" ] || return 1
+	case $SELF in
+	"$CLONE"/*) return 1 ;;
+	esac
+	return 0
+}
+
+# live_save: keep the live copy as it is before the first switch of a trial. Not again while
+# a copy is kept: a trial that is resumed finds the candidate's script live by then.
+live_save() {
+	[ ! -e "$LIVE_GOOD" ] || return 0
+	live_usable || return 0
+	if cp "$SELF" "$LIVE_GOOD.tmp" 2>/dev/null && mv -f "$LIVE_GOOD.tmp" "$LIVE_GOOD"; then
+		return 0
+	fi
+	rm -f "$LIVE_GOOD.tmp"
+	log "could not keep a copy of the live updater before the trial"
+	return 0
+}
+
+# live_restore: put the kept copy back as the live one, atomically (a rename: this very run
+# keeps reading the file it started with), whatever the ABI of the one it replaces.
+live_restore() {
+	[ -f "$LIVE_GOOD" ] || return 0
+	live_usable || return 0
+	cmp -s "$LIVE_GOOD" "$SELF" && return 0
+	_lr_tmp="$SELF.restore.$$"
+	if cp "$LIVE_GOOD" "$_lr_tmp" 2>/dev/null && chmod 755 "$_lr_tmp" && mv -f "$_lr_tmp" "$SELF"; then
+		log "put back the updater script that was live before the trial"
+	else
+		rm -f "$_lr_tmp"
+		log "could not put back the updater script that was live before the trial"
+	fi
+	return 0
+}
+
 # ---- the venv -------------------------------------------------------------------------
 # The venv has no pip and no copy of warpzone: a `.pth` file puts the clone on its path and
 # `bin/warpzone` is a shim that runs `python -m warpzone`. That needs no network and no
 # setuptools, so it can be made again whenever the interpreter it was made with is gone (an
 # operating system update), and the path of its Python, which units and ES-DE scripts hold,
-# stays the same. `--clear` is only ever run on a folder that is called `venv`, is a venv
-# (has `pyvenv.cfg`) or does not exist, is not a symlink, and does not hold the clone: never on
-# the folder around it, where the play state lives.
+# stays the same. `--clear` is only ever run on a folder that is called `venv`, does not exist
+# or holds the mark `warpzone-venv` that this script writes when it makes one (so never a venv
+# of the user's, or the one of an older install), is not a symlink, and does not hold the clone:
+# never on the folder around it, where the play state lives.
 
 LOCATE_CODE='import importlib.util, os, sys; s = importlib.util.find_spec("warpzone"); root = os.path.realpath(sys.argv[1]); here = os.path.realpath(s.origin) if s is not None and s.origin else ""; sys.exit(0 if here.startswith(root + os.sep) else 7)'
 VENV_LOG=$STATE_DIR/last-venv.log
+VENV_MARK=warpzone-venv
 
 # sh_quote S: S in single quotes, for a line of a script.
 sh_quote() {
@@ -1135,8 +1192,8 @@ make_venv() {
 		return 1
 		;;
 	esac
-	if [ -e "$_mv_venv" ] && { [ ! -d "$_mv_venv" ] || [ ! -f "$_mv_venv/pyvenv.cfg" ]; }; then
-		log "not repairing $_mv_venv: it exists and is not a venv (there is no pyvenv.cfg)"
+	if [ -e "$_mv_venv" ] && { [ ! -d "$_mv_venv" ] || [ ! -f "$_mv_venv/$VENV_MARK" ]; }; then
+		log "not repairing $_mv_venv: it was not made by warpzone (it has no $VENV_MARK mark), so it is left as it is; move it away, or choose another folder with --venv"
 		return 1
 	fi
 	log "making the venv $_mv_venv again with $_mv_base"
@@ -1160,6 +1217,10 @@ make_venv() {
 	} >"$_mv_shim.tmp"
 	if ! chmod 755 "$_mv_shim.tmp" || ! mv -f "$_mv_shim.tmp" "$_mv_shim"; then
 		log "could not write $_mv_shim"
+		return 1
+	fi
+	if ! printf 'made by warpzone updater.sh; it may make this venv again (--clear)\n' >"$_mv_venv/$VENV_MARK"; then
+		log "could not write the mark $_mv_venv/$VENV_MARK"
 		return 1
 	fi
 	if ! venv_works "$_mv_py"; then
@@ -1471,6 +1532,7 @@ retry_suspect() {
 # back_to_good: HEAD on the version known to work; stuck when that cannot be done.
 back_to_good() {
 	checkout_ref "$S_good_branch" "$S_good_sha" || stuck "checkout of $S_good_sha failed"
+	live_restore
 }
 
 # env_abort MESSAGE: the verification could not judge the release. Back to the version known
@@ -1499,6 +1561,7 @@ attempt() {
 		env_backoff
 		finish 1
 	fi
+	live_save
 	if ! state_save; then
 		log "the state cannot be saved; not switching"
 		exit 1
@@ -1528,6 +1591,7 @@ attempt() {
 	esac
 	_why=$VERIFY_WHY
 	differential "$_tag" "$_sha" "$S_good_tag" "$S_good_branch" "$S_good_sha"
+	[ "$DV" = stuck ] || live_restore
 	case $DV in
 	stuck) stuck "checkout of $S_good_sha failed" ;;
 	bad)
@@ -1632,6 +1696,7 @@ resume() {
 
 # probation_pass: the new version is accepted for good.
 probation_pass() {
+	rm -f "$LIVE_GOOD"
 	S_probation=0
 	S_from_tag=
 	S_from_sha=
@@ -1688,6 +1753,7 @@ probation_check() {
 		esac
 		_why2=$VERIFY_WHY
 		checkout_ref "$S_from_branch" "$S_from_sha" || stuck "checkout of $S_from_sha failed"
+		live_restore
 		case $_rr in
 		4 | 5)
 			S_suspect_tag=$_tag
@@ -1712,6 +1778,7 @@ probation_check() {
 		finish 1
 		;;
 	deferred)
+		live_restore
 		S_good_tag=$S_from_tag
 		S_good_sha=$S_from_sha
 		S_good_branch=$S_from_branch
@@ -1828,7 +1895,6 @@ cmd_tick() {
 
 	conf_check
 	fetch_if_due
-	repair_python || true
 	detect_kind
 	if [ "$KIND" = dirty ]; then
 		# A tree that an update of ours left half done is not somebody's work.
@@ -1849,6 +1915,14 @@ cmd_tick() {
 		;;
 	esac
 
+	# Only a checkout on a release is looked after: a developer's clone is not touched, and
+	# neither is the venv that belongs to it.
+	repair_python || true
+
+	# No trial and no probation: nothing to put back, so the kept copy of the updater goes.
+	if [ -z "$S_trying_tag" ] && [ "$S_probation" != 1 ]; then
+		rm -f "$LIVE_GOOD"
+	fi
 	sync_good_reference
 
 	# The keys are the ones of the version known to work, so this comes after the reference.
@@ -2070,7 +2144,7 @@ cmd_order() {
 
 cmd_selftest() {
 	_bad=0
-	for _c in git sed grep tr cut find cksum sync sleep date kill mkdir mv rm cat head tail wc dirname sort; do
+	for _c in git sed grep tr cut find cksum cp cmp sync sleep date kill mkdir mv rm cat head tail wc dirname sort; do
 		if ! command -v "$_c" >/dev/null 2>&1; then
 			echo "selftest: missing command: $_c"
 			_bad=1

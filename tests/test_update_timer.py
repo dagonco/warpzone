@@ -2,6 +2,8 @@
 copy of the script, and the settings file `provision device` writes for it."""
 
 import os
+import re
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -308,6 +310,68 @@ class EnsureUpdaterTests(TmpHome):
             self.assertFalse(ensure_updater(self.home, self.rep, dry_run=False, source=self.source))
         self.assertIn("selftest", self.rep.warnings[0])
         self.assertFalse(self.live.exists())
+
+    def runner(self, during=None):
+        """A fake `sh -n` and `selftest`; `during` runs at the moment of the selftest."""
+
+        def run(command, timeout):
+            if "selftest" in command:
+                if during is not None:
+                    during()
+                abi = selfupdate.updater_abi(Path(command[1]).read_text())
+                return 0, f"selftest: ok abi={abi}\n"
+            return 0, ""
+
+        return run
+
+    def test_the_temporary_file_has_a_name_of_its_own_every_time(self) -> None:
+        names: list[list[str]] = []
+        self.live.parent.mkdir(parents=True)
+        self.source.write_text(SCRIPT_V1)
+        run = self.runner(lambda: names.append(self.leftovers()))
+        self.assertTrue(
+            ensure_updater(self.home, self.rep, dry_run=False, source=self.source, run=run)
+        )
+        (temp,) = names[0]
+        self.assertNotEqual(temp, ".updater.sh.new")
+        self.assertTrue(temp.startswith(".updater.sh."), temp)
+        self.assertEqual(self.leftovers(), ["updater.sh"])
+
+    def test_a_live_copy_that_changed_during_the_checks_is_judged_again(self) -> None:
+        # another provision installed a script of a higher ABI while this one was being checked
+        self.offer(SCRIPT_V1)
+        self.source.write_text(SCRIPT_V1 + "# a fix\n")
+        run = self.runner(lambda: self.live.write_text(SCRIPT_V2))
+        self.assertTrue(
+            ensure_updater(self.home, self.rep, dry_run=False, source=self.source, run=run)
+        )
+        self.assertEqual(self.live.read_text(), SCRIPT_V2)
+        self.assertFalse((self.live.parent / "updater.sh.prev").exists())
+        self.assertEqual(self.leftovers(), ["updater.sh"])
+
+    def test_the_prev_copy_is_the_one_that_was_live_at_the_last_moment(self) -> None:
+        self.offer(SCRIPT_V1)
+        self.source.write_text(SCRIPT_V1 + "# a fix\n")
+        midway = SCRIPT_V1 + "# installed meanwhile\n"
+        run = self.runner(lambda: self.live.write_text(midway))
+        self.assertTrue(
+            ensure_updater(self.home, self.rep, dry_run=False, source=self.source, run=run)
+        )
+        self.assertTrue(self.live.read_text().endswith("# a fix\n"))
+        self.assertEqual((self.live.parent / "updater.sh.prev").read_text(), midway)
+
+    def test_the_script_that_ships_with_warpzone_passes_its_own_checks(self) -> None:
+        # not a fake: sh -n, selftest and the line that says its ABI, as they are
+        self.assertTrue(ensure_updater(self.home, self.rep, dry_run=False))
+        self.assertEqual(self.rep.warnings, [])
+        self.assertEqual(self.live.read_text(), selfupdate.UPDATER_SOURCE.read_text())
+        abi = selfupdate.updater_abi(self.live.read_text())
+        shown = subprocess.run(
+            ["sh", str(self.live), "selftest"], capture_output=True, text=True, check=False
+        )
+        self.assertEqual(shown.returncode, 0, shown.stderr)
+        self.assertRegex(shown.stdout, rf"(?m)^selftest: ok abi={abi}$")
+        self.assertIsNotNone(re.search(r"UPDATER_ABI=\d+", self.live.read_text()))
 
     def test_dry_run_writes_nothing(self) -> None:
         self.assertFalse(self.offer(SCRIPT_V1, dry_run=True))

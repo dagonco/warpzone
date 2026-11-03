@@ -2138,9 +2138,13 @@ settings, the state and the `bad/` folder are (`live_path`, `conf_path`, `state_
   `python -m warpzone "$@"`. That needs no network and no setuptools (unlike `pip install -e`,
   which wants `setuptools>=77`), and the path of the venv's Python, which units and ES-DE scripts
   hold, stays the same. Everything runs with `-m warpzone`. `--clear` is run only on a folder
-  that is called `venv`, has a `pyvenv.cfg` or does not exist, is not a symlink and does not
+  that is called `venv`, does not exist or holds the mark `warpzone-venv` (which the script
+  writes when it makes one, so a venv of the user's, or the one of an older install, is never
+  cleared: `install` refuses it and a tick logs it and leaves it), is not a symlink and does not
   hold the clone; never on the folder around it, which holds `play-state`. A venv that works
-  is left alone (it is judged by finding `warpzone` without importing it).
+  is left alone (it is judged by finding `warpzone` without importing it). A tick repairs only
+  a checkout on a release (a tag or a clean branch inside `origin/main`), never a `dev` or
+  `dirty` one.
 - **The live copy.** `provision.ensure_updater` puts the script that ships with the running
   version at `~/.local/share/warpzone/updater/updater.sh`, outside the clone. The new text is
   written beside it, checked with `sh -n` and with `sh <copy> selftest` (which must print
@@ -2150,7 +2154,20 @@ settings, the state and the `bad/` folder are (`live_path`, `conf_path`, `state_
   script of an ABI that is not lower, installs; the same text is current; a copy of a lower ABI
   than the live one is never installed (a rollback to an older release does not downgrade the
   script); a script with no `UPDATER_ABI` is refused. A failed check leaves the live copy as
-  it was and warns.
+  it was and warns. The new text goes to a temporary file with a name of its own in the same
+  folder, and what is live is read again, and judged by the same rule, just before the rename,
+  so two `provision` runs at once cannot install a script that the other has not checked.
+  **A copy that is kept during a trial.** The `provision --unattended` of a release under trial
+  installs that release's updater, and a script with a fault `selftest` does not see would
+  then stop the device from updating, with the previous version's `provision` unable to put the
+  old one back (a lower ABI is never installed over a higher one, and a rollback may not run
+  `provision`). So before the first switch of a trial the tick copies the live script to
+  `updater/updater.sh.good` in the state folder (not again while it is there, since a resumed
+  trial finds the candidate's script live) and, whenever it goes back to the previous version
+  (a bad release, an environment failure, a trial given up, a failed probation), it puts that
+  copy back with a rename, whatever the ABI of the script it replaces. The copy is dropped at
+  the next tick when no trial or probation is on, and when probation passes. A script that is
+  run from inside the clone is never replaced.
 - **The settings.** `provision.ensure_self_update` writes
   `~/.local/state/warpzone/updater/conf` from the device's table in `config.toml`:
   `device`, `config` (the absolute path of the config file), `clone` (the git checkout warpzone

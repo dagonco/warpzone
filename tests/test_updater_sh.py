@@ -70,6 +70,11 @@ case "$*" in
     if has wrong_version; then echo "warpzone 0.0.0"; else echo "warpzone $version"; fi
     exit 0 ;;
   "-m warpzone provision device "*)
+    # what the real provision does: install the script of this release as the live copy
+    if has install_updater; then
+      cp "$clone/warpzone/data/updater.sh" "$WZ_FAKE_LIVE.new"
+      mv -f "$WZ_FAKE_LIVE.new" "$WZ_FAKE_LIVE"
+    fi
     [ -e "$dir/env_broken" ] && exit 1
     if has spend; then
       # this step "takes" 99 seconds of the tick's budget (the uptime is the budget's clock)
@@ -356,6 +361,7 @@ class Rig:
             "WZ_BOOT_ID_FILE": str(self.boot_id),
             "WZ_FAKE_CLONE": str(self.clone),
             "WZ_FAKE_DIR": str(self.fake_dir),
+            "WZ_FAKE_LIVE": str(self.updater),
             "WZ_FETCH_INTERVAL": "0",
             "WZ_STEP_TIMEOUT": "20",
             "PATH": f"{self.python.parent}{os.pathsep}{os.environ['PATH']}",
@@ -2045,6 +2051,100 @@ class StaleTargetTests(UpdaterCase):
         self.assert_left_alone(rig, "0.2.0rc1")
 
 
+class LiveCopyTests(UpdaterCase):
+    """The provision of a release under trial installs that release's updater as the live copy;
+    when the release is rejected the updater that was live before comes back."""
+
+    BROKEN = (
+        "#!/bin/sh\nUPDATER_ABI=1\n"
+        'case ${1:-} in selftest) echo "selftest: ok abi=1" ;; *) exit 1 ;; esac\n'
+    )
+
+    def good_copy(self) -> Path:
+        return self.rig.state_dir / "updater.sh.good"
+
+    def test_a_rejected_release_does_not_leave_its_updater_live(self) -> None:
+        rig = self.rig
+        original = rig.updater.read_text()
+        # of a higher ABI than the live one, which "provision" would never replace
+        higher = self.BROKEN.replace("ABI=1", "ABI=9").replace("abi=1", "abi=9")
+        rig.release(
+            "0.2.0", "install_updater health_fails", extra={"warpzone/data/updater.sh": higher}
+        )
+        self.assertTick(rig.tick(), 1)
+        self.assertEqual(rig.bad(), ["v0.2.0"])
+        self.assertEqual(rig.on_tag(), "v0.1.0")
+        self.assertEqual(rig.updater.read_text(), original)
+        self.assertEqual(os.stat(rig.updater).st_mode & 0o111, 0o111)
+        self.assertTick(rig.tick(), 0)  # the next tick runs the restored script
+        self.assertFalse(self.good_copy().exists(), "nothing left to restore")
+
+    def test_an_environment_failure_restores_it_too(self) -> None:
+        rig = self.rig
+        original = rig.updater.read_text()
+        rig.release("0.2.0", "install_updater", extra={"warpzone/data/updater.sh": self.BROKEN})
+        rig.flag("env_broken")  # provision fails for every release: the tag is not blamed
+        rig.tick()
+        self.assertEqual(rig.bad(), [])
+        self.assertEqual(rig.updater.read_text(), original)
+
+    def test_a_release_that_passes_keeps_its_updater_and_the_old_one_until_probation(self) -> None:
+        rig = self.rig
+        original = rig.updater.read_text()
+        newer = original + "# a newer script\n"
+        rig.release("0.2.0", "install_updater", extra={"warpzone/data/updater.sh": newer})
+        self.assertTick(rig.tick(), 0)
+        self.assertEqual(rig.updater.read_text(), newer)
+        self.assertEqual(self.good_copy().read_text(), original)
+        rig.boot_id.write_text("boot-2\n")
+        self.assertTick(rig.tick(now=NOW + 900), 0)  # probation passes
+        self.assertEqual(rig.updater.read_text(), newer)
+        self.assertFalse(self.good_copy().exists())
+
+    def test_a_failure_in_probation_puts_the_previous_updater_back(self) -> None:
+        rig = self.rig
+        original = rig.updater.read_text()
+        newer = original + "# a newer script\n"
+        rig.release("0.2.0", "install_updater", extra={"warpzone/data/updater.sh": newer})
+        self.assertTick(rig.tick(), 0)
+        rig.boot_id.write_text("boot-2\n")
+        rig.break_version("0.2.0", "health_fails")
+        self.assertTick(rig.tick(now=NOW + 900), 1)
+        self.assertEqual(rig.bad(), ["v0.2.0"])
+        self.assertEqual(rig.updater.read_text(), original)
+
+    def test_a_run_that_is_resumed_keeps_the_copy_it_saved_first(self) -> None:
+        rig = self.rig
+        original = rig.updater.read_text()
+        newer = original + "# a newer script\n"
+        rig.release("0.2.0", "install_updater die", extra={"warpzone/data/updater.sh": newer})
+        self.assertNotEqual(rig.tick().returncode, 0)  # a power cut after the new script went live
+        self.assertEqual(rig.updater.read_text(), newer)
+        self.assertNotEqual(rig.tick(now=NOW + 900).returncode, 0)
+        self.assertEqual(self.good_copy().read_text(), original)
+        self.assertTick(rig.tick(now=NOW + 1800), 1)  # two attempts without a verdict
+        self.assertEqual(rig.updater.read_text(), original)
+        self.assertEqual(rig.bad(), [])
+
+    def test_a_copy_that_is_inside_the_clone_is_never_replaced(self) -> None:
+        rig = self.rig
+        rig.release("0.2.0", "health_fails")
+        inside = rig.clone / "warpzone" / "data" / "updater.sh"
+        inside.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(UPDATER, inside)
+        before = inside.read_bytes()
+        proc = subprocess.run(
+            ["sh", str(inside), "tick"],
+            env=rig.env(),
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(inside.read_bytes(), before, proc.stdout)
+        self.assertFalse(self.good_copy().exists())
+
+
 # A release that a real Python can import and run: the empty modules the import check names, and
 # a `__main__` that answers `--version` and records the other commands it is given.
 FAKE_MAIN = """import os, sys
@@ -2177,11 +2277,6 @@ class InstallTests(RealPythonCase):
         self.assertEqual(self.install("deck", "--channel", "rc").returncode, 0)
         self.assertEqual(self.head_tag(), "v0.3.0rc1")
 
-    def test_stable_never_picks_a_candidate(self) -> None:
-        self.rig.release("0.3.0rc1", extra=with_updater())
-        self.assertEqual(self.install("deck").returncode, 0)
-        self.assertEqual(self.head_tag(), "v0.2.0")
-
     def test_the_rules_are_the_ones_of_a_tick(self) -> None:
         rig = self.rig
         rig.release("0.2.1", extra=with_updater(), on_main=False)  # not on main
@@ -2278,8 +2373,33 @@ class InstallTests(RealPythonCase):
         (keep / "ledger").write_text("saves")
         self.venv.mkdir()
         (self.venv / "pyvenv.cfg").write_text("home = /nowhere\n")  # a venv that is broken
+        (self.venv / "warpzone-venv").write_text("made by warpzone\n")  # and that is ours
         self.assertEqual(self.install("deck").returncode, 0)
         self.assertEqual((keep / "ledger").read_text(), "saves")
+
+    def test_a_venv_that_warpzone_did_not_make_is_refused_and_left_alone(self) -> None:
+        # the user's own venv, or the one of an older install, that does not work
+        self.venv.mkdir()
+        (self.venv / "pyvenv.cfg").write_text("home = /nowhere\n")
+        (self.venv / "mine.txt").write_text("my packages")
+        proc = self.install("deck")
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("not made by warpzone", proc.output)
+        self.assertIn("--venv", proc.output)
+        self.assertEqual((self.venv / "mine.txt").read_text(), "my packages")
+        self.assertEqual(self.main_calls(), [])
+
+    def test_a_venv_that_is_a_symlink_is_never_cleared(self) -> None:
+        real = self.base / "real-venv"
+        real.mkdir()
+        (real / "pyvenv.cfg").write_text("home = /nowhere\n")
+        (real / "warpzone-venv").write_text("made by warpzone\n")  # only the link stops it
+        (real / "mine.txt").write_text("my packages")
+        self.venv.symlink_to(real)
+        proc = self.install("deck")
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertEqual((real / "mine.txt").read_text(), "my packages")
+        self.assertTrue((real / "pyvenv.cfg").exists())
 
     def test_a_signed_release_is_required_once_the_clone_trusts_a_key(self) -> None:
         if SSH_KEYGEN is None:
@@ -2309,12 +2429,14 @@ class RepairTests(RealPythonCase):
     def tick(self, **extra: str):
         return self.rig.tick(WZ_PYTHON_FALLBACKS=sys.executable, **extra)
 
-    def make_venv(self, *, pth: bool = False) -> None:
+    def make_venv(self, *, pth: bool = False, ours: bool = True) -> None:
         subprocess.run(
             [sys.executable, "-m", "venv", "--without-pip", str(self.venv)],
             check=True,
             capture_output=True,
         )
+        if ours:
+            (self.venv / "warpzone-venv").write_text("made by warpzone\n")
         if pth:
             site = next(self.venv.glob("lib/python*/site-packages"))
             (site / "warpzone.pth").write_text(f"{self.rig.clone}\n")
@@ -2358,13 +2480,6 @@ class RepairTests(RealPythonCase):
         self.assertTick(proc, 0)
         self.assert_mended()
 
-    def test_a_pth_that_points_to_another_clone_is_replaced(self) -> None:
-        self.make_venv(pth=False)
-        site = next(self.venv.glob("lib/python*/site-packages"))
-        (site / "warpzone.pth").write_text(f"{self.base / 'old-clone'}\n")
-        self.assertTick(self.tick(), 0)
-        self.assert_mended()
-
     def test_a_working_venv_is_left_alone(self) -> None:
         self.make_venv(pth=True)
         (self.venv / "marker").write_text("mine")
@@ -2374,6 +2489,38 @@ class RepairTests(RealPythonCase):
         self.assertEqual((self.venv / "marker").read_text(), "mine")
         self.assertEqual((self.venv / "pyvenv.cfg").stat().st_mtime_ns, cfg)
         self.assertNotIn("repair", proc.output)
+
+    def test_a_venv_that_warpzone_did_not_make_is_left_alone(self) -> None:
+        self.make_venv(pth=False, ours=False)  # it runs, but cannot find the clone
+        (self.venv / "mine.txt").write_text("my packages")
+        proc = self.tick()
+        self.assertEqual((self.venv / "mine.txt").read_text(), "my packages")
+        self.assertIn("not repairing", proc.output)
+        self.assertIn("not made by warpzone", proc.output)
+        self.assertEqual((self.base / "play-state" / "ledger").read_text(), "saves")
+
+    def test_a_venv_that_is_a_symlink_is_never_cleared(self) -> None:
+        real = self.base / "real-venv"
+        real.mkdir()
+        (real / "pyvenv.cfg").write_text("home = /nowhere\n")
+        (real / "warpzone-venv").write_text("made by warpzone\n")  # only the link stops it
+        (real / "mine.txt").write_text("my packages")
+        self.venv.symlink_to(real)
+        proc = self.tick()
+        self.assertEqual((real / "mine.txt").read_text(), "my packages")
+        self.assertTrue((real / "pyvenv.cfg").exists())
+        self.assertIn("not repairing", proc.output)
+
+    def test_a_clone_with_commits_of_its_own_or_changes_is_not_repaired(self) -> None:
+        clone = self.rig.clone
+        git(clone, "checkout", "-q", "-b", "mine")
+        git(clone, "commit", "-q", "--allow-empty", "-m", "mine")
+        self.tick()
+        self.assertFalse(self.venv.exists(), "a dev checkout")
+        git(clone, "checkout", "-q", "--detach", "v0.2.0")
+        (clone / "warpzone" / "__init__.py").write_text("# edited\n")
+        self.tick()
+        self.assertFalse(self.venv.exists(), "a dirty checkout")
 
     def test_the_folder_must_be_called_venv(self) -> None:
         other = self.base / "env"

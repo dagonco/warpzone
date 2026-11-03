@@ -992,9 +992,19 @@ def ensure_updater(
         return current is not None
 
     new_abi = selfupdate.updater_abi(candidate)
-    tmp = live.with_name(f".{live.name}.new")
+    tmp: Path | None = None
     try:
-        _write_script(tmp, candidate)
+        # A name of its own (two provisions at once must not share a file that one of them
+        # has checked and the other has not) in the folder of the live copy, so that the final
+        # rename stays on one file system.
+        live.parent.mkdir(parents=True, exist_ok=True)
+        fd, name = tempfile.mkstemp(dir=live.parent, prefix=f".{live.name}.", suffix=".new")
+        tmp = Path(name)
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(candidate.encode())
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.chmod(tmp, 0o755)
         code, shown = check(["sh", "-n", str(tmp)], UPDATER_CHECK_SECONDS)
         if code != 0:
             rep.warn(
@@ -1009,6 +1019,14 @@ def ensure_updater(
                 f"the updater was not installed: its selftest failed ({why}); {live} is unchanged"
             )
             return current is not None
+        # The checks take seconds: judge again against what is live now, not what was live
+        # before them.
+        latest = _read_text(live)
+        if latest != current:
+            if selfupdate.install_decision(candidate, latest) != "install":
+                rep.out(f"updater: {live} changed while the new script was checked; keeping it")
+                return latest is not None
+            current = latest
         if current is not None:
             _write_script(live.with_name(f"{live.name}.prev"), current)
         os.replace(tmp, live)
@@ -1016,7 +1034,8 @@ def ensure_updater(
         rep.warn(f"the updater was not installed: {exc}")
         return live.is_file()
     finally:
-        tmp.unlink(missing_ok=True)
+        if tmp is not None:
+            tmp.unlink(missing_ok=True)
     rep.out(f"updater: installed {live}" + (" (the old one is kept as .prev)" if current else ""))
     return True
 
