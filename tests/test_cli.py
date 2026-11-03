@@ -150,7 +150,7 @@ class CliTests(unittest.TestCase):
 
 
 class ApplyPathImportTests(unittest.TestCase):
-    """The ES-DE startup run must stay fast: it imports no network code (docs/design.md)."""
+    """The ES-DE startup run must stay fast: it imports no network code (development/design.md)."""
 
     def test_settings_apply_loads_no_network_module(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

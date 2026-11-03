@@ -19,7 +19,7 @@ already in the library is reported and never overwritten. Without the tool the p
 placed as it is, as before.
 
 The decisions (`pkg_kind`, `category_kind`, `shortcut_name`, `desktop_text`) are pure
-functions of bytes or text; `install` touches the disk. See docs/design.md.
+functions of bytes or text; `install` touches the disk. See development/design.md.
 """
 
 from __future__ import annotations

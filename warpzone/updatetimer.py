@@ -4,7 +4,7 @@
 profile; `doctor` looks for them. The unit keeps the name `warpzone-self-update`, so writing it
 leaves no orphan unit. The timer is a piece of its own, apart from the script it starts
 (`updater.sh tick` does not know what ran it): a platform without systemd can start the same
-tick from another launcher. See docs/self-update.md.
+tick from another launcher. See operation/self-update.md.
 """
 
 from __future__ import annotations

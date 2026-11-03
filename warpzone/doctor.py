@@ -2006,7 +2006,7 @@ def judge_updater_state(
                 WARN,
                 "signatures are not required: no version this device ran lists a signer key, "
                 "so a release is trusted without one",
-                "see docs/releasing.md on signing releases",
+                "see https://dagonco.github.io/warpzone/development/releasing/ on signing releases",
             )
         )
     try:

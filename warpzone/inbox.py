@@ -9,7 +9,7 @@ that could not be placed go to `inbox/_revisar/` with a `<item>.reason.txt`.
 
 The decisions (`skip_name`, `unsafe_member`, `select_purge`, `plan_units`,
 `destination_verdict`, `whitelist_line`, `cue_refs`, `gdi_refs`, `resolve_refs`,
-`unsupported_reason`) are pure; the rest touches the disk. See docs/design.md.
+`unsupported_reason`) are pure; the rest touches the disk. See development/design.md.
 """
 
 from __future__ import annotations

@@ -1088,7 +1088,7 @@ def ensure_self_update(
         rep.warn(
             f"the updater was not installed: {clone} is not a git checkout. A device runs "
             "warpzone from a clone made with `sh <clone>/warpzone/data/updater.sh install "
-            f"{device.name}` (see docs/self-update.md)"
+            f"{device.name}` (see https://dagonco.github.io/warpzone/operation/self-update/)"
         )
         return
     if not import_check(python):
@@ -1516,9 +1516,9 @@ def ensure_gamelists(
     for a gamelist that already says the same, so a second run, and a run while the frontend
     is open and has nothing to change, do nothing. A file is written only while the frontend
     is not running, atomically, and refused when it changed after it was read. The user
-    data the frontend saved in a gamelist is carried over; see docs/design.md, "Frontend
+    data the frontend saved in a gamelist is carried over; see development/design.md, "Frontend
     artwork". With `play_state` that data also goes to the other devices and theirs is merged
-    in; see docs/design.md, "Play state".
+    in; see development/design.md, "Play state".
     """
     art, rule = profile.artwork, profile.es_systems
     layout = _artwork_layout(profile, home)

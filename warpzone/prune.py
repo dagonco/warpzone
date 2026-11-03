@@ -4,7 +4,7 @@ When a pattern leaves a device's whitelist, Syncthing stops syncing the files bu
 leaves the copies on disk. A file is a leftover only when Syncthing itself has
 flagged it as ignored in the folder database after a full rescan (`local.ignored`
 in `GET /rest/db/file`) AND the hub still has the same file (`global`). Nothing
-here re-implements Syncthing's ignore matcher; see docs/design.md.
+here re-implements Syncthing's ignore matcher; see development/design.md.
 """
 
 from __future__ import annotations

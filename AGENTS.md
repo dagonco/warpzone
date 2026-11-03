@@ -4,7 +4,7 @@ Guidance for coding agents working on this repository. Humans: see [README.md](R
 
 ## What this is
 
-`warpzone` is a CLI that keeps one game library on a home server (the hub) and delivers it to several consoles through Syncthing: each console receives only what its whitelist on the hub allows, and emulator saves sync both ways. Read [docs/design.md](docs/design.md) before changing behaviour: it is the contract for the implementation, and any behaviour change updates it in the same pull request.
+`warpzone` is a CLI that keeps one game library on a home server (the hub) and delivers it to several consoles through Syncthing: each console receives only what its whitelist on the hub allows, and emulator saves sync both ways. Read [website/src/content/docs/development/design.md](website/src/content/docs/development/design.md) before changing behaviour: it is the contract for the implementation, and any behaviour change updates it in the same pull request.
 
 ## Ground rules
 
@@ -17,7 +17,15 @@ Guidance for coding agents working on this repository. Humans: see [README.md](R
 
 ## Layout
 
-See "Code layout" in [docs/design.md](docs/design.md). In short: `cli.py` wires argparse and exit codes; `config.py` and `profiles.py` load and validate TOML; `model.py` expands them into desired folder specs (pure); `syncthing.py` is the REST client; `provision.py`, `prune.py` and `bios.py` implement the commands; `warpzone/data/` (with `data/profiles/`) holds shipped TOML data.
+See "Code layout" in [website/src/content/docs/development/design.md](website/src/content/docs/development/design.md). In short: `cli.py` wires argparse and exit codes; `config.py` and `profiles.py` load and validate TOML; `model.py` expands them into desired folder specs (pure); `syncthing.py` is the REST client; `provision.py`, `prune.py` and `bios.py` implement the commands; `warpzone/data/` (with `data/profiles/`) holds shipped TOML data.
+
+## Documentation website
+
+All documentation lives in `website/src/content/docs/` (Starlight, Astro; English only) and is published at https://dagonco.github.io/warpzone by `.github/workflows/docs.yml`. Code comments name pages by their path under that folder (for example `development/design.md`). Link between pages with absolute paths that include the base (`/warpzone/setup/inbox/#ps4-games`); the build fails on a broken link or anchor. Link to files outside the site (`examples/`, `templates/`, source) with `https://github.com/dagonco/warpzone/blob/main/...`. Node dependencies live only in `website/`, pinned to exact versions; the Python package stays dependency-free.
+
+```bash
+cd website && npm ci && npm run build
+```
 
 ## Checks
 
@@ -56,6 +64,6 @@ CI runs unit tests on Linux with Python 3.11 and 3.14 and on macOS with Python 3
 
 - `main` is protected: changes land through pull requests, squash-merged, with all CI checks green. No force pushes.
 - Commit messages are a single imperative title line in sentence case, no body and no trailers. Match `git log --oneline`.
-- User-visible changes get an entry under `[Unreleased]` in [CHANGELOG.md](CHANGELOG.md) (Keep a Changelog). The README command table and the guides in `docs/` are updated with new commands or options.
-- Releases follow [docs/releasing.md](docs/releasing.md): a release pull request moves `[Unreleased]` into a version section and bumps `__version__`, then an annotated `vX.Y.Z` tag on `main` triggers the release workflow.
+- User-visible changes get an entry under `[Unreleased]` in [CHANGELOG.md](CHANGELOG.md) (Keep a Changelog). The guides and the reference pages in `website/src/content/docs/` are updated with new commands or options.
+- Releases follow [website/src/content/docs/development/releasing.md](website/src/content/docs/development/releasing.md): a release pull request moves `[Unreleased]` into a version section and bumps `__version__`, then an annotated `vX.Y.Z` tag on `main` triggers the release workflow.
 - Do not change `.github/workflows/` unless the task is about CI. Third-party actions stay pinned by commit SHA.
