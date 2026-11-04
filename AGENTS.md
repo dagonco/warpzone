@@ -9,7 +9,7 @@ Guidance for coding agents working on this repository. Humans: see [README.md](R
 ## Ground rules
 
 - Python 3.11+ and the standard library only. No runtime dependencies, ever.
-- Read-only by default: commands that change files report first and act only with `--apply` (see `prune`). Never overwrite or delete user data without a re-check right before acting.
+- Writing commands follow one of two rules (see "Writing commands" in the design). Destructive ones, which delete or move user data (`prune`, `inbox`), report first and act only with `--apply`, and have no `--dry-run`. Convergent ones, which keep a backup of any file they edit (`provision`, `settings`, `play-state`, `links`, `frontend refresh`), write by default and accept `--dry-run`. Read-only commands (`check`, `bios`, `doctor`, `health`, `status`, `render-ignores`, `settings audit`) write no user data. Never overwrite or delete user data without a re-check right before acting.
 - Keep decisions pure and I/O at the edges: a pure function decides (`prune.classify`, `bios.judge_*`), a thin layer touches the disk or the Syncthing API. Unit-test the pure part without a filesystem or network.
 - Never print or log API keys or tokens. Redact them in dry-run output (`syncthing.redact`).
 - The repository is public: no personal data in code, docs, tests or commits (hostnames, IP addresses, device IDs, user names, home paths, real API keys). Test fixtures use obvious fakes; mark them for gitleaks with a trailing `# gitleaks:allow` comment.

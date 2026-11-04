@@ -836,7 +836,7 @@ device`, `frontend refresh`, `play-state sync`, `links sync`, `settings apply` a
 path, JSON body with secrets redacted) and sends no write, though it still sends the GET
 requests it needs to compute the diff; the others say what they would write. Commands that act
 only with `--apply` (`prune`, `inbox`) have no `--dry-run`: the report is the dry run, see
-[Pruning](#pruning). `check`, `bios`, `doctor`, `status`, `render-ignores`,
+[Writing commands](#writing-commands). `check`, `bios`, `doctor`, `status`, `render-ignores`,
 `settings audit`, `health` and `self-update` do not write user data and take none.
 
 Every command takes `--config PATH` (default `$WARPZONE_CONFIG`, then the XDG path) except
@@ -857,6 +857,36 @@ wrong while working (a missing BIOS, an item sent to review).
 `--syncthing-config PATH`. It does not take `--dry-run`: without `--apply` it
 is one. If the device name is left out, it is the configured device whose ID
 matches the local Syncthing.
+
+### Writing commands
+
+There are two kinds of command that write, and the rule follows from what a mistake costs.
+
+**Destructive commands report first and act only with `--apply`.** They delete or move data
+the user owns and cannot get back from a backup: `prune` (files of a whitelisted folder the
+device no longer whitelists) and `inbox` (converts, places and moves the originals of the games
+in `inbox/`). Without `--apply` they read, plan and print, and change nothing; the report is
+the dry run, so they take no `--dry-run`. `prune` re-checks each file right before deleting it
+and has a size cap on top (`--max-gib`).
+
+**Convergent commands write by default and accept `--dry-run`.** They bring the machine to
+the state the config and the profile describe: running one again changes nothing, and what
+they change is either warpzone's own (Syncthing folders it prefixes with `wz-`, its units,
+scripts and state files, symlinks it made) or a file that an emulator or the frontend owns,
+which they edit on one key or one line, with a backup first and never while that program runs.
+They are `provision hub`, `provision device`, `frontend refresh`, `play-state sync`,
+`links sync`, `settings apply` and `settings capture` (which writes only the keys the user
+chooses). `--dry-run` says what they would do and writes nothing. `self-update` is the
+timer's own convergent step and takes no `--dry-run`: it moves the clone to a release that
+passes the checks, and goes back to the last good one when it fails (see
+[Self-update](#self-update)).
+
+**Read-only commands** never write user data: `check`, `bios`, `doctor`, `health`, `status`,
+`render-ignores` and `settings audit`.
+
+A new command that deletes or moves user data is destructive and follows the first rule;
+anything else follows the second. Either way, never overwrite or delete user data without a
+re-check right before acting.
 
 Idempotency rules for `provision`:
 
