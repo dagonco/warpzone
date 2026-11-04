@@ -1,0 +1,74 @@
+---
+title: warpzone
+description: Keep one game library on a home server and deliver it to every console you own, with saves that follow you.
+template: splash
+hero:
+  tagline: One game library on your home server, delivered to every console you own, with saves that follow you.
+  actions:
+    - text: Quick start
+      link: /warpzone/overview/quick-start/
+      icon: right-arrow
+    - text: View on GitHub
+      link: https://github.com/dagonco/warpzone
+      icon: external
+      variant: minimal
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+You have a NAS full of ROMs, a Steam Deck, maybe a Steam Machine, maybe a handheld on the shelf. Each one has its own copy of the games, its own idea of which games it wants and its own saves. warpzone is a thin layer of conventions and automation on top of [Syncthing](https://syncthing.net) that makes the server, called **the hub**, the single source of truth. It never moves a byte of game data itself: it configures Syncthing and keeps each device's setup honest.
+
+## The problem
+
+- Copying a 2 TB library to a 512 GB device means picking games by hand, every time.
+- Editing a "what do I want here" list on each device, over SSH or with a gamepad, does not scale past one device.
+- Saves live in a dozen emulator-specific places, and syncing them naively syncs the wrong things.
+- One accidental delete on a console should never reach the server.
+
+warpzone fixes this with three rules: the hub owns the library, devices only receive it, and each device chooses what it gets with a **whitelist that is edited only on the hub**.
+
+## How it works
+
+```
+                       hub (home server)
+         +-----------------------------------+
+         | library/   roms, bios, extras     | --> whitelisted, receive-only
+         | songs/     Clone Hero, YARG       | --> whitelisted, receive-only
+         | tools/     scripts, docs          | --> receive-only
+         | saves/     per emulator           | <-> two-way, 30 days of history
+         | frontend/  ES-DE media, gamelists | <-> two-way
+         | settings/  emulator settings      | <-> two-way, 30 days of history
+         | inbox/     new dumps (not synced) |
+         +-----------------------------------+
+                 | Syncthing           |
+                 v                     v
+            console A              console B   ...
+        (patterns-<device>)    (patterns-<device>)
+```
+
+Each `library/` and `songs/` folder on the hub holds one `patterns-<device>.stignore` per device. A device applies only its own, so the same folder gives each console a different slice of the library. Saves get their own two-way folders, so their direction can never leak into the library. New games arrive through the `inbox/` folder, which is never synced: you drop dumps there, and `warpzone inbox` identifies, converts and files them.
+
+<CardGrid>
+  <Card title="Start here" icon="rocket">
+    Go from nothing to a hub and one console receiving games in the [quick start](/warpzone/overview/quick-start/). Install notes are in [Installation](/warpzone/overview/installation/).
+  </Card>
+  <Card title="Learn the model" icon="open-book">
+    [Concepts](/warpzone/overview/concepts/) explains the hub, devices, whitelists, saves, the inbox and the settings layer in one page.
+  </Card>
+  <Card title="Set up a console" icon="laptop">
+    Guides for [Steam Deck and EmuDeck](/warpzone/guides/emudeck/), [Steam Machine](/warpzone/guides/steam-machine/) and [Anbernic](/warpzone/guides/anbernic/), plus [how to add a new console](/warpzone/guides/new-console/).
+  </Card>
+  <Card title="Stay safe" icon="approve-check">
+    Library, songs and tools are receive-only on devices, so a delete on a console never reaches the hub. See [Safety](/warpzone/operation/safety/).
+  </Card>
+</CardGrid>
+
+## What you need
+
+- [Syncthing](https://syncthing.net) v2.x on the hub and on every device.
+- Python 3.11 or newer on the machines that run `warpzone`. Standard library only: no packages to install.
+- The hub is driven remotely through its Syncthing REST API, so it does not need Python.
+
+## Legal
+
+warpzone ships and locates no ROMs, BIOS files, keys or firmware, and never will. `warpzone bios` and `warpzone inbox` only compare what you already have with public file names, sizes and hashes. It only moves files you already have between machines you own. Use your own legally obtained dumps.

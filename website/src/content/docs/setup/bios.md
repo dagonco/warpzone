@@ -1,4 +1,6 @@
-# Checking BIOS files
+---
+title: "Checking BIOS files"
+---
 
 What `warpzone bios` reports, how it decides, and how to accept a BIOS you changed on purpose.
 
@@ -44,8 +46,8 @@ The PS3 firmware and `keys.txt` are staging copies: RPCS3 installs the firmware 
 
 ## Accepting your own BIOS
 
-If you keep a modified or region-free BIOS on purpose, accept its hash in a local file, `bios.toml` next to your `config.toml` (or `--overrides PATH`). It is then reported as "accepted (local)". See [`examples/bios.example.toml`](../examples/bios.example.toml).
+If you keep a modified or region-free BIOS on purpose, accept its hash in a local file, `bios.toml` next to your `config.toml` (or `--overrides PATH`). It is then reported as "accepted (local)". See [`examples/bios.example.toml`](https://github.com/dagonco/warpzone/blob/main/examples/bios.example.toml).
 
 ## Where the data comes from
 
-The manifest only holds file names, sizes and hashes, taken from [libretro-database](https://github.com/libretro/libretro-database) and MAME. `warpzone` never downloads a BIOS and this repository contains none. Details in [design.md](design.md#bios-check).
+The manifest only holds file names, sizes and hashes, taken from [libretro-database](https://github.com/libretro/libretro-database) and MAME. `warpzone` never downloads a BIOS and this repository contains none. Details in [the design document](/warpzone/development/design/#bios-check).

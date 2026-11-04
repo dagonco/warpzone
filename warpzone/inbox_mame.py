@@ -7,7 +7,7 @@ parent, of its BIOS and of its devices is present, in the dropped zip or in the 
 device zips already in `library/roms/mame/`. The first emulator that fits wins: FinalBurn
 Neo, then MAME (the ES-DE default, so no `<altemulator>`), then MAME 2003-Plus; the others
 are recorded as a per-game `<altemulator>` in the hub's ES-DE gamelist. Sega Atomiswave
-and Naomi games, which hang in MAME, go to Flycast instead. See docs/design.md.
+and Naomi games, which hang in MAME, go to Flycast instead. See development/design.md.
 
 The decisions (`evaluate`, `best_fit`, `decide`, `update_gamelist`, `parse_sets`,
 `describe_miss`) are pure; `MameHandler` and the cache and gamelist file helpers touch

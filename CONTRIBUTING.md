@@ -31,8 +31,16 @@ It takes about a minute. Set `WARPZONE_E2E_VERBOSE=1` to print the Syncthing log
 
 ## Documentation
 
-`docs/design.md` is the contract for the implementation. If you change behaviour, change it there too.
+The documentation is a [Starlight](https://starlight.astro.build) site in `website/`, published at <https://dagonco.github.io/warpzone>. The pages are in `website/src/content/docs/`. `website/src/content/docs/development/design.md` is the contract for the implementation: if you change behaviour, change it there too.
+
+To build the site (Node 22.23.4 or newer; the build also fails on a broken internal link):
+
+```bash
+cd website
+npm ci
+npm run build
+```
 
 ## Releasing
 
-Maintainers: see [docs/releasing.md](docs/releasing.md). User-visible changes go under `[Unreleased]` in [CHANGELOG.md](CHANGELOG.md).
+Maintainers: see [Releasing](https://dagonco.github.io/warpzone/development/releasing/) (`website/src/content/docs/development/releasing.md`). User-visible changes go under `[Unreleased]` in [CHANGELOG.md](CHANGELOG.md).

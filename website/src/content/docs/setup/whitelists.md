@@ -1,4 +1,6 @@
-# Whitelists and pruning
+---
+title: "Whitelists and pruning"
+---
 
 How a device chooses what it receives, how a new device bootstraps safely, and how to clean up what a device no longer whitelists.
 
@@ -22,9 +24,9 @@ A whitelist starts with `#include patterns-common.stignore`, lists what the devi
 *
 ```
 
-Every device receives every whitelist but applies only its own. Start from [`templates/patterns-common.stignore`](../templates/patterns-common.stignore) and [`templates/patterns-device.example.stignore`](../templates/patterns-device.example.stignore). The same scheme applies to the `songs/` folder for devices that subscribe to it.
+Every device receives every whitelist but applies only its own. Start from [`templates/patterns-common.stignore`](https://github.com/dagonco/warpzone/blob/main/templates/patterns-common.stignore) and [`templates/patterns-device.example.stignore`](https://github.com/dagonco/warpzone/blob/main/templates/patterns-device.example.stignore). The same scheme applies to the `songs/` folder for devices that subscribe to it.
 
-Xenia and Model 2 keep their own data inside the system folder, next to the games, which are in its `roms/` subfolder. Name `!/roms/xbox360/roms` and `!/roms/model2/roms` (not `!/roms/xbox360` or `!/roms/model2`) and the emulator data stays on the device. See [emudeck.md](emudeck.md#xenia-and-model-2-live-inside-roms).
+Xenia and Model 2 keep their own data inside the system folder, next to the games, which are in its `roms/` subfolder. Name `!/roms/xbox360/roms` and `!/roms/model2/roms` (not `!/roms/xbox360` or `!/roms/model2`) and the emulator data stays on the device. See [the EmuDeck guide](/warpzone/guides/emudeck/#xenia-and-model-2-live-inside-roms).
 
 Folders without a whitelist (tools, media, saves, ES-DE) get their fixed ignore lines directly through the API; they need no files.
 
@@ -75,4 +77,4 @@ It asks Syncthing which files it ignores (after a full rescan) instead of guessi
 | `--list` | Prints every file. |
 | `--notify-url URL` | POSTs a JSON summary (`device`, `folder`, `files`, `bytes`, `applied`) to a webhook, for example a Home Assistant automation. |
 
-The algorithm and its safety rules are in [design.md](design.md#pruning).
+The algorithm and its safety rules are in [the design document](/warpzone/development/design/#pruning).

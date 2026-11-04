@@ -5,157 +5,22 @@
 
 Keep one game library on a home server and deliver it to every console you own, with saves that follow you from one device to the next.
 
-You have a NAS full of ROMs, a Steam Deck, maybe a Steam Machine, maybe a spare Mac. Each one has its own copy, its own idea of which games it wants, and its own saves. `warpzone` is a thin layer of conventions and automation on top of [Syncthing](https://syncthing.net) that makes the server the single source of truth. It never moves a byte of game data itself: it only configures Syncthing and keeps each device's setup honest.
-
-## The problem
-
-- Copying a 2 TB library to a 512 GB device means picking games by hand, every time.
-- Editing a "what do I want here" list on each device, over SSH or with a gamepad, does not scale past one device.
-- Saves live in a dozen emulator-specific places, and syncing them naively syncs the wrong things.
-- One accidental delete on a console should never reach the server.
-
-`warpzone` fixes this with three rules: the hub owns the library, devices only receive it, and each device chooses what it gets with a whitelist that is **edited only on the hub**.
+`warpzone` is a thin layer of conventions and automation on top of [Syncthing](https://syncthing.net). It never moves a byte of game data itself: it only configures Syncthing and keeps each device's setup honest.
 
 ## How it works
 
-```
-                       hub (NAS)
-         ┌───────────────────────────────────┐
-         │ library/   roms, bios, extras     │ ──► whitelisted, receive-only
-         │ songs/     Clone Hero, YARG       │ ──► whitelisted, receive-only
-         │ tools/     scripts, docs          │ ──► receive-only
-         │ saves/     per emulator           │ ◄─► two-way, 30 days of history
-         │ frontend/  ES-DE media, gamelists │ ◄─► two-way
-         │ settings/  emulator settings      │ ◄─► two-way, 30 days of history
-         │ inbox/     new dumps (not synced) │
-         └───────────────────────────────────┘
-                 │ Syncthing           │
-                 ▼                     ▼
-          Steam Deck            Steam Machine  ...
-          (patterns-deck)       (patterns-machine)
-```
-
-Each `library/` and `songs/` folder holds one `patterns-<device>.stignore` per device. A device applies only its own, so the same folder gives each console a different slice of the library. Saves get their own folders so their two-way direction can never leak into the library. Keys and firmware that EmuDeck symlinks get their own receive-only folders (see [docs/emudeck.md](docs/emudeck.md)). `songs` is not emulation (Clone Hero, YARG) and lands outside `~/Emulation`.
-
-### Hub layout
-
-```
-<hub root>/
-├── library/                 hub: send-only   -> device: receive-only, per-device whitelist
-│   ├── roms/<system>/       ES-DE system folder names
-│   ├── bios/
-│   ├── extras/              switch/{updates,dlc,mods,misc}, amiibo/, texturepacks/
-│   ├── patterns-common.stignore
-│   └── patterns-<device>.stignore
-├── saves/<emulator>/<kind>/ hub: send-receive <-> devices: send-receive, hub keeps 30 days of history
-├── frontend/
-│   ├── media/               ES-DE downloaded media     <->
-│   ├── es-de/               ES-DE gamelists, collections <->
-│   └── play-state/          favourites and play statistics, one file per device <->
-├── settings/                emulator setting layers    <-> two-way, hub keeps 30 days of history
-├── songs/                   hub: send-only -> opted-in devices, per-device whitelist
-├── tools/                   hub: send-only -> devices (scripts, docs)
-└── inbox/                   never synced; drop zone for new content (SMB)
-```
-
-## Requirements
-
-- Syncthing v2.x on the hub and on every device (tested with v2.1.7).
-- Python 3.11+ on the machine that runs `warpzone`. Standard library only: it runs unchanged on SteamOS, macOS and any Linux box.
-- The hub is driven remotely through its Syncthing REST API, so it does not need Python (many NAS ship an old one). Enable the GUI/API on a LAN address of the hub.
-
-## Install
-
-**On a console or any other device** that keeps itself up to date, there is one way to install: from a clone, with Python 3.11 or newer, git and Syncthing running, the private config in place and the hub provisioned (Quickstart, steps 1 to 3):
-
-```bash
-mkdir -p ~/.local/share/warpzone && cd ~/.local/share/warpzone
-git clone https://github.com/dagonco/warpzone.git src
-sh src/warpzone/data/updater.sh install deck
-~/.local/share/warpzone/venv/bin/warpzone --version
-```
-
-`deck` is the device's name in the config. The script checks out the newest release, makes a venv next to the clone (no pip, no network beyond git), and runs `warpzone provision device deck`, which also installs the updater and its timer (step 4 of the Quickstart). Every step, the options (`--config`, `--venv`, `--channel rc`) and what the updater does afterwards are in [docs/self-update.md](docs/self-update.md). A `pipx` or wheel install is not a supported device install.
-
-**On the machine that only runs `provision hub`, `inbox` and the like**, from a clone, with nothing to install:
-
-```bash
-git clone https://github.com/dagonco/warpzone.git && cd warpzone
-python3 -m warpzone --help
-```
-
-Each release lists a `SHA256SUMS` file and carries a build provenance attestation (`gh attestation verify <file> --repo dagonco/warpzone`).
-
-## Quickstart
-
-1. **Write the private config.** Copy [`examples/config.example.toml`](examples/config.example.toml) to `~/.config/warpzone/config.toml`. Fill in the device IDs (Syncthing: Actions > Show ID) and the hub's API key (Actions > Settings > GUI). This file is the only place with personal data; keep the key in a file with `chmod 600`. The same file works on every machine.
-2. **Put the whitelists on the hub.** In the hub's `library/` folder, copy [`templates/patterns-common.stignore`](templates/patterns-common.stignore) and make one `patterns-<device>.stignore` per device from [`templates/patterns-device.example.stignore`](templates/patterns-device.example.stignore). Do the same in `songs/` for devices that subscribe to it. See [docs/whitelists.md](docs/whitelists.md).
-3. **Check, then configure the hub.**
-
-   ```bash
-   warpzone check
-   warpzone provision hub --dry-run    # prints the REST calls it would make, makes none
-   warpzone provision hub
-   ```
-
-   This adds every configured device and creates the `wz-*` folders on the hub. It is idempotent: run it again whenever you add a device.
-4. **Provision each device, on the device.**
-
-   ```bash
-   warpzone provision device deck   # the install above already ran it once
-   ```
-
-   It finds the local Syncthing's API key in its `config.xml` (including the SyncThingy flatpak), adds the hub, and creates the subscribed folders. Save folders whose directory does not exist yet are skipped with a warning and picked up by the next run. With the SyncThingy flatpak it also grants it access to the emulators' `~/.var/app` folders (flatpak hides them) and asks you to restart Syncthing. Use `--syncthing-config PATH` if your `config.xml` is somewhere unusual. On a device with systemd it also installs the updater script and a timer that starts it 45 seconds after boot and every 15 minutes (see [docs/self-update.md](docs/self-update.md); `self_update = false` in the device's config turns it off).
-
-## Commands
-
-| Command | What it does |
-|---|---|
-| `warpzone check` | Validates the config and lists missing whitelists. |
-| `warpzone provision hub` | Sets up the hub's Syncthing through its REST API. Once, then whenever you add a device. |
-| `warpzone provision device <name>` | On a console: adds the hub and creates the subscribed folders. `--unattended` is the variant for a run nobody watches (see [docs/self-update.md](docs/self-update.md#unattended-provisioning)). |
-| `warpzone status` | Folder state, outstanding items and receive-only local changes. |
-| `warpzone render-ignores <name>` | Prints the ignore lines a device folder would get. |
-| `warpzone frontend refresh` | On a console whose frontend is not ES-DE: rewrites its gamelists from the hub's scraped artwork and metadata. |
-| `warpzone play-state sync <name>` | On a console with ES-DE: shares favourites and play statistics with the other frontends. ES-DE runs it at startup, and a timer between starts. |
-| `warpzone links sync <name>` | On a console: links the library's Vita games and their licences into Vita3K's own storage. `provision device` runs it and ES-DE runs it at startup. |
-| `warpzone prune` | Reports (or, with `--apply`, deletes) files a device no longer whitelists. |
-| `warpzone bios` | Which BIOS and firmware files the library has, lacks or has wrong. |
-| `warpzone inbox` | Reports (or, with `--apply`, files) new games dropped in `inbox/`. |
-| `warpzone settings apply` | On a console: writes the emulator settings from the hub's layers. ES-DE runs it at startup. |
-| `warpzone settings capture` | On a console: takes settings changed in an emulator to the hub's layers. |
-| `warpzone settings audit` | Reports drift between the layers and this console (read only). |
-| `sh <clone>/warpzone/data/updater.sh install <device>` | On a device, from a fresh `git clone`: checks out the newest release, makes the venv and runs `provision device`. The one way to install a device, see [docs/self-update.md](docs/self-update.md#installing-a-device). |
-| `warpzone self-update` | On a device: runs one tick of the updater now, as its timer does (look for a release, switch to it, verify it, go back if it fails). See [docs/self-update.md](docs/self-update.md). |
-| `warpzone health [device]` | On a device: checks that this version works (config, dry runs of what ES-DE and the timers run, startup scripts and units); writes nothing. Exit 0 when it works. See [docs/self-update.md](docs/self-update.md#checking-a-version). |
-| `warpzone doctor` | Checks this machine and prints the fix for each problem. |
-
-`provision`, `frontend refresh` and `links sync` support `--dry-run`. `prune` and `inbox` report first and act only with `--apply`. `settings apply` and `settings capture` support `--dry-run`.
-
-## Safety
-
-- Library, songs and tools are **receive-only** on devices: a delete or edit on a console never reaches the hub.
-- Only `wz-*` folders are touched, devices are only added, and a changed folder path is refused.
-- `prune` and `inbox` report by default. `inbox` never overwrites, and `prune` deletes only files the hub still has unchanged.
-- API keys are never printed, logged or put in error messages.
-
-Turn on filesystem snapshots for the hub's share. The full list of rules is in [docs/safety.md](docs/safety.md).
+The server (the hub) owns the library. Devices only receive it, and each device chooses what it gets with a whitelist that is edited only on the hub, so a 2 TB library can feed a 512 GB console. Emulator saves, settings and frontend data sync both ways, with history kept on the hub. `warpzone` is a Python 3.11+ command line tool that uses the standard library only, so it runs unchanged on SteamOS, macOS and any Linux box.
 
 ## Documentation
 
-| Guide | Covers |
-|---|---|
-| [docs/whitelists.md](docs/whitelists.md) | How whitelists work, rescan, bootstrap, pruning. |
-| [docs/settings.md](docs/settings.md) | Sharing emulator settings across consoles: capture, apply, audit. |
-| [docs/inbox.md](docs/inbox.md) | Adding games: DAT-based discs and cartridges, Switch, 3DS, PS3, PS4, PS Vita and Xbox, arcade. |
-| [docs/bios.md](docs/bios.md) | The BIOS and firmware check. |
-| [docs/doctor.md](docs/doctor.md) | Checking a machine. |
-| [docs/self-update.md](docs/self-update.md) | Installing and updating a device: `updater.sh install`, the updater and its timer, `self-update`, turning it off. |
-| [docs/emudeck.md](docs/emudeck.md) | The EmuDeck profile, the symlink gotcha, manual steps. |
-| [docs/anbernic.md](docs/anbernic.md) | The Anbernic RG351MP (dArkOS) profile: exFAT card, system list override, RetroArch paths. |
-| [docs/safety.md](docs/safety.md) | Safety rules and hub snapshots. |
-| [docs/design.md](docs/design.md) | The implementation contract. |
-| [CONTRIBUTING.md](CONTRIBUTING.md), [docs/releasing.md](docs/releasing.md), [CHANGELOG.md](CHANGELOG.md) | Contributing, releasing, history. |
+Everything else is on the documentation website: <https://dagonco.github.io/warpzone>.
+
+- [Installation](https://dagonco.github.io/warpzone/overview/installation/) and [Quick start](https://dagonco.github.io/warpzone/overview/quick-start/)
+- [Commands](https://dagonco.github.io/warpzone/reference/commands/)
+- [Safety rules](https://dagonco.github.io/warpzone/operation/safety/)
+- [Design](https://dagonco.github.io/warpzone/development/design/), [Contributing](CONTRIBUTING.md), [Changelog](CHANGELOG.md)
+
+The site's sources are in [`website/`](website).
 
 ## Legal
 
