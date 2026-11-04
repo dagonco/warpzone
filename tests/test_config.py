@@ -76,6 +76,13 @@ class ConfigTests(unittest.TestCase):
             lambda d: d["devices"].update({"Bad Name": d["devices"]["deck"]}), "name must be"
         )
 
+    def test_hub_root_must_be_an_absolute_path(self) -> None:
+        self.assert_error(lambda d: d["hub"].update(root="games"), "hub.root: must be an absolute")
+        self.assert_error(
+            lambda d: d["hub"].update(root="./games"), "hub.root: must be an absolute"
+        )
+        self.assertEqual(parse_config(config_data()).hub.root, "/data/games")
+
     def test_rescan_seconds(self) -> None:
         self.assertEqual(parse_config(config_data()).devices["deck"].rescan_seconds, 300)
         data = copy.deepcopy(config_data())

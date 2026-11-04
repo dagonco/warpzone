@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import http.client
 import ipaddress
 import json
 import ssl
@@ -121,6 +122,12 @@ class Client:
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
             reason = scrub(str(getattr(exc, "reason", exc)), secrets)
             raise SyncthingError(f"{self.label}: cannot reach {self.base_url} ({reason})") from None
+        except http.client.HTTPException as exc:
+            # A reply cut short or not HTTP at all (IncompleteRead, BadStatusLine, ...).
+            reason = scrub(f"{type(exc).__name__}: {exc}", secrets)
+            raise SyncthingError(
+                f"{self.label}: {method} {path}: the reply from {self.base_url} broke ({reason})"
+            ) from None
         if not raw:
             return None
         try:

@@ -18,6 +18,7 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ### Fixed
 
+- An additive hub run (`provision hub --additive`, `auto_hub`) warns about a `wz-*` folder the hub has paused instead of leaving it silently, and a folder whose creation fails after it was made gives one clean warning; a reply cut short by the Syncthing API (`IncompleteRead`, `BadStatusLine`) is a Syncthing error instead of a traceback; and `hub.root` must be an absolute path.
 - The updater stops with a log line when it finds no clone to work on, instead of acting on whatever folder it runs from; a retirement is looked up by name for the tags the tick considers (the running version, the pin, a version being tried or under suspicion and each valid candidate) instead of going through a limited number of `retired/` tags, so no amount of fake retirement tags can hide a real one, also after a trial that was given up; and no move to a lower version is accepted in a tick where the copy of the allowed signers failed.
 
 ## [0.3.0rc2] - 2026-11-04

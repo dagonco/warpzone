@@ -29,7 +29,7 @@ The hub is the machine that holds the library and runs the authoritative Syncthi
 |---|---|---|---|---|
 | `name` | string | none | yes | Non-empty after trimming. The hub's display name in Syncthing on the devices. |
 | `device_id` | string | none | yes | A Syncthing device ID: 8 groups of 7 characters from `A-Z` and `2-7`, separated by `-`. Must differ from every device's ID. |
-| `root` | string | none | yes | Non-empty. The absolute path of the hub root on the hub's own filesystem (the folder holding `library/`, `saves/`, `frontend/`, `songs/`, `tools/` and `settings/`), as seen by the hub's Syncthing, not by the machine running warpzone. A trailing `/` is removed. |
+| `root` | string | none | yes | Non-empty and absolute (a relative path is a config error). The absolute path of the hub root on the hub's own filesystem (the folder holding `library/`, `saves/`, `frontend/`, `songs/`, `tools/` and `settings/`), as seen by the hub's Syncthing, not by the machine running warpzone. A trailing `/` is removed. |
 | `api_url` | string | none | yes | Must start with `http://` or `https://`. The base URL of the hub's Syncthing GUI and API. A trailing `/` is removed. |
 | `api_key` | string | none | one of the two | Non-empty. The hub's API key, inline. |
 | `api_key_file` | string | none | one of the two | A path to a file holding the key (`~` is expanded). The file must be readable and not empty; its contents are trimmed. Keep it mode 600 and out of any repository. |
