@@ -27,11 +27,24 @@ from warpzone import (
     titlelinks,
     updatetimer,
 )
-from warpzone.config import DEFAULT_WAIT_SECONDS, HUB_WAIT_SECONDS, Config, Device
-from warpzone.errors import WarpzoneError
-from warpzone.model import ESDE_ID, MEDIA_ID, FolderSpec, device_specs, hub_specs
+from warpzone.config import DEFAULT_WAIT_SECONDS, Config, Device
+from warpzone.model import ESDE_ID, MEDIA_ID, FolderSpec, device_specs
 from warpzone.paths import expand_home
 from warpzone.profiles import Profile
+from warpzone.provision_folders import (
+    PREFIX,
+    ProvisionError,
+    apply_ignores,
+    ensure_device,
+    folder_status,
+    in_sync,
+    unattended_refusals,
+    unpause,
+    upsert_folder,
+    wait_for_files,
+    wait_pending,
+)
+from warpzone.provision_hub import check_hub, provision_hub
 from warpzone.report import Reporter
 from warpzone.runners import (
     FlatpakRunner,
@@ -45,309 +58,14 @@ from warpzone.runners import (
 )
 from warpzone.syncthing import Client, SyncthingError
 
-PREFIX = "wz-"
-
-
-class ProvisionError(WarpzoneError):
-    pass
-
-
-def _same_path(a: str, b: str) -> bool:
-    return (a.rstrip("/") or "/") == (b.rstrip("/") or "/")
-
-
-def _subset(wanted: Any, actual: Any) -> bool:
-    """True if every key in `wanted` has the same value in `actual` (recursively)."""
-    if isinstance(wanted, dict):
-        return isinstance(actual, dict) and all(
-            k in actual and _subset(v, actual[k]) for k, v in wanted.items()
-        )
-    return bool(wanted == actual)
-
-
-def _folder_patch(spec: FolderSpec, current: dict[str, Any]) -> dict[str, Any]:
-    """The owned keys that differ. Devices are only ever added, never removed."""
-    body = spec.body()
-    owned = ("label", "type", "fsWatcherEnabled", "rescanIntervalS", "ignorePerms")
-    patch: dict[str, Any] = {
-        key: body[key] for key in owned if key in body and current.get(key) != body[key]
-    }
-    if not _subset(spec.versioning, current.get("versioning") or {}):
-        patch["versioning"] = spec.versioning
-    have = list(current.get("devices") or [])
-    known = {d["deviceID"] for d in have}
-    missing = [d for d in body["devices"] if d["deviceID"] not in known]
-    if missing:
-        patch["devices"] = have + missing
-    return patch
-
-
-def _ensure_device(
-    client: Client,
-    device_id: str,
-    name: str,
-    addresses: tuple[str, ...],
-    known: set[str],
-    rep: Reporter,
-) -> None:
-    if device_id in known:
-        rep.out(f"device {name}: already known")
-        return
-    client.add_device(
-        {
-            "deviceID": device_id,
-            "name": name,
-            "addresses": list(addresses),
-            "autoAcceptFolders": False,
-        }
-    )
-    known.add(device_id)
-    rep.out(f"device {name}: added")
-
-
-def _upsert_folder(
-    client: Client, spec: FolderSpec, current: dict[str, Any] | None, rep: Reporter
-) -> bool:
-    """Create (paused) or patch the folder. Returns True if it was created."""
-    if current is None:
-        client.add_folder({**spec.body(), "paused": True})
-        rep.note(spec.id, f"created at {spec.path}")
-        return True
-    if not _same_path(current.get("path", ""), spec.path):
-        raise ProvisionError(
-            f"{spec.id}: Syncthing has it at {current.get('path')!r} but the config says "
-            f"{spec.path!r}. Changing a folder path would look like a mass delete, so "
-            "warpzone refuses. Remove the folder in Syncthing first (files stay on disk), "
-            "then run provision again."
-        )
-    patch = _folder_patch(spec, current)
-    if patch:
-        client.patch_folder(spec.id, patch)
-        rep.note(spec.id, f"updated {', '.join(sorted(patch))}")
-    return False
-
-
-def _unpause(client: Client, spec: FolderSpec, rep: Reporter) -> None:
-    client.patch_folder(spec.id, {"paused": False})
-    rep.note(spec.id, "resumed")
-
-
-def _apply_ignores(
-    client: Client, spec: FolderSpec, current: dict[str, Any] | None, created: bool, rep: Reporter
-) -> None:
-    """Set the final ignores directly (no bootstrap) and make sure the folder runs."""
-    wanted = list(spec.ignores)
-    changed = created or client.get_ignores(spec.id) != wanted
-    if changed:
-        client.set_ignores(spec.id, wanted)
-        rep.note(spec.id, "ignores set")
-    if created or (changed and current is not None and current.get("paused")):
-        _unpause(client, spec, rep)
-
-
-def _bootstrap_hub_folder(
-    client: Client,
-    spec: FolderSpec,
-    *,
-    timeout: float,
-    poll: float,
-    rep: Reporter,
-    sleep: Callable[[float], None],
-    clock: Callable[[], float],
-) -> bool:
-    """A newly created whitelisted hub folder: let only the whitelists through first.
-
-    The first full scan of a big library can take hours, and devices wait for their
-    `patterns-<device>.stignore` to show up in the hub's index. With every other file
-    ignored the scan reaches the whitelists at once; once they are indexed the final
-    ignores go in and the full scan starts. If they never show up the final ignores
-    are set anyway, so the folder is never left half-configured. Returns True when the
-    whitelists were indexed (or, in dry-run, would be waited for).
-    """
-    assert spec.bootstrap_ignores is not None
-    client.set_ignores(spec.id, list(spec.bootstrap_ignores))
-    rep.note(spec.id, "bootstrap ignores set")
-    _unpause(client, spec, rep)
-    client.scan(spec.id)
-    if client.dry_run:
-        rep.note(spec.id, f"dry-run: would wait up to {timeout:.0f}s for the whitelists")
-        pending: list[str] = []
-    else:
-        pending = _wait_pending(
-            client,
-            spec.id,
-            spec.required_files,
-            in_index,
-            timeout=timeout,
-            poll=poll,
-            rep=rep,
-            sleep=sleep,
-            clock=clock,
-        )
-    client.set_ignores(spec.id, list(spec.ignores))
-    client.scan(spec.id)
-    rep.note(spec.id, "final ignores set, full scan started")
-    if pending:
-        rep.warn(
-            f"{spec.id}: {', '.join(pending)} not in the hub's index after {timeout:.0f}s; "
-            f"the final ignores are set anyway. Add them under {spec.path}, then run "
-            "`warpzone check`"
-        )
-    return not pending
-
-
-def _missing_on(client: Client, spec: FolderSpec) -> list[str]:
-    names = set(client.browse(spec.id))
-    return [f for f in spec.required_files if f not in names]
-
-
-def provision_hub(
-    cfg: Config,
-    profiles: dict[str, Profile],
-    client: Client,
-    rep: Reporter,
-    *,
-    wait_timeout: float = HUB_WAIT_SECONDS,
-    poll: float = 2.0,
-    sleep: Callable[[float], None] = time.sleep,
-    clock: Callable[[], float] = time.monotonic,
-) -> None:
-    actual = client.my_id()
-    if actual != cfg.hub.device_id:
-        raise ProvisionError(
-            f"the API at {cfg.hub.api_url} belongs to device {actual[:7]}..., "
-            f"but hub.device_id starts with {cfg.hub.device_id[:7]}..."
-        )
-    known = {d["deviceID"] for d in client.devices()}
-    for device in cfg.devices.values():
-        _ensure_device(client, device.device_id, device.name, device.addresses, known, rep)
-
-    existing = {f["id"]: f for f in client.folders()}
-    for spec in hub_specs(cfg, profiles):
-        current = existing.get(spec.id)
-        created = _upsert_folder(client, spec, current, rep)
-        bootstrapped = False
-        if created and spec.bootstrap_ignores is not None:
-            bootstrapped = True
-            _bootstrap_hub_folder(
-                client, spec, timeout=wait_timeout, poll=poll, rep=rep, sleep=sleep, clock=clock
-            )
-        else:
-            _apply_ignores(client, spec, current, created, rep)
-        rep.flush(spec.id)
-        if not spec.required_files or bootstrapped:
-            if bootstrapped and client.dry_run:
-                rep.warn(
-                    f"{spec.id}: add {', '.join(spec.required_files)} under {spec.path}, "
-                    "then run `warpzone check`"
-                )
-            continue
-        if created:
-            rep.warn(
-                f"{spec.id}: add {', '.join(spec.required_files)} under {spec.path}, "
-                "then run `warpzone check`"
-            )
-        elif not client.dry_run:
-            missing = _missing_on(client, spec)
-            if missing:
-                rep.warn(f"{spec.id}: missing in {spec.path}: {', '.join(missing)}")
-
-
-def check_hub(cfg: Config, profiles: dict[str, Profile], client: Client, rep: Reporter) -> int:
-    """Report whitelist files missing on the hub. Returns the number of problems."""
-    problems = 0
-    for spec in hub_specs(cfg, profiles):
-        if not spec.required_files:
-            continue
-        try:
-            missing = _missing_on(client, spec)
-        except SyncthingError as exc:
-            if exc.status is None:
-                raise
-            rep.out(f"{spec.id}: not configured on the hub yet (run `warpzone provision hub`)")
-            problems += 1
-            continue
-        if missing:
-            problems += len(missing)
-            rep.out(f"{spec.id}: MISSING {', '.join(missing)} (in {spec.path})")
-        else:
-            rep.out(f"{spec.id}: whitelists present")
-    return problems
-
-
-def in_sync(info: dict[str, Any] | None) -> bool:
-    """True when the local copy of a file is exactly the global one."""
-    if not info:
-        return False
-    local, global_ = info.get("local"), info.get("global")
-    return bool(
-        local
-        and global_
-        and not local.get("deleted")
-        and not local.get("invalid")
-        and local.get("version") == global_.get("version")
-    )
-
-
-def in_index(info: dict[str, Any] | None) -> bool:
-    """True when this machine's index holds a live (not deleted, not invalid) copy."""
-    local = (info or {}).get("local")
-    return bool(local and not local.get("deleted") and not local.get("invalid"))
-
-
-def _wait_pending(
-    client: Client,
-    folder_id: str,
-    files: tuple[str, ...],
-    ready: Callable[[dict[str, Any] | None], bool],
-    *,
-    timeout: float,
-    poll: float,
-    rep: Reporter,
-    sleep: Callable[[float], None],
-    clock: Callable[[], float],
-) -> list[str]:
-    """Poll until every file is `ready`; returns the ones still pending at the deadline."""
-    deadline = clock() + timeout
-    pending = list(files)
-    announced = False
-    while True:
-        pending = [f for f in pending if not ready(client.db_file(folder_id, f))]
-        if not pending or clock() >= deadline:
-            return pending
-        if not announced:
-            rep.out(f"{folder_id}: waiting for {', '.join(pending)} (up to {timeout:.0f}s)")
-            announced = True
-        sleep(poll)
-
-
-def wait_for_files(
-    client: Client,
-    spec: FolderSpec,
-    *,
-    timeout: float,
-    poll: float,
-    rep: Reporter,
-    sleep: Callable[[float], None] = time.sleep,
-    clock: Callable[[], float] = time.monotonic,
-) -> None:
-    pending = _wait_pending(
-        client,
-        spec.id,
-        spec.required_files,
-        in_sync,
-        timeout=timeout,
-        poll=poll,
-        rep=rep,
-        sleep=sleep,
-        clock=clock,
-    )
-    if pending:
-        raise ProvisionError(
-            f"{spec.id}: {', '.join(pending)} did not arrive within {timeout:.0f}s. "
-            "The folder stays on the safe bootstrap ignores (only whitelists can arrive). "
-            "Check that the hub is online and has these files, then run provision again."
-        )
+__all__ = [
+    "PREFIX",
+    "ProvisionError",
+    "check_hub",
+    "folder_status",
+    "provision_hub",
+    "wait_for_files",
+]
 
 
 def _hub_precheck(
@@ -393,28 +111,6 @@ def _hub_precheck(
                 "Nothing was changed on this device."
             )
     return skipped
-
-
-def unattended_refusals(spec: FolderSpec, current: dict[str, Any]) -> list[str]:
-    """Why an unattended run must not touch a folder Syncthing already has (pure).
-
-    `type` decides what a folder does with changes: `receiveonly` to `sendreceive` would send
-    a console's deletions to the hub. `versioning` decides what Syncthing keeps. Neither is
-    ever changed without a person, and neither is a failure a rollback could fix.
-    """
-    problems = []
-    patch = _folder_patch(spec, current)
-    if "type" in patch:
-        problems.append(
-            f"{spec.id}: type is {current.get('type')!r}, the config says {spec.type!r}"
-        )
-    if "versioning" in patch:
-        problems.append(f"{spec.id}: versioning differs from the config")
-    if not _same_path(current.get("path", ""), spec.path):
-        problems.append(
-            f"{spec.id}: Syncthing has it at {current.get('path')!r}, not {spec.path!r}"
-        )
-    return problems
 
 
 def _missing_markers(specs: Iterable[FolderSpec], existing: dict[str, dict[str, Any]]) -> list[str]:
@@ -468,7 +164,7 @@ def _provision_whitelisted(
             return
         client.set_ignores(spec.id, final)
         if current is not None and current.get("paused"):
-            _unpause(client, spec, rep)
+            unpause(client, spec, rep)
         client.scan(spec.id)
         rep.note(spec.id, "final ignores set (whitelists on disk), rescanning")
         return
@@ -476,11 +172,11 @@ def _provision_whitelisted(
         client.set_ignores(spec.id, boot)
         rep.note(spec.id, "bootstrap ignores set")
     if created or (current is not None and current.get("paused")):
-        _unpause(client, spec, rep)
+        unpause(client, spec, rep)
     if client.dry_run:
         rep.note(spec.id, f"dry-run: would wait up to {timeout:.0f}s for the whitelists")
     elif unattended:
-        pending = _wait_pending(
+        pending = wait_pending(
             client,
             spec.id,
             spec.required_files,
@@ -670,7 +366,7 @@ def _enable_event_scripts(
     rep.out(f"es-de: set CustomEventScripts to true in {path} (old file backed up)")
 
 
-def _script_config(config_path: Path | None, home: Path) -> Path | None:
+def script_config(config_path: Path | None, home: Path) -> Path | None:
     """The config path the startup script has to pass, or None for the default location."""
     if config_path is None:
         return None
@@ -703,7 +399,7 @@ def ensure_esde_script(
     if "esde" not in profile.paths:
         return
     python = python or sys.executable
-    text = esde.render_startup_script(python, name, _script_config(config_path, home))
+    text = esde.render_startup_script(python, name, script_config(config_path, home))
     _install_startup_script(
         name,
         profile,
@@ -736,7 +432,7 @@ def ensure_play_state_script(
     if "esde" not in profile.paths:
         return
     python = python or sys.executable
-    text = esde.render_play_state_script(python, name, _script_config(config_path, home))
+    text = esde.render_play_state_script(python, name, script_config(config_path, home))
     _install_startup_script(
         name,
         profile,
@@ -769,7 +465,7 @@ def ensure_links_script(
     if "esde" not in profile.paths or not profile.links:
         return
     python = python or sys.executable
-    text = esde.render_links_script(python, name, _script_config(config_path, home))
+    text = esde.render_links_script(python, name, script_config(config_path, home))
     _install_startup_script(
         name,
         profile,
@@ -1095,7 +791,7 @@ def ensure_self_update(
         ensure_update_timer(home, rep, dry_run=dry_run, updater=live, systemctl=systemctl)
 
 
-def _busy(
+def busy(
     names: Sequence[str], label: str, what: str, again: str, rep: Reporter, proc: Path
 ) -> bool:
     """True, with a warning, when `what` must not be written now.
@@ -1162,7 +858,7 @@ def ensure_systems_override(
         rep.out(f"es_systems.cfg: already current ({override})")
         return
     label, what = "EmulationStation", f"{override}"
-    if _busy(rule.process, label, what, again, rep, proc):
+    if busy(rule.process, label, what, again, rep, proc):
         return
     if dry_run:
         rep.out(f"es_systems.cfg: dry-run: would write {override} (ROM folders below {target})")
@@ -1171,7 +867,7 @@ def ensure_systems_override(
         override,
         wanted,
         expect=before,
-        busy=lambda: _busy(rule.process, label, what, again, rep, proc),  # it may have started
+        busy=lambda: busy(rule.process, label, what, again, rep, proc),  # it may have started
         backup=(
             None
             if before is None
@@ -1234,7 +930,7 @@ def ensure_retroarch_pins(
     if not pending:
         return
     what = "RetroArch's config files"
-    if _busy(rule.process, "RetroArch", what, again, rep, proc):
+    if busy(rule.process, "RetroArch", what, again, rep, proc):
         return
     for path, text, gap in pending:
         keys = ", ".join(sorted(gap.differs))
@@ -1245,7 +941,7 @@ def ensure_retroarch_pins(
             path,
             frontend.retroarch_apply(text, wants).encode("utf-8"),
             expect=safefile.stamp(path),
-            busy=lambda: _busy(rule.process, "RetroArch", what, again, rep, proc),
+            busy=lambda: busy(rule.process, "RetroArch", what, again, rep, proc),
             backup=partial(
                 settings_state.backup, path, "retroarch", path.parent.name, root=state_root
             ),
@@ -1314,7 +1010,7 @@ def ensure_shadps4_dirs(
         )
         return
     what = "shadPS4's config files"
-    if not pending or _busy(rule.process, "shadPS4", what, again, rep, proc):
+    if not pending or busy(rule.process, "shadPS4", what, again, rep, proc):
         return
     for path, kind, text, gap in pending:
         folders = ", ".join(gap)
@@ -1326,7 +1022,7 @@ def ensure_shadps4_dirs(
                 path,
                 partial(_shadps4_apply, kind, text, wants),
                 expect=safefile.stamp(path),
-                busy=lambda: _busy(rule.process, "shadPS4", what, again, rep, proc),
+                busy=lambda: busy(rule.process, "shadPS4", what, again, rep, proc),
                 backup=partial(settings_state.backup, path, "shadps4", path.name, root=state_root),
             )
         except shadps4.Shadps4ConfigError as exc:
@@ -1463,7 +1159,7 @@ def ensure_shadps4_launch(
     )
 
 
-def _artwork_layout(profile: Profile, home: Path) -> artwork.Layout | None:
+def artwork_layout(profile: Profile, home: Path) -> artwork.Layout | None:
     art = profile.artwork
     if art is None or "library" not in profile.paths:
         return None
@@ -1478,13 +1174,13 @@ def _artwork_layout(profile: Profile, home: Path) -> artwork.Layout | None:
 
 def artwork_scope(profile: Profile, home: Path) -> list[str]:
     """The hub systems a device with `[artwork]` receives artwork for (none without any)."""
-    layout = _artwork_layout(profile, home)
+    layout = artwork_layout(profile, home)
     if layout is None or profile.artwork is None:
         return []
     return artwork.library_systems(layout.roms)  # `systems = "library"`, the only scope
 
 
-def _no_scope_warning(name: str, layout: artwork.Layout) -> str:
+def no_scope_warning(name: str, layout: artwork.Layout) -> str:
     return (
         f"no system folder in {layout.roms} yet, so no artwork is received; it follows once "
         f"games have arrived (`warpzone frontend refresh {name}`, or the timer, picks it up)"
@@ -1543,7 +1239,7 @@ def ensure_gamelists(
     in; see development/design.md, "Play state".
     """
     art, rule = profile.artwork, profile.es_systems
-    layout = _artwork_layout(profile, home)
+    layout = artwork_layout(profile, home)
     if art is None or rule is None or layout is None:
         return
     fmt = artwork.FORMATS[art.format]
@@ -1620,7 +1316,7 @@ def ensure_gamelists(
         publish(applied=True)
         return
     label, what = "EmulationStation", "its gamelists"
-    if _busy(rule.process, label, what, again, rep, proc):
+    if busy(rule.process, label, what, again, rep, proc):
         publish(applied=False)
         return
     # First the ledger: a run cut short between the two loses at worst the plays made in that
@@ -1634,7 +1330,7 @@ def ensure_gamelists(
                 item.path,
                 item.data,
                 expect=stamps.get(item.path),
-                busy=lambda: _busy(rule.process, label, what, again, rep, proc),  # it may start
+                busy=lambda: busy(rule.process, label, what, again, rep, proc),  # it may start
             )
             if outcome is safefile.Edit.BUSY:
                 return
@@ -1678,7 +1374,7 @@ def ensure_artwork_timer(
         )
         return
     service, timer = artwork.render_units(
-        python, name, _script_config(config_path, home), art.refresh
+        python, name, script_config(config_path, home), art.refresh
     )
     _install_timer(
         artwork.UNIT_NAME, service, timer, art.refresh, "artwork", home, rep, dry_run, systemctl
@@ -1715,7 +1411,7 @@ def ensure_play_state_timer(
         )
         return
     service, timer = artwork.render_play_state_units(
-        python, name, _script_config(config_path, home), rule.refresh
+        python, name, script_config(config_path, home), rule.refresh
     )
     _install_timer(
         artwork.PLAY_STATE_UNIT,
@@ -1792,9 +1488,9 @@ def refresh_artwork(
     proc: Path = Path("/proc"),
 ) -> None:
     """`frontend refresh`: bring the artwork scope up to date, then the gamelists."""
-    layout = _artwork_layout(profile, home)
+    layout = artwork_layout(profile, home)
     if layout is not None and not artwork_scope(profile, home):
-        rep.warn(_no_scope_warning(name, layout))
+        rep.warn(no_scope_warning(name, layout))
     if local is None:
         rep.warn("local Syncthing not found, so which systems receive artwork was not checked")
     else:
@@ -1899,13 +1595,13 @@ def provision_device(
     )
 
     known = {d["deviceID"] for d in local.devices()}
-    _ensure_device(local, cfg.hub.device_id, cfg.hub.name, cfg.hub.addresses, known, rep)
+    ensure_device(local, cfg.hub.device_id, cfg.hub.name, cfg.hub.addresses, known, rep)
 
     for spec in todo:
         current = existing.get(spec.id)
-        created = _upsert_folder(local, spec, current, rep)
+        created = upsert_folder(local, spec, current, rep)
         if spec.bootstrap_ignores is None:
-            _apply_ignores(local, spec, current, created, rep)
+            apply_ignores(local, spec, current, created, rep)
         else:
             _provision_whitelisted(
                 local,
@@ -1932,9 +1628,9 @@ def provision_device(
             ensure(name, profile, home, rep, dry_run=local.dry_run, proc=proc, state_root=root)
 
     if with_artwork:
-        layout = _artwork_layout(profile, home)
+        layout = artwork_layout(profile, home)
         if layout is not None and not scope:
-            rep.warn(_no_scope_warning(name, layout))
+            rep.warn(no_scope_warning(name, layout))
         ensure_gamelists(
             name,
             profile,
@@ -2023,28 +1719,3 @@ def provision_device(
         systemctl=systemctl_run,
         updater_source=updater_source,
     )
-
-
-def folder_status(client: Client, title: str, rep: Reporter) -> None:
-    """One line per wz-* folder: state, how much is outstanding, local changes."""
-    rep.out(f"{title}:")
-    folders = [f for f in client.folders() if f["id"].startswith(PREFIX)]
-    if not folders:
-        rep.out("  no warpzone folders")
-    for folder in sorted(folders, key=lambda f: f["id"]):
-        if folder.get("paused"):
-            rep.out(f"  {folder['id']}: paused")
-            continue
-        st = client.db_status(folder["id"])
-        need = sum(st.get(k, 0) for k in ("needFiles", "needDirectories", "needDeletes"))
-        parts = [str(st.get("state", "?")), f"{st.get('globalFiles', 0)} files", f"need {need}"]
-        errors = st.get("errors", 0) + st.get("pullErrors", 0)
-        if errors:
-            parts.append(f"{errors} errors")
-        if folder.get("type") == "receiveonly":
-            changed = st.get("receiveOnlyTotalItems", 0)
-            if changed:
-                parts.append(f"{changed} local changes")
-        if st.get("error"):
-            parts.append(f"error: {st['error']}")
-        rep.out(f"  {folder['id']}: {', '.join(parts)}")

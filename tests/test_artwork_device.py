@@ -219,7 +219,7 @@ class GamelistTests(Art, unittest.TestCase):
         self.ensure()
         self.scraped("gba", GBA.replace("A &amp; B", "Changed"))
         before = self.out("gba").read_bytes()
-        real = provision_mod._busy
+        real = provision_mod.busy
         calls: list[int] = []
 
         def busy(*args, **kw):
@@ -229,7 +229,7 @@ class GamelistTests(Art, unittest.TestCase):
                 self.proc.add(4242, "emulationstatio")
             return result
 
-        with mock.patch.object(provision_mod, "_busy", busy):
+        with mock.patch.object(provision_mod, "busy", busy):
             rep, _ = self.ensure()
         self.assertEqual(self.out("gba").read_bytes(), before)
         self.assertEqual(len(calls), 2)

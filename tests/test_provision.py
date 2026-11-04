@@ -1269,7 +1269,7 @@ class EsdeScriptTests(unittest.TestCase):
         self.start_esde()
         rep, _ = reporter()
         self.assertTrue(
-            provision_mod._busy(
+            provision_mod.busy(
                 esde.ESDE_PROCESSES, "ES-DE", "a file", "run again", rep, self.proc.path
             )
         )
@@ -1277,7 +1277,7 @@ class EsdeScriptTests(unittest.TestCase):
         rep, _ = reporter()
         self.proc.clear()
         self.assertFalse(
-            provision_mod._busy(
+            provision_mod.busy(
                 esde.ESDE_PROCESSES, "ES-DE", "a file", "run again", rep, self.proc.path
             )
         )

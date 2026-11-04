@@ -30,7 +30,7 @@ from warpzone.errors import WarpzoneError
 from warpzone.model import FolderSpec, device_specs
 from warpzone.paths import expand_home
 from warpzone.profiles import Profile
-from warpzone.provision import in_sync
+from warpzone.provision_folders import in_sync
 from warpzone.report import Reporter
 from warpzone.syncthing import Client, SyncthingError, scrub
 
