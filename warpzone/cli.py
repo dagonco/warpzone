@@ -321,10 +321,15 @@ def _build_parser() -> argparse.ArgumentParser:
         "--all", action="store_true", dest="all_keys", help="also list keys in sync"
     )
 
-    sub.add_parser(
+    su = sub.add_parser(
         "self-update",
         help="on a device: run one tick of the updater, as its timer does (look for a "
         "release, switch to it, verify it, go back if it fails)",
+    )
+    su.add_argument(
+        "--now",
+        action="store_true",
+        help="look for a new release now, even if the last look was recent",
     )
 
     hl = sub.add_parser(
@@ -591,10 +596,10 @@ def _links(args: argparse.Namespace, cfg: Config, profiles: dict[str, Profile]) 
     return EXIT_OK
 
 
-def _self_update(rep: Reporter) -> int:
+def _self_update(rep: Reporter, *, now: bool) -> int:
     from warpzone import selfupdate
 
-    return selfupdate.run_tick(selfupdate.live_path(Path.home()), rep.out)
+    return selfupdate.run_tick(selfupdate.live_path(Path.home()), rep.out, fetch_now=now)
 
 
 def _health(args: argparse.Namespace, rep: Reporter) -> int:
@@ -624,7 +629,7 @@ def _run(args: argparse.Namespace) -> int:
 
     rep = Reporter(print, warn_sink=_eprint)
     if args.command == "self-update":  # needs no config
-        return _self_update(rep)
+        return _self_update(rep, now=args.now)
     if args.command == "health":  # a failed check is a result, not a usage error
         return _health(args, rep)
     if args.command == "doctor":  # offline, read-only, needs no valid config

@@ -5,7 +5,9 @@
 # (a broken release must not be able to stop the tool that puts the good one back) and its
 # rules are written in development/design.md, "Autonomous updates (contract)".
 #
-#   updater.sh tick      one run of the timer: update, verify, roll back, reconcile
+#   updater.sh tick [--fetch-now]
+#                        one run of the timer: update, verify, roll back, reconcile;
+#                        --fetch-now fetches even when the interval has not passed
 #   updater.sh install DEVICE [--config FILE] [--venv DIR] [--channel stable|rc] [-- ARGS...]
 #                        the human install, from a git clone: check out the best release,
 #                        make the venv, run `provision device`
@@ -22,7 +24,8 @@
 #   WZ_LOG        the log (default self-update.log next to WZ_STATE_DIR)
 #   WZ_PROC       where /proc is; WZ_BOOT_ID_FILE the boot id
 #   WZ_NOW        the time as seconds since the epoch
-#   WZ_FETCH_INTERVAL  seconds between fetches (default one day)
+#   WZ_FETCH_INTERVAL  seconds between fetches (default one hour on rc, twelve on stable
+#                      or with a pin)
 #   WZ_STEP_TIMEOUT    seconds for each step of a verification
 #   WZ_TICK_BUDGET     seconds a whole tick may take (default 1500, under the service's 30 min)
 #   WZ_FETCH_TIMEOUT   seconds for the fetch (default 120)
@@ -52,7 +55,8 @@ CONF=${WZ_CONF:-$STATE_DIR/conf}
 LOG=${WZ_LOG:-$(dirname "$STATE_DIR")/self-update.log}
 PROC=${WZ_PROC:-/proc}
 BOOT_ID_FILE=${WZ_BOOT_ID_FILE:-/proc/sys/kernel/random/boot_id}
-FETCH_INTERVAL=${WZ_FETCH_INTERVAL:-$DAY}
+FETCH_INTERVAL=${WZ_FETCH_INTERVAL:-}
+FETCH_NOW=0
 PY_FALLBACKS=${WZ_PYTHON_FALLBACKS-/usr/bin/python3 python3}
 SIGNERS_FILE=
 SIGNERS_SRC=
@@ -225,7 +229,7 @@ order_tags() {
 
 # Numbers that come from the environment: one that is not a number would stop the script
 # on its first sum.
-case $FETCH_INTERVAL in '' | *[!0-9]*) FETCH_INTERVAL=$DAY ;; esac
+case $FETCH_INTERVAL in *[!0-9]*) FETCH_INTERVAL= ;; esac
 case $STEP_TIMEOUT in '' | 0 | *[!0-9]*) STEP_TIMEOUT= ;; esac
 case $FETCH_TIMEOUT in '' | *[!0-9]*) FETCH_TIMEOUT=120 ;; esac
 case $TICK_BUDGET in '' | *[!0-9]*) TICK_BUDGET=1500 ;; esac
@@ -1069,7 +1073,7 @@ move_allowed() {
 
 fetch_if_due() {
 	FETCHED=0
-	if [ -n "$S_last_fetch" ]; then
+	if [ -n "$S_last_fetch" ] && [ "$FETCH_NOW" != 1 ]; then
 		_jitter=$(printf '%s' "$C_device" | cksum | cut -d ' ' -f 1)
 		_jitter=$((_jitter % (FETCH_INTERVAL / 24 + 1)))
 		[ $((NOW - S_last_fetch)) -ge $((FETCH_INTERVAL + _jitter)) ] || return 0
@@ -1933,6 +1937,14 @@ conf_check() {
 }
 
 cmd_tick() {
+	case ${1-} in
+	'') ;;
+	--fetch-now) FETCH_NOW=1 ;;
+	*)
+		echo "usage: updater.sh tick [--fetch-now]" >&2
+		exit 2
+		;;
+	esac
 	mkdir -p "$STATE_DIR" || {
 		echo "updater: cannot create $STATE_DIR" >&2
 		exit 1
@@ -2009,6 +2021,15 @@ cmd_tick() {
 	fi
 
 	conf_check
+	# Without WZ_FETCH_INTERVAL the pace follows the channel: a candidate is looked for every
+	# hour, a stable release (or a new tag while pinned) every twelve.
+	if [ -z "$FETCH_INTERVAL" ]; then
+		if [ "$C_channel" = rc ] && [ -z "$C_pin" ]; then
+			FETCH_INTERVAL=3600
+		else
+			FETCH_INTERVAL=$((12 * 3600))
+		fi
+	fi
 	fetch_if_due
 	detect_kind
 	if [ "$KIND" = dirty ]; then
@@ -2357,7 +2378,10 @@ cmd_selftest() {
 }
 
 case ${1:-} in
-tick) cmd_tick ;;
+tick)
+	shift
+	cmd_tick "$@"
+	;;
 install)
 	shift
 	cmd_install "$@"

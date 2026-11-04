@@ -154,12 +154,17 @@ class WrapperTests(unittest.TestCase):
         self.lines: list[str] = []
         self.commands: list[list[str]] = []
 
-    def run_tick(self, code: int = 0) -> int:
+    def run_tick(self, code: int = 0, *, fetch_now: bool = False) -> int:
         def run(command):
             self.commands.append(list(command))
             return code
 
-        return selfupdate.run_tick(self.live, self.lines.append, run=run)
+        return selfupdate.run_tick(self.live, self.lines.append, fetch_now=fetch_now, run=run)
+
+    def test_fetch_now_asks_the_tick_to_fetch(self) -> None:
+        self.live.write_text("UPDATER_ABI=1\n")
+        self.assertEqual(self.run_tick(0, fetch_now=True), 0)
+        self.assertEqual(self.commands, [["sh", str(self.live), "tick", "--fetch-now"]])
 
     def test_it_runs_the_live_copy_with_sh_and_returns_its_exit_code(self) -> None:
         self.live.write_text("UPDATER_ABI=1\n")

@@ -176,10 +176,12 @@ def run_tick(
     live: Path,
     out: Callable[[str], None],
     *,
+    fetch_now: bool = False,
     run: Callable[[Sequence[str]], int] = _run,
 ) -> int:
     """`warpzone self-update`: run one tick of the live copy of the script, as the timer does,
-    and return its exit code. Without a live copy, say what to do and return 1."""
+    and return its exit code; `fetch_now` asks it to fetch even when the interval has not
+    passed. Without a live copy, say what to do and return 1."""
     if not live.is_file():
         out(
             f"self-update: there is no updater at {live}. `warpzone provision device <name>` "
@@ -188,7 +190,7 @@ def run_tick(
         )
         return 1
     try:
-        return run(["sh", str(live), "tick"])
+        return run(["sh", str(live), "tick", *(["--fetch-now"] if fetch_now else [])])
     except OSError as exc:
         out(f"self-update: cannot run sh {live} tick ({exc})")
         return 1

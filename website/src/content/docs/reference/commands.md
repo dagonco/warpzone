@@ -24,7 +24,7 @@ warpzone --version                # prints "warpzone X.Y.Z" and exits 0
 | `provision hub`, `provision device`, `frontend refresh`, `play-state sync`, `links sync`, `settings apply`, `settings capture` | Yes, and each accepts `--dry-run` to show what it would do and change nothing. |
 | `self-update` | Yes: it runs one tick of the updater, which can switch the checkout to a newer release. It has no `--dry-run`. |
 
-**`--config PATH`.** Almost every leaf command takes `--config PATH`: the private config file. Without it warpzone uses `$WARPZONE_CONFIG`, then `$XDG_CONFIG_HOME/warpzone/config.toml`, then `~/.config/warpzone/config.toml`. The option goes after the full command (`warpzone provision hub --config FILE`, not before `provision`). `self-update` is the exception: it takes no options and needs no config.
+**`--config PATH`.** Almost every leaf command takes `--config PATH`: the private config file. Without it warpzone uses `$WARPZONE_CONFIG`, then `$XDG_CONFIG_HOME/warpzone/config.toml`, then `~/.config/warpzone/config.toml`. The option goes after the full command (`warpzone provision hub --config FILE`, not before `provision`). `self-update` is the exception: it needs no config and takes only `--now`.
 
 **`--dry-run`.** For commands that talk to Syncthing (`provision`, `frontend refresh`) it prints the REST calls it would make (method, path and JSON body, with API keys redacted) and sends no write; it still sends the `GET` requests it needs to work out the difference. For `play-state sync`, `links sync` and `settings`, it says what it would do and writes nothing.
 
@@ -385,13 +385,13 @@ warpzone settings audit --emulator eden retroarch
 ## `warpzone self-update`
 
 ```
-warpzone self-update
+warpzone self-update [--now]
 ```
 
-On a device: runs one tick of the live copy of the updater (`sh ~/.local/share/warpzone/updater/updater.sh tick`), exactly as its timer does, and exits with the script's code. It takes no options and needs no config. Without a live copy it says so and exits `1`. See [Updating a device](/warpzone/operation/self-update/#warpzone-self-update).
+On a device: runs one tick of the live copy of the updater (`sh ~/.local/share/warpzone/updater/updater.sh tick`), exactly as its timer does, and exits with the script's code. `--now` makes the tick fetch the remote even when the fetch interval has not passed (`updater.sh tick --fetch-now`); it still waits while the menu is open. It needs no config. Without a live copy it says so and exits `1`. See [Updating a device](/warpzone/operation/self-update/#warpzone-self-update).
 
 ```bash
-warpzone self-update
+warpzone self-update --now
 ```
 
 ## `warpzone health`
@@ -433,7 +433,7 @@ warpzone doctor
 `warpzone/data/updater.sh` is POSIX `sh` and needs only `git` and the usual tools. It lives outside the warpzone package on purpose, so that a broken release cannot stop the tool that puts the good one back. A device runs its live copy, `~/.local/share/warpzone/updater/updater.sh`; the first install runs the copy inside the clone. The rules it follows are in [Updating a device](/warpzone/operation/self-update/#the-updater-script).
 
 ```
-updater.sh tick
+updater.sh tick [--fetch-now]
 updater.sh install DEVICE [--config FILE] [--venv DIR] [--channel stable|rc] [-- ARGS...]
 updater.sh menu
 updater.sh selftest
@@ -444,7 +444,7 @@ Any other first word prints `usage: updater.sh tick|install|menu|selftest|order`
 
 ### `updater.sh tick`
 
-One run of the timer: take the lock, defer while the frontend is open (up to 72 hours), fetch at most once a day, choose the best tag of the channel (or the pin), check it out, verify it in three steps (warpzone imports and `--version` is the tag; `provision device DEVICE --unattended`; `warpzone health DEVICE`), roll back if a step fails, and reconcile. It takes no options. Exit `0` when the tick ended without a failure (nothing to do, up to date, switched and verified, deferred, a dirty or development checkout left alone, another tick holding the lock, self-update turned off); `1` when it ended in a rollback, a missing Python, too little free space, an environment failure or an unusable checkout; `143` when stopped by `HUP`, `INT` or `TERM`.
+One run of the timer: take the lock, defer while the frontend is open (up to 72 hours), fetch at most once an hour on `rc` and once every 12 hours on `stable` or with a pin (`WZ_FETCH_INTERVAL` overrides; `--fetch-now` fetches at once), choose the best tag of the channel (or the pin), check it out, verify it in three steps (warpzone imports and `--version` is the tag; `provision device DEVICE --unattended`; `warpzone health DEVICE`), roll back if a step fails, and reconcile. Its only option is `--fetch-now`; any other prints `usage: updater.sh tick [--fetch-now]` and exits `2`. Exit `0` when the tick ended without a failure (nothing to do, up to date, switched and verified, deferred, a dirty or development checkout left alone, another tick holding the lock, self-update turned off); `1` when it ended in a rollback, a missing Python, too little free space, an environment failure or an unusable checkout; `143` when stopped by `HUP`, `INT` or `TERM`.
 
 ```bash
 sh ~/.local/share/warpzone/updater/updater.sh tick

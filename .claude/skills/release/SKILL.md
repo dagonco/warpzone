@@ -52,7 +52,7 @@ Confirm with the user first: the version and that it should ship now. Releases a
 
    Expect the wheel, the sdist and `SHA256SUMS`, the changelog section as notes, and `isPrerelease` true for an rc and false for a stable release.
 
-Devices with the updater timer fetch once a day and move to the new tag at the tick after that ([self-update.md](../../../website/src/content/docs/operation/self-update.md)).
+Devices with the updater timer fetch every hour on `rc` and every 12 hours on `stable`, and move to the new tag in that tick (later if the menu is open); `warpzone self-update --now` on a device looks at once ([self-update.md](../../../website/src/content/docs/operation/self-update.md)).
 
 ## When it fails
 
