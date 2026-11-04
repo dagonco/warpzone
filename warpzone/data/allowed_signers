@@ -4,3 +4,4 @@
 #   <principal> namespaces="git" <key type> <public key>
 #
 # While no key is listed, a device does not require signed tags and says so in its log.
+dagonco namespaces="git" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKhMlygMlvFpy8+sRt8Wt1kvyqjZk0/tpRBbgkbynkEU warpzone release

@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ## [Unreleased]
 
+### Security
+
+- `warpzone/data/allowed_signers` now lists the maintainer's release key. A device that runs this release keeps trusting that key, and from the next release on it only accepts release, candidate, pin and `retired/` tags signed with it.
+
 ### Added
 
 - On the Anbernic (ArkOS) profile, `provision device` adds "Warpzone Status" and "Warpzone Update Now" to the Options menu (a new `[options_menu]` profile table pointing at `/opt/system`): the first shows the version, the updater's state and what `warpzone doctor` reports, without the network; the second runs `warpzone self-update --now`.
