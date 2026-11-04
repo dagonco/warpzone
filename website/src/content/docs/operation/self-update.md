@@ -67,6 +67,7 @@ The script appends its messages, with a UTC timestamp, to `~/.local/state/warpzo
 - It refuses to change the `type` (for example `receiveonly` to `sendreceive`, which would send the console's deletions to the hub) or the `versioning` of a folder that exists, and a changed path. It lists them and changes nothing.
 - A folder whose marker (`.stfolder`) is missing, such as one on a card that is not mounted, stops the run before any change.
 - A folder that is new for the device and that the hub does not have yet (or lacks its whitelists) is skipped with a warning. A new folder whose whitelists do not arrive in 30 seconds (`--timeout` changes it) stays on the bootstrap ignores, with a warning, and the next run finishes it.
+- On a device with `auto_hub = true` it creates on the hub the folders of the device that the hub lacks, apart from whitelisted ones (see [Hub folders from a console](/warpzone/development/design/#hub-folders-from-a-console-auto_hub)). A failure there is a warning, and an existing hub folder is never changed.
 - The SyncThingy flatpak grant is not made, because it needs a Syncthing restart: the command to run is a warning.
 - It never runs `prune --apply`, `inbox --apply` or `settings capture`.
 

@@ -132,6 +132,23 @@ class CliTests(unittest.TestCase):
             self.assertIn("wz-library", hub.folders)
             self.assertIn("warning: wz-library", err)
 
+    def test_provision_hub_additive_creates_only_what_is_missing(self) -> None:
+        with FakeSyncthing(HUB_ID) as hub:
+            path = write_config(self.tmp, hub.url)
+            code, _, err = run("provision", "hub", "--additive", "--config", path)
+            self.assertEqual(code, 0, err)
+            self.assertIn("wz-tools", hub.folders)
+            self.assertNotIn("wz-library", hub.folders)
+            self.assertIn("warning: wz-library is not on the hub", err)
+
+    def test_provision_hub_additive_dry_run_writes_nothing(self) -> None:
+        with FakeSyncthing(HUB_ID) as hub:
+            path = write_config(self.tmp, hub.url)
+            code, out, err = run("provision", "hub", "--additive", "--dry-run", "--config", path)
+            self.assertEqual(code, 0, err)
+            self.assertIn("[dry-run] hub: POST /rest/config/folders", out)
+            self.assertEqual(hub.writes(), [])
+
     def test_wrong_hub_is_exit_1(self) -> None:
         with FakeSyncthing(MACHINE_ID) as hub:
             path = write_config(self.tmp, hub.url)

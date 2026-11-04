@@ -78,6 +78,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help="seconds a new whitelisted folder waits for its whitelists to be indexed "
         "before the full scan starts (default: %(default)s)",
     )
+    hub.add_argument(
+        "--additive",
+        action="store_true",
+        help="only create the wz-* folders the hub lacks (never a whitelisted one) and change "
+        "nothing that exists; what a device with auto_hub does for itself",
+    )
     dev = prov_sub.add_parser(
         "device", parents=[common, writing], help="configure this machine (run on the device)"
     )
@@ -697,6 +703,10 @@ def _run(args: argparse.Namespace) -> int:
         )
         return EXIT_RUNTIME if problems else EXIT_OK
 
+    if args.target == "hub" and args.additive:
+        provision.provision_hub_additive(cfg, profiles, _hub_client(cfg, dry_run=args.dry_run), rep)
+        return EXIT_OK
+
     if args.target == "hub":
         provision.provision_hub(
             cfg,
@@ -718,9 +728,10 @@ def _run(args: argparse.Namespace) -> int:
         name,
         profiles[cfg.devices[name].profile],
         client,
-        _hub_client(cfg),
+        _hub_client(cfg, dry_run=args.dry_run),
         rep,
         home=Path.home(),
+        profiles=profiles,
         wait_timeout=wait,
         syncthing_config=local.config_path,
         config_path=_config_path(args),

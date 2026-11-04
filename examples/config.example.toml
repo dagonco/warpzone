@@ -68,6 +68,11 @@ folders = ["library", "tools", "saves", "frontend", "bios", "settings"]
 # Optional. Keep this device on one tag, whatever the channel: vX.Y.Z or vX.Y.ZrcN.
 # pin = "v0.3.0"
 
+# Optional. Let `provision device` create on the hub the folders this device needs and the
+# hub lacks (never a whitelisted one, never a change to a folder the hub has). Needs the hub
+# API key in this config. Default false.
+# auto_hub = false
+
 [devices.machine]
 device_id = "CCCCCCC-CCCCCCC-CCCCCCC-CCCCCCC-CCCCCCC-CCCCCCC-CCCCCCC-CCCCCCC"
 profile = "steamos-emudeck"

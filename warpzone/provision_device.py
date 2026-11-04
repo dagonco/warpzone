@@ -39,6 +39,7 @@ from warpzone.provision_folders import (
     wait_for_files,
     wait_pending,
 )
+from warpzone.provision_hub import provision_hub_additive
 from warpzone.provision_scripts import (
     ensure_esde_script,
     ensure_links_script,
@@ -93,6 +94,31 @@ def _hub_precheck(
                 "Nothing was changed on this device."
             )
     return skipped
+
+
+def _auto_hub(
+    cfg: Config,
+    profiles: dict[str, Profile],
+    hub: Client,
+    folder_ids: set[str],
+    rep: Reporter,
+    *,
+    dry_run: bool,
+) -> None:
+    """`auto_hub`: create on the hub the folders this run needs and it lacks.
+
+    Anything that goes wrong here is a warning, never a failure: the hub may be down or the
+    key may be wrong, and a console must not roll back its release for that. The rest of the
+    run then sees the hub as it is (a missing whitelisted folder is still reported by the
+    pre-check). A `--dry-run` of the device never writes to the hub.
+    """
+    if dry_run and not hub.dry_run:
+        rep.out("auto_hub: dry-run: the hub is not asked to create anything")
+        return
+    try:
+        provision_hub_additive(cfg, profiles, hub, rep, only=folder_ids, report_whitelisted=False)
+    except (SyncthingError, ProvisionError) as exc:
+        rep.warn(f"auto_hub: {exc}; the hub was not changed beyond what is reported above")
 
 
 def _missing_markers(specs: Iterable[FolderSpec], existing: dict[str, dict[str, Any]]) -> list[str]:
@@ -296,6 +322,7 @@ def provision_device(
     unattended: bool = False,
     clone: Path | None = None,
     updater_source: Path = UPDATER_SOURCE,
+    profiles: dict[str, Profile] | None = None,
 ) -> None:
     device = cfg.devices[name]
     actual = local.my_id()
@@ -344,6 +371,9 @@ def provision_device(
                 )
         else:
             todo.append(spec)
+
+    if hub is not None and device.auto_hub and profiles is not None:
+        _auto_hub(cfg, profiles, hub, {s.id for s in todo}, rep, dry_run=local.dry_run)
 
     if hub is not None:
         new = frozenset(s.id for s in todo if s.id not in existing) if unattended else frozenset()

@@ -22,7 +22,7 @@ class ProvisionError(WarpzoneError):
     pass
 
 
-def _same_path(a: str, b: str) -> bool:
+def same_path(a: str, b: str) -> bool:
     return (a.rstrip("/") or "/") == (b.rstrip("/") or "/")
 
 
@@ -83,7 +83,7 @@ def upsert_folder(
         client.add_folder({**spec.body(), "paused": True})
         rep.note(spec.id, f"created at {spec.path}")
         return True
-    if not _same_path(current.get("path", ""), spec.path):
+    if not same_path(current.get("path", ""), spec.path):
         raise ProvisionError(
             f"{spec.id}: Syncthing has it at {current.get('path')!r} but the config says "
             f"{spec.path!r}. Changing a folder path would look like a mass delete, so "
@@ -205,7 +205,7 @@ def unattended_refusals(spec: FolderSpec, current: dict[str, Any]) -> list[str]:
         )
     if "versioning" in patch:
         problems.append(f"{spec.id}: versioning differs from the config")
-    if not _same_path(current.get("path", ""), spec.path):
+    if not same_path(current.get("path", ""), spec.path):
         problems.append(
             f"{spec.id}: Syncthing has it at {current.get('path')!r}, not {spec.path!r}"
         )
