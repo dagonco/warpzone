@@ -10,6 +10,10 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 - Agent skills in `.claude/skills/` for installing a console, adding games through the inbox, editing a whitelist, diagnosing a machine and publishing a release.
 
+### Fixed
+
+- Updater: fake `retired/` tags can no longer push a real retirement out of the per-tick limit, a failed copy of the trusted keys no longer leaves their version recorded (and a missing copy refuses older keys), and the note that lets the updater clear its own venv is dropped once the venv is marked.
+
 ## [0.3.0rc1] - 2026-11-03
 
 First release candidate of 0.3.0. Consoles can now keep themselves on a working release, the inbox takes in more systems, and warpzone supports a second device profile.

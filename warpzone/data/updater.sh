@@ -777,8 +777,9 @@ retired_ok() {
 
 # retired_load: the retirements the clone has (it takes them with the daily fetch), the newest
 # versions first. A tag that is no retirement (not annotated, no version for a name, not on
-# the commit of its release) is cheap to turn down and does not count towards the limit; at
-# most RETIRED_MAX that are well formed get their signature checked, so that a pile of bad
+# the commit of its release, or of a release that is no valid tag itself: fake pairs of
+# `vX` and `retired/vX` are cheap to make) does not count towards the limit; at most
+# RETIRED_MAX that are well formed get their own signature checked, so that a pile of bad
 # ones cannot use up the tick's budget, and RETIRED_SCAN tags are looked at in all. Needs
 # signing_setup first.
 retired_load() {
@@ -795,7 +796,7 @@ retired_load() {
 		_rlines=$((_rlines + 1))
 		_rtag=${_rref#refs/tags/retired/}
 		_rok=0
-		if rel_key "$_rtag" && [ "$_rtype" = tag ] && retired_ok "$_rtag"; then
+		if rel_key "$_rtag" && [ "$_rtype" = tag ] && retired_ok "$_rtag" && release_ok "$_rtag" && tag_signed "$_rtag"; then
 			if [ "$_rcount" -ge "$RETIRED_MAX" ]; then
 				_rmore=1
 				break
@@ -814,7 +815,7 @@ retired_load() {
 	done <"$_rf"
 	rm -f "$_rf"
 	if [ "$_rbadn" -gt 0 ]; then
-		log_daily "retirement tags ignored ($_rbadn: not annotated, not a version, not on that release's commit, or not signed by an allowed key):$RETIRED_BAD"
+		log_daily "retirement tags ignored ($_rbadn: not annotated, not a version, not on that release's commit, of a release that is no valid tag, or not signed by an allowed key):$RETIRED_BAD"
 	fi
 	if [ "$_rmore" = 1 ]; then
 		log_daily "more than $RETIRED_MAX retirement tags: only the newest $RETIRED_MAX were looked at"
@@ -896,11 +897,20 @@ signing_setup() {
 		signers_judge
 		_good_ver=
 		[ "$SIGN_ON" = 1 ] && _good_ver=$(version_at "$S_good_sha")
-		if [ "$SIGN_ON" = 1 ] && { [ -z "$S_signers_version" ] || [ ! -s "$SIGNERS_LAST" ] || ! keys_older "$_good_ver" "$S_signers_version"; }; then
+		if [ "$SIGN_ON" = 1 ] && [ -n "$S_signers_version" ] && [ ! -s "$SIGNERS_LAST" ] && keys_older "$_good_ver" "$S_signers_version"; then
+			# the copy of the keys that were trusted is gone, and the file of this older version
+			# would bring back keys that a newer one dropped: none are trusted
+			SIGNERS_FILE=$SIGNERS_LAST # missing or empty: nothing verifies
+			SIGNERS_SRC="no allowed signers: the copy of the keys of $S_signers_version is missing"
+			log_daily "the version known to work is older than $S_signers_version, whose allowed signers are not kept any more: no signed tag is accepted"
+		elif [ "$SIGN_ON" = 1 ] && { [ -z "$S_signers_version" ] || ! keys_older "$_good_ver" "$S_signers_version"; }; then
 			S_signing=1
-			S_signers_version=$_good_ver
-			if cat "$SIGNERS_TMP" >"$SIGNERS_LAST.new" 2>/dev/null; then
-				mv -f "$SIGNERS_LAST.new" "$SIGNERS_LAST"
+			# the version of the keys is recorded only once they are copied: a copy that failed
+			# (a full disk) must not leave a version with no keys to hold it to
+			if cat "$SIGNERS_TMP" >"$SIGNERS_LAST.new" 2>/dev/null && mv -f "$SIGNERS_LAST.new" "$SIGNERS_LAST" 2>/dev/null; then
+				S_signers_version=$_good_ver
+			else
+				rm -f "$SIGNERS_LAST.new" 2>/dev/null
 			fi
 		elif [ "$SIGN_ON" = 1 ] || [ "$S_signing" = 1 ]; then
 			SIGN_ON=1
@@ -936,12 +946,17 @@ tag_signed() {
 
 # ---- choosing a target ----------------------------------------------------------------
 
+# release_ok TAG: TAG is an ancestor of origin/main and its __version__ is the tag without the v.
+release_ok() {
+	g merge-base --is-ancestor "refs/tags/$1" origin/main >/dev/null 2>&1 || return 1
+	[ "$(version_at "refs/tags/$1")" = "${1#v}" ]
+}
+
 # tag_valid TAG: TAG is an ancestor of origin/main, its __version__ is the tag without the v,
 # and its signature verifies when one is required. Says why in the log when the signature
 # is what fails.
 tag_valid() {
-	g merge-base --is-ancestor "refs/tags/$1" origin/main >/dev/null 2>&1 || return 1
-	[ "$(version_at "refs/tags/$1")" = "${1#v}" ] || return 1
+	release_ok "$1" || return 1
 	if ! tag_signed "$1"; then
 		log_daily "$1 is not a candidate: its signature does not verify against the allowed signers ($SIGNERS_SRC)"
 		return 1
@@ -1180,7 +1195,7 @@ live_restore() {
 # stays the same. `--clear` is only ever run on a folder that is called `venv`, does not exist
 # or holds the mark `warpzone-venv` that this script writes when it makes one, or is noted in
 # `venv-owned` in the state folder (written before `--clear`, so a power cut between the clear
-# and the mark loses nothing), so never a venv of the user's or the one of an older install;
+# and the mark loses nothing, and dropped once the mark is there), so never a venv of the user's or the one of an older install;
 # is not a symlink, and does not hold the clone: never on the folder around it, where the play
 # state lives.
 
@@ -1201,6 +1216,19 @@ venv_note() {
 	printf '%s\n' "$1" >>"$VENV_OWNED" && sync
 }
 
+# venv_unnote VENV: the mark is written, so the note has done its work. Kept, it would let a
+# later venv of the user's own, made on this path after warpzone's was deleted, be cleared.
+venv_unnote() {
+	venv_noted "$1" || return 0
+	_vu_tmp="$STATE_DIR/.venv-owned.$$"
+	if grep -Fxv -- "$1" "$VENV_OWNED" >"$_vu_tmp" 2>/dev/null; [ ! -s "$_vu_tmp" ]; then
+		rm -f "$VENV_OWNED" "$_vu_tmp"
+	else
+		mv -f "$_vu_tmp" "$VENV_OWNED"
+	fi
+	return 0
+}
+
 # venv_adopt VENV: a venv that works, that has the `warpzone-clone.pth` only this script
 # writes, and lacks the mark (a cut kept it from being written), gets the mark and the note.
 venv_adopt() {
@@ -1208,7 +1236,7 @@ venv_adopt() {
 	for _va_p in "$1"/lib/python*/site-packages/warpzone-clone.pth; do
 		[ -f "$_va_p" ] || continue
 		venv_note "$1" || return 0
-		printf 'made by warpzone updater.sh; it may make this venv again (--clear)\n' >"$1/$VENV_MARK"
+		printf 'made by warpzone updater.sh; it may make this venv again (--clear)\n' >"$1/$VENV_MARK" && venv_unnote "$1"
 		return 0
 	done
 	return 0
@@ -1283,6 +1311,7 @@ make_venv() {
 		log "could not write the mark $_mv_venv/$VENV_MARK"
 		return 1
 	fi
+	venv_unnote "$_mv_venv"
 	if ! venv_works "$_mv_py"; then
 		log "the venv $_mv_venv was made, but warpzone cannot be found from it"
 		return 1
