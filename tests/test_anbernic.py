@@ -21,7 +21,7 @@ from warpzone import frontend, settings_state
 from warpzone.config import parse_config
 from warpzone.doctor import CHECKS, OK, WARN, Context, check_frontend
 from warpzone.model import ModelError, device_specs
-from warpzone.profiles import ProfileError, load_profile, parse_profile
+from warpzone.profiles import OptionsMenu, ProfileError, load_profile, parse_profile
 from warpzone.provision import provision_device
 from warpzone.syncthing import Client
 
@@ -187,9 +187,12 @@ class Device:
         for path in (self.cfg, self.cfg32):
             path.parent.mkdir(parents=True)
             path.write_text(RETROARCH)
+        self.options_dir = tmp / "opt-system"
+        self.options_dir.mkdir()
         self.profile = dataclasses.replace(
             PROFILE,
             es_systems=dataclasses.replace(PROFILE.es_systems, source=str(self.system_list)),
+            options_menu=OptionsMenu(str(self.options_dir)),
         )
 
     def start(self, comm: str) -> None:

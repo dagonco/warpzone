@@ -236,6 +236,15 @@ class PlayState:
 
 
 @dataclass(frozen=True)
+class OptionsMenu:
+    """`[options_menu]`: the folder whose executable `.sh` files the device's Options menu
+    lists (ArkOS: `/opt/system`). `provision device` adds its "Warpzone" entries there.
+    """
+
+    dir: str
+
+
+@dataclass(frozen=True)
 class Profile:
     name: str
     description: str
@@ -255,6 +264,7 @@ class Profile:
     play_state: PlayState | None = None
     shadps4: ShadPS4Dirs | None = None
     links: dict[str, TitleLinks] = field(default_factory=dict)
+    options_menu: OptionsMenu | None = None
 
     def placement_ignores(self) -> tuple[str, ...]:
         """The anchored library paths that placements deliver instead of the library."""
@@ -286,6 +296,7 @@ def parse_profile(data: dict[str, Any], source: str) -> Profile:
         "play_state",
         "shadps4",
         "links",
+        "options_menu",
     }
     for key in sorted(set(data) - allowed):
         err(f"unknown key {key!r}")
@@ -357,6 +368,7 @@ def parse_profile(data: dict[str, Any], source: str) -> Profile:
     play_state = _parse_play_state(data.get("play_state"), paths, artwork, err)
     shadps4 = _parse_shadps4(data.get("shadps4"), "library" in paths, err)
     links = _parse_links(data.get("links"), "library" in paths, err)
+    options_menu = _parse_options_menu(data.get("options_menu"), err)
 
     if errors:
         raise ProfileError("\n".join(errors))
@@ -375,6 +387,7 @@ def parse_profile(data: dict[str, Any], source: str) -> Profile:
         play_state,
         shadps4,
         links,
+        options_menu,
     )
 
 
@@ -423,6 +436,21 @@ def _nested(a: str, b: str) -> bool:
     """Whether folder `a` is `b` or sits inside it (literal paths, `~` unexpanded)."""
     a, b = a.rstrip("/") + "/", b.rstrip("/") + "/"
     return a.startswith(b)
+
+
+def _parse_options_menu(raw: Any, err: Callable[[str], None]) -> OptionsMenu | None:
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        err("`options_menu` must be a table")
+        return None
+    for extra in sorted(set(raw) - {"dir"}):
+        err(f"options_menu.{extra}: unknown key")
+    folder = raw.get("dir")
+    if not isinstance(folder, str) or not (folder.startswith("/") or folder.startswith("~/")):
+        err("options_menu.dir: required, an absolute folder (or one starting with `~/`)")
+        return None
+    return OptionsMenu(folder)
 
 
 def _parse_play_state(
