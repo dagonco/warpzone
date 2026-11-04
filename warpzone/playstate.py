@@ -476,14 +476,18 @@ def edit_gamelist(
         return block
 
     new = _BLOCK.sub("", text)
-    new = gamelist.GAME.sub(game, new)
+    new = gamelist.expand_empty_list(new, eol)
+    edited, at = [], 0
+    for match in gamelist.game_blocks(new):
+        edited += [new[at : match.start()], game(match)]
+        at = match.end()
+    new = "".join(edited) + new[at:]
     opening = _OPEN.search(new)
     if opening is None or opening.group(0).rstrip().endswith("/>"):
         raise PlayStateError("the file has no <gameList> to edit")
-    closings = list(_CLOSE.finditer(new))
-    if not closings:
+    closing = gamelist.last_outside_comments(_CLOSE, new)
+    if closing is None:
         raise PlayStateError("the file has no </gameList>")
-    closing = closings[-1]
     extra = "".join(
         _new_game(rel, change, zone, eol)
         for rel, change in sorted(changes.items())
