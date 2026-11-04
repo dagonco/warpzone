@@ -15,11 +15,11 @@ refused with the list of the ones that are. Paths use `~` and are expanded on th
 
 Besides `name` and `description`, a profile has the top-level flag `ignore_perms` and these
 tables: `[paths]`, `[library]`, `[saves.*]`, `[bios.*]`, `[settings.*]`, `[es_systems]`,
-`[retroarch]`, `[artwork]`, `[play_state]`, `[shadps4]` and `[links.*]`
+`[retroarch]`, `[artwork]`, `[play_state]`, `[shadps4]`, `[links.*]` and `[options_menu]`
 (`profiles.parse_profile` refuses any other key). The shipped files are the reference; this is
 the shape of the first four, and the others are described where their feature is
 ([Frontend and RetroArch overrides](#frontend-and-retroarch-overrides),
-[shadPS4 install directories](#shadps4-install-directories), [Title links](/warpzone/development/design/title-links/),
+[shadPS4 install directories](#shadps4-install-directories), [Options menu](#options-menu), [Title links](/warpzone/development/design/title-links/),
 [Frontend artwork](/warpzone/development/design/frontend-artwork/), [Play state](/warpzone/development/design/play-state/) and, for `[settings.*]`,
 [Emulator settings](/warpzone/development/design/emulator-settings/#profile-entries)):
 
@@ -282,3 +282,27 @@ changed; `provision device` backs the file up, refuses while ES-DE runs and uses
 write that fails if the file changed meanwhile. `doctor` compares the script with the text
 `provision` would write and reads the rule. The ES-DE startup scripts do not depend on any of
 this: if EmuDeck puts its entry back, only PS4 launching goes back to the Qt launcher.
+
+## Options menu
+
+`[options_menu]` (`dir`, an absolute folder or one starting with `~/`) names the folder whose
+executable `.sh` files the device's Options menu lists. Only the `anbernic-rg351mp` profile sets
+it, to ArkOS's `/opt/system`. `provision device` writes two bash scripts there, built by the pure
+functions of `options_menu.py` and installed by `provision_scripts.ensure_options_menu`:
+
+- `Warpzone Status.sh` reads local files only (no network) and shows them with ArkOS's `msgbox`
+  helper, or prints them when `msgbox` is missing: the version
+  (`~/.local/share/warpzone/venv/bin/warpzone --version`), `channel` and `pin` from
+  `~/.local/state/warpzone/updater/conf`, `good_tag`, `last_result` and `last_fetch` (as a local
+  date) from `~/.local/state/warpzone/updater/state`, and the `[!!]` and `[! ]` lines of
+  `warpzone doctor` (at most 8, each cut to 40 characters, then `+N more`). The files are
+  read line by line, never sourced. Whatever is missing or unreadable shows as `unknown`, and the
+  script always exits 0.
+- `Warpzone Update Now.sh` runs `warpzone self-update --now` and shows its exit code and last
+  lines.
+
+Writing follows the rules of every device write: each file is replaced atomically and only when
+its content differs (`unchanged` otherwise; a lost executable bit is restored), nothing else in
+the folder is read or touched, and a folder that does not exist is not created: `provision
+device` warns and goes on. A file of the same name that lacks the marker line the scripts start
+with is not warpzone's and is left alone with a warning. A dry run reports what it would write.

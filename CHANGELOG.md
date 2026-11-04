@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ### Added
 
+- On the Anbernic (ArkOS) profile, `provision device` adds "Warpzone Status" and "Warpzone Update Now" to the Options menu (a new `[options_menu]` profile table pointing at `/opt/system`): the first shows the version, the updater's state and what `warpzone doctor` reports, without the network; the second runs `warpzone self-update --now`.
 - `auto_hub = true` under a device lets `provision device` create on the hub the folders the device needs and the hub lacks, and `warpzone provision hub --additive` does the same from anywhere. Both only create: whitelisted folders and folders the hub already has are never created or changed, and no folder is created at a path another hub folder uses.
 - `warpzone self-update --now` (and `updater.sh tick --fetch-now`) looks for a new release right away instead of waiting for the next fetch; it still waits while the menu is open.
 

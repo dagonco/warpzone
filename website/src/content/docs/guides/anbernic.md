@@ -99,6 +99,15 @@ Add it to every device that takes part, run `warpzone provision hub`, then `warp
 
 See [the design document](/warpzone/development/design/play-state/) for the rules.
 
+## Options menu entries
+
+`provision device` adds two entries to the ArkOS "Options" menu (the profile's `[options_menu]` table points at `/opt/system`, where ArkOS lists every executable `.sh`):
+
+- **Warpzone Status** shows, without the network: the warpzone version, the updater's channel and pin, the version it last settled on (`good tag`), the result of its last run, when it last looked for a release, and the problems `warpzone doctor` finds (at most 8 lines, cut to fit the screen). Anything it cannot read shows as `unknown`.
+- **Warpzone Update Now** runs `warpzone self-update --now`, so the console looks for a release right away, and shows how it ended.
+
+Only these two files are written, they are overwritten at every `provision device` run, and nothing else in `/opt/system` is touched. If the folder does not exist, the step is skipped with a warning. The status entry only reads what the updater already keeps on the device, so it works without SSH and without a connection.
+
 ## Doctor
 
 On the device, `warpzone doctor` adds two lines under "Frontend": `ES systems override` and `RetroArch paths`; with `frontend` in the folders it adds `Frontend artwork` (gamelists missing or stale) and `Artwork timer`, and with `play-state` it adds `Play state`. See [the doctor guide](/warpzone/operation/doctor/#frontend).
