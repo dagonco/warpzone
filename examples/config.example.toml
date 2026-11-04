@@ -44,7 +44,7 @@ profile = "steamos-emudeck"
 #             the library cannot deliver them because EmuDeck symlinks those folders
 #   settings  emulator setting layers (two-way)
 #   play-state  favourites and play statistics shared with the other frontends (two-way,
-#             one file per device; needs `frontend`, see development/design.md, "Play state")
+#             one file per device; needs `frontend`, see https://dagonco.github.io/warpzone/development/design/#play-state)
 folders = ["library", "tools", "saves", "frontend", "bios", "settings"]
 
 # Optional. Where the hub finds this device. Default ["dynamic"].
@@ -57,12 +57,12 @@ folders = ["library", "tools", "saves", "frontend", "bios", "settings"]
 
 # Optional. `provision device` installs the updater and a systemd user timer that starts
 # it after boot and every 15 minutes. Set false to skip it on this device
-# (operation/self-update.md).
+# (https://dagonco.github.io/warpzone/operation/self-update/).
 # self_update = true
 
 # Optional. Which releases this device follows once the updater picks them by channel:
 # "stable" (default) takes only vX.Y.Z tags; "rc" also takes release candidates
-# (vX.Y.ZrcN). See development/design.md, "Autonomous updates".
+# (vX.Y.ZrcN). See https://dagonco.github.io/warpzone/development/design/#autonomous-updates-contract.
 # channel = "stable"
 
 # Optional. Keep this device on one tag, whatever the channel: vX.Y.Z or vX.Y.ZrcN.
@@ -75,7 +75,7 @@ folders = ["library", "tools", "saves", "frontend", "songs", "bios"]
 
 # A device with another profile. The Anbernic RG351MP (dArkOS) has no tools, songs, ES-DE or
 # emulator settings, so it subscribes to the library and the saves; `frontend` delivers the
-# scraped covers and descriptions for its own frontend (see website/src/content/docs/guides/anbernic.md).
+# scraped covers and descriptions for its own frontend (see https://dagonco.github.io/warpzone/guides/anbernic/).
 [devices.rg351mp]
 device_id = "DDDDDDD-DDDDDDD-DDDDDDD-DDDDDDD-DDDDDDD-DDDDDDD-DDDDDDD-DDDDDDD"
 profile = "anbernic-rg351mp"

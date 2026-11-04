@@ -22,7 +22,7 @@ Confirm with the user first: the version and that it should ship now. Releases a
 1. Start from an up-to-date `main` and a new branch such as `release/vX.Y.Z`: `git switch main && git pull --ff-only && git switch -c release/vX.Y.Z`.
 2. In `CHANGELOG.md`, move the content of `[Unreleased]` into a new `## [X.Y.Z] - YYYY-MM-DD` section (same heading form for an rc, for example `## [0.3.0rc1] - ...`) and leave `[Unreleased]` empty above it. Write for users, not commit by commit.
 3. Update the link references at the bottom: `[Unreleased]` compares `vX.Y.Z...HEAD`, and add `[X.Y.Z]` comparing the previous tag with `vX.Y.Z`.
-4. Set `__version__` in `warpzone/__init__.py` to the version. Update the wheel URL and filename in the README install section if it still names one.
+4. Set `__version__` in `warpzone/__init__.py` to the version.
 5. Run the checks, and show the output:
 
    ```bash

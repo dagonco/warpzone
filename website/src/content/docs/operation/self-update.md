@@ -17,7 +17,7 @@ There is one way to install a device. A `pipx` or wheel install is not a support
 
 ## Installing a device
 
-On the device, from a clone, with Python 3.11 or newer, git, Syncthing running, and the config file in `~/.config/warpzone/config.toml` (see the README):
+On the device, from a clone, with Python 3.11 or newer, git, Syncthing running, and the config file in `~/.config/warpzone/config.toml` (see [Configuration](/warpzone/reference/configuration/)):
 
 ```bash
 mkdir -p ~/.local/share/warpzone && cd ~/.local/share/warpzone

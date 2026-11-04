@@ -78,6 +78,8 @@ sh src/warpzone/data/updater.sh install deck
 ~/.local/share/warpzone/venv/bin/warpzone --version
 ```
 
+> Until 0.3.0 is released, install with `--channel rc`: the newest stable release, v0.2.0, has no `updater.sh`. For example `sh src/warpzone/data/updater.sh install deck --channel rc`.
+
 `install` checks out the newest release, makes a venv next to the clone and runs `warpzone provision device deck`. That step finds the local Syncthing's API key, adds the hub, creates the subscribed folders and installs the updater and its timer. Folders whose emulator is not installed yet are skipped with a warning and picked up by the next run. See [Installation](/warpzone/overview/installation/) and [Updates](/warpzone/operation/self-update/).
 
 ## 6. Check that it works

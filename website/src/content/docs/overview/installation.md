@@ -41,6 +41,8 @@ sh src/warpzone/data/updater.sh install deck
 ~/.local/share/warpzone/venv/bin/warpzone --version
 ```
 
+> Until 0.3.0 is released, install with `--channel rc`: the newest stable release, v0.2.0, has no `updater.sh`. For example `sh src/warpzone/data/updater.sh install deck --channel rc`.
+
 `deck` is the device's name in the config (`[devices.deck]`). The script:
 
 1. Refuses, before changing anything, a clone that has changes to tracked files or commits of its own, a device with no Python 3.11 or newer, and the case where no release can be installed.

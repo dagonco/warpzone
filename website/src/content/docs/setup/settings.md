@@ -42,15 +42,9 @@ Eleven emulators are covered by the `steamos-emudeck` profile: Eden, RetroArch (
 
 `provision device` also installs the ES-DE startup script (`~/ES-DE/scripts/startup/warpzone-settings.sh`), which runs `settings apply` each time ES-DE starts and never blocks it for more than 15 seconds. ES-DE only runs scripts when *Enable custom event scripts* is on (Main menu > Other settings). `provision` turns it on in `es_settings.xml`, but only while ES-DE is closed, because ES-DE rewrites that file when it quits. If ES-DE is running, `provision` warns and leaves the file alone: quit ES-DE and run `provision device` again, or turn the option on in ES-DE yourself. `warpzone doctor` reminds you while it is off.
 
-The script uses the Python that ran `provision`. Install warpzone (for example with pipx) before provisioning; from a clone `provision` warns and installs nothing. SteamOS ships neither pip nor pipx, so use a virtual environment:
+The script uses the Python that ran `provision`, which on a device installed with `updater.sh install` is the venv's Python, so nothing else is needed. A device set up another way gets a warning and no script; install it as in [Installation](/warpzone/overview/installation/#on-a-device).
 
-```bash
-python3 -m venv ~/.local/share/warpzone/venv
-~/.local/share/warpzone/venv/bin/pip install <wheel URL from the release>
-~/.local/share/warpzone/venv/bin/python -m warpzone provision device <name>
-```
-
-A SteamOS update that replaces Python can break the environment. The startup script then fails without blocking ES-DE, and `warpzone doctor` reports the last apply; recreate the environment to fix it.
+A SteamOS update that replaces Python can break the venv. The startup script then fails without blocking ES-DE, `warpzone doctor` reports the last apply, and the updater makes the venv again at its next tick ([Python repair](/warpzone/operation/self-update/#python-repair)).
 
 ## First capture, on the reference console
 

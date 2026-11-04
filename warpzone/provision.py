@@ -812,8 +812,8 @@ def _install_startup_script(
     if not import_check(python):
         rep.warn(
             f"the ES-DE startup script was not installed: {python} cannot import warpzone "
-            "from outside the current folder (run from a clone?). Install warpzone for it "
-            f"(for example with pipx), then run `warpzone provision device {name}` from there"
+            "from outside the current folder (run from a clone?). Set the device up with "
+            f"`updater.sh install {name}`, which provisions from a venv"
         )
         return
     path = esde.script_path(esde_dir, script)
@@ -1644,8 +1644,8 @@ def ensure_artwork_timer(
     if not import_check(python):
         rep.warn(
             f"the artwork timer was not installed: {python} cannot import warpzone from "
-            "outside the current folder (run from a clone?). Install warpzone for it (for "
-            f"example with pipx), then run `warpzone provision device {name}` from there"
+            "outside the current folder (run from a clone?). Set the device up with "
+            f"`updater.sh install {name}`, which provisions from a venv"
         )
         return
     service, timer = artwork.render_units(
@@ -1681,8 +1681,8 @@ def ensure_play_state_timer(
     if not import_check(python):
         rep.warn(
             f"the play state timer was not installed: {python} cannot import warpzone from "
-            "outside the current folder (run from a clone?). Install warpzone for it (for "
-            f"example with pipx), then run `warpzone provision device {name}` from there"
+            "outside the current folder (run from a clone?). Set the device up with "
+            f"`updater.sh install {name}`, which provisions from a venv"
         )
         return
     service, timer = artwork.render_play_state_units(

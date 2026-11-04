@@ -38,7 +38,7 @@ Turn on filesystem snapshots for the hub's games share as well. warpzone keeps n
 
 ## Can I use it without a NAS?
 
-The hub is the machine that holds the library and runs Syncthing. A NAS is the typical choice, not a requirement. warpzone drives the hub through its Syncthing REST API and does not run on the hub itself, so any machine you can reach that way can be the hub. The commands run on other machines: `provision hub`, `check` and `status` on a desktop with access to the hub's API, `provision device` on each console, and `inbox` on a desktop that mounts the hub's share (conversions are too heavy for a NAS). See [concepts](/warpzone/overview/concepts/).
+The hub is the machine that holds the library and runs Syncthing. A NAS is the typical choice, not a requirement: any always-on machine that runs Syncthing v2, holds the library under `[hub].root`, exposes its GUI and REST API on a LAN address for the admin machine, is reachable by the consoles through Syncthing, and shares its hub root with the desktop that runs `inbox` can be the hub. warpzone does not run on the hub itself.
 
 ## How do updates work?
 
