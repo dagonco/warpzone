@@ -69,7 +69,27 @@ export default defineConfig({
         {
           label: 'Development',
           items: [
-            { label: 'Design', slug: 'development/design' },
+            {
+              label: 'Design',
+              collapsed: true,
+              items: [
+                { label: 'Overview', slug: 'development/design' },
+                { label: 'Hub, folders and ignores', slug: 'development/design/hub-and-folders' },
+                { label: 'Profiles', slug: 'development/design/profiles' },
+                { label: 'Title links', slug: 'development/design/title-links' },
+                { label: 'Frontend artwork', slug: 'development/design/frontend-artwork' },
+                { label: 'Play state', slug: 'development/design/play-state' },
+                { label: 'Configuration and command line', slug: 'development/design/configuration' },
+                { label: 'Pruning', slug: 'development/design/prune' },
+                { label: 'BIOS check', slug: 'development/design/bios' },
+                { label: 'Inbox', slug: 'development/design/inbox' },
+                { label: 'Emulator settings', slug: 'development/design/emulator-settings' },
+                { label: 'Doctor', slug: 'development/design/doctor' },
+                { label: 'Self-update', slug: 'development/design/self-update' },
+                { label: 'Autonomous updates', slug: 'development/design/autonomous-updates' },
+                { label: 'Code, testing and CI', slug: 'development/design/code-and-testing' },
+              ],
+            },
             {
               label: 'Contributing',
               link: 'https://github.com/dagonco/warpzone/blob/main/CONTRIBUTING.md',

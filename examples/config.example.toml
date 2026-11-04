@@ -45,7 +45,7 @@ profile = "steamos-emudeck"
 #             the library cannot deliver them because EmuDeck symlinks those folders
 #   settings  emulator setting layers (two-way)
 #   play-state  favourites and play statistics shared with the other frontends (two-way,
-#             one file per device; needs `frontend`, see https://dagonco.github.io/warpzone/development/design/#play-state)
+#             one file per device; needs `frontend`, see https://dagonco.github.io/warpzone/development/design/play-state/)
 folders = ["library", "tools", "saves", "frontend", "bios", "settings"]
 
 # Optional. Where the hub finds this device. Default ["dynamic"].
@@ -63,7 +63,7 @@ folders = ["library", "tools", "saves", "frontend", "bios", "settings"]
 
 # Optional. Which releases this device follows once the updater picks them by channel:
 # "stable" (default) takes only vX.Y.Z tags; "rc" also takes release candidates
-# (vX.Y.ZrcN). See https://dagonco.github.io/warpzone/development/design/#autonomous-updates-contract.
+# (vX.Y.ZrcN). See https://dagonco.github.io/warpzone/development/design/autonomous-updates/.
 # channel = "stable"
 
 # Optional. Keep this device on one tag, whatever the channel: vX.Y.Z or vX.Y.ZrcN.

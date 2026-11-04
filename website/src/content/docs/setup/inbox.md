@@ -42,7 +42,7 @@ fbneo_dat = "~/dats/fbneo-arcade.dat"
 mame2003plus_dat = "~/dats/mame2003-plus.xml"
 ```
 
-`bsdtar`, `dolphin_tool`, `nsz`, `orbis_pkg_util` and `switch_keys` work the same way, and `work_dir` moves the temporary files (they can take several GiB). Run `warpzone doctor` to see what is missing ([the doctor guide](/warpzone/operation/doctor/)). Details in [the design document](/warpzone/development/design/#inbox).
+`bsdtar`, `dolphin_tool`, `nsz`, `orbis_pkg_util` and `switch_keys` work the same way, and `work_dir` moves the temporary files (they can take several GiB). Run `warpzone doctor` to see what is missing ([the doctor guide](/warpzone/operation/doctor/)). Details in [the design document](/warpzone/development/design/inbox/).
 
 ## What it does for each item
 

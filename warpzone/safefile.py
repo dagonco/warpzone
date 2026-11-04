@@ -1,7 +1,8 @@
 """Safe writes: atomic replacement, stamps, the guarded edit and the JSON cache.
 
 Everything that writes a file warpzone does not fully own goes through here. Nothing in this
-module touches the network or Syncthing. See docs/design.md, "Device state".
+module touches the network or Syncthing. See "Device state" in
+development/design/emulator-settings.md.
 """
 
 from __future__ import annotations

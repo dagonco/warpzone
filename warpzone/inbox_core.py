@@ -8,7 +8,7 @@ inbox module.
 
 The pure decisions here (`skip_name`, `unsafe_member`, `whitelist_line`,
 `unsupported_reason`, `destination_verdict`) have no I/O; the rest touches the disk or
-runs a tool. See development/design.md.
+runs a tool. See development/design/inbox.md.
 """
 
 from __future__ import annotations

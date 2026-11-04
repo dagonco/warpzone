@@ -4,7 +4,7 @@
 system: the process table, the checks that run a subprocess, the commands (`flatpak`,
 `systemctl`, `sh`) and the clock. The defaults are the real thing; a test passes one object
 with the pieces it fakes instead of patching each function. See "Code layout" in
-development/design.md.
+development/design/code-and-testing.md.
 """
 
 from __future__ import annotations

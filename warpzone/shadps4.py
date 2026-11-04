@@ -4,7 +4,7 @@ shadPS4 runs extracted games it finds in its install directories. Two config fil
 them, depending on the version: `config.json` (v0.21 and later: `General.install_dirs`, a
 list of `{"enabled": true, "path": "..."}`) and the older `config.toml` (`GUI.installDirs`,
 a list of strings). A profile with `[shadps4]` has `provision device` add the folders it
-declares to both, and `doctor` check them. No I/O here. See development/design.md, "shadPS4
+declares to both, and `doctor` check them. No I/O here. See development/design/profiles.md, "shadPS4
 install directories".
 """
 

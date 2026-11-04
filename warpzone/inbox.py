@@ -10,7 +10,7 @@ that could not be placed go to `inbox/_revisar/` with a `<item>.reason.txt`.
 The decisions (`select_purge`, `plan_units`, `cue_refs`, `gdi_refs`, `resolve_refs`) are
 pure; the rest touches the disk. What the kind handlers share (errors, options, results,
 staging, `skip_name`, `whitelist_line`, ...) lives in `inbox_core.py`, which the handlers
-import instead of this module. See development/design.md.
+import instead of this module. See development/design/inbox.md.
 """
 
 from __future__ import annotations

@@ -28,7 +28,7 @@ format = 1
 savestate_auto_save = "true"
 ```
 
-Each table is `[<emulator>.<file>]`, and each entry is a key of that file with its value. The device layer wins over common, and a device cannot unset a common key, only give it another value. Removing a key from the layers stops managing it: the console keeps the value last written. `capture` writes these files for you; you can also edit them on the hub. [the design document](/warpzone/development/design/#emulator-settings) has the full format.
+Each table is `[<emulator>.<file>]`, and each entry is a key of that file with its value. The device layer wins over common, and a device cannot unset a common key, only give it another value. Removing a key from the layers stops managing it: the console keeps the value last written. `capture` writes these files for you; you can also edit them on the hub. [the design document](/warpzone/development/design/emulator-settings/) has the full format.
 
 The folder is two-way (unlike `tools`, which is receive-only on devices), because captures are written on a console. The hub keeps 30 days of versions of every layer, which is the history of each change.
 

@@ -9,7 +9,7 @@ The rules (`plan`) are pure. The links are the only thing ever changed: a real f
 in the way is left alone, so is a link that points elsewhere, and only a dangling link that
 points into the library folder (one this module made for a game that is gone) is removed.
 Nothing is changed while the emulator runs, and `dry_run` changes nothing. No network code
-is imported, because ES-DE waits for the startup script. See development/design.md, "Title links".
+is imported, because ES-DE waits for the startup script. See development/design/title-links.md.
 """
 
 from __future__ import annotations

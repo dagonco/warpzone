@@ -1,7 +1,7 @@
 """`warpzone/data/updater.sh`, run against real git repositories and a fake Python.
 
 The script is POSIX sh that decides which release a device runs and puts it back when a
-release does not work (development/design.md, "Autonomous updates"). Each test builds an upstream
+release does not work (development/design/autonomous-updates.md). Each test builds an upstream
 repository with tagged releases, a clone of it, and a fake `python` (a script that behaves
 like warpzone according to the checked-out version), then runs `updater.sh tick` the way
 the timer does. They run with whatever shells exist (`sh`, `dash`, `bash`) so a macOS and a

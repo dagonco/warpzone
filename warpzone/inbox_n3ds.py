@@ -19,7 +19,7 @@ review.
 How the module hooks into `inbox.py`: `HANDLER` is a kind handler that claims an item whose file
 names end in `.3ds` or `.cci`, loose, in a folder or in an archive. The decisions (`claimed_name`,
 `target_name`, `partition0_offset`, `judge`) are pure functions of bytes; `detect` and
-`place_image` touch the disk. See development/design.md.
+`place_image` touch the disk. See development/design/inbox.md.
 """
 
 from __future__ import annotations
