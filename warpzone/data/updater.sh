@@ -1218,12 +1218,16 @@ venv_note() {
 
 # venv_unnote VENV: the mark is written, so the note has done its work. Kept, it would let a
 # later venv of the user's own, made on this path after warpzone's was deleted, be cleared.
-# The mark is flushed first, so that a power cut cannot lose it after the note is gone.
+# The mark is flushed first, so that a power cut cannot lose it after the note is gone; and a
+# note that cannot be rewritten (grep fails with more than 1) is left as it is.
 venv_unnote() {
 	venv_noted "$1" || return 0
 	sync
 	_vu_tmp="$STATE_DIR/.venv-owned.$$"
-	if grep -Fxv -- "$1" "$VENV_OWNED" >"$_vu_tmp" 2>/dev/null; [ ! -s "$_vu_tmp" ]; then
+	grep -Fxv -- "$1" "$VENV_OWNED" >"$_vu_tmp" 2>/dev/null
+	if [ $? -gt 1 ]; then
+		rm -f "$_vu_tmp"
+	elif [ ! -s "$_vu_tmp" ]; then
 		rm -f "$VENV_OWNED" "$_vu_tmp"
 	else
 		mv -f "$_vu_tmp" "$VENV_OWNED"
