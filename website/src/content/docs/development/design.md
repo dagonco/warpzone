@@ -575,7 +575,7 @@ then `*`. The systems are the plain-named directories below `<library>/roms` at 
 `device_specs` is asked (`artwork.library_systems`); a name that would be a pattern
 (`*`, `?`, `[`, spaces) is left out. So the scope follows the whitelist without being edited
 per system, but it is computed, not read from Syncthing: `provision device` sets it, and so does
-every `frontend refresh` (`provision.sync_artwork_scope`, which patches only ignores that differ
+every `frontend refresh` (`provision_artwork.sync_artwork_scope`, which patches only ignores that differ
 and only for folders Syncthing already has). With no system folder yet the ignores let nothing
 in and `provision` says so. Covers of every game of an included system arrive, also those whose
 game is not on the device (a single ROM of a big system whitelists the whole system's covers);
@@ -623,7 +623,7 @@ content already matches (`artwork.same_content`: same entries and known fields, 
 layout or the games listed without data) is not rewritten, so the frontend's own formatting
 survives and a second run changes nothing.
 
-**When it runs.** `provision.ensure_gamelists` is the writer, like `ensure_systems_override`: only
+**When it runs.** `provision_artwork.ensure_gamelists` is the writer, like `ensure_systems_override`: only
 while no process in `[es_systems].process` runs (a missing `/proc` or a running frontend warns
 and writes nothing, except when nothing would change), atomically, and refused when the file
 changed after it was read. `provision device` calls it for a device that lists `frontend`;
@@ -2149,7 +2149,7 @@ supported device install.
   is left alone (it is judged by finding `warpzone` without importing it). A tick repairs only
   a checkout on a release (a tag or a clean branch inside `origin/main`), never a `dev` or
   `dirty` one.
-- **The live copy.** `provision.ensure_updater` puts the script that ships with the running
+- **The live copy.** `provision_updater.ensure_updater` puts the script that ships with the running
   version at `~/.local/share/warpzone/updater/updater.sh`, outside the clone. The new text is
   written beside it, checked with `sh -n` and with `sh <copy> selftest` (which must print
   `selftest: ok abi=N` for the script's own `UPDATER_ABI`), then the old file is saved as
@@ -2178,7 +2178,7 @@ supported device install.
   every symlink resolved (`cd -P`, `pwd -P`), must be `~/.local/share/warpzone/updater/updater.sh`
   (`WZ_LIVE` moves it for tests), so the clone's own script, run by hand or through a symlink,
   is never touched.
-- **The settings.** `provision.ensure_self_update` writes
+- **The settings.** `provision_updater.ensure_self_update` writes
   `~/.local/state/warpzone/updater/conf` from the device's table in `config.toml`:
   `device`, `config` (the absolute path of the config file), `clone` (the git checkout warpzone
   runs from), `python` (the interpreter that ran `provision`), `channel`, `pin` (empty for
@@ -2246,7 +2246,7 @@ do.
 | `warpzone/data/updater.sh tick`: lock, `enabled`, deferral while the menu is open (72 hours at most), fetch once a day, the target (the best valid tag, see Channels), the three-step verification with a time limit, the differential verdict and its back-off, `bad/<tag>`, the state file, the attempts loop, probation, the kind of checkout, the stale `index.lock`, `menu` and `selftest` | Implemented (`tests/test_updater_sh.py`) |
 | In `updater.sh`: the `rc` channel, retirement by `retired/vX.Y.Z` tags, `pin`, and the check of tag signatures against the `allowed_signers` of the running version | Implemented (`tests/test_updater_sh.py`) |
 | `updater.sh install` (the human install from a `git clone`), the Python repair (`venv --without-pip --clear`, a `.pth` to the clone, the `bin/warpzone` shim), `UPDATER_ABI` | Implemented (`tests/test_updater_sh.py`) |
-| The live copy `~/.local/share/warpzone/updater/updater.sh` (`provision.ensure_updater`: atomic, after `sh -n` and `selftest`, `.prev` kept, never a lower ABI) and the settings file written by `provision device` (`selfupdate.render_conf`) | Implemented (`tests/test_update_timer.py`, `tests/test_selfupdate.py`) |
+| The live copy `~/.local/share/warpzone/updater/updater.sh` (`provision_updater.ensure_updater`: atomic, after `sh -n` and `selftest`, `.prev` kept, never a lower ABI) and the settings file written by `provision device` (`selfupdate.render_conf`) | Implemented (`tests/test_update_timer.py`, `tests/test_selfupdate.py`) |
 | The timer units that start `updater.sh tick`, and `warpzone self-update` as a wrapper of one tick | Implemented (`tests/test_update_timer.py`, `tests/test_cli.py`) |
 | The `doctor` checks of the updater (timer, script, settings, state) | Implemented (`tests/test_doctor.py`) |
 | `provision hub --additive` | Not implemented |
@@ -2739,7 +2739,17 @@ warpzone/
   model.py           folder specs: expands config + profiles into the desired state
   ignores.py         ignore rendering (common, per-device, bootstrap)
   syncthing.py       minimal REST client (urllib), redaction, dry-run recorder
-  provision.py       hub and device provisioning (diff desired vs actual → calls)
+  probes.py          `DeviceProbes`: the process table, subprocess checks, commands and clock a device
+                     command reads, in one object a test can fake
+  provision.py       the name the commands import: re-exports what `cli` and `health` call
+  provision_folders.py  Syncthing folder steps both provisioning commands share (diff, patch, ignores, wait)
+  provision_hub.py   `provision hub` and `check`: devices, folders, the whitelist bootstrap
+  provision_device.py  `provision device`: the subscribed folders, then the steps below, in order
+  provision_emulators.py  device edits for ES-DE's system list, RetroArch, shadPS4 and title links
+  provision_artwork.py  frontend artwork on a device: the scope of the artwork folders, the gamelists
+  provision_scripts.py  the ES-DE startup scripts and turning ES-DE's event scripts on
+  provision_timers.py  the artwork and play state systemd user timers
+  provision_updater.py  the autonomous update: settings file, live updater script, its timer
   prune.py           leftover detection (pure `classify`), delete, webhook
   bios.py            BIOS manifest, local overrides, pure `judge_*`, disk checks
   dat.py             Redump / No-Intro DAT parsing, cache, matching, disc grouping (pure)
@@ -2790,7 +2800,7 @@ website/             documentation site (Starlight); this file is
 ```
 
 `model.py` is pure: config + profiles in, list of desired folder specs out. All
-I/O sits in `syncthing.py`, `localst.py` and `provision.py`, so the diffing
+I/O sits in `syncthing.py`, `localst.py` and the `provision_*` modules, so the diffing
 logic is unit-tested without a network.
 
 ## Testing
@@ -2800,6 +2810,10 @@ logic is unit-tested without a network.
   redaction, `config.xml` parsing, dry-run output.
 - A fake Syncthing (`http.server` in a thread) for provision flows, including
   the bootstrap wait loop and its timeout.
+- The device commands (`provision device`, `frontend refresh`, `prune`) reach the machine only
+  through a `DeviceProbes` (`probes.py`): the `/proc` to read, the import check, the
+  `flatpak` and `systemctl` runners, the script check and the clock. A test passes one
+  object with the pieces it fakes (`tests/support.py`: `device_probes`) instead of patching.
 - End-to-end test, skipped unless `WARPZONE_E2E_SYNCTHING` points at a
   Syncthing binary: start a hub and a device instance in temp dirs, run
   `provision hub` and `provision device`, then assert that a whitelisted file
