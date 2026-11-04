@@ -1,9 +1,13 @@
 name: ci
 
+# Pull requests are tested in full, and main only takes a pull request that is up to date
+# with it (squash merge), so a push to main would test the same tree again. A weekly run
+# catches what changes outside the code (runner images, Python releases).
 on:
-  push:
-    branches: [main]
   pull_request:
+  schedule:
+    - cron: "17 5 * * 1"
+  workflow_dispatch:
 
 permissions:
   contents: read

@@ -261,7 +261,14 @@ logic is unit-tested without a network.
 
 ## CI (GitHub Actions)
 
+`ci.yml` runs on every pull request, every Monday and by hand (`workflow_dispatch`), not on
+pushes to `main`: `main` only takes a pull request that is up to date with it, squash-merged,
+so its tree is the one the pull request already tested. The weekly run catches changes from
+outside the code, such as new runner images or Python releases. `docs.yml` still runs on
+`main`, because it publishes the website.
+
 - `lint`: ruff check + ruff format --check.
+- `typecheck`: mypy on the `warpzone` package.
 - `test`: unittest on Linux with Python 3.11 and 3.14 and on macOS with Python 3.14, without
   the updater script's tests (`WARPZONE_SKIP_UPDATER_SH=1`).
 - `updater`: `tests/test_updater_sh.py` on Ubuntu with dash as `sh` and on macOS.
