@@ -627,17 +627,33 @@ version_at() {
 		sed -n 's/^__version__ = "\(.*\)"[[:space:]]*$/\1/p' | head -n 1
 }
 
+# clear_pyc: remove the bytecode caches under the package. Python takes a `.pyc` for the
+# source when the source has the size and the second of modification it was compiled from, so
+# the bytecode of a release that was just rolled back (a rollback is often in the second of
+# the checkout, and a version string has the same size) could run in place of the good source,
+# for the checks and for the shim alike. Python writes them again, from the right source.
+clear_pyc() {
+	[ -d "$CLONE/warpzone" ] || return 0
+	find "$CLONE/warpzone" -name __pycache__ -type d -prune -exec rm -rf {} + >/dev/null 2>&1
+	return 0
+}
+
 # checkout_ref BRANCH SHA: back onto the branch when it still points at SHA, otherwise
-# detached at SHA. Never resets, stashes or cleans.
+# detached at SHA. Never resets, stashes or cleans (the bytecode caches apart).
 checkout_ref() {
 	if [ -n "$1" ]; then
 		_at=$(g rev-parse -q --verify "refs/heads/$1" 2>/dev/null)
 		if [ "$_at" = "$2" ]; then
 			g checkout --quiet --no-overwrite-ignore "$1" -- >/dev/null 2>&1
-			return $?
+			_cr_status=$?
+			clear_pyc
+			return $_cr_status
 		fi
 	fi
 	g checkout --quiet --no-overwrite-ignore --detach "$2" >/dev/null 2>&1
+	_cr_status=$?
+	clear_pyc
+	return $_cr_status
 }
 
 # free_kb prints the free space, in KiB, of the file system of the clone (nothing if unknown).
@@ -695,6 +711,9 @@ heal_half_checkout() {
 	fi
 	log "an update was cut in the middle; doing its checkout again"
 	g checkout --quiet --force --no-overwrite-ignore --detach "$3" >/dev/null 2>&1
+	_hb_status=$?
+	clear_pyc
+	return $_hb_status
 }
 
 # detect_kind sets KIND to tag, adopted, dev, dirty or nogit, and BRANCH.
@@ -1387,6 +1406,7 @@ verify_version() {
 	_t_provision=${STEP_TIMEOUT:-900}
 	_t_health=${STEP_TIMEOUT:-300}
 	: >"$VERIFY_LOG" 2>/dev/null
+	clear_pyc
 
 	run_limited "$_t_import" "$PY" -I -c "$IMPORT_CODE" "$CLONE" >>"$VERIFY_LOG" 2>&1
 	_r=$?

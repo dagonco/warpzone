@@ -2901,6 +2901,25 @@ class BadReleaseLifecycleTests(RealPythonCase):
         self.assertEqual(self.on_tag(), "v0.400.0")
         self.assertEqual(rig.bad(), ["v0.30.0"])
 
+    def test_a_stale_bytecode_of_the_bad_release_is_not_run_after_the_rollback(self) -> None:
+        rig = self.rig
+        # Both releases have a __init__.py of the same size ("0.2.0" and "0.3.0"), and every
+        # checkout leaves it with one and the same modification time: what a rollback in the
+        # second of the checkout does. Python then takes the `.pyc` of the bad release for
+        # the source of the good one.
+        hook = self.src / ".git" / "hooks" / "post-checkout"
+        hook.write_text("#!/bin/sh\ntouch -t 202401020000.00 warpzone/__init__.py\n")
+        hook.chmod(0o755)
+        init = self.src / "warpzone" / "__init__.py"
+        subprocess.run(["touch", "-t", "202401010000.00", str(init)], check=True)
+        rig.release("0.3.0", extra={**with_updater(), "warpzone/__main__.py": HEALTH_FAILS_MAIN})
+        self.assertTick(self.tick(now=NOW + DAY), 1)
+        state = rig.state()
+        self.assertEqual(self.on_tag(), "v0.2.0")
+        self.assertEqual(rig.bad(), ["v0.3.0"], state)
+        self.assertEqual(state["last_result"], "rolled-back")
+        self.assertEqual(self.shim_version(), "warpzone 0.2.0", "the shim runs the good source")
+
     def test_a_release_is_not_marked_bad_when_the_good_one_fails_the_same_way(self) -> None:
         rig = self.rig
         rig.release("0.30.0", extra={**with_updater(), "warpzone/__main__.py": HEALTH_FAILS_MAIN})
