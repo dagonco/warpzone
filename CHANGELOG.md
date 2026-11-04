@@ -9,6 +9,7 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 ### Added
 
 - A documentation website at <https://dagonco.github.io/warpzone>, built with Starlight and published from `main`. The guides moved from `docs/` into it, and the README is now a short introduction.
+- Agent skills in `.claude/skills/` for installing a console, adding games through the inbox, editing a whitelist, diagnosing a machine and publishing a release.
 
 ## [0.3.0rc1] - 2026-11-03
 

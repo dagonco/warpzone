@@ -27,6 +27,8 @@ All documentation lives in `website/src/content/docs/` (Starlight, Astro; Englis
 cd website && npm ci && npm run build
 ```
 
+Agent skills for common tasks (install a console, add games, edit a whitelist, diagnose, release) live in `.claude/skills/`; keep them in step with the docs they link to.
+
 ## Checks
 
 Run all of these before pushing; CI runs the same:
