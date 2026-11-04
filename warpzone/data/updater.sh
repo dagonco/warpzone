@@ -637,7 +637,7 @@ version_at() {
 # the checkout, and a version string has the same size) could run in place of the good source,
 # for the checks and for the shim alike. Python writes them again, from the right source.
 clear_pyc() {
-	[ -d "$CLONE/warpzone" ] || return 0
+	[ -n "$CLONE" ] && [ -d "$CLONE/warpzone" ] || return 0
 	find "$CLONE/warpzone" -name __pycache__ -type d -prune -exec rm -rf {} + >/dev/null 2>&1
 	return 0
 }
@@ -798,13 +798,54 @@ retired_ok() {
 	[ -n "$_ro_commit" ] && [ "$_ro_target" = "$_ro_commit" ]
 }
 
+# retired_formed TAG: the tag retired/TAG is an annotated tag on the commit of the release TAG,
+# and TAG is a valid release (an ancestor of main, its own version, signed when required).
+retired_formed() {
+	[ "$(g cat-file -t "refs/tags/retired/$1" 2>/dev/null </dev/null)" = tag ] &&
+		retired_ok "$1" && release_ok "$1" && tag_signed "$1"
+}
+
+# retired_scope: what this tick may need to know about retirements, from the running version
+# (RM_CUR and its key) and whether it is itself retired (RM_DOWN: then every tag of the
+# channel is a candidate, whatever its version). Needs signing_setup first.
+RM_CUR=
+RM_CUR_KEY=
+RM_DOWN=0
+retired_scope() {
+	RM_CUR=$(version_at HEAD)
+	ver_key "$RM_CUR"
+	RM_CUR_KEY=$VK
+	RM_DOWN=0
+	if [ -z "$C_pin" ] && [ -n "$RM_CUR" ] && rel_key "v$RM_CUR" && retired_formed "v$RM_CUR" && tag_signed "retired/v$RM_CUR"; then
+		RM_DOWN=1
+	fi
+}
+
+# retired_matters TAG: a retirement of TAG can change what this tick does: TAG is the running
+# version, the pin, a version being tried or under suspicion, or a candidate that pick_target
+# looks at (newer than the running version and of the channel, or any of the channel when the
+# running version is retired; with a pin, nothing else is a target). RK is the key of TAG.
+retired_matters() {
+	[ "$1" = "v$RM_CUR" ] && return 0
+	[ "$1" = "$C_pin" ] && return 0
+	[ "$1" = "$S_trying_tag" ] && return 0
+	[ "$1" = "$S_suspect_tag" ] && return 0
+	[ -z "$C_pin" ] || return 1
+	if [ "$RM_DOWN" = 0 ]; then
+		key_gt "$RK" "$RM_CUR_KEY" || return 1
+	fi
+	[ "$C_channel" != stable ] || is_plain_tag "$1"
+}
+
 # retired_load: the retirements the clone has (it takes them with the daily fetch), the newest
-# versions first. A tag that is no retirement (not annotated, no version for a name, not on
-# the commit of its release, or of a release that is no valid tag itself: fake pairs of
-# `vX` and `retired/vX` are cheap to make) does not count towards the limit; at most
-# RETIRED_MAX that are well formed get their own signature checked, so that a pile of bad
-# ones cannot use up the tick's budget, and RETIRED_SCAN tags are looked at in all. Needs
-# signing_setup first.
+# versions first. Only those of tags that matter (retired_matters) are looked at: unsigned or
+# fake retirements of other real releases, such as the candidates of the running version
+# (they sort above it), cannot use up the limit. A tag that is no retirement (not annotated,
+# no version for a name, not on the commit of its release, or of a release that is no valid tag
+# itself: fake pairs of `vX` and `retired/vX` are cheap to make) does not count towards the
+# limit; at most RETIRED_MAX that are well formed get their own signature checked, so that a
+# pile of bad ones cannot use up the tick's budget, and RETIRED_SCAN tags are looked at in all.
+# Needs signing_setup first.
 retired_load() {
 	RETIRED_TAGS=' '
 	RETIRED_INFO=
@@ -813,12 +854,16 @@ retired_load() {
 	_rcount=0
 	_rlines=0
 	_rbadn=0
+	retired_scope
 	_rf="$STATE_DIR/.retired.$$"
 	g for-each-ref --sort=-v:refname --format='%(refname) %(objecttype) %(taggerdate:short) %(contents:subject)' refs/tags/retired/ 2>/dev/null | head -n "$RETIRED_SCAN" >"$_rf" 2>/dev/null
 	while read -r _rref _rtype _rdate _rreason; do
 		_rlines=$((_rlines + 1))
 		_rtag=${_rref#refs/tags/retired/}
 		_rok=0
+		if rel_key "$_rtag" && ! retired_matters "$_rtag"; then
+			continue # a well formed name that no choice of this tick depends on
+		fi
 		if rel_key "$_rtag" && [ "$_rtype" = tag ] && retired_ok "$_rtag" && release_ok "$_rtag" && tag_signed "$_rtag"; then
 			if [ "$_rcount" -ge "$RETIRED_MAX" ]; then
 				_rmore=1
@@ -874,6 +919,23 @@ retired_why() {
 
 SIGN_ON=0
 SIGN_WHY=
+SIGN_NODOWN=0
+SIGN_NODOWN_SAID=0
+
+# down_blocked TAG REV: TAG is below the version at REV and no move down is accepted in this
+# tick (the copy of the keys failed, see signing_setup). Says so once.
+down_blocked() {
+	[ "$SIGN_NODOWN" = 1 ] || return 1
+	rel_key "$1" || return 1
+	_db_key=$RK
+	ver_key "$(version_at "$2")"
+	key_gt "$VK" "$_db_key" || return 1
+	if [ "$SIGN_NODOWN_SAID" = 0 ]; then
+		SIGN_NODOWN_SAID=1
+		log "not moving down to $1: the allowed signers could not be copied, so the version of the keys on record may be stale; the next tick tries again"
+	fi
+	return 0
+}
 
 # signers_judge: set SIGN_ON from SIGNERS_FILE (and SIGN_WHY when no signature is required).
 signers_judge() {
@@ -903,8 +965,11 @@ keys_older() {
 # older release does not turn them off (that release has no file) or bring back the keys it
 # listed and a newer release dropped (it has an older file). The last keys are then the ones
 # used, and with none to use, every tag is refused. Keys are only replaced by those of a
-# version that is as new or newer.
+# version that is as new or newer. When the keys of the version in use could not be copied
+# (SIGN_NODOWN), `signers_version` may be older than that version, so no move down is accepted
+# in that tick (down_blocked above).
 signing_setup() {
+	SIGN_NODOWN=0
 	rm -f "$SIGNERS_TMP"
 	if [ -n "${WZ_ALLOWED_SIGNERS+x}" ]; then
 		SIGNERS_FILE=$WZ_ALLOWED_SIGNERS
@@ -934,6 +999,10 @@ signing_setup() {
 				S_signers_version=$_good_ver
 			else
 				rm -f "$SIGNERS_LAST.new" 2>/dev/null
+					# the version on record may be older than the one in use: a move down now
+					# could end on a release that lists a key this one dropped, and the next
+					# tick would take that key back
+					[ "$S_signers_version" = "$_good_ver" ] || SIGN_NODOWN=1
 			fi
 		elif [ "$SIGN_ON" = 1 ] || [ "$S_signing" = 1 ]; then
 			SIGN_ON=1
@@ -1001,6 +1070,7 @@ pick_pin() {
 		return 1
 	fi
 	tag_valid "$C_pin" || return 1
+	down_blocked "$C_pin" HEAD && return 1
 	PICK=$C_pin
 	return 0
 }
@@ -1049,6 +1119,7 @@ pick_target() {
 		if [ "$_down" = 0 ] && ! key_gt "$RK" "$_cur_key"; then
 			break # the rest is lower still
 		fi
+		down_blocked "$_tag" HEAD && continue
 		target_ok "$_tag" || continue
 		PICK=$_tag
 		return 0
@@ -1060,11 +1131,15 @@ pick_target() {
 # version is retired, or TAG is the pin (and with a pin nothing else is a target).
 move_allowed() {
 	if [ -n "$C_pin" ]; then
-		[ "$1" = "$C_pin" ]
+		[ "$1" = "$C_pin" ] || return 1
+		! down_blocked "$1" HEAD
 		return
 	fi
 	_ma_cur=$(version_at HEAD)
-	is_retired "v$_ma_cur" && return 0
+	if is_retired "v$_ma_cur"; then
+		! down_blocked "$1" HEAD
+		return
+	fi
 	rel_key "$1" || return 1
 	_ma_key=$RK
 	ver_key "$_ma_cur"
@@ -1664,9 +1739,9 @@ env_abort() {
 	finish 1
 }
 
-# attempt: S_trying_* and S_attempts are set. Check it out, verify it, decide. SECOND_LOOK=1
-# is the look at a release that was already under suspicion: if it fails again it is bad.
-attempt() {
+# attempt_prepare: before anything is switched: the tree has no changes, there is room, the live
+# copy of the updater is kept and the state is saved (what a power cut will find).
+attempt_prepare() {
 	if is_dirty; then
 		log "the tree has local changes; not switching to $S_trying_tag"
 		clear_trying
@@ -1685,85 +1760,82 @@ attempt() {
 		log "the state cannot be saved; not switching"
 		exit 1
 	fi
-	_tag=$S_trying_tag
-	_sha=$S_trying_sha
-	if [ "$(head_sha)" != "$_sha" ]; then
-		log "switching to $_tag"
-		if ! g checkout --quiet --no-overwrite-ignore --detach "$_sha" >/dev/null 2>&1; then
-			log "cannot check out $_tag; not a verdict on the release"
-			heal_half_checkout "$S_good_sha" "$_sha" "$S_good_sha" || log "the tree is left as it is"
-			clear_trying
-			env_backoff
-			finish 1
-		fi
-	fi
-	verify_version "$_tag"
-	case $? in
-	0) promote ;;
-	3)
-		log "the check of $_tag was deferred ($VERIFY_WHY); it continues at the next tick"
-		[ "$S_attempts" -gt 0 ] && S_attempts=$((S_attempts - 1))
-		mark_deferred
-		finish 0
-		;;
-	4) env_abort "$_tag could not be judged: $VERIFY_WHY" ;;
-	esac
-	_why=$VERIFY_WHY
-	differential "$_tag" "$_sha" "$S_good_tag" "$S_good_branch" "$S_good_sha"
-	[ "$DV" = stuck ] || live_restore
-	case $DV in
-	stuck) stuck "checkout of $S_good_sha failed" ;;
-	bad)
-		if [ "$SECOND_LOOK" = 1 ]; then
-			# It failed a second time and the previous version passes just now: bad.
-			write_bad "$_tag" "$_sha" "$_why (second look)"
-			log "$_tag is bad ($_why, again); back on the previous version"
-			clear_trying
-			S_env_failures=0
-			S_retry_after=
-			S_last_result=rolled-back
-			settle_pending
-			finish 1
-		fi
-		retry_suspect "$_tag" "$_sha"
-		_rr=$?
-		case $_rr in
-		0)
-			log "$_tag passed the second time"
-			promote
-			;;
-		3)
-			log "the second check of $_tag was deferred ($VERIFY_WHY); it continues at the next tick"
-			[ "$S_attempts" -gt 0 ] && S_attempts=$((S_attempts - 1))
-			mark_deferred
-			finish 0
-			;;
-		esac
-		_why2=$VERIFY_WHY
-		back_to_good
-		case $_rr in
-		4 | 5)
-			# No time or no way to look again now: the release stays under suspicion and the
-			# next tick looks at it first thing, with a whole budget. It is not the
-			# environment's fault, so there is no back-off.
-			S_suspect_tag=$_tag
-			S_suspect_sha=$_sha
-			log "$_tag failed once and could not be looked at again ($_why2); it will at the next tick"
-			;;
-		*)
-			write_bad "$_tag" "$_sha" "$_why (twice)"
-			log "$_tag is bad ($_why, twice); back on the previous version"
-			;;
-		esac
+}
+
+# attempt_switch TAG SHA: HEAD on SHA. A checkout that fails is no verdict on the release.
+attempt_switch() {
+	[ "$(head_sha)" != "$2" ] || return 0
+	log "switching to $1"
+	if ! g checkout --quiet --no-overwrite-ignore --detach "$2" >/dev/null 2>&1; then
+		log "cannot check out $1; not a verdict on the release"
+		heal_half_checkout "$S_good_sha" "$2" "$S_good_sha" || log "the tree is left as it is"
 		clear_trying
-		S_env_failures=0
-		S_retry_after=
-		S_last_result=rolled-back
-		settle_pending
+		env_backoff
 		finish 1
+	fi
+}
+
+# attempt_defer WHAT: the check was cut short by the menu: it continues at the next tick.
+attempt_defer() {
+	log "$1 was deferred ($VERIFY_WHY); it continues at the next tick"
+	[ "$S_attempts" -gt 0 ] && S_attempts=$((S_attempts - 1))
+	mark_deferred
+	finish 0
+}
+
+# attempt_rolled_back: the release is judged and the previous version is back.
+attempt_rolled_back() {
+	clear_trying
+	S_env_failures=0
+	S_retry_after=
+	S_last_result=rolled-back
+	settle_pending
+	finish 1
+}
+
+# attempt_bad TAG SHA WHY: TAG failed its check and the previous version passes. A first
+# failure is looked at once more before the release is blamed.
+attempt_bad() {
+	if [ "$SECOND_LOOK" = 1 ]; then
+		# It failed a second time and the previous version passes just now: bad.
+		write_bad "$1" "$2" "$3 (second look)"
+		log "$1 is bad ($3, again); back on the previous version"
+		attempt_rolled_back
+	fi
+	retry_suspect "$1" "$2"
+	_rr=$?
+	case $_rr in
+	0)
+		log "$1 passed the second time"
+		promote
 		;;
+	3) attempt_defer "the second check of $1" ;;
+	esac
+	_why2=$VERIFY_WHY
+	back_to_good
+	case $_rr in
+	4 | 5)
+		# No time or no way to look again now: the release stays under suspicion and the
+		# next tick looks at it first thing, with a whole budget. It is not the
+		# environment's fault, so there is no back-off.
+		S_suspect_tag=$1
+		S_suspect_sha=$2
+		log "$1 failed once and could not be looked at again ($_why2); it will at the next tick"
+		;;
+	*)
+		write_bad "$1" "$2" "$3 (twice)"
+		log "$1 is bad ($3, twice); back on the previous version"
+		;;
+	esac
+	attempt_rolled_back
+}
+
+# attempt_inconclusive TAG: the check of TAG failed and the previous version could not tell
+# a bad release from a broken environment (DV is deferred, budget or env): TAG is not marked bad.
+attempt_inconclusive() {
+	case $DV in
 	deferred)
-		log "the previous version could not be checked now either; $_tag is not marked bad"
+		log "the previous version could not be checked now either; $1 is not marked bad"
 		keep_suspect
 		clear_trying
 		mark_deferred
@@ -1772,19 +1844,19 @@ attempt() {
 	budget)
 		if [ "$SECOND_LOOK" = 1 ]; then
 			# Nothing proves it either way: it stays under suspicion, with no back-off.
-			log "the previous version could not be checked in the time left; $_tag stays under suspicion"
+			log "the previous version could not be checked in the time left; $1 stays under suspicion"
 			keep_suspect
 			clear_trying
 			S_last_result=rolled-back
 			finish 1
 		fi
-		log "no time left to tell a bad release from a broken environment; $_tag is not marked bad"
+		log "no time left to tell a bad release from a broken environment; $1 is not marked bad"
 		clear_trying
 		env_backoff
 		finish 1
 		;;
 	*)
-		log "the previous version fails too, so the environment is at fault; $_tag is not marked bad"
+		log "the previous version fails too, so the environment is at fault; $1 is not marked bad"
 		clear_trying
 		env_backoff
 		finish 1
@@ -1792,10 +1864,45 @@ attempt() {
 	esac
 }
 
+# attempt_failed TAG SHA: the check of TAG failed. Check the previous version, put it back and
+# decide whom to blame.
+attempt_failed() {
+	_why=$VERIFY_WHY
+	differential "$1" "$2" "$S_good_tag" "$S_good_branch" "$S_good_sha"
+	[ "$DV" = stuck ] || live_restore
+	case $DV in
+	stuck) stuck "checkout of $S_good_sha failed" ;;
+	bad) attempt_bad "$1" "$2" "$_why" ;;
+	*) attempt_inconclusive "$1" ;;
+	esac
+}
+
+# attempt: S_trying_* and S_attempts are set. Check it out, verify it, decide. SECOND_LOOK=1
+# is the look at a release that was already under suspicion: if it fails again it is bad.
+attempt() {
+	attempt_prepare
+	_tag=$S_trying_tag
+	_sha=$S_trying_sha
+	attempt_switch "$_tag" "$_sha"
+	verify_version "$_tag"
+	case $? in
+	0) promote ;;
+	3) attempt_defer "the check of $_tag" ;;
+	4) env_abort "$_tag could not be judged: $VERIFY_WHY" ;;
+	esac
+	attempt_failed "$_tag" "$_sha"
+}
+
 # resume: a tick that finds a version being tried knows the last run did not finish.
 resume() {
 	if ! target_ok "$S_trying_tag"; then
 		log "$S_trying_tag is not a target any more (marked bad, retired, off the channel or not signed); going back to the previous version"
+		back_to_good
+		clear_trying
+		return 0
+	fi
+	if down_blocked "$S_trying_tag" "$S_good_sha"; then
+		log "going back to the previous version, without marking $S_trying_tag bad"
 		back_to_good
 		clear_trying
 		return 0
@@ -1936,7 +2043,9 @@ conf_check() {
 	return 0
 }
 
-cmd_tick() {
+# tick_start: the arguments, the state folder, the lock, the settings and the clone. Ends the
+# tick (exit 0, or 1 where something is wrong) when there is nothing to do or no way to go on.
+tick_start() {
 	case ${1-} in
 	'') ;;
 	--fetch-now) FETCH_NOW=1 ;;
@@ -1972,6 +2081,11 @@ cmd_tick() {
 		C_clone=$(cd "$(dirname "$0")/../.." 2>/dev/null && pwd)
 	fi
 	CLONE=$C_clone
+	if [ -z "$CLONE" ]; then
+		# an empty path is the folder the tick happens to run in, and `$CLONE/warpzone` is `/warpzone`
+		log "no clone: the settings name none and the script is not inside one"
+		exit 1
+	fi
 	if ! command -v git >/dev/null 2>&1; then
 		log "git is not installed"
 		exit 1
@@ -1983,11 +2097,11 @@ cmd_tick() {
 	NOW=$(now)
 	state_load
 	state_drop_future
+}
 
-	clear_stale_index_lock
-
-	# The menu: wait for it to close, at most 72 hours from the first deferral. A menu that
-	# is seen closed ends the deferral: the 72 hours are of an unbroken wait.
+# tick_menu: the menu: wait for it to close, at most 72 hours from the first deferral. A menu
+# that is seen closed ends the deferral: the 72 hours are of an unbroken wait.
+tick_menu() {
 	menu_open
 	_menu=$?
 	if [ "$_menu" = 1 ]; then
@@ -2008,7 +2122,10 @@ cmd_tick() {
 		;;
 	2) log "cannot tell whether the menu is open ($PROC is not readable); going on" ;;
 	esac
+}
 
+# tick_python: a Python to run the checks with, or the end of the tick.
+tick_python() {
 	if ! find_python; then
 		if [ "$PY_CUT" = 1 ]; then
 			S_last_result="env"
@@ -2019,7 +2136,11 @@ cmd_tick() {
 		log "no usable Python 3.11 or newer was found"
 		finish 1
 	fi
+}
 
+# tick_checkout: the settings made fit, the fetch if it is due, and what the checkout is. Ends
+# the tick when it is not a checkout of ours to move.
+tick_checkout() {
 	conf_check
 	# Without WZ_FETCH_INTERVAL the pace follows the channel: a candidate is looked for every
 	# hour, a stable release (or a new tag while pinned) every twelve.
@@ -2050,7 +2171,10 @@ cmd_tick() {
 		finish 0
 		;;
 	esac
+}
 
+# tick_trust: the version known to work, the keys of that version and the retirements.
+tick_trust() {
 	# Only a checkout on a release is looked after: a developer's clone is not touched, and
 	# neither is the venv that belongs to it.
 	repair_python || true
@@ -2069,37 +2193,32 @@ cmd_tick() {
 		S_pin_retired=$C_pin
 		log_daily "the pinned tag $C_pin is retired ($(retired_why "$C_pin")); the pin wins, and it stays"
 	fi
+}
 
-	if [ -n "$S_trying_tag" ]; then
-		resume
+# tick_suspect: a release that failed once, while the previous version passed, and could not be
+# looked at again for lack of time: this is that second look, with a whole budget.
+tick_suspect() {
+	[ -n "$S_suspect_tag" ] || return 0
+	if ! target_ok "$S_suspect_tag" || ! move_allowed "$S_suspect_tag"; then
+		# bad, retired, off the channel or unsigned meanwhile, or not newer than what is
+		# checked out any more: never down (unless it is the pin, or the running version
+		# has been retired)
+		S_suspect_tag=
+		S_suspect_sha=
+		return 0
 	fi
-	if [ -n "$S_suspect_tag" ]; then
-		# A release that failed once, while the previous version passed, and could not be
-		# looked at again for lack of time: this is that second look, with a whole budget.
-		if ! target_ok "$S_suspect_tag" || ! move_allowed "$S_suspect_tag"; then
-			# bad, retired, off the channel or unsigned meanwhile, or not newer than what is
-			# checked out any more: never down (unless it is the pin, or the running version
-			# has been retired)
-			S_suspect_tag=
-			S_suspect_sha=
-		else
-			log "second look at $S_suspect_tag"
-			S_trying_tag=$S_suspect_tag
-			S_trying_sha=$S_suspect_sha
-			S_suspect_tag=
-			S_suspect_sha=
-			S_attempts=1
-			SECOND_LOOK=1
-			attempt
-		fi
-	fi
-	probation_check
+	log "second look at $S_suspect_tag"
+	S_trying_tag=$S_suspect_tag
+	S_trying_sha=$S_suspect_sha
+	S_suspect_tag=
+	S_suspect_sha=
+	S_attempts=1
+	SECOND_LOOK=1
+	attempt
+}
 
-	if [ -n "$S_retry_after" ] && [ "$S_retry_after" -gt "$NOW" ]; then
-		log "waiting until $S_retry_after before trying a new release"
-		finish 0
-	fi
-
+# tick_new_release: the best valid release newer than the one running, tried if there is one.
+tick_new_release() {
 	pick_target || true
 	_target=$PICK
 	if [ -n "$_target" ]; then
@@ -2109,7 +2228,10 @@ cmd_tick() {
 		log "new release $_target (running $(version_at HEAD))"
 		attempt
 	fi
+}
 
+# tick_finish: nothing moved: provision if it is due, note the result and end.
+tick_finish() {
 	reconcile_if_needed
 	case $RECONCILE in
 	deferred) ;;
@@ -2121,6 +2243,28 @@ cmd_tick() {
 		;;
 	esac
 	finish 0
+}
+
+cmd_tick() {
+	tick_start "$@"
+	clear_stale_index_lock
+	tick_menu
+	tick_python
+	tick_checkout
+	tick_trust
+	if [ -n "$S_trying_tag" ]; then
+		resume
+	fi
+	tick_suspect
+	probation_check
+
+	if [ -n "$S_retry_after" ] && [ "$S_retry_after" -gt "$NOW" ]; then
+		log "waiting until $S_retry_after before trying a new release"
+		finish 0
+	fi
+
+	tick_new_release
+	tick_finish
 }
 
 install_usage() {

@@ -2301,7 +2301,8 @@ over a higher one, so a rollback does not downgrade the script. It reads its set
 runs), line by line and never with `source`, so a value cannot run anything. The script reads
 `device`, `python` (the interpreter to try first), `enabled` (`false`, `0`, `no` or `off`
 turn it off), `frontend` (the process names of the frontend, separated by spaces; default
-`es-de ES-DE.AppImage`), `clone` (the git checkout; default two folders above the script) and
+`es-de ES-DE.AppImage`), `clone` (the git checkout; default two folders above the script; a tick
+that ends up with no clone at all logs it and exits `1` without touching anything) and
 `config` (passed as `--config`), `channel` (`stable` or `rc`; anything else is `stable`, with a
 line in the log) and `pin` (a tag; one that is not a tag is ignored, with a line in the log).
 For tests every path
@@ -2662,7 +2663,12 @@ checks (a version name, an annotated tag, the commit) count tags towards the lim
 signatures of at most 50 well formed `retired/` tags are checked per tick (`RETIRED_MAX`, `WZ_RETIRED_MAX` for tests,
 newest version first), so a pile of tags with invalid signatures cannot use up the tick's
 budget, and tags that are no retirement cannot push a real one out; 500 tags are looked at in
-all (`RETIRED_SCAN`). It logs when there are more. The reason, taken
+all (`RETIRED_SCAN`). It logs when there are more. Only retirements of tags that matter to
+the tick are looked at and counted: the running version, the pin, a version being tried or
+under suspicion, and the candidates the tick considers (newer than the running version and of
+the channel, or every one of the channel when the running version is retired). Fake or
+unsigned retirements of other real releases, such as the candidates of the running version
+(`retired/v0.3.0rc1` sorts above `retired/v0.3.0`), cannot use up the limit. The reason, taken
 from the tag's subject, is only text for the log; nothing in a tag is run. A retired tag is
 never a candidate. When the running version is retired the device goes to the best valid
 candidate of its channel, even a lower one (there is no floor), and stays where it is when
@@ -2726,7 +2732,11 @@ the version known to work is older than `signers_version` (a `pin`, or a retirem
 device down to an old release), its `allowed_signers`, absent or listing keys that a newer
 release dropped, is ignored and the last keys are used, and the log says so; `.last` is only
 replaced by the keys of a version that is as new or newer. With no copy to use, every tag is
-refused. Trust is by first use: the first release that
+refused. When the copy of the keys of the version known to work cannot be written (a full
+disk) and `signers_version` is older than that version, no move down is accepted in that tick
+(a retirement, a pin, a version being tried, a suspect), with a line in the log: the stale
+version could let the next tick bring back a key that this version dropped. The next tick
+tries the copy again. Trust is by first use: the first release that
 carries keys is taken without a signature check (nothing on the device yet says whom to
 trust), and so is any release before it; from then on a release has to be signed by keys the
 device already trusts, which includes the release that rotates them.
