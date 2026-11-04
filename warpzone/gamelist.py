@@ -9,7 +9,8 @@ what is here: the arcade emulator of a game (`update_entry`, used by `inbox_mame
 argument (`game_blocks(skip_comments=...)`, `child_indent(line_start_only=...)`).
 
 Nothing here imports the network: `playstate` runs on ES-DE's startup path (see "Speed" in
-docs/design.md), so `escape` and `unescape` are local instead of `xml.sax.saxutils`'.
+development/design/emulator-settings.md), so `escape` and `unescape` are local instead of
+`xml.sax.saxutils`'.
 """
 
 from __future__ import annotations

@@ -9,7 +9,7 @@ The rules (`plan`) are pure. The links are the only thing ever changed: a real f
 in the way is left alone, so is a link that points elsewhere, and only a dangling link that
 points into the library folder (one this module made for a game that is gone) is removed.
 Nothing is changed while the emulator runs, and `dry_run` changes nothing. No network code
-is imported, because ES-DE waits for the startup script. See development/design.md, "Title links".
+is imported, because ES-DE waits for the startup script. See development/design/title-links.md.
 """
 
 from __future__ import annotations
@@ -219,10 +219,10 @@ def _apply(item: Resolved, todo: Plan, say: Say, warn: Say, dry_run: bool) -> in
             changed += 1
             continue
         # Look again right before acting: only a link that is still dangling and still ours.
-        dest = _readlink(path)
-        if dest is None or os.path.exists(path):
+        current = _readlink(path)
+        if current is None or os.path.exists(path):
             continue
-        if posixpath.dirname(_norm(dest)) != _norm(str(item.source)):
+        if posixpath.dirname(_norm(current)) != _norm(str(item.source)):
             continue
         try:
             os.unlink(path)

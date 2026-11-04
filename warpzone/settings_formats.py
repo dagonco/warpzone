@@ -2,7 +2,8 @@
 
 A handler is pure (text in, text out). This module holds the line-oriented formats
 (`ini`, `qt-ini`, `retroarch-cfg`, `yaml-flat`); `json` and `toml` live in
-`settings_tree` and are imported on demand. See "Format handlers" in development/design.md.
+`settings_tree` and are imported on demand. See "Format handlers" in
+development/design/emulator-settings.md.
 """
 
 from __future__ import annotations
@@ -269,8 +270,8 @@ class _IniHandler:
         tail: list[str] = []
         new_sections: dict[str, list[str]] = {}
 
-        existing = []
-        added = []
+        existing: list[tuple[str, str]] = []
+        added: list[tuple[str, str]] = []
         for key, raw in changes.items():
             if key in fixed:
                 raise NotWritable(key, "the key is present more than once or outside a section")

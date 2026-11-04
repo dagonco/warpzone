@@ -82,7 +82,7 @@ What each part means:
 - `[bios.<emu>-<kind>]` is a BIOS placement: a receive-only folder from the hub's `library/<hub>` to the emulator's real directory, with its own `ignore` list. The library ignores that hub folder automatically.
 - `ignore_perms = true` at the top level is for a library on a filesystem without POSIX permissions.
 
-Profiles can also describe settings files, a frontend's system list, artwork conversion, play state, shadPS4 and title links; the shipped profiles are the reference. The format is validated when it loads and an error names the key at fault ([the design document](/warpzone/development/design/#profiles)).
+Profiles can also describe settings files, a frontend's system list, artwork conversion, play state, shadPS4 and title links; the shipped profiles are the reference. The format is validated when it loads and an error names the key at fault ([the design document](/warpzone/development/design/profiles/)).
 
 Profiles are read from the package's data folder, so a profile that is not part of the release a device runs is not found there. Contribute it as a pull request with a test that loads it ([CONTRIBUTING](https://github.com/dagonco/warpzone/blob/main/CONTRIBUTING.md)). Never put personal data in a profile: it is public.
 

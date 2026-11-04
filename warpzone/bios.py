@@ -3,7 +3,7 @@
 warpzone never downloads or ships BIOS files. The manifest (`data/bios.toml`) holds
 public metadata only: file names, sizes, hashes and file signatures. The decisions
 (`judge_*`, `settle`, `unknown_files`, `render`) are pure; `Library` and `check_library`
-are the only parts that touch the disk. See development/design.md.
+are the only parts that touch the disk. See development/design/bios.md.
 
 A file entry has one of four kinds of check: `hash` (size and md5, the default),
 `magic` (it starts with fixed bytes, for official firmware and disk images that have no
@@ -25,7 +25,7 @@ from dataclasses import dataclass, field
 from importlib import resources
 from itertools import chain
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeGuard
 
 from warpzone.config import Config
 from warpzone.errors import UsageError
@@ -153,7 +153,7 @@ class Report:
 # ---------------------------------------------------------------- manifest
 
 
-def _path_ok(path: object) -> bool:
+def _path_ok(path: object) -> TypeGuard[str]:
     if not isinstance(path, str) or not path or path.startswith("/") or "\\" in path:
         return False
     return ".." not in path.split("/") and "" not in path.split("/")

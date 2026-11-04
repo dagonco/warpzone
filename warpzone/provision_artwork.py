@@ -91,9 +91,9 @@ def ensure_gamelists(
     for a gamelist that already says the same, so a second run, and a run while the frontend
     is open and has nothing to change, do nothing. A file is written only while the frontend
     is not running, atomically, and refused when it changed after it was read. The user
-    data the frontend saved in a gamelist is carried over; see development/design.md, "Frontend
-    artwork". With `play_state` that data also goes to the other devices and theirs is merged
-    in; see development/design.md, "Play state".
+    data the frontend saved in a gamelist is carried over; see
+    development/design/frontend-artwork.md. With `play_state` that data also goes to the other
+    devices and theirs is merged in; see development/design/play-state.md.
     """
     art, rule = profile.artwork, profile.es_systems
     layout = artwork_layout(profile, home)

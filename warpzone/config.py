@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import re
 import tomllib
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -13,7 +14,8 @@ from warpzone.errors import UsageError
 from warpzone.versions import tag_key
 
 # Syncthing applies a changed whitelist only on a full scan of the folder, and a
-# freshly synced whitelist file does not trigger one reliably (see design.md).
+# freshly synced whitelist file does not trigger one reliably (see
+# development/design/hub-and-folders.md).
 DEFAULT_RESCAN_SECONDS = 300
 MIN_RESCAN_SECONDS = 5
 CHANNELS = ("stable", "rc")
@@ -125,7 +127,7 @@ DEFAULT_MAX_GIB = 50.0  # `prune`: the most it deletes in one run
 DEFAULT_RESCAN_TIMEOUT = 600.0  # `prune`: how long it waits for the rescan
 
 
-def default_config_path(env: dict[str, str] | None = None) -> Path:
+def default_config_path(env: Mapping[str, str] | None = None) -> Path:
     env = os.environ if env is None else env
     base = env.get("XDG_CONFIG_HOME")
     root = Path(base) if base else Path.home() / ".config"

@@ -1,11 +1,11 @@
 """What `warpzone` knows about the updater script (`warpzone/data/updater.sh`).
 
-The script decides which release a device runs (see development/design.md, "Autonomous updates
-(contract)"), so this module holds only what the rest of warpzone needs from it: the order of
-release tags, where the script's live copy, settings and state are, the settings file that
-`provision device` writes for it, the rule for renewing the live copy, a reader for its state,
-and `warpzone self-update`, which is a wrapper that runs one tick. The functions are pure
-except `run_tick`; see operation/self-update.md.
+The script decides which release a device runs (see
+development/design/autonomous-updates.md), so this module holds only what the rest of warpzone
+needs from it: the order of release tags, where the script's live copy, settings and state are,
+the settings file that `provision device` writes for it, the rule for renewing the live copy, a
+reader for its state, and `warpzone self-update`, which is a wrapper that runs one tick. The
+functions are pure except `run_tick`; see operation/self-update.md.
 """
 
 from __future__ import annotations

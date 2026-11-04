@@ -3,7 +3,7 @@
 Nothing here touches a disk or a network. `plan_apply` and `plan_data` decide what `settings
 apply` writes, `candidates`, `preselect`, `decide` and `apply_decisions` decide what `settings
 capture` proposes and what each answer changes, and `audit_rows` and `render_audit` describe the
-state for `settings audit`. See "Emulator settings" in development/design.md.
+state for `settings audit`. See "Emulator settings" in development/design/emulator-settings.md.
 
 Values are `str | int | float | bool` and are compared by type and value (`1`, `1.0`, `true`
 and `"1"` all differ). Secret keys never appear in any result: they are filtered by `tracked`
@@ -726,15 +726,15 @@ def _file_lines(rows: list[AuditRow], all_keys: bool) -> list[str]:
     key_width = max((len(r.key or "") for r in keyed), default=0) + _KEY_GAP
     value_width = max((len(_values(r)) for r in keyed), default=0) + _VALUE_GAP
     lines = [f"{head}  {first.path}".rstrip()]
-    for label, r, text in shown:
+    for label, shown_row, text in shown:
         prefix = f"  {label:<{_LABEL_WIDTH}}"
-        if r is None:
+        if shown_row is None:
             lines.append((prefix + text).rstrip())
             continue
-        line = prefix + f"{r.key:<{key_width}}"
-        values = _values(r)
+        line = prefix + f"{shown_row.key:<{key_width}}"
+        values = _values(shown_row)
         line += f"{values:<{value_width}}" if values else ""
-        lines.append((line + r.detail).rstrip())
+        lines.append((line + shown_row.detail).rstrip())
     return lines
 
 

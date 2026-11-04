@@ -9,9 +9,10 @@ Small, focused pull requests are welcome. New device profiles are the easiest co
 ```bash
 uvx ruff check .
 uvx ruff format --check .
+uvx mypy==2.4.1
 ```
 
-CI pins the ruff version in `.github/workflows/ci.yml`.
+CI pins the ruff and mypy versions in `.github/workflows/ci.yml`. mypy runs in its default (non-strict) mode over the `warpzone` package, as configured in `pyproject.toml`; the tests are not type-checked.
 
 ## Tests
 
@@ -31,7 +32,7 @@ It takes about a minute. Set `WARPZONE_E2E_VERBOSE=1` to print the Syncthing log
 
 ## Documentation
 
-The documentation is a [Starlight](https://starlight.astro.build) site in `website/`, published at <https://dagonco.github.io/warpzone>. The pages are in `website/src/content/docs/`. `website/src/content/docs/development/design.md` is the contract for the implementation: if you change behaviour, change it there too.
+The documentation is a [Starlight](https://starlight.astro.build) site in `website/`, published at <https://dagonco.github.io/warpzone>. The pages are in `website/src/content/docs/`. The pages in `website/src/content/docs/development/design/` (start at `index.md`) are the contract for the implementation: if you change behaviour, change the page that describes it too.
 
 To build the site (Node 22.23.4 or newer; the build also fails on a broken internal link):
 

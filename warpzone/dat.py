@@ -3,7 +3,7 @@
 `warpzone inbox` identifies games by content: a file matches a DAT rom when size and
 CRC32 are equal (and SHA1 too, when both sides have one), and a game matches when all
 its DAT roms are present. Everything except `load_dat` and `DatLibrary` is pure.
-See development/design.md.
+See development/design/inbox.md.
 """
 
 from __future__ import annotations
@@ -11,7 +11,7 @@ from __future__ import annotations
 import hashlib
 import os
 import re
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -364,7 +364,7 @@ class DiscGroup:
     clash: tuple[str, ...] = ()  # disc tags that more than one match claims
 
 
-def group_discs(matches: Sequence[GameMatch], dats: dict[str, Sequence[Dat]]) -> list[DiscGroup]:
+def group_discs(matches: Sequence[GameMatch], dats: Mapping[str, Sequence[Dat]]) -> list[DiscGroup]:
     """Group the matches of an item into library entries.
 
     A game whose name has "(Disc N)" joins the other discs with the same text before

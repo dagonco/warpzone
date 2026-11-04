@@ -17,7 +17,7 @@ the `.nsp` reaches the library. `.xci` is never converted: it goes to review.
 `base_title_id`, `normalize_text`, `dlc_display_name`, `build_names`, `parse_nsz_info`,
 `parse_pfs0`, `ids_from_filename`, `verdict`) are pure; the rest touches the disk or runs `nsz`.
 The keys file is only passed to `nsz` by path: its content is never read, printed or logged.
-See development/design.md.
+See development/design/inbox.md.
 """
 
 from __future__ import annotations
@@ -499,7 +499,7 @@ class SwitchOutcome:
 
 
 def _keys_ok(env: SwitchEnv) -> bool:
-    return bool(env.keys) and env.keys.is_file()
+    return env.keys is not None and env.keys.is_file()
 
 
 def run_nsz(command: Sequence[str]) -> tuple[int, str]:

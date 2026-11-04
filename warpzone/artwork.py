@@ -5,7 +5,7 @@ receives a slice of them (`media_ignores`, `metadata_ignores`) and a converter, 
 profile's `format`, turns each ES-DE gamelist into the frontend's own (`build`, then the
 format's `render`). A frontend that reads another file shape is one more `Format` in
 `FORMATS`; the rest, including the profile and `provision`, does not change.
-See development/design.md, "Frontend artwork".
+See development/design/frontend-artwork.md, "Frontend artwork".
 """
 
 from __future__ import annotations
@@ -283,12 +283,12 @@ def build(
         seen.add(key)
         built.append(Entry(old.tag, "./" + rel, merged(base + rel, mine)))
     for rel in sorted(extra):
-        emitted = rel[len(base) :] if rel.startswith(base) else None
-        key = ("game", f"./{emitted}")
+        extra_rel = rel[len(base) :] if rel.startswith(base) else None
+        key = ("game", f"./{extra_rel}")
         fields = merged(rel, {})
-        if emitted and key not in seen and fields and rom_exists(rel):
+        if extra_rel and key not in seen and fields and rom_exists(rel):
             seen.add(key)
-            built.append(Entry("game", f"./{emitted}", fields))
+            built.append(Entry("game", f"./{extra_rel}", fields))
     return built
 
 
