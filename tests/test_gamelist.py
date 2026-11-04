@@ -11,7 +11,7 @@ play state editor edits whatever its pattern finds.
 import unittest
 from datetime import timedelta, timezone
 
-from warpzone import inbox_mame, playstate
+from warpzone import gamelist, playstate
 from warpzone.playstate import Wanted
 
 CET = timezone(timedelta(hours=1))
@@ -1206,12 +1206,65 @@ STATE_CASES = {
 }
 
 
+class PrimitivesTests(unittest.TestCase):
+    def test_escape_and_unescape_are_inverse_and_decode_ampersand_last(self) -> None:
+        self.assertEqual(gamelist.escape('a & b <c> "d"'), 'a &amp; b &lt;c&gt; "d"')
+        self.assertEqual(gamelist.unescape("a &amp; b &lt;c&gt;"), "a & b <c>")
+        self.assertEqual(gamelist.unescape("&amp;lt;"), "&lt;")
+        text = "<&>&amp;"
+        self.assertEqual(gamelist.unescape(gamelist.escape(text)), text)
+
+    def test_the_line_ending_is_crlf_as_soon_as_the_file_has_one(self) -> None:
+        self.assertEqual(gamelist.eol_of("a\nb\r\nc\n"), "\r\n")
+        self.assertEqual(gamelist.eol_of("a\nb\n"), "\n")
+        self.assertEqual(gamelist.eol_of(""), "\n")
+
+    def test_indent_before_is_none_when_something_else_is_on_the_line(self) -> None:
+        text = "<a>\n\t\t<b/>\n<c/> <d/>"
+        self.assertEqual(gamelist.indent_before(text, text.index("<b/>")), "\t\t")
+        self.assertIsNone(gamelist.indent_before(text, text.index("<d/>")))
+        self.assertEqual(gamelist.indent_before(text, 0), "")
+
+    def test_game_blocks_can_skip_the_ones_in_comments(self) -> None:
+        text = "<!-- <game><path>a</path></game> --><game><path>b</path></game>"
+        self.assertEqual(
+            [m.group(0) for m in gamelist.game_blocks(text)], ["<game><path>b</path></game>"]
+        )
+        self.assertEqual(len(gamelist.game_blocks(text, skip_comments=False)), 2)
+
+    def test_child_indent_follows_the_path_and_falls_back(self) -> None:
+        block = "<game>\n    <name>x</name>\n    <path>./a.zip</path>\n</game>"
+        self.assertEqual(gamelist.child_indent(block, "\t\t"), "    ")
+        self.assertEqual(gamelist.child_indent("<game></game>", "\t\t"), "\t\t")
+        # a path with no indentation gives the default, or nothing for the play state editor
+        flat = "<game>\n<path>./a.zip</path>\n</game>"
+        self.assertEqual(gamelist.child_indent(flat, "\t\t"), "\t\t")
+        self.assertEqual(gamelist.child_indent(flat, "", line_start_only=True), "")
+        # a path that shares its line with other content: only the strict reading skips it
+        mixed = "<game><path>./a.zip</path>\n\t\t<path>./b.zip</path>\n</game>"
+        self.assertEqual(gamelist.child_indent(mixed, "D"), "D")
+        self.assertEqual(gamelist.child_indent(mixed, "D", line_start_only=True), "\t\t")
+
+    def test_add_child_goes_on_its_own_line_before_the_closing_tag(self) -> None:
+        block = "<game>\r\n\t\t<path>./a.zip</path>\r\n\t</game>"
+        self.assertEqual(
+            gamelist.add_child(block, "<x/>", "\r\n", "\t\t"),
+            "<game>\r\n\t\t<path>./a.zip</path>\r\n\t\t<x/>\r\n\t</game>",
+        )
+
+    def test_add_child_goes_right_before_a_closing_tag_that_shares_its_line(self) -> None:
+        self.assertEqual(
+            gamelist.add_child("<game><path>./a.zip</path></game>", "<x/>", "\n", "\t\t"),
+            "<game><path>./a.zip</path><x/></game>",
+        )
+
+
 class EmulatorEditorTests(unittest.TestCase):
     def test_every_case_keeps_its_exact_output(self) -> None:
         for name, (text, file_name, emulator, expected, action) in MAME_CASES.items():
             with self.subTest(name):
                 if expected is None:
-                    with self.assertRaises(inbox_mame.GamelistError):
+                    with self.assertRaises(gamelist.GamelistError):
                         edit_emulator(text, file_name, emulator)
                 else:
                     self.assertEqual(edit_emulator(text, file_name, emulator), (expected, action))
@@ -1229,7 +1282,7 @@ class StateEditorTests(unittest.TestCase):
 
 
 def edit_emulator(text: str, file_name: str, emulator: str | None) -> tuple[str, str]:
-    return inbox_mame.update_gamelist_entry(text, file_name, emulator)
+    return gamelist.update_entry(text, file_name, emulator)
 
 
 def edit_state(text: str, changes: dict, included: dict) -> str:

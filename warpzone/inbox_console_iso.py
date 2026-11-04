@@ -36,7 +36,7 @@ unmatched `.iso` is ever read for a signature.
 
 A PS3 `.iso` needs ES-DE's alternative emulator `RPCS3 ISO (Standalone)` (the system
 default is a shortcut launcher), which is written per game into the hub's ES-DE gamelist
-with the helpers of `inbox_mame`.
+with `gamelist.update_entry`, written through the file helpers of `inbox_mame`.
 
 The decisions (`claimed_name`, `iso_records`, `xdvdfs_entries`, `detect`,
 `destination`) are pure functions of bytes or of a binary file object that is only read in
@@ -55,7 +55,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import BinaryIO, TypeVar
 
-from warpzone import inbox_core, inbox_mame, inbox_ps4
+from warpzone import gamelist, inbox_core, inbox_mame, inbox_ps4
 from warpzone.dat import FileInfo
 from warpzone.inbox_core import Context, ItemFailure, ItemResult, Options, Staged, UnitResult
 from warpzone.sfo import MAX_SFO_BYTES, parse_sfo
@@ -360,8 +360,8 @@ def _gamelist(ctx: Context, entry: str, res: UnitResult) -> None:
     """Record RPCS3's ISO launcher as the emulator of one PS3 game (only with --apply)."""
     path = gamelist_path(ctx.opts)
     text = inbox_mame.read_gamelist(path)
-    new, action = inbox_mame.update_gamelist_entry(
-        inbox_mame.EMPTY_GAMELIST if text is None else text, entry, EMU_RPCS3_ISO
+    new, action = gamelist.update_entry(
+        gamelist.EMPTY_GAMELIST if text is None else text, entry, EMU_RPCS3_ISO
     )
     try:
         shown = path.relative_to(ctx.opts.root).as_posix()
@@ -413,7 +413,7 @@ def place_image(ctx: Context, path: Path, rel: str, found: Detected) -> UnitResu
         if found.kind == PS3:
             try:
                 _gamelist(ctx, entry, res)
-            except inbox_mame.GamelistError as exc:  # placed; a rerun retries the gamelist
+            except gamelist.GamelistError as exc:  # placed; a rerun retries the gamelist
                 res.reason = f"{entry} is in the library but the gamelist was not updated: {exc}"
     except ItemFailure as exc:
         res.outcome, res.reason = "review", str(exc)
