@@ -50,4 +50,4 @@ If you keep a modified or region-free BIOS on purpose, accept its hash in a loca
 
 ## Where the data comes from
 
-The manifest only holds file names, sizes and hashes, taken from [libretro-database](https://github.com/libretro/libretro-database) and MAME. `warpzone` never downloads a BIOS and this repository contains none. Details in [the design document](/warpzone/development/design/#bios-check).
+The manifest only holds file names, sizes and hashes, taken from [libretro-database](https://github.com/libretro/libretro-database) and MAME. `warpzone` never downloads a BIOS and this repository contains none. Details in [the design document](/warpzone/development/design/bios/).

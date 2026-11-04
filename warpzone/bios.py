@@ -3,7 +3,7 @@
 warpzone never downloads or ships BIOS files. The manifest (`data/bios.toml`) holds
 public metadata only: file names, sizes, hashes and file signatures. The decisions
 (`judge_*`, `settle`, `unknown_files`, `render`) are pure; `Library` and `check_library`
-are the only parts that touch the disk. See development/design.md.
+are the only parts that touch the disk. See development/design/bios.md.
 
 A file entry has one of four kinds of check: `hash` (size and md5, the default),
 `magic` (it starts with fixed bytes, for official firmware and disk images that have no

@@ -13,7 +13,8 @@ from warpzone.errors import UsageError
 from warpzone.versions import tag_key
 
 # Syncthing applies a changed whitelist only on a full scan of the folder, and a
-# freshly synced whitelist file does not trigger one reliably (see design.md).
+# freshly synced whitelist file does not trigger one reliably (see
+# development/design/hub-and-folders.md).
 DEFAULT_RESCAN_SECONDS = 300
 MIN_RESCAN_SECONDS = 5
 CHANNELS = ("stable", "rc")

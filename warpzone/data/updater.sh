@@ -3,7 +3,7 @@
 #
 # POSIX sh, git and the usual tools only. It lives outside the warpzone package on purpose
 # (a broken release must not be able to stop the tool that puts the good one back) and its
-# rules are written in development/design.md, "Autonomous updates (contract)".
+# rules are written in development/design/autonomous-updates.md, "Autonomous updates (contract)".
 #
 #   updater.sh tick [--fetch-now]
 #                        one run of the timer: update, verify, roll back, reconcile;

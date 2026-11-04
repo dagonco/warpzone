@@ -29,7 +29,7 @@ from warpzone.profiles import Profile, ProfileError, available_profiles, load_pr
 
 # Everything that talks to the network (provision, prune, doctor, the inbox, the Syncthing
 # client) is imported inside the command that needs it, so `settings apply`, which ES-DE runs
-# at every start, loads none of it (see "Speed" in development/design.md).
+# at every start, loads none of it (see "Speed" in development/design/emulator-settings.md).
 if TYPE_CHECKING:
     from warpzone.report import Reporter
     from warpzone.syncthing import Client

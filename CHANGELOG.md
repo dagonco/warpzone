@@ -80,7 +80,7 @@ Other devices and frontends:
 
 - A second shipped profile, `anbernic-rg351mp`, for an Anbernic RG351MP running dArkOS with an exFAT card: the library in `/roms/library`, a system list override and the RetroArch BIOS, save and state paths, written only while the frontend is closed and backed up first. Profiles gain `ignore_perms`, `[es_systems]`, `[retroarch]` and `create_when` for it. See [the Anbernic guide](https://dagonco.github.io/warpzone/guides/anbernic/).
 - Scraped covers and descriptions for a frontend that is not ES-DE (`[artwork]` in a profile, used by the Anbernic profile). The device receives only the covers and gamelists of the systems it has, `provision device` converts them to the frontend's own format keeping favourites and play counts, and `warpzone frontend refresh` (also run by a timer) renews them while the frontend is closed. See [Artwork](https://dagonco.github.io/warpzone/guides/anbernic/#artwork).
-- Favourites and play statistics travel between frontends and devices through a new two-way folder, `wz-play-state`, that a device joins by listing `play-state` in `folders`. Removing a favourite sticks, play counts add up across devices without counting a play twice, and `warpzone play-state sync` (also run by a timer and at ES-DE startup) applies it. See [Favourites and play statistics](https://dagonco.github.io/warpzone/guides/anbernic/#favourites-and-play-statistics) and [Play state](https://dagonco.github.io/warpzone/development/design/#play-state).
+- Favourites and play statistics travel between frontends and devices through a new two-way folder, `wz-play-state`, that a device joins by listing `play-state` in `folders`. Removing a favourite sticks, play counts add up across devices without counting a play twice, and `warpzone play-state sync` (also run by a timer and at ES-DE startup) applies it. See [Favourites and play statistics](https://dagonco.github.io/warpzone/guides/anbernic/#favourites-and-play-statistics) and [Play state](https://dagonco.github.io/warpzone/development/design/play-state/).
 
 ### Changed
 
@@ -93,7 +93,7 @@ Other devices and frontends:
 ### Fixed
 
 - PS4 games no longer crash on a console when started from ES-DE: EmuDeck's Qt launcher can exit with 139 on the arguments it passes, so `provision device` starts the game through the SDL emulator of the version selected in the launcher (EmuDeck's own script is never edited, and `doctor` warns when EmuDeck puts its entry back). See [shadPS4 launch script](https://dagonco.github.io/warpzone/guides/emudeck/#shadps4-launch-script).
-- `warpzone play-state sync --dry-run` no longer creates its lock file. See [the design document](https://dagonco.github.io/warpzone/development/design/#play-state).
+- `warpzone play-state sync --dry-run` no longer creates its lock file. See [the design document](https://dagonco.github.io/warpzone/development/design/play-state/).
 
 ### Removed
 

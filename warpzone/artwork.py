@@ -5,7 +5,7 @@ receives a slice of them (`media_ignores`, `metadata_ignores`) and a converter, 
 profile's `format`, turns each ES-DE gamelist into the frontend's own (`build`, then the
 format's `render`). A frontend that reads another file shape is one more `Format` in
 `FORMATS`; the rest, including the profile and `provision`, does not change.
-See development/design.md, "Frontend artwork".
+See development/design/frontend-artwork.md, "Frontend artwork".
 """
 
 from __future__ import annotations

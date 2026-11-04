@@ -2,7 +2,7 @@
 
 Each device owns one JSON Lines file in the `wz-play-state` folder, keyed by hub system and ROM
 path below it. Nothing but `plan` decides what a device publishes and what its gamelists
-should say; `playstate_device` reads and writes the files. See development/design.md, "Play state".
+should say; `playstate_device` reads and writes the files. See development/design/play-state.md.
 """
 
 from __future__ import annotations

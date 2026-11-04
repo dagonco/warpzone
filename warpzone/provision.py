@@ -2,7 +2,7 @@
 
 `cli`, `health` and the updater script import this module; the work lives in
 `provision_hub`, `provision_device` and the modules `provision_device` calls (see "Code
-layout" in development/design.md).
+layout" in development/design/code-and-testing.md).
 """
 
 from __future__ import annotations
