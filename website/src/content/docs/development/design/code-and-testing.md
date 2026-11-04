@@ -262,7 +262,21 @@ logic is unit-tested without a network.
 
 ## CI (GitHub Actions)
 
+`ci.yml` runs on every pull request, every Monday and by hand (`workflow_dispatch`), not on
+pushes to `main`: `main` only takes a pull request that is up to date with it, squash-merged,
+so its tree is the one the pull request already tested. The weekly run catches changes from
+outside the code, such as new runner images or Python releases. `docs.yml` still runs on
+`main`, because it publishes the website.
+
+On a pull request a first job, `changes`, looks at the files it changes. `test`, `typecheck`
+and `e2e` run only when something the tests read changes (code, tests, `pyproject.toml`,
+`examples/`, `CHANGELOG.md`, the design pages); `updater` only when the package, its tests or
+`pyproject.toml` change. `lint` and `secrets` always run, and a change to `ci.yml` runs
+everything. A skipped job counts as passed for the required checks; the matrix jobs skip
+their steps rather than the whole job, so their checks keep their names.
+
 - `lint`: ruff check + ruff format --check.
+- `typecheck`: mypy on the `warpzone` package.
 - `test`: unittest on Linux with Python 3.11 and 3.14 and on macOS with Python 3.14, without
   the updater script's tests (`WARPZONE_SKIP_UPDATER_SH=1`).
 - `updater`: `tests/test_updater_sh.py` on Ubuntu with dash as `sh` and on macOS.
