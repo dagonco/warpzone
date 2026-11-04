@@ -5,7 +5,7 @@ description: Use when the user wants a console to receive a game or system it do
 
 # Edit a device's whitelist
 
-A device receives only what its whitelist on the hub allows. The whitelist is the file `patterns-<device>.stignore` inside the synced `library/` folder on the hub (and in `songs/` for devices that subscribe to it). It is edited only on the hub, never on a console. Reference: [whitelists.md](../../../docs/whitelists.md), rules in [safety.md](../../../docs/safety.md).
+A device receives only what its whitelist on the hub allows. The whitelist is the file `patterns-<device>.stignore` inside the synced `library/` folder on the hub (and in `songs/` for devices that subscribe to it). It is edited only on the hub, never on a console. Reference: [whitelists.md](../../../website/src/content/docs/setup/whitelists.md), rules in [safety.md](../../../website/src/content/docs/operation/safety.md).
 
 Find the hub root from `[inbox] root` in the user's config (`$XDG_CONFIG_HOME/warpzone/config.toml`) if set; otherwise ask the user where the hub's share is mounted. Device names are the `[devices.<name>]` tables of that config; ask which console is meant. Do not print API keys.
 
@@ -19,7 +19,7 @@ Find the hub root from `[inbox] root` in the user's config (`$XDG_CONFIG_HOME/wa
 *
 ```
 
-Keep the `#include` first and the final `*` last; new `!` lines go between them. Xenia and Model 2 data live next to the games, so name `!/roms/xbox360/roms` and `!/roms/model2/roms`, not the system folder ([whitelists.md](../../../docs/whitelists.md)). `inbox` prints the exact `whitelist:` lines for new games; use those verbatim.
+Keep the `#include` first and the final `*` last; new `!` lines go between them. Xenia and Model 2 data live next to the games, so name `!/roms/xbox360/roms` and `!/roms/model2/roms`, not the system folder ([whitelists.md](../../../website/src/content/docs/setup/whitelists.md)). `inbox` prints the exact `whitelist:` lines for new games; use those verbatim.
 
 ## Add a game
 
@@ -39,7 +39,7 @@ Hard order. Whitelist-first loses the deletion: Syncthing stops syncing an ignor
    - Switch: the game in `roms/switch/`, plus its updates in `extras/switch/updates/<Title>/` and DLC in `extras/switch/dlc/<Title>/` (usually whitelisted by folder, so do not remove those lines while other games need them).
    - Other systems: usually one file or folder under `roms/<system>/`; check the folder for extras.
 
-   Layouts: [inbox.md](../../../docs/inbox.md). Show the user the full list of paths and lines, which consoles hold them, and say that deleting from the hub propagates to every console that whitelists them. The hub is the source of truth: check the user has a snapshot ([Snapshots](../../../docs/safety.md#snapshots-on-the-hub)).
+   Layouts: [inbox.md](../../../website/src/content/docs/setup/inbox.md). Show the user the full list of paths and lines, which consoles hold them, and say that deleting from the hub propagates to every console that whitelists them. The hub is the source of truth: check the user has a snapshot ([Snapshots](../../../website/src/content/docs/operation/safety.md#snapshots-on-the-hub)).
 2. Wait for the user's explicit OK to delete exactly that list. A dry run or listing is not an OK.
 3. Delete every listed part from the hub (library path under the hub root). Re-check each path right before deleting; delete only what was approved.
 4. Wait until the deletion has reached every console that whitelists the game: `warpzone status` on each shows `need 0` for `wz-library` (deletions count in `need`). A console that is offline must reconnect first; removing the line before it does leaves its copy behind.

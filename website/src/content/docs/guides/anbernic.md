@@ -1,6 +1,8 @@
-# Anbernic RG351MP (dArkOS)
+---
+title: "Anbernic RG351MP (dArkOS)"
+---
 
-The `anbernic-rg351mp` profile is for an Anbernic RG351MP that runs dArkOS: EmulationStation as the frontend, RetroArch for most systems, and a games partition (`/roms`) formatted as exFAT. It is a plain TOML file in [`warpzone/data/profiles/`](../warpzone/data/profiles).
+The `anbernic-rg351mp` profile is for an Anbernic RG351MP that runs dArkOS: EmulationStation as the frontend, RetroArch for most systems, and a games partition (`/roms`) formatted as exFAT. It is a plain TOML file in [`warpzone/data/profiles/`](https://github.com/dagonco/warpzone/tree/main/warpzone/data/profiles).
 
 ## What it does differently
 
@@ -95,8 +97,8 @@ Add it to every device that takes part, run `warpzone provision hub`, then `warp
 - **When.** Each `frontend refresh` publishes what EmulationStation saved (on exit) and merges the others, every 15 minutes while it is closed. While it is open only publishing happens, and the merge waits.
 - **Games that are not here.** Their state waits in the files and applies if the game arrives. `hidden` and `kidgame` stay on this device.
 
-See [design.md](design.md#play-state) for the rules.
+See [the design document](/warpzone/development/design/#play-state) for the rules.
 
 ## Doctor
 
-On the device, `warpzone doctor` adds two lines under "Frontend": `ES systems override` and `RetroArch paths`; with `frontend` in the folders it adds `Frontend artwork` (gamelists missing or stale) and `Artwork timer`, and with `play-state` it adds `Play state`. See [doctor.md](doctor.md#frontend).
+On the device, `warpzone doctor` adds two lines under "Frontend": `ES systems override` and `RetroArch paths`; with `frontend` in the folders it adds `Frontend artwork` (gamelists missing or stale) and `Artwork timer`, and with `play-state` it adds `Play state`. See [the doctor guide](/warpzone/operation/doctor/#frontend).

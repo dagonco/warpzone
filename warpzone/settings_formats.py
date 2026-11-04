@@ -2,7 +2,7 @@
 
 A handler is pure (text in, text out). This module holds the line-oriented formats
 (`ini`, `qt-ini`, `retroarch-cfg`, `yaml-flat`); `json` and `toml` live in
-`settings_tree` and are imported on demand. See "Format handlers" in docs/design.md.
+`settings_tree` and are imported on demand. See "Format handlers" in development/design.md.
 """
 
 from __future__ import annotations

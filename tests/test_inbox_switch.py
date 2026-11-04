@@ -21,7 +21,7 @@ from switch_support import (
 from test_inbox import Base
 from warpzone import inbox_switch as sw
 from warpzone.config import InboxSettings
-from warpzone.inbox import InboxError, Tools, whitelist_line
+from warpzone.inbox_core import InboxError, Tools, whitelist_line
 
 MK8 = "0100152000022000"  # a base game
 MK8_UPD = "0100152000022800"

@@ -5,7 +5,7 @@ code of the command that fails with it: `cli.main` prints its message and return
 a new error class needs no change there. Errors that only steer the flow inside one module
 (a single item that cannot be placed, a process that is not there) stay plain `Exception`s.
 The module imports nothing from warpzone, so loading it costs nothing (see "Speed" in
-docs/design.md).
+development/design.md).
 """
 
 from __future__ import annotations
