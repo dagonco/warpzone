@@ -142,6 +142,7 @@ class AdditivePlan:
     whitelisted: tuple[FolderSpec, ...]  # missing and whitelisted: a person makes these
     differences: tuple[str, ...]  # folders the hub has that differ from the config; left alone
     clashes: tuple[str, ...] = ()  # missing, but another hub folder is at that path: not made
+    paused: tuple[str, ...] = ()  # the hub has them paused (a creation that stopped half-way?)
 
 
 def _path_key(path: str) -> str:
@@ -168,6 +169,7 @@ def additive_plan(
     whitelisted: list[FolderSpec] = []
     differences: list[str] = []
     clashes: list[str] = []
+    paused: list[str] = []
     taken = {_path_key(f.get("path", "")): fid for fid, f in existing.items() if f.get("path")}
     for spec in specs:
         if not spec.id.startswith(PREFIX) or (only is not None and spec.id not in only):
@@ -187,6 +189,8 @@ def additive_plan(
             taken[_path_key(spec.path)] = spec.id
             create.append(spec)
             continue
+        if current.get("paused"):
+            paused.append(spec.id)
         if not same_path(current.get("path", ""), spec.path):
             differences.append(
                 f"{spec.id}: the hub has it at {current.get('path')!r}, not {spec.path!r}"
@@ -199,7 +203,9 @@ def additive_plan(
         lacking = [names.get(d, d[:7]) for d in spec.devices if d not in shared]
         if lacking:
             differences.append(f"{spec.id}: not shared with {', '.join(lacking)} on the hub")
-    return AdditivePlan(tuple(create), tuple(whitelisted), tuple(differences), tuple(clashes))
+    return AdditivePlan(
+        tuple(create), tuple(whitelisted), tuple(differences), tuple(clashes), tuple(paused)
+    )
 
 
 def provision_hub_additive(
@@ -217,7 +223,8 @@ def provision_hub_additive(
     hub already has is never patched (so a console with an old config or channel reverts
     nothing); a whitelisted folder is left to a person. The hub's folders are read again right
     before each creation, and the API must answer as the hub. A new folder is created paused,
-    gets its ignores, and is resumed. Returns the IDs it created.
+    gets its ignores, and is resumed; if that fails the folder stays paused and a warning
+    says so (a later run warns about it too). Returns the IDs it created.
     """
     actual = client.my_id()
     if actual != cfg.hub.device_id:
@@ -236,6 +243,11 @@ def provision_hub_additive(
         rep.warn(f"{text} (left as it is; `warpzone provision hub` changes it)")
     for text in plan.clashes:
         rep.warn(text)
+    for folder_id in plan.paused:
+        rep.warn(
+            f"{folder_id}: paused on the hub (left paused; a creation that stopped half-way "
+            "looks like this, `warpzone provision hub` finishes it)"
+        )
     if report_whitelisted:
         for spec in plan.whitelisted:
             rep.warn(
@@ -255,7 +267,17 @@ def provision_hub_additive(
             rep.out(f"{spec.id}: already on the hub, left as it is")
             continue
         upsert_folder(client, spec, None, rep)
-        apply_ignores(client, spec, None, True, rep)
+        try:
+            apply_ignores(client, spec, None, True, rep)
+        except SyncthingError as exc:
+            # The folder exists but is still paused: say so once, and keep its half-written
+            # notes out of any later line for this ID.
+            rep.discard(spec.id)
+            rep.warn(
+                f"{spec.id}: created on the hub but not finished ({exc}); it stays paused, "
+                "run `warpzone provision hub` to finish it"
+            )
+            continue
         rep.flush(spec.id)
         created.append(spec.id)
     if not plan.create:

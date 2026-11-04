@@ -975,6 +975,47 @@ class AdditiveHubTests(unittest.TestCase):
             self.assertEqual(fake.writes(), [])
             self.assertTrue(any("old-tools" in w for w in rep.warnings))
 
+    def test_a_paused_folder_is_reported_and_left_paused(self) -> None:
+        with FakeSyncthing(HUB_ID) as fake:
+            self.additive(fake)
+            fake.folders["wz-tools"]["paused"] = True
+            fake.requests.clear()
+            created, rep, _ = self.additive(fake)
+            self.assertEqual(created, [])
+            self.assertEqual(fake.writes(), [])
+            self.assertTrue(fake.folders["wz-tools"]["paused"])
+            warned = [w for w in rep.warnings if w.startswith("wz-tools") and "paused" in w]
+            self.assertEqual(len(warned), 1)
+            self.assertIn("provision hub", warned[0])
+
+    def test_a_running_folder_is_not_reported_as_paused(self) -> None:
+        with FakeSyncthing(HUB_ID) as fake:
+            self.additive(fake)
+            _, rep, _ = self.additive(fake)
+            self.assertFalse([w for w in rep.warnings if "paused" in w])
+
+    def test_a_folder_that_fails_half_way_is_one_clean_warning(self) -> None:
+        with FakeSyncthing(HUB_ID) as fake:
+            original = fake.route
+
+            def route(method, path, query, body):
+                if (method, path, query.get("folder")) == ("POST", "/rest/db/ignores", "wz-tools"):
+                    return 500, "boom"
+                return original(method, path, query, body)
+
+            fake.route = route
+            created, rep, lines = self.additive(fake, only={"wz-tools"})
+            self.assertEqual(created, [])
+            self.assertTrue(fake.folders["wz-tools"]["paused"])
+            warned = [w for w in rep.warnings if w.startswith("wz-tools")]
+            self.assertEqual(len(warned), 1)
+            self.assertIn("paused", warned[0])
+            self.assertIn("provision hub", warned[0])
+            self.assertFalse([ln for ln in lines if ln.startswith("wz-tools: created")])
+            # Nothing pending is left to be printed into a later line for the same ID.
+            rep.flush("wz-tools")
+            self.assertEqual(lines[-1], "wz-tools: unchanged")
+
     def test_an_api_that_is_not_the_hub_is_refused_before_any_write(self) -> None:
         with FakeSyncthing(DECK_ID) as fake:
             with self.assertRaises(ProvisionError):

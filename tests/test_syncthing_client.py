@@ -1,4 +1,6 @@
+import http.client
 import unittest
+from unittest import mock
 
 from support import API_KEY, HUB_ID, FakeSyncthing
 from warpzone.localst import (
@@ -63,6 +65,36 @@ class ClientTests(unittest.TestCase):
         self.assertIsNone(ctx.exception.status)
         self.assertIn("cannot reach", str(ctx.exception))
         self.assertNotIn(API_KEY, str(ctx.exception))
+
+    def test_a_broken_http_exchange_is_a_syncthing_error(self) -> None:
+        client = Client("http://127.0.0.1:1", "real-key-value", label="hub")
+        broken = [
+            http.client.RemoteDisconnected("closed, real-key-value"),
+            http.client.IncompleteRead(b"abc", 10),
+            http.client.BadStatusLine("real-key-value"),
+        ]
+        for exc in broken:
+            with self.subTest(exc=type(exc).__name__):
+                with (
+                    mock.patch("urllib.request.urlopen", side_effect=exc),
+                    self.assertRaises(SyncthingError) as ctx,
+                ):
+                    client.my_id()
+                self.assertIsNone(ctx.exception.status)
+                self.assertTrue(str(ctx.exception).startswith("hub: "))
+                self.assertNotIn("real-key-value", str(ctx.exception))
+
+    def test_a_body_cut_short_while_reading_is_a_syncthing_error(self) -> None:
+        client = Client("http://127.0.0.1:1", API_KEY, label="hub")
+        resp = mock.MagicMock()
+        resp.__enter__.return_value = resp
+        resp.read.side_effect = http.client.IncompleteRead(b"abc", 10)
+        with (
+            mock.patch("urllib.request.urlopen", return_value=resp),
+            self.assertRaises(SyncthingError) as ctx,
+        ):
+            client.my_id()
+        self.assertIn("IncompleteRead", str(ctx.exception))
 
     def test_db_file_404_is_none(self) -> None:
         with FakeSyncthing(HUB_ID) as fake:

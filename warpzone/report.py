@@ -24,6 +24,10 @@ class Reporter:
         notes = self._notes.pop(folder_id, [])
         self.out(f"{folder_id}: {', '.join(notes) if notes else 'unchanged'}")
 
+    def discard(self, folder_id: str) -> None:
+        """Drop the notes collected for one folder, when a failure replaces its line."""
+        self._notes.pop(folder_id, None)
+
     def defer(self) -> None:
         self.deferred = True
 
