@@ -31,7 +31,8 @@ api_key_file = "~/.config/warpzone/hub.key"
 # local Syncthing is a different device.
 device_id = "BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB"
 
-# A profile shipped in warpzone/data/profiles/ (see `warpzone check` for the list).
+# A profile shipped in warpzone/data/profiles/ (the file name without .toml). `warpzone check`
+# prints the profiles your devices use; an unknown name is refused with the list.
 profile = "steamos-emudeck"
 
 # What this device subscribes to. Any of:

@@ -10,7 +10,7 @@ warpzone never moves game data itself, it only configures Syncthing and keeps
 each device's copy honest.
 
 This document is the contract for the implementation. Anything not described
-here is out of scope for v0.2.
+here is out of scope.
 
 ## Goals
 
@@ -25,7 +25,7 @@ here is out of scope for v0.2.
 - No dependencies beyond the Python standard library (3.11+), so the tool runs
   unchanged on SteamOS, macOS and any Linux box.
 
-## Non-goals (v0.2)
+## Non-goals
 
 - Moving, renaming or converting ROMs that are already in the library. New content goes through `warpzone inbox`, which only ever adds.
 - Shipping or locating any copyrighted content (ROMs, BIOS, keys, firmware).
@@ -208,10 +208,20 @@ files shipped in the repo (`warpzone/data/profiles/<name>.toml`), because they a
 the part other people can reuse and improve.
 
 warpzone ships `steamos-emudeck` and `anbernic-rg351mp` (see
-[Frontend and RetroArch overrides](#frontend-and-retroarch-overrides)). Paths use `~` and
-are expanded on the device.
-It has five kinds of entry; the shipped file is the reference, this is the shape of
-the first four (the fifth, `[settings.*]`, is described in
+[Frontend and RetroArch overrides](#frontend-and-retroarch-overrides)). Those are the only
+profiles: `profiles.available_profiles` lists the files of `warpzone/data/profiles/` and there
+is no user profile folder, so a new profile is a pull request. `warpzone check` prints the
+profiles the configured devices use, and a profile name the config uses that is not shipped is
+refused with the list of the ones that are. Paths use `~` and are expanded on the device.
+
+Besides `name` and `description`, a profile has the top-level flag `ignore_perms` and these
+tables: `[paths]`, `[library]`, `[saves.*]`, `[bios.*]`, `[settings.*]`, `[es_systems]`,
+`[retroarch]`, `[artwork]`, `[play_state]`, `[shadps4]` and `[links.*]`
+(`profiles.parse_profile` refuses any other key). The shipped files are the reference; this is
+the shape of the first four, and the others are described where their feature is
+([Frontend and RetroArch overrides](#frontend-and-retroarch-overrides),
+[shadPS4 install directories](#shadps4-install-directories), [Title links](#title-links),
+[Frontend artwork](#frontend-artwork), [Play state](#play-state) and, for `[settings.*]`,
 [Emulator settings](#profile-entries)):
 
 ```toml
@@ -806,7 +816,6 @@ error messages; the RetroAchievements key is read from `RA_API_KEY`, never from 
 | `warpzone provision device <name>` | on the device | Reads the local Syncthing API key from the local `config.xml` (searching the default locations, including the SyncThingy flatpak; `--syncthing-config PATH` overrides), adds the hub device, creates the subscribed folders with the bootstrap above (`--timeout SECONDS`). With `auto_hub = true` it first creates on the hub the folders of the device that the hub lacks (see [Hub folders from a console](#hub-folders-from-a-console-auto_hub)). `--unattended` is for a run nobody watches and changes the rules as described in [Autonomous updates](#autonomous-updates-contract); it exits `3` when a write waits for the menu to close. When that Syncthing is the SyncThingy flatpak it first grants it the missing `flatpak override --user --filesystem=~/.var/app/<app>` for every folder under `~/.var/app` (flatpak hides other apps' data), and asks for a Syncthing restart. When the device subscribes to `settings`, it installs the ES-DE startup script that runs `settings apply` (see [ES-DE startup script](#es-de-startup-script)). When the device subscribes to `library` and its profile has `[es_systems]` or `[retroarch]`, it also writes the frontend's system list override and pins RetroArch's paths (see [Frontend and RetroArch overrides](#frontend-and-retroarch-overrides)). When the profile has `[shadps4]` it also lists the PS4 games folder in shadPS4's install directories (see [shadPS4 install directories](#shadps4-install-directories)). When the profile has `[links.*]` and the device lists `library`, it links the library games into the emulator's game folder and installs the ES-DE startup script that keeps them linked (see [Title links](#title-links)). When it lists `frontend` and the profile has `[artwork]`, it limits the artwork folders to the systems on the device, writes the gamelists and installs the refresh timer (see [Frontend artwork](#frontend-artwork)). Idempotent. |
 | `warpzone frontend refresh [device]` | on the device | For a device whose profile has `[artwork]` and that lists `frontend`: widens the artwork folders' ignores to the systems that have games now (when the local Syncthing is found) and rewrites the frontend's gamelists from the synced ES-DE data, only while the frontend is closed. `--dry-run` prints what it would do. See [Frontend artwork](#frontend-artwork). |
 | `warpzone play-state sync <device>` | on the device | For a device with ES-DE that lists `play-state`: publishes what its gamelists say and merges the other devices' ledgers into them, only while ES-DE is closed or starting (`--frontend-starting`, which its startup script passes). `--dry-run`, `--quiet`. Needs no network. See [Play state](#play-state). |
-| `warpzone provision device <name>` | on the device | Reads the local Syncthing API key from the local `config.xml` (searching the default locations, including the SyncThingy flatpak; `--syncthing-config PATH` overrides), adds the hub device, creates the subscribed folders with the bootstrap above (`--timeout SECONDS`). When that Syncthing is the SyncThingy flatpak it first grants it the missing `flatpak override --user --filesystem=~/.var/app/<app>` for every folder under `~/.var/app` (flatpak hides other apps' data), and asks for a Syncthing restart. When the device subscribes to `settings`, it installs the ES-DE startup script that runs `settings apply` (see [ES-DE startup script](#es-de-startup-script)). When the device subscribes to `library` and its profile has `[es_systems]` or `[retroarch]`, it also writes the frontend's system list override and pins RetroArch's paths (see [Frontend and RetroArch overrides](#frontend-and-retroarch-overrides)). It then writes the updater's settings, installs the live copy of the updater script and the timer that starts it, for every profile (see [Self-update](#self-update)). Idempotent. |
 | `warpzone links sync <device>` | on the device | For a profile with `[links.*]` and a device that lists `library`: makes each rule's `target` hold a symlink per library title, never while the emulator runs (see [Title links](#title-links)). `--dry-run` only says what it would do, `--quiet` prints nothing. ES-DE runs it at startup. |
 | `warpzone prune [device]` | on the device | Reports, and with `--apply` deletes, the files of the whitelisted folders that the device no longer whitelists (see [Pruning](#pruning)). Report only by default. |
 | `warpzone bios` | on a device or the hub | Reports which BIOS and firmware files a library has, lacks or has wrong (see [BIOS check](#bios-check)). Read-only. Exit 1 if a required item is missing or wrong. |
@@ -821,12 +830,27 @@ error messages; the RetroAchievements key is read from `RA_API_KEY`, never from 
 | `warpzone status` | anywhere | Folder state, need counts, errors, receive-only local changes, for the hub (and the local device if any). |
 | `warpzone render-ignores <device>` | anywhere | Prints the ignore lines a device folder would get. For debugging. |
 
-Every writing command supports `--dry-run`, which prints the REST calls it
-would make (method, path, JSON body with secrets redacted) and sends no write.
-It still sends the GET requests it needs to compute the diff. Every command
-takes `--config PATH` (default `$WARPZONE_CONFIG`, then the XDG path).
+`--dry-run` belongs to the commands that write by default: `provision hub`, `provision
+device`, `frontend refresh`, `play-state sync`, `links sync`, `settings apply` and
+`settings capture`. For `provision` it prints the REST calls the command would make (method,
+path, JSON body with secrets redacted) and sends no write, though it still sends the GET
+requests it needs to compute the diff; the others say what they would write. Commands that act
+only with `--apply` (`prune`, `inbox`) have no `--dry-run`: the report is the dry run, see
+[Pruning](#pruning). `check`, `bios`, `doctor`, `status`, `render-ignores`,
+`settings audit`, `health` and `self-update` do not write user data and take none.
 
-Exit codes: `0` ok, `1` runtime error (for `health`, a failed check, a config error included), `2` usage or config error, and `3` only for `provision device --unattended` (deferred).
+Every command takes `--config PATH` (default `$WARPZONE_CONFIG`, then the XDG path) except
+`self-update`, whose only option is `--now`: it needs no config and runs the installed updater
+with the settings `provision device` wrote.
+
+Exit codes: `0` ok, `1` runtime error (for `health`, a failed check, a config error included),
+`2` usage or config error, `3` only for `provision device --unattended` (deferred), `130` when
+a command is interrupted with Ctrl-C and `143` for an updater tick killed by `HUP`, `INT` or
+`TERM`. Every error warpzone reports derives from `WarpzoneError`, which carries its exit code
+(`errors.py`); `UsageError`, the base of `ConfigError`, `ProfileError`, `ModelError`,
+`BiosError` and `InboxError`, makes it `2`. So a usage error of `bios` or `inbox` (a missing
+`--root`, a configured file that does not exist) exits `2`, not `1`, and `1` stays for what went
+wrong while working (a missing BIOS, an item sent to review).
 
 `prune` has its own flags: `--apply`, `--max-gib N` (default 50), `--force`,
 `--list`, `--notify-url URL`, `--timeout SECONDS` (wait for the rescan),
@@ -1103,8 +1127,8 @@ Syncthing state. The contract:
   identified by their NCSD and NCCH headers, not by DAT.
 - **PS4 packages.** See [PS4 packages](#ps4-packages) below; with `orbis-pkg-util` they are
   extracted into a game folder with a shortcut.
-- **Out of scope.** Vita, and PS3 or Xbox content that is not a disc image (`.pkg`,
-  `.rap`, an extracted `PS3_GAME` or `default.xbe` folder). Their files are recognised by
+- **Out of scope.** Vita `.vpk` packages, and PS3 or Xbox content that is not a disc image
+  (`.pkg`, `.rap`, an extracted `PS3_GAME` or `default.xbe` folder). Their files are recognised by
   extension or folder and go to review with "not supported by inbox yet". A disc image kept as a
   single `.bin` for several tracks is not identified (the DATs list one file per track).
 - **Exit code.** `0` when every item is placed or already in the library; `1` when any
@@ -2534,14 +2558,15 @@ one without the other is dropped, and `attempts` with it.
 lines. The log stays in `self-update.log` (cut to its last 200 lines past 64 KiB). Values are
 read as data: a key that is not on the list or not made of lowercase letters and underscores
 is ignored, a number that is not a number is reset, and nothing is ever evaluated. `doctor`
-(not written yet) reads the state and warns about a rollback, `stuck`, `dirty`, or more than
+reads the state and warns about a rollback, `stuck`, `dirty`, or more than
 14 days without a success.
 
 The exit status of a tick is `0` when nothing needs attention (updated, up to date, deferred,
 a checkout that is `dev` or `dirty`, a lock held by another tick, `enabled` off) and `1` when
 a release was rolled back, the environment is at fault, the previous version could not be
-checked out (`stuck`), no Python was found, or the tick could not run. A run that was killed
-leaves no status at all.
+checked out (`stuck`), no Python was found, or the tick could not run. A tick killed by `HUP`,
+`INT` or `TERM` stops its running step and exits `143` (the same trap in `install`); one killed
+by `KILL` or a power cut leaves no status at all.
 
 **Bad versions and the loop.**
 
@@ -2807,12 +2832,15 @@ warpzone/
   prune.py           leftover detection (pure `classify`), delete, webhook
   bios.py            BIOS manifest, local overrides, pure `judge_*`, disk checks
   dat.py             Redump / No-Intro DAT parsing, cache, matching, disc grouping (pure)
+  inbox_core.py      what the inbox pipeline and its handlers share: errors, options, results, staging
   inbox.py           unpack, identify, convert, place, file the originals
+  sfo.py             the key/value table of a PARAM.SFO (pure; PS3 discs and PS4 packages)
   inbox_switch.py    Switch games: identify with nsz, titledb names, decompress, place
   inbox_mame.py      arcade sets: MAME / FBNeo / 2003-Plus fit, emulator choice, gamelist backup and write
   inbox_console_iso.py  PS3, Xbox, Xbox 360 and Wii U images: identify by signature, place
   inbox_ps4.py       PS4 packages: extract with orbis-pkg-util, place the game folder, shortcut
   inbox_vita.py      PS Vita game dumps: identify by param.sfo, place the folder and the .psvita file
+  shadps4.py         shadPS4's install directories and launch script edits (pure)
   titlelinks.py      symlinks from the library's game folders into an emulator's own (pure plan)
   inbox_n3ds.py      3DS images (`.3ds`, `.cci`): NCSD / NCCH header check, placed as `.cci`
   flatpak.py         the SyncThingy flatpak: app id and the unit's commands
@@ -2841,6 +2869,7 @@ warpzone/
   localst.py         find and parse the local Syncthing config.xml
   data/updater.sh    the updater (POSIX sh): choose a release, verify it, roll it back
   data/bios.toml     BIOS manifest (names, sizes, hashes, signatures only)
+  data/allowed_signers  the keys that sign releases, in the format of `ssh-keygen -Y` (see "Autonomous updates")
   data/profiles/steamos-emudeck.toml
   data/profiles/anbernic-rg351mp.toml
 templates/
@@ -3005,7 +3034,9 @@ logic is unit-tested without a network.
 ## CI (GitHub Actions)
 
 - `lint`: ruff check + ruff format --check.
-- `test`: unittest on Python 3.11, 3.12, 3.13, 3.14, ubuntu-latest and macos-latest.
+- `test`: unittest on Linux with Python 3.11 and 3.14 and on macOS with Python 3.14, without
+  the updater script's tests (`WARPZONE_SKIP_UPDATER_SH=1`).
+- `updater`: `tests/test_updater_sh.py` on Ubuntu with dash as `sh` and on macOS.
 - `e2e`: ubuntu-latest, downloads a pinned Syncthing release, verifies its
   SHA-256 against a value committed in the workflow, runs the e2e test.
 - `secrets`: gitleaks over the full history.
