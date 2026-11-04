@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ## [Unreleased]
 
+### Added
+
+- Agent skills in `.claude/skills/` for installing a console, adding games through the inbox, editing a whitelist, diagnosing a machine and publishing a release.
+
 ## [0.3.0rc1] - 2026-11-03
 
 First release candidate of 0.3.0. Consoles can now keep themselves on a working release, the inbox takes in more systems, and warpzone supports a second device profile.
