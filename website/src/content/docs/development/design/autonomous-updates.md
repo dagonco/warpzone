@@ -181,7 +181,9 @@ same step is `provision hub --additive`, which a person can run from anywhere. T
   warns, naming `provision hub` as the way to change it. A missing folder whose path another
   hub folder already has (compared without a trailing slash and in any case, whatever that
   folder's ID) is not created either, with a warning: two folders on one directory would each
-  sync it their own way.
+  sync it their own way. A `wz-*` folder the hub has paused is reported too (a creation that
+  stopped after the POST looks like this) and left paused, naming `provision hub` as the way
+  to finish it.
 - **Only what the device needs.** From a device, the run is limited to the folders of that
   device that this run is going to provision (the ones left out because a save directory is
   missing are not made on the hub). The hub folder is shared with every device that
@@ -191,7 +193,9 @@ same step is `provision hub --additive`, which a person can run from anywhere. T
   written). The hub's folders are read again right before each creation (after any device it
   adds, since `POST /rest/config/folders` replaces a folder with the same ID), and a folder
   that appeared in between is left alone. A new folder is created paused, gets its ignores and is
-  then resumed, as `provision hub` does.
+  then resumed, as `provision hub` does. If setting the ignores or resuming fails, the folder
+  stays paused and the run gives one warning for that folder ID (its pending notes are
+  dropped, so they cannot end up in a later line for the same ID) and goes on.
 - **Never a failure of the device.** From `provision device`, an unreachable hub, a refused
   key or another device behind the API is a warning (`auto_hub: ...`) and the run goes on
   with the hub as it is. A console must not roll back a release because the hub is away. A

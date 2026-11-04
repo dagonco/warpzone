@@ -247,6 +247,8 @@ def parse_config(data: dict[str, Any], known_profiles: set[str] | None = None) -
             errors.append("hub.api_url: must start with http:// or https://")
         addresses = _addresses(raw_hub, "hub", errors)
         api_key = _read_api_key(raw_hub, errors)
+        if root and not root.startswith("/"):
+            errors.append(f"hub.root: must be an absolute path (starting with /), not {root!r}")
         if root and len(root) > 1:
             root = root.rstrip("/")
         hub = Hub(name, device_id, root, api_url.rstrip("/"), api_key, addresses)
