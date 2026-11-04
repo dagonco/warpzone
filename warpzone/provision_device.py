@@ -43,6 +43,7 @@ from warpzone.provision_hub import provision_hub_additive
 from warpzone.provision_scripts import (
     ensure_esde_script,
     ensure_links_script,
+    ensure_options_menu,
     ensure_play_state_script,
 )
 from warpzone.provision_timers import ensure_artwork_timer, ensure_play_state_timer
@@ -495,6 +496,8 @@ def provision_device(
             config_path=config_path,
             probes=probes,
         )
+
+    ensure_options_menu(profile, home, rep, dry_run=local.dry_run)
 
     ensure_self_update(
         device,

@@ -6,7 +6,7 @@ import os
 import sys
 from pathlib import Path
 
-from warpzone import esde, procs, safefile, settings_state
+from warpzone import esde, options_menu, procs, safefile, settings_state
 from warpzone.paths import expand_home
 from warpzone.probes import REAL_PROBES, DeviceProbes
 from warpzone.profiles import Profile
@@ -242,3 +242,47 @@ def _install_startup_script(
         rep.out(f"es-de: wrote {path}")
     root = state_root if state_root is not None else settings_state.state_dir(home=home)
     _enable_event_scripts(name, esde_dir, rep, dry_run=dry_run, probes=probes, state_root=root)
+
+
+def ensure_options_menu(
+    profile: Profile, home: Path, rep: Reporter, *, dry_run: bool, tag: str = "options menu"
+) -> None:
+    """Install the "Warpzone" entries of the device's Options menu (ArkOS: `/opt/system`).
+
+    Only those files are written, each atomically and only when its content differs. A folder
+    that does not exist is not created (it is not an ArkOS menu then): a warning says so. A
+    file of the same name that did not come from warpzone is left alone. Does nothing when the
+    profile has no `[options_menu]`.
+    """
+    if profile.options_menu is None:
+        return
+    folder = Path(expand_home(profile.options_menu.dir, home))
+    if not folder.is_dir():
+        rep.warn(f"{tag}: skipped, {folder} does not exist (is this ArkOS?)")
+        return
+    for name, text in options_menu.entries().items():
+        path = folder / name
+        try:
+            current: str | None = path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            current = None
+        except (OSError, UnicodeDecodeError):
+            rep.warn(f"{tag}: cannot read {path}, left alone")
+            continue
+        if current is not None and options_menu.MARKER not in current:
+            rep.warn(f"{tag}: {path} is not a warpzone file, left alone")
+            continue
+        try:
+            if current == text:
+                if not dry_run and not os.access(path, os.X_OK):
+                    path.chmod(0o755)
+                    rep.out(f"{tag}: made {path} executable")
+                else:
+                    rep.out(f"{tag}: unchanged ({path})")
+            elif dry_run:
+                rep.out(f"{tag}: dry-run: would write {path}")
+            else:
+                safefile.write_script(path, text)
+                rep.out(f"{tag}: wrote {path}")
+        except OSError as exc:
+            rep.warn(f"{tag}: cannot write {path} ({exc})")
