@@ -14,12 +14,8 @@ from test_provision import reporter
 from warpzone import selfupdate, updatetimer
 from warpzone.config import parse_config
 from warpzone.profiles import load_profile
-from warpzone.provision import (
-    ensure_self_update,
-    ensure_update_timer,
-    ensure_updater,
-    provision_device,
-)
+from warpzone.provision import provision_device
+from warpzone.provision_updater import ensure_self_update, ensure_update_timer, ensure_updater
 from warpzone.syncthing import Client
 
 TIMER = "warpzone-self-update.timer"
@@ -306,7 +302,7 @@ class EnsureUpdaterTests(TmpHome):
     def test_a_script_that_hangs_in_its_selftest_is_cut_off(self) -> None:
         text = "UPDATER_ABI=2\ncase ${1:-} in selftest) sleep 30 ;; esac\n"
         self.source.write_text(text)
-        with mock.patch("warpzone.provision.UPDATER_CHECK_SECONDS", 1):
+        with mock.patch("warpzone.provision_updater.UPDATER_CHECK_SECONDS", 1):
             self.assertFalse(ensure_updater(self.home, self.rep, dry_run=False, source=self.source))
         self.assertIn("selftest", self.rep.warnings[0])
         self.assertFalse(self.live.exists())
