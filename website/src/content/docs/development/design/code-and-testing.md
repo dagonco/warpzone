@@ -71,6 +71,7 @@ warpzone/
   shadps4.py         shadPS4's install directories and launch script edits (pure)
   titlelinks.py      symlinks from the library's game folders into an emulator's own (pure plan)
   inbox_n3ds.py      3DS images (`.3ds`, `.cci`): NCSD / NCCH header check, placed as `.cci`
+  inbox_dolphin.py   Wii and GameCube `.rvz` / `.wia`: header check (disc type, magic, game ID), placed in `wii/` or `gc/`
   flatpak.py         the SyncThingy flatpak: app id and the unit's commands
   selfupdate.py      the updater's side in Python: paths, settings file, live copy rule, `self-update` wrapper
   versions.py        order of package versions and release tags (`version_key`, `tag_key`; pure)

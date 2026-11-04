@@ -21,7 +21,7 @@ Inbox tools
   [ok] chdman       chdman - MAME Compressed Hunks of Data (CHD) manager 0.289 (unknown) (/opt/homebrew/bin/chdman)
   [!!] bsdtar       not found (required by inbox)
                     fix: sudo apt install libarchive-tools
-  [--] dolphin-tool not found (only for compressed GameCube images (.rvz))
+  [--] dolphin-tool not found (only for compressed GameCube images (.gcz))
                     fix: install Dolphin (brew install --cask dolphin); ...
 ...
 1 problem(s), 0 warning(s), 4 optional item(s) not set up. Fix the [!!] lines above.

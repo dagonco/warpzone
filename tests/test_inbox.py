@@ -274,7 +274,7 @@ class PureTests(unittest.TestCase):
         units, _ = plan_units([cart], lambda match: True)
         self.assertEqual(units[0].entry, "Cart (USA).zip")
         units, _ = plan_units([DiscGroup("gc", "G", (m("gc", "G"),), False)], lambda match: True)
-        self.assertEqual(units[0].entry, "G.rvz")
+        self.assertEqual(units[0].entry, "G.gcz")
 
         incomplete = DiscGroup("psx", "Big (USA)", multi.matches[:1], True, missing=("2",))
         clash = DiscGroup("psx", "Big (USA)", multi.matches, True, clash=("1",))
@@ -825,13 +825,13 @@ class FileSystemTests(Base):
         self.assertEqual(self.library(), ["gc/Cube Game (USA).iso"])
         self.assertIn("dolphin-tool convert -f rvz -c zstd -l 5 -b 131072", self.out)
 
-    def test_compressed_gamecube_image_needs_dolphin_tool_and_is_kept_as_it_is(self) -> None:
-        rvz = b"RVZ\x01 compressed container"
-        self.drop("cube.rvz", rvz)
+    def test_gcz_gamecube_image_needs_dolphin_tool_and_is_kept_as_it_is(self) -> None:
+        gcz = b"\x01\xc0\x0b\xb1 compressed container"
+        self.drop("cube.gcz", gcz)
         self.assertEqual(self.go(tools=Tools()), 1)
-        self.assertIn("needs dolphin-tool", self.reason("cube.rvz"))
-        (self.inbox / "_revisar" / "cube.rvz").rename(self.inbox / "cube.rvz")
-        age(self.inbox / "cube.rvz")
+        self.assertIn("needs dolphin-tool", self.reason("cube.gcz"))
+        (self.inbox / "_revisar" / "cube.gcz").rename(self.inbox / "cube.gcz")
+        age(self.inbox / "cube.gcz")
         source = (
             "import shutil, sys\n"
             "a = sys.argv[1:]\n"
@@ -840,8 +840,8 @@ class FileSystemTests(Base):
         )
         dolphin = make_stub(self.bin, "dolphin-tool", source)
         self.assertEqual(self.go(tools=Tools(dolphin_tool=dolphin)), 0)
-        self.assertEqual(self.library(), ["gc/Cube Game (USA).rvz"])
-        self.assertEqual((self.roms / "gc" / "Cube Game (USA).rvz").read_bytes(), rvz)
+        self.assertEqual(self.library(), ["gc/Cube Game (USA).gcz"])
+        self.assertEqual((self.roms / "gc" / "Cube Game (USA).gcz").read_bytes(), gcz)
         self.assertNotIn("could be converted", self.out)
 
     def test_part_file_from_an_earlier_crash_is_replaced(self) -> None:

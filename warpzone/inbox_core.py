@@ -2,9 +2,9 @@
 
 `inbox.py` runs the pipeline (DATs, conversion, filing) and registers the handlers
 (`inbox_mame.py`, `inbox_switch.py`, `inbox_console_iso.py`, `inbox_vita.py`,
-`inbox_n3ds.py`, `inbox_ps4.py`). The handlers import this module and never `inbox.py`,
-so the imports between the inbox modules form no cycle. This module imports no other
-inbox module.
+`inbox_n3ds.py`, `inbox_dolphin.py`, `inbox_ps4.py`). The handlers import this module and
+never `inbox.py`, so the imports between the inbox modules form no cycle. This module
+imports no other inbox module.
 
 The pure decisions here (`skip_name`, `unsafe_member`, `whitelist_line`,
 `unsupported_reason`, `destination_verdict`) have no I/O; the rest touches the disk or
@@ -172,7 +172,7 @@ def copy_verified(src: Path, dest: Path) -> None:
 class Staged:
     path: Path  # where the bytes are (the inbox itself, or the local work folder)
     rel: str  # name within the item, "/" separated
-    origin: Path | None = None  # the compressed GameCube image this was expanded from
+    origin: Path | None = None  # the .gcz image this was expanded from
 
 
 def _free_space_check(dest: Path, needed: int) -> None:

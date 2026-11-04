@@ -29,7 +29,15 @@ from datetime import date
 from pathlib import Path
 
 from warpzone import dat as datmod
-from warpzone import inbox_console_iso, inbox_mame, inbox_n3ds, inbox_switch, inbox_vita, ra
+from warpzone import (
+    inbox_console_iso,
+    inbox_dolphin,
+    inbox_mame,
+    inbox_n3ds,
+    inbox_switch,
+    inbox_vita,
+    ra,
+)
 from warpzone.dat import (
     DISC_SYSTEMS,
     EXTENSION_HINTS,
@@ -70,7 +78,7 @@ DONE_DIR = "_done"
 REVIEW_DIR = "_revisar"
 DONE_KEEP_DAYS = 7
 SETTLE_SECONDS = 30  # an item changed more recently than this may still be copying
-COMPRESSED_GC = (".rvz", ".gcz", ".wia")
+COMPRESSED_GC = (".gcz",)  # .rvz and .wia are read by `inbox_dolphin`
 # Files that travel with a dump but are not part of any DAT; never identified.
 ZIP_DATE = (1996, 12, 24, 23, 32, 0)  # fixed, so the same game always zips to the same bytes
 DOLPHIN_HINT = "dolphin-tool convert -f rvz -c zstd -l 5 -b 131072"
@@ -147,7 +155,7 @@ def output_extension(system: str, from_compressed: bool = False) -> str:
     if system == "psp":
         return ".iso"
     if system == "gc":
-        return ".rvz" if from_compressed else ".iso"
+        return ".gcz" if from_compressed else ".iso"
     return ".zip"
 
 
@@ -209,8 +217,9 @@ def fingerprint(path: Path, rel: str) -> FileInfo:
 def expand_compressed(
     staged: list[Staged], work: Path, tools: Tools
 ) -> tuple[list[Staged], list[str]]:
-    """GameCube .rvz/.gcz/.wia images are expanded to an .iso (needs dolphin-tool) so
-    they can be identified; the compressed file is what gets placed."""
+    """GameCube .gcz images are expanded to an .iso (needs dolphin-tool) so they can be
+    identified; the compressed file is what gets placed. (.rvz and .wia carry a copy of the
+    disc header and are identified without a tool by `inbox_dolphin`.)"""
     out: list[Staged] = []
     failures: list[str] = []
     for s in staged:
@@ -218,7 +227,7 @@ def expand_compressed(
             out.append(s)
             continue
         if not tools.dolphin_tool:
-            failures.append(f"{s.rel}: needs dolphin-tool to identify a compressed GameCube image")
+            failures.append(f"{s.rel}: needs dolphin-tool to identify a .gcz GameCube image")
             continue
         iso = next_free(work, "d") / (s.path.stem + ".iso")
         iso.parent.mkdir(parents=True)
@@ -301,7 +310,7 @@ def make_zip(out: Path, game: datmod.Game, sources: Sequence[Path]) -> None:
 
 @dataclass
 class Prepared:
-    kind: str  # cd | dvd | zip | iso | rvz
+    kind: str  # cd | dvd | zip | iso | rvz (a compressed image kept as it is)
     sources: tuple[Path, ...]  # one per rom of the game
     chd_input: Path | None  # what chdman reads (cue, gdi or iso)
     ra_input: Path | None
@@ -319,6 +328,7 @@ def kind_handlers() -> list[KindHandler]:
         inbox_console_iso.HANDLER,
         inbox_vita.HANDLER,
         inbox_n3ds.HANDLER,
+        inbox_dolphin.HANDLER,
     ]
 
 
