@@ -6,10 +6,9 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ## [Unreleased]
 
-### Security
+## [0.3.0rc3] - 2026-11-04
 
-- `warpzone/data/allowed_signers` now lists the maintainer's release key. A device that runs this release keeps trusting that key, and from the next release on it only accepts release, candidate, pin and `retired/` tags signed with it.
-
+Third release candidate of 0.3.0: release candidates now reach devices within the hour, hubs can get their folders from the consoles (`auto_hub`), the Anbernic shows warpzone's state in its Options menu, and this release carries the key that signs every later release.
 ### Added
 
 - On the Anbernic (ArkOS) profile, `provision device` adds "Warpzone Status" and "Warpzone Update Now" to the Options menu (a new `[options_menu]` profile table pointing at `/opt/system`): the first shows the version, the updater's state and what `warpzone doctor` reports, without the network; the second runs `warpzone self-update --now`.
@@ -24,6 +23,10 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 - An additive hub run (`provision hub --additive`, `auto_hub`) warns about a `wz-*` folder the hub has paused instead of leaving it silently, and a folder whose creation fails after it was made gives one clean warning; a reply cut short by the Syncthing API (`IncompleteRead`, `BadStatusLine`) is a Syncthing error instead of a traceback; and `hub.root` must be an absolute path.
 - The updater stops with a log line when it finds no clone to work on, instead of acting on whatever folder it runs from; a retirement is looked up by name for the tags the tick considers (the running version, the pin, a version being tried or under suspicion and each valid candidate) instead of going through a limited number of `retired/` tags, so no amount of fake retirement tags can hide a real one, also after a trial that was given up; and no move to a lower version is accepted in a tick where the copy of the allowed signers failed.
+
+### Security
+
+- `warpzone/data/allowed_signers` now lists the maintainer's release key. A device that runs this release keeps trusting that key, and from the next release on it only accepts release, candidate, pin and `retired/` tags signed with it.
 
 ## [0.3.0rc2] - 2026-11-04
 
@@ -138,7 +141,8 @@ First public release. warpzone keeps one game library on a home server and deliv
 - `warpzone doctor` checks the tools, config, Syncthing, DATs and hub folder of a machine and prints the fix for each problem.
 - `warpzone status`, `check` and `render-ignores` to inspect folder state, validate the config and preview a device's ignore lines. `provision` supports `--dry-run`.
 
-[Unreleased]: https://github.com/dagonco/warpzone/compare/v0.3.0rc2...HEAD
+[Unreleased]: https://github.com/dagonco/warpzone/compare/v0.3.0rc3...HEAD
+[0.3.0rc3]: https://github.com/dagonco/warpzone/compare/v0.3.0rc2...v0.3.0rc3
 [0.3.0rc2]: https://github.com/dagonco/warpzone/compare/v0.3.0rc1...v0.3.0rc2
 [0.3.0rc1]: https://github.com/dagonco/warpzone/compare/v0.2.0...v0.3.0rc1
 [0.2.0]: https://github.com/dagonco/warpzone/compare/v0.1.0...v0.2.0
