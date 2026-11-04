@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import posixpath
 import time
 from collections.abc import Callable, Collection
 from dataclasses import dataclass
@@ -140,6 +141,12 @@ class AdditivePlan:
     create: tuple[FolderSpec, ...]  # missing and not whitelisted: the only ones it makes
     whitelisted: tuple[FolderSpec, ...]  # missing and whitelisted: a person makes these
     differences: tuple[str, ...]  # folders the hub has that differ from the config; left alone
+    clashes: tuple[str, ...] = ()  # missing, but another hub folder is at that path: not made
+
+
+def _path_key(path: str) -> str:
+    """A folder path as compared for clashes: no trailing slash, any case."""
+    return posixpath.normpath(path).casefold() if path else ""
 
 
 def additive_plan(
@@ -153,16 +160,32 @@ def additive_plan(
     Only a folder that is not on the hub and is not whitelisted is created. A folder the hub
     has is never touched, whatever it looks like: its differences are only reported. `names`
     maps a device ID to its name, for the report; `only` limits the run to those folder IDs.
+    A missing folder whose path another hub folder already has (compared without a trailing
+    slash and in any case) is not created either: two folders on one directory would each
+    sync it their own way.
     """
     create: list[FolderSpec] = []
     whitelisted: list[FolderSpec] = []
     differences: list[str] = []
+    clashes: list[str] = []
+    taken = {_path_key(f.get("path", "")): fid for fid, f in existing.items() if f.get("path")}
     for spec in specs:
         if not spec.id.startswith(PREFIX) or (only is not None and spec.id not in only):
             continue
         current = existing.get(spec.id)
         if current is None:
-            (whitelisted if spec.bootstrap_ignores is not None else create).append(spec)
+            if spec.bootstrap_ignores is not None:
+                whitelisted.append(spec)
+                continue
+            other = taken.get(_path_key(spec.path))
+            if other is not None:
+                clashes.append(
+                    f"{spec.id}: not created, the hub's folder {other!r} is already at "
+                    f"{spec.path!r}"
+                )
+                continue
+            taken[_path_key(spec.path)] = spec.id
+            create.append(spec)
             continue
         if not same_path(current.get("path", ""), spec.path):
             differences.append(
@@ -176,7 +199,7 @@ def additive_plan(
         lacking = [names.get(d, d[:7]) for d in spec.devices if d not in shared]
         if lacking:
             differences.append(f"{spec.id}: not shared with {', '.join(lacking)} on the hub")
-    return AdditivePlan(tuple(create), tuple(whitelisted), tuple(differences))
+    return AdditivePlan(tuple(create), tuple(whitelisted), tuple(differences), tuple(clashes))
 
 
 def provision_hub_additive(
@@ -211,6 +234,8 @@ def provision_hub_additive(
     )
     for text in plan.differences:
         rep.warn(f"{text} (left as it is; `warpzone provision hub` changes it)")
+    for text in plan.clashes:
+        rep.warn(text)
     if report_whitelisted:
         for spec in plan.whitelisted:
             rep.warn(
@@ -219,14 +244,16 @@ def provision_hub_additive(
             )
     created: list[str] = []
     for spec in plan.create:
-        # The last look before writing: someone may have made it since the list was read.
-        if any(f["id"] == spec.id for f in client.folders()):
-            rep.out(f"{spec.id}: already on the hub, left as it is")
-            continue
         known = {d["deviceID"] for d in client.devices()}
         for device_id in spec.devices:
             device = devices[device_id]
             ensure_device(client, device_id, device.name, device.addresses, known, rep)
+        # The last look before writing, after the device writes: POST /rest/config/folders
+        # replaces a folder with the same ID, and someone may have made it since the list
+        # was read.
+        if any(f["id"] == spec.id for f in client.folders()):
+            rep.out(f"{spec.id}: already on the hub, left as it is")
+            continue
         upsert_folder(client, spec, None, rep)
         apply_ignores(client, spec, None, True, rep)
         rep.flush(spec.id)
