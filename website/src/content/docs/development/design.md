@@ -2408,15 +2408,19 @@ same step is `provision hub --additive`, which a person can run from anywhere. T
   devices, ignores or paused flag changed, so a console with an old config or channel reverts
   nothing and there is no question of whose config wins. Where an existing folder differs
   from the config (path, type, or a subscribing device it is not shared with) the run only
-  warns, naming `provision hub` as the way to change it.
+  warns, naming `provision hub` as the way to change it. A missing folder whose path another
+  hub folder already has (compared without a trailing slash and in any case, whatever that
+  folder's ID) is not created either, with a warning: two folders on one directory would each
+  sync it their own way.
 - **Only what the device needs.** From a device, the run is limited to the folders of that
   device that this run is going to provision (the ones left out because a save directory is
   missing are not made on the hub). The hub folder is shared with every device that
   subscribes to it in the config, as `provision hub` would, and a subscriber the hub does not
   know yet is added as a device first.
 - **Safe to write.** The API must answer as `hub.device_id` (else `ProvisionError`, nothing
-  written). The hub's folders are read again right before each creation, and a folder that
-  appeared in between is left alone. A new folder is created paused, gets its ignores and is
+  written). The hub's folders are read again right before each creation (after any device it
+  adds, since `POST /rest/config/folders` replaces a folder with the same ID), and a folder
+  that appeared in between is left alone. A new folder is created paused, gets its ignores and is
   then resumed, as `provision hub` does.
 - **Never a failure of the device.** From `provision device`, an unreachable hub, a refused
   key or another device behind the API is a warning (`auto_hub: ...`) and the run goes on

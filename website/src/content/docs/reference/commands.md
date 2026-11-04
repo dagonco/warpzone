@@ -95,7 +95,7 @@ warpzone provision hub [--config PATH] [--dry-run] [--timeout SECONDS] [--additi
 
 Configures the hub's Syncthing through its REST API: checks that the API belongs to the device named in `[hub]`, adds every configured device, creates or updates every `wz-*` folder and shares it with the devices that subscribe to it, and sets the hub's ignores. It is idempotent: run it once, then again whenever you add a device or a folder group.
 
-With `--additive` it does much less: it only creates the `wz-*` folders the hub lacks, and only those that are not whitelisted (`wz-library` and `wz-songs` are left to a plain `provision hub`, with a warning). A folder the hub has is never changed, and where it differs from the config (path, type, a device it is not shared with) the run only warns. It is what a device with `auto_hub = true` does for itself, so it is safe to run from anywhere.
+With `--additive` it does much less: it only creates the `wz-*` folders the hub lacks, and only those that are not whitelisted (`wz-library` and `wz-songs` are left to a plain `provision hub`, with a warning). A folder the hub has is never changed, and where it differs from the config (path, type, a device it is not shared with) the run only warns. A missing folder is not created at a path another hub folder already uses. It is what a device with `auto_hub = true` does for itself, so it is safe to run from anywhere.
 
 | Option | Default | Meaning |
 |---|---|---|
