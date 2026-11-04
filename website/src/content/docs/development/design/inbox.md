@@ -15,6 +15,19 @@ Syncthing state. The contract:
 - **Report only by default.** Without `--apply` it unpacks into a local work folder,
   identifies, plans and prints, and writes nothing to the share. With `--apply` it
   converts, places and files the originals.
+- **One writer at a time.** `--apply` (never a report) takes `inbox/.warpzone.lock`
+  (`inbox_lock.py`) after the layout checks and before it scans: created with
+  `O_CREAT | O_EXCL`, holding JSON with the host name, pid and start time. Another run that finds it
+  exits with `InboxError` (usage exit code) naming the holder and the time; messages call
+  it `inbox/.warpzone.lock`, never a path outside the hub. `inbox_lock.judge` (pure)
+  decides whether a lock in the way is stale: older than 12 hours (an unreadable lock,
+  such as one still being written, goes by the age of the file), or held by a pid that
+  is not alive on the same host (`os.kill(pid, 0)`; a pid of another host cannot be
+  checked, so only age applies). A stale lock is taken over only with `--force-lock`,
+  after a re-read right before the unlink, and with a report line; a live one never.
+  The lock is released in a `finally` (errors and Ctrl-C), and only if it still holds
+  this run's host, pid and start time. It is a hidden file, so scanning skips it. A
+  `SIGKILL` or a power cut leaves it behind, which is what the stale rules are for.
 - **Untrusted content.** Archives are unpacked only into the local work folder (`.zip`
   with `zipfile`, `.7z` and `.rar` with `bsdtar`; archives inside archives up to two
   levels). A member with an absolute path, a `..` component or a NUL byte, or a symbolic

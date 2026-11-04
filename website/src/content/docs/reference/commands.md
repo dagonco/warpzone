@@ -223,7 +223,7 @@ warpzone bios --root /path/to/library --system saturn nds
 ## `warpzone inbox`
 
 ```
-warpzone inbox [--config PATH] [--root PATH] [--dats PATH] [--apply] [--work-dir PATH]
+warpzone inbox [--config PATH] [--root PATH] [--dats PATH] [--apply] [--force-lock] [--work-dir PATH]
 ```
 
 Identifies the new games dropped in `inbox/` against the Redump and No-Intro DATs, converts them where needed, and files them in `library/roms/`. Without `--apply` it only reports what it would do. With `--apply` it converts, places the files and moves the originals out of the inbox. See [Adding games](/warpzone/setup/inbox/).
@@ -234,9 +234,10 @@ Identifies the new games dropped in `inbox/` against the Redump and No-Intro DAT
 | `--root PATH` | `[inbox] root` | The hub root as mounted on this machine, holding `inbox/` and `library/`. |
 | `--dats PATH` | `[inbox] dats_dir` | Folder with the Redump and No-Intro DATs. |
 | `--apply` | off | Convert, place and move the originals. |
+| `--force-lock` | off | With `--apply`, take over a stale `inbox/.warpzone.lock` (older than 12 hours, or held by a process that is gone from this machine). A live lock is never taken. |
 | `--work-dir PATH` | `[inbox] work_dir`, else the system temp folder | Local folder for unpacked archives and conversions. |
 
-The external tools (`chdman`, `bsdtar`, `rahasher`, ...) come from the `[inbox]` table or `PATH`. The environment variable `RA_API_KEY`, when set, is used for RetroAchievements lookups. Without a `--root` or `--dats` (and no value in the config) it stops with exit `2`, and so does a hub root without `inbox/` and `library/roms/`. Exit `0` when every item was placed (or would be); `1` when some items need attention.
+The external tools (`chdman`, `bsdtar`, `rahasher`, ...) come from the `[inbox]` table or `PATH`. The environment variable `RA_API_KEY`, when set, is used for RetroAchievements lookups. Without a `--root` or `--dats` (and no value in the config) it stops with exit `2`, and so does a hub root without `inbox/` and `library/roms/`. With `--apply` only one run works on a hub's inbox at a time, through the lock file `inbox/.warpzone.lock`; a second run exits `2` naming the host, process and start time that hold it. Exit `0` when every item was placed (or would be); `1` when some items need attention.
 
 ```bash
 warpzone inbox

@@ -61,6 +61,7 @@ warpzone/
   bios.py            BIOS manifest, local overrides, pure `judge_*`, disk checks
   dat.py             Redump / No-Intro DAT parsing, cache, matching, disc grouping (pure)
   inbox_core.py      what the inbox pipeline and its handlers share: errors, options, results, staging
+  inbox_lock.py      the `inbox/.warpzone.lock` file that keeps two `--apply` runs apart
   inbox.py           unpack, identify, convert, place, file the originals
   sfo.py             the key/value table of a PARAM.SFO (pure; PS3 discs and PS4 packages)
   inbox_switch.py    Switch games: identify with nsz, titledb names, decompress, place
