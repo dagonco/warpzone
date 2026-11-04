@@ -7,7 +7,7 @@ with a backup and an atomic replace. It imports no network code: `capture` is ha
 with two read calls and asks it whether the `wz-settings` folder is up to date. Messages, log
 lines and output name keys and ids, never values (a prompt shows a value, cut, for the keys the
 user is asked about; secret keys are never asked about). See "Emulator settings" in
-docs/design.md.
+development/design.md.
 """
 
 from __future__ import annotations

@@ -1,5 +1,5 @@
 # Public keys whose signature a release tag must carry, in the format of `ssh-keygen -Y`
-# (docs/releasing.md, "Signing a tag"). One line per key:
+# (development/releasing.md, "Signing a tag"). One line per key:
 #
 #   <principal> namespaces="git" <key type> <public key>
 #

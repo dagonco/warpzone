@@ -7,7 +7,7 @@ parent, of its BIOS and of its devices is present, in the dropped zip or in the 
 device zips already in `library/roms/mame/`. The first emulator that fits wins: FinalBurn
 Neo, then MAME (the ES-DE default, so no `<altemulator>`), then MAME 2003-Plus; the others
 are recorded as a per-game `<altemulator>` in the hub's ES-DE gamelist. Sega Atomiswave
-and Naomi games, which hang in MAME, go to Flycast instead. See docs/design.md.
+and Naomi games, which hang in MAME, go to Flycast instead. See development/design.md.
 
 The decisions (`evaluate`, `best_fit`, `decide`, `update_gamelist`, `parse_sets`,
 `describe_miss`) are pure; `MameHandler` and the cache and gamelist file helpers touch
@@ -31,9 +31,9 @@ from pathlib import Path
 from typing import IO
 from xml.sax.saxutils import escape, unescape
 
-from warpzone import inbox, safefile
+from warpzone import inbox_core, safefile
 from warpzone.errors import WarpzoneError
-from warpzone.inbox import Context, InboxError, ItemFailure, ItemResult, Options, UnitResult
+from warpzone.inbox_core import Context, InboxError, ItemFailure, ItemResult, Options, UnitResult
 
 SYSTEM = "mame"  # roms/<system>/ where arcade sets live
 GAMELIST_REL = ("frontend", "es-de", "gamelists", "mame", "gamelist.xml")
@@ -856,16 +856,16 @@ class MameHandler:
             return None
         zips: list[Path] = []
         for base, dirs, names in os.walk(item):
-            dirs[:] = [d for d in dirs if not inbox.skip_name(d)]
+            dirs[:] = [d for d in dirs if not inbox_core.skip_name(d)]
             for name in sorted(names):
-                if inbox.skip_name(name):
+                if inbox_core.skip_name(name):
                     continue
                 path = Path(base) / name
                 if path.is_symlink():
                     return None
                 if path.suffix.lower() == ".zip":
                     zips.append(path)
-                elif path.suffix.lower() not in inbox.SIDECAR_EXTENSIONS:
+                elif path.suffix.lower() not in inbox_core.SIDECAR_EXTENSIONS:
                     return None
         return sorted(zips) or None
 
@@ -952,8 +952,8 @@ class MameHandler:
             )
         dest = folder / entry
         if dest.exists():
-            same = inbox.same_content("zip", dest, path, None)
-            verdict = inbox.destination_verdict(True, same)
+            same = inbox_core.same_content("zip", dest, path, None)
+            verdict = inbox_core.destination_verdict(True, same)
             if verdict == "conflict":
                 res.outcome = "review"
                 res.reason = f"{entry}: a different file with that name is already in the library"
@@ -994,7 +994,7 @@ class MameHandler:
         part = dest.with_name(dest.name + ".part")
         part.unlink(missing_ok=True)
         try:
-            inbox.copy_verified(src, part)
+            inbox_core.copy_verified(src, part)
             if read_zip(part, verify=True)[1] != own:
                 raise ItemFailure(f"{dest.name}: the copy does not match the original")
             if dest.exists():

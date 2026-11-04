@@ -4,7 +4,7 @@ Everything here lives on the device, outside every synced folder, under
 `$XDG_STATE_HOME/warpzone/settings/`. Backups are whole files and may hold an
 emulator's login tokens, so every file written here is mode 0600 and the state
 directory is 0700. Nothing in this module touches the network or Syncthing.
-See docs/design.md, "Device state".
+See development/design.md, "Device state".
 """
 
 from __future__ import annotations

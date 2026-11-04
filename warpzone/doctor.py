@@ -2006,7 +2006,7 @@ def judge_updater_state(
                 WARN,
                 "signatures are not required: no version this device ran lists a signer key, "
                 "so a release is trusted without one",
-                "see docs/releasing.md on signing releases",
+                "see https://dagonco.github.io/warpzone/development/releasing/ on signing releases",
             )
         )
     try:
@@ -2428,7 +2428,7 @@ def check_hub(ctx: Context) -> list[Result]:
                 level,
                 f"{folder} lacks {', '.join(n + '/' for n in lacking)}",
                 f"is {source} the hub root? It must hold inbox/ and library/roms/ "
-                "(see 'Hub layout' in the README)",
+                "(see https://dagonco.github.io/warpzone/overview/concepts/#the-hub)",
             )
         ]
     results = [Result("Hub folder", G_HUB, OK, f"{folder} has inbox/ and library/roms/")]

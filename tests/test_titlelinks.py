@@ -8,26 +8,18 @@ import tempfile
 import unittest
 import unittest.mock
 from pathlib import Path
-from unittest import addModuleCleanup, mock
 
 import test_shadps4
-from support import DECK_ID, HUB_ID, FakeProc
+from support import DECK_ID, HUB_ID, FakeProc, stub_self_update
 from test_cli import run, write_config
 from test_doctor import by_name
 from test_shadps4 import PROFILE
 from warpzone import esde, titlelinks
-from warpzone import provision as provision_mod
 from warpzone.doctor import OK, WARN
 from warpzone.profiles import ProfileError, parse_profile
 from warpzone.titlelinks import Entry
 
-
-def setUpModule() -> None:
-    """provision_device would install the updater and its timer, which runs a real self-test
-    of the script (seconds, inside a clone): tests/test_update_timer.py covers that."""
-    patcher = mock.patch.object(provision_mod, "ensure_self_update")
-    patcher.start()
-    addModuleCleanup(patcher.stop)
+setUpModule = stub_self_update
 
 
 SOURCE = "/lib/roms/psvita/app"

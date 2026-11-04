@@ -1,4 +1,6 @@
-# Checking a machine
+---
+title: "Checking a machine"
+---
 
 What `warpzone doctor` checks and how to read its output.
 
@@ -37,7 +39,7 @@ Inbox tools
 - shadPS4's install folder (`~/Emulation/roms/ps4/games` in its config files), on a device whose profile declares it (`steamos-emudeck`).
 - The shadPS4 launcher: warpzone's launch script exists, is executable and is the text `provision device` writes, and ES-DE's `SHADPS4` find rule runs it (EmuDeck can put its own entry back). The fix is `warpzone provision device <name>` with ES-DE closed.
 - Vita3K's game links (`~/Emulation/storage/Vita3K/ux0/app/<TITLEID>`) and licence links (`ux0/license/<TITLEID>`), the ES-DE startup script that keeps them, and dangling links, on a device whose profile declares `[links.*]` (`steamos-emudeck`). The fix is `warpzone links sync <name>` with Vita3K closed.
-- The updater, on a Linux device (see [self-update.md](self-update.md)): its timer (installed, running the updater, enabled), the live copy of the script, its settings against the config, and its state. A warning for a rollback in the last 14 days, a `dirty` or `dev` checkout, a retired `pin`, signatures not required, and more than 14 days without a successful run; a problem when it is `stuck`.
+- The updater, on a Linux device (see [Updating a device](/warpzone/operation/self-update/)): its timer (installed, running the updater, enabled), the live copy of the script, its settings against the config, and its state. A warning for a rollback in the last 14 days, a `dirty` or `dev` checkout, a retired `pin`, signatures not required, and more than 14 days without a successful run; a problem when it is `stuck`.
 - The frontend's system list override and RetroArch's paths, on a device whose profile sets them (`anbernic-rg351mp`).
 - The inbox tools (`chdman`, `bsdtar`, `RAHasher`, `dolphin-tool`, `nsz`, `orbis-pkg-util`), the Switch titledb folder and keys file (presence only).
 - The DAT folder and how old the newest DAT is, and the optional arcade DAT files.
@@ -58,23 +60,23 @@ If no unit exists, the fix shows one for the SyncThingy flatpak:
 ExecStart=/usr/bin/flatpak run --command=syncthing com.github.zocker_160.SyncThingy serve --no-browser --no-restart
 ```
 
-plus `ExecStop=/usr/bin/flatpak kill com.github.zocker_160.SyncThingy` (see [emudeck.md](emudeck.md#syncthing-on-the-console)), then `systemctl --user enable --now syncthing.service`, and a reminder to remove the autostart entry so two instances do not compete. It also warns when both a unit and an autostart entry start Syncthing.
+plus `ExecStop=/usr/bin/flatpak kill com.github.zocker_160.SyncThingy` (see [the EmuDeck guide](/warpzone/guides/emudeck/#syncthing-on-the-console)), then `systemctl --user enable --now syncthing.service`, and a reminder to remove the autostart entry so two instances do not compete. It also warns when both a unit and an autostart entry start Syncthing.
 
-With the SyncThingy flatpak, `doctor` also checks that Syncthing can see the emulators' data folders (`flatpak override --user --show`). For every installed emulator whose folder under `~/.var/app` is missing from the overrides it reports a problem and prints the `flatpak override` command to fix it. See [emudeck.md](emudeck.md#flatpak-access-to-the-emulators-folders).
+With the SyncThingy flatpak, `doctor` also checks that Syncthing can see the emulators' data folders (`flatpak override --user --show`). For every installed emulator whose folder under `~/.var/app` is missing from the overrides it reports a problem and prints the `flatpak override` command to fix it. See [the EmuDeck guide](/warpzone/guides/emudeck/#flatpak-access-to-the-emulators-folders).
 
 The Syncthing unit is checked too: if `systemctl --user show syncthing` reports `activating (auto-restart)`, `doctor` warns that the unit keeps failing to start, usually because an old Syncthing still holds the port. With the SyncThingy flatpak the fix is `flatpak kill com.github.zocker_160.SyncThingy`, a unit with the `ExecStop` above, and a restart.
 
 ## Dreamcast VMUs (RetroArch Flycast)
 
-When RetroArch's Flycast core has run (`Flycast.opt` exists in the RetroArch flatpak), `doctor` reads its `reicast_per_content_vmus` option. If it is `disabled` or missing, the core keeps the VMUs in `bios/dc/`, which warpzone does not sync, and the check warns with the menu path to change it. `VMU A1` and `All VMUs` are fine. See [emudeck.md](emudeck.md#dreamcast-saves-retroarch-flycast).
+When RetroArch's Flycast core has run (`Flycast.opt` exists in the RetroArch flatpak), `doctor` reads its `reicast_per_content_vmus` option. If it is `disabled` or missing, the core keeps the VMUs in `bios/dc/`, which warpzone does not sync, and the check warns with the menu path to change it. `VMU A1` and `All VMUs` are fine. See [the EmuDeck guide](/warpzone/guides/emudeck/#dreamcast-saves-retroarch-flycast).
 
 ## Vita3K user
 
-`doctor` reads `user-id:` in `~/.config/Vita3K/config.yml`. The profile syncs the saves of user `00`; if Vita3K's active user has another id, the check warns and says how to fix it. See [emudeck.md](emudeck.md#vita3k-syncs-user-00).
+`doctor` reads `user-id:` in `~/.config/Vita3K/config.yml`. The profile syncs the saves of user `00`; if Vita3K's active user has another id, the check warns and says how to fix it. See [the EmuDeck guide](/warpzone/guides/emudeck/#vita3k-syncs-user-00).
 
 ## Emulator settings
 
-On a console that subscribes to the `settings` group, `doctor` finds the device from the local Syncthing's `config.xml` (a machine without it says nothing) and adds three lines. See [settings.md](settings.md).
+On a console that subscribes to the `settings` group, `doctor` finds the device from the local Syncthing's `config.xml` (a machine without it says nothing) and adds three lines. See [Emulator settings](/warpzone/setup/settings/).
 
 - **Settings layers.** The local `wz-settings` folder and its marker exist, and `common.toml` and the device's layer parse and validate. A missing folder, an invalid layer, a conflict copy or a secret key in a layer is a problem; an emulator or file id the profile does not know is a warning.
 - **ES-DE startup script.** The script is installed, executable and its Python exists, and ES-DE's custom event scripts are on (`CustomEventScripts` in `es_settings.xml`). Otherwise it warns and the fix is `warpzone provision device <name>`, run with ES-DE closed, or the menu path in ES-DE.
@@ -82,7 +84,7 @@ On a console that subscribes to the `settings` group, `doctor` finds the device 
 
 ## Frontend
 
-On a device that subscribes to `library` with a profile that moves the frontend and RetroArch to the library (`anbernic-rg351mp`), `doctor` finds the device the same way, through the local Syncthing's `config.xml`, and adds two lines, and two more when it lists `frontend`. See [anbernic.md](anbernic.md).
+On a device that subscribes to `library` with a profile that moves the frontend and RetroArch to the library (`anbernic-rg351mp`), `doctor` finds the device the same way, through the local Syncthing's `config.xml`, and adds two lines, and two more when it lists `frontend`. See [the Anbernic guide](/warpzone/guides/anbernic/).
 
 - **ES systems override.** `~/.emulationstation/es_systems.cfg` is exactly the system list of the OS with the ROM folders moved into the library. Missing or out of date (dArkOS updated its list) is a warning, and the fix is `warpzone provision device <name>` with EmulationStation closed.
 - **RetroArch paths.** Each RetroArch config has the BIOS folder and the save and state settings the profile wants. A key that differs is named with its current value; a missing config or a key present twice is a warning.
@@ -90,4 +92,4 @@ On a device that subscribes to `library` with a profile that moves the frontend 
 - **Artwork timer.** Only when the profile sets `refresh`: `warpzone-artwork.timer` is installed in `~/.config/systemd/user`. Otherwise the fix is `warpzone provision device <name>`.
 - **Play state.** For a device that lists `play-state`: its folder is set up in Syncthing and, with ES-DE, the startup script and `warpzone-play-state.timer` are installed. Otherwise the fix is `warpzone provision device <name>`.
 
-Details in [design.md](design.md#doctor).
+Details in [the design document](/warpzone/development/design/#doctor).

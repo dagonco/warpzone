@@ -7,9 +7,9 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
-from unittest import addModuleCleanup, mock
+from unittest import mock
 
-from support import API_KEY, HUB_ID, FakeSyncthing
+from support import API_KEY, HUB_ID, FakeSyncthing, stub_self_update
 from test_anbernic import ARK_ID, PROFILE, Device, ark_config
 from test_artwork import source_xml
 from test_doctor import by_name, context
@@ -27,13 +27,7 @@ from warpzone.provision import (
 )
 from warpzone.syncthing import Client
 
-
-def setUpModule() -> None:
-    """provision_device would install the updater and its timer: tests/test_update_timer.py
-    covers that."""
-    patcher = mock.patch.object(provision_mod, "ensure_self_update")
-    patcher.start()
-    addModuleCleanup(patcher.stop)
+setUpModule = stub_self_update
 
 
 SYSTEM_LIST = """<?xml version="1.0"?>

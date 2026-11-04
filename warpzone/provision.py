@@ -803,8 +803,8 @@ def _install_startup_script(
     if not import_check(python):
         rep.warn(
             f"the ES-DE startup script was not installed: {python} cannot import warpzone "
-            "from outside the current folder (run from a clone?). Install warpzone for it "
-            f"(for example with pipx), then run `warpzone provision device {name}` from there"
+            "from outside the current folder (run from a clone?). Set the device up with "
+            f"`updater.sh install {name}`, which provisions from a venv"
         )
         return
     path = esde.script_path(esde_dir, script)
@@ -1079,7 +1079,7 @@ def ensure_self_update(
         rep.warn(
             f"the updater was not installed: {clone} is not a git checkout. A device runs "
             "warpzone from a clone made with `sh <clone>/warpzone/data/updater.sh install "
-            f"{device.name}` (see docs/self-update.md)"
+            f"{device.name}` (see https://dagonco.github.io/warpzone/operation/self-update/)"
         )
         return
     if not import_check(python):
@@ -1538,9 +1538,9 @@ def ensure_gamelists(
     for a gamelist that already says the same, so a second run, and a run while the frontend
     is open and has nothing to change, do nothing. A file is written only while the frontend
     is not running, atomically, and refused when it changed after it was read. The user
-    data the frontend saved in a gamelist is carried over; see docs/design.md, "Frontend
+    data the frontend saved in a gamelist is carried over; see development/design.md, "Frontend
     artwork". With `play_state` that data also goes to the other devices and theirs is merged
-    in; see docs/design.md, "Play state".
+    in; see development/design.md, "Play state".
     """
     art, rule = profile.artwork, profile.es_systems
     layout = _artwork_layout(profile, home)
@@ -1673,8 +1673,8 @@ def ensure_artwork_timer(
     if not import_check(python):
         rep.warn(
             f"the artwork timer was not installed: {python} cannot import warpzone from "
-            "outside the current folder (run from a clone?). Install warpzone for it (for "
-            f"example with pipx), then run `warpzone provision device {name}` from there"
+            "outside the current folder (run from a clone?). Set the device up with "
+            f"`updater.sh install {name}`, which provisions from a venv"
         )
         return
     service, timer = artwork.render_units(
@@ -1710,8 +1710,8 @@ def ensure_play_state_timer(
     if not import_check(python):
         rep.warn(
             f"the play state timer was not installed: {python} cannot import warpzone from "
-            "outside the current folder (run from a clone?). Install warpzone for it (for "
-            f"example with pipx), then run `warpzone provision device {name}` from there"
+            "outside the current folder (run from a clone?). Set the device up with "
+            f"`updater.sh install {name}`, which provisions from a venv"
         )
         return
     service, timer = artwork.render_play_state_units(

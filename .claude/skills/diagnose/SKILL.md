@@ -5,7 +5,7 @@ description: Use when something on a warpzone machine seems wrong (a console doe
 
 # Diagnose a machine
 
-Read-only by default. `doctor` never installs or changes anything and makes no network calls (apart from one request to the local Syncthing on loopback). `health` writes nothing. Fixes that change files or services are proposed to the user and run only after their OK. References: [doctor.md](../../../docs/doctor.md), [self-update.md](../../../docs/self-update.md#checking-a-version).
+Read-only by default. `doctor` never installs or changes anything and makes no network calls (apart from one request to the local Syncthing on loopback). `health` writes nothing. Fixes that change files or services are proposed to the user and run only after their OK. References: [doctor.md](../../../website/src/content/docs/operation/doctor.md), [self-update.md](../../../website/src/content/docs/operation/self-update.md#checking-a-version).
 
 Never print API keys or the config's secrets. Show the commands you ran and the relevant output.
 
@@ -32,7 +32,7 @@ Never print API keys or the config's secrets. Show the commands you ran and the 
    | Unapplied or held-back emulator settings | `warpzone settings audit` (read only) first, then `settings apply` or `settings capture` |
    | Syncthing not running in Game Mode, flatpak access missing | the unit or `flatpak override` command in the `fix:` text |
    | Updater timer, live copy or settings out of step with the config | `warpzone provision device <device>` |
-   | Recent rollback, `stuck`, `dirty` or `dev` checkout, retired pin, no success for 14 days | read `~/.local/state/warpzone/self-update.log` and `~/.local/state/warpzone/updater/last-verify.log`; see [self-update.md](../../../docs/self-update.md#log) |
+   | Recent rollback, `stuck`, `dirty` or `dev` checkout, retired pin, no success for 14 days | read `~/.local/state/warpzone/self-update.log` and `~/.local/state/warpzone/updater/last-verify.log`; see [self-update.md](../../../website/src/content/docs/operation/self-update.md#log) |
 
 5. Other read-only commands that help: `warpzone check` (config and missing whitelists), `warpzone status` (folder state, outstanding items, receive-only local changes), `warpzone settings audit`, `warpzone bios`. `warpzone self-update` runs one updater tick, which can change the checkout, so treat it as a change and ask first. Exit code `3` from `provision device --unattended` means deferred (something was open), not failure.
 6. After an approved fix, run `warpzone doctor` again and show that the line is now `[ok]`.
@@ -40,5 +40,5 @@ Never print API keys or the config's secrets. Show the commands you ran and the 
 ## Never
 
 - Delete, reset or clean a checkout, a venv or a Syncthing folder to "fix" something. Do not run `prune --apply`, `inbox --apply` or `settings capture` as a diagnostic step.
-- Change a Syncthing folder's path or type by hand. warpzone refuses path changes on purpose ([safety.md](../../../docs/safety.md)).
+- Change a Syncthing folder's path or type by hand. warpzone refuses path changes on purpose ([safety.md](../../../website/src/content/docs/operation/safety.md)).
 - Report success without the evidence of a passing command.

@@ -251,7 +251,7 @@ create_target = true
 
 # Emulator settings: the files whose keys `warpzone settings` layers across devices.
 # A key is common unless it is listed under `device`. Patterns match the canonical key
-# (see docs/design.md, "Format handlers"): `*` is any run of characters, `?` one, and
+# (see development/design.md, "Format handlers"): `*` is any run of characters, `?` one, and
 # `[` is literal. Lists are written in TOML literal strings so a Qt `\` needs no escape.
 #   noise   never proposed by `capture` (window state, recent files, input and paths).
 #   secret  logins and tokens: never captured, applied, snapshotted or logged.

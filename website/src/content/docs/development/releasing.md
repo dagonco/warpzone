@@ -1,4 +1,6 @@
-# Releasing
+---
+title: "Releasing"
+---
 
 Releases are cut by pushing a `vX.Y.Z` tag on `main`. The tag triggers `.github/workflows/release.yml`, which verifies, builds and publishes the GitHub Release. Nothing is uploaded to PyPI.
 
@@ -9,7 +11,7 @@ Versions follow [SemVer](https://semver.org/). The single source of the version 
 1. Start from an up-to-date `main` and a new branch, for example `release/vX.Y.Z`.
 2. In `CHANGELOG.md`, rename the content of `[Unreleased]` into a new `## [X.Y.Z] - YYYY-MM-DD` section and leave `[Unreleased]` empty above it. Write for users, not commit by commit.
 3. Update the link references at the bottom: `[Unreleased]` compares `vX.Y.Z...HEAD`, and add `[X.Y.Z]` comparing the previous tag with `vX.Y.Z`.
-4. Set `__version__` in `warpzone/__init__.py` to `X.Y.Z`. Update the wheel URL and filename in the README install section.
+4. Set `__version__` in `warpzone/__init__.py` to `X.Y.Z`.
 5. Run the checks locally: `uvx ruff check .`, `uvx ruff format --check .`, `python3 -m unittest discover -s tests -v`. One test fails if `CHANGELOG.md` has no section for the current version.
 6. Open a pull request, wait for green CI (lint, tests, e2e, secrets) and merge it.
 7. Tag the merge commit on `main` with an annotated tag and push only that tag:
@@ -20,7 +22,7 @@ Versions follow [SemVer](https://semver.org/). The single source of the version 
    git push origin vX.Y.Z
    ```
 
-8. Watch the `release` workflow in the Actions tab, then open the release and check its notes and assets. Devices with the updater timer ([self-update.md](self-update.md)) fetch once a day and check out the new tag at the tick after that.
+8. Watch the `release` workflow in the Actions tab, then open the release and check its notes and assets. Devices with the updater timer ([Updating a device](/warpzone/operation/self-update/)) fetch once a day and check out the new tag at the tick after that.
 
 ## What the workflow does
 
