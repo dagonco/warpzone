@@ -508,9 +508,7 @@ class ProvisionTests(Helpers, test_shadps4.Device, unittest.TestCase):
             try:
                 with (
                     unittest.mock.patch("pathlib.Path.home", return_value=self.home),
-                    unittest.mock.patch.object(
-                        titlelinks.settings_state, "running", return_value=False
-                    ),
+                    unittest.mock.patch.object(titlelinks.procs, "running", return_value=False),
                 ):
                     code, out, err = run("links", "sync", "deck", "--config", config, "--dry-run")
                     self.assertEqual((code, err), (0, ""), out)

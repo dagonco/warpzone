@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import ClassVar
 
 from support import FakeProc
-from warpzone import settings_state
+from warpzone.procs import running
 from warpzone.versions import tag_key
 
 UPDATER = Path(__file__).resolve().parent.parent / "warpzone" / "data" / "updater.sh"
@@ -770,7 +770,7 @@ class MenuTests(UpdaterCase):
         self.assertEqual(rig.on_tag(), "v0.2.0")
         self.assertEqual(rig.state()["deferred_since"], "")
 
-    def test_the_process_check_agrees_with_settings_state_running(self) -> None:
+    def test_the_process_check_agrees_with_procs_module(self) -> None:
         trees: list[tuple[list[str], list[tuple[str, list[str]]]]] = [
             (["es-de"], []),
             (["es-de"], [("es-de", ["/usr/bin/es-de"])]),
@@ -788,7 +788,7 @@ class MenuTests(UpdaterCase):
                 for pid, (comm, argv) in enumerate(procs, start=7000001):
                     rig.proc.add(pid, comm, argv)
                 rig.write_conf(frontend=" ".join(names))
-                expected = settings_state.running(names, rig.proc.path)
+                expected = running(names, rig.proc.path)
                 proc = rig.run("menu")
                 self.assertEqual(proc.returncode == 0, expected, proc.output)
                 self.assertIn(proc.returncode, (0, 1))

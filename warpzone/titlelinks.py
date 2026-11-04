@@ -21,7 +21,7 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
-from warpzone import settings_state
+from warpzone import procs
 from warpzone.paths import expand_home
 from warpzone.profiles import Profile, TitleLinks
 
@@ -291,8 +291,8 @@ def sync(
             say(f"links {item.key}: {len(todo.ok)} {item.rule.noun}(s) linked, nothing to do")
             continue
         try:
-            busy = settings_state.running(item.rule.process, proc=proc)
-        except settings_state.NoProc:
+            busy = procs.running(item.rule.process, proc=proc)
+        except procs.NoProc:
             warn(
                 f"links {item.key}: cannot tell whether {item.label} is running (no /proc), so "
                 f"the links were left alone: {again} on a system with /proc"

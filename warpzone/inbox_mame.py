@@ -17,7 +17,6 @@ the disk. The module plugs into `inbox.py` through `inbox.kind_handlers()`.
 from __future__ import annotations
 
 import hashlib
-import json
 import os
 import re
 import shutil
@@ -32,7 +31,7 @@ from pathlib import Path
 from typing import IO
 from xml.sax.saxutils import escape, unescape
 
-from warpzone import inbox
+from warpzone import inbox, safefile
 from warpzone.errors import WarpzoneError
 from warpzone.inbox import Context, InboxError, ItemFailure, ItemResult, Options, UnitResult
 
@@ -250,9 +249,9 @@ def load_sets(path: Path, cache_dir: Path | None) -> tuple[dict[str, Machine], s
     stat = path.stat()
     cache = _cache_file(cache_dir, path) if cache_dir else None
     if cache:
+        data = safefile.read_json_cache(cache)
         try:
-            data = json.loads(cache.read_text(encoding="utf-8"))
-            if (
+            if data is not None and (
                 data["version"] == CACHE_VERSION
                 and data["size"] == stat.st_size
                 and data["mtime_ns"] == stat.st_mtime_ns
@@ -276,13 +275,7 @@ def load_sets(path: Path, cache_dir: Path | None) -> tuple[dict[str, Machine], s
             "build": build,
             "machines": [_machine_json(m) for m in machines.values()],
         }
-        tmp = cache.with_name(cache.name + ".tmp")
-        try:
-            cache.parent.mkdir(parents=True, exist_ok=True)
-            tmp.write_text(json.dumps(data, separators=(",", ":")), encoding="utf-8")
-            os.replace(tmp, cache)
-        except OSError:
-            pass  # a cache that cannot be written only costs time
+        safefile.write_json_cache(cache, data)
     return machines, build, False
 
 

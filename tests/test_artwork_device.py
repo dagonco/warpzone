@@ -14,7 +14,7 @@ from test_anbernic import ARK_ID, PROFILE, Device, ark_config
 from test_artwork import source_xml
 from test_doctor import by_name, context
 from test_provision import reporter
-from warpzone import artwork, settings_state
+from warpzone import artwork, safefile
 from warpzone import provision as provision_mod
 from warpzone.cli import main
 from warpzone.doctor import OK, WARN, Context, check_frontend
@@ -217,9 +217,29 @@ class GamelistTests(Art, unittest.TestCase):
     def test_a_gamelist_that_changed_while_it_was_written_is_left_alone(self) -> None:
         self.ensure()
         self.scraped("gba", GBA.replace("A &amp; B", "Changed"))
-        with mock.patch.object(settings_state, "atomic_write", return_value=False):
+        with mock.patch.object(safefile, "atomic_write", return_value=False):
             rep, _ = self.ensure()
         self.assertTrue(any("changed while" in w for w in rep.warnings))
+
+    def test_emulationstation_started_just_before_the_write_leaves_the_gamelist_alone(self) -> None:
+        self.ensure()
+        self.scraped("gba", GBA.replace("A &amp; B", "Changed"))
+        before = self.out("gba").read_bytes()
+        real = provision_mod._busy
+        calls: list[int] = []
+
+        def busy(*args, **kw):
+            result = real(*args, **kw)
+            calls.append(1)
+            if len(calls) == 1:  # the check before anything is planned to be written
+                self.proc.add(4242, "emulationstatio")
+            return result
+
+        with mock.patch.object(provision_mod, "_busy", busy):
+            rep, _ = self.ensure()
+        self.assertEqual(self.out("gba").read_bytes(), before)
+        self.assertEqual(len(calls), 2)
+        self.assertTrue(any("EmulationStation is running" in w for w in rep.warnings))
 
     def test_no_scrape_yet_is_not_an_error(self) -> None:
         for p in (self.meta / "gamelists").rglob("*.xml"):

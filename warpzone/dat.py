@@ -9,13 +9,14 @@ See docs/design.md.
 from __future__ import annotations
 
 import hashlib
-import json
 import os
 import re
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+from warpzone import safefile
 
 # DAT name (the file name without ".dat") -> warpzone system folder (roms/<system>).
 # Names are libretro-database's metadat/redump and metadat/no-intro. Keep this small:
@@ -211,8 +212,10 @@ def _cache_file(cache_dir: Path, dat_path: Path) -> Path:
 
 
 def _read_cache(cache: Path, stat: os.stat_result) -> list[Game] | None:
+    data = safefile.read_json_cache(cache)
+    if data is None:
+        return None
     try:
-        data = json.loads(cache.read_text(encoding="utf-8"))
         if (
             data["version"] != CACHE_VERSION
             or data["size"] != stat.st_size
@@ -220,7 +223,7 @@ def _read_cache(cache: Path, stat: os.stat_result) -> list[Game] | None:
         ):
             return None
         return [Game(n, tuple(Rom(*r) for r in roms)) for n, roms in data["games"]]
-    except (OSError, ValueError, KeyError, TypeError):
+    except (ValueError, KeyError, TypeError):
         return None
 
 
@@ -231,13 +234,7 @@ def _write_cache(cache: Path, stat: os.stat_result, games: Sequence[Game]) -> No
         "mtime_ns": stat.st_mtime_ns,
         "games": [[g.name, [[r.name, r.size, r.crc, r.sha1] for r in g.roms]] for g in games],
     }
-    tmp = cache.with_name(cache.name + ".tmp")
-    try:
-        cache.parent.mkdir(parents=True, exist_ok=True)
-        tmp.write_text(json.dumps(data, separators=(",", ":")), encoding="utf-8")
-        os.replace(tmp, cache)
-    except OSError:
-        pass  # a cache that cannot be written only costs time
+    safefile.write_json_cache(cache, data)
 
 
 def load_dat(path: Path, system: str, cache_dir: Path | None) -> Dat:

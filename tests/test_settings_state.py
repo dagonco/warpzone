@@ -1,12 +1,10 @@
 import json
-import os
 import stat
 import tempfile
 import unittest
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from support import FakeProc
 from warpzone import settings_state as st
 
 
@@ -31,76 +29,6 @@ class StateDirTests(unittest.TestCase):
             with self.subTest(value=value):
                 got = st.state_dir({"XDG_STATE_HOME": value}, Path("/home/u"))
                 self.assertEqual(got, Path("/home/u/.local/state/warpzone/settings"))
-
-
-class RunningTests(TmpCase):
-    def setUp(self) -> None:
-        super().setUp()
-        self.proc = FakeProc(self.tmp / "proc")
-
-    def running(self, names: list[str], **kw: object) -> bool:
-        return st.running(names, self.proc.path, **kw)  # type: ignore[arg-type]
-
-    def test_match_by_comm(self) -> None:
-        self.proc.add(100, "retroarch", [])
-        self.assertTrue(self.running(["retroarch"]))
-
-    def test_match_by_argv0_basename(self) -> None:
-        self.proc.add(100, "AppRun", ["/tmp/.mount_x/usr/bin/azahar", "game.3ds"])
-        self.assertTrue(self.running(["azahar"]))
-
-    def test_match_by_truncated_comm(self) -> None:
-        name = "duckstation-qt-x64-ReleaseLTO.AppImage"
-        self.proc.add(100, name[:15], [])
-        self.assertEqual(len(name[:15]), 15)
-        self.assertTrue(self.running([name]))
-
-    def test_no_match(self) -> None:
-        self.proc.add(100, "bash", ["bash"])
-        self.assertFalse(self.running(["retroarch"]))
-        self.assertFalse(self.running([]))
-
-    def test_launcher_script_is_not_the_emulator(self) -> None:
-        self.proc.add(100, "bash", ["bash", "/emu/tools/launchers/retroarch.sh"])
-        self.proc.add(101, "retroarch.sh", ["/bin/bash", "/x/retroarch.sh"])
-        self.assertFalse(self.running(["retroarch"]))
-
-    def test_arguments_mentioning_the_emulator_are_not_a_match(self) -> None:
-        self.proc.add(100, "nano", ["nano", "/home/u/.config/retroarch/retroarch.cfg"])
-        self.proc.add(101, "python3", ["python3", "-m", "warpzone", "retroarch"])
-        self.proc.add(102, "bash", ["bash", "-c", "pgrep -f retroarch"])
-        self.assertFalse(self.running(["retroarch"]))
-
-    def test_own_process_is_skipped_even_when_it_looks_like_the_emulator(self) -> None:
-        self.proc.add(100, "retroarch", ["/usr/bin/retroarch"])
-        self.assertFalse(self.running(["retroarch"], self_pid=100))
-
-    def test_parent_process_is_skipped(self) -> None:
-        self.proc.add(100, "bash", ["bash", "-c", "warpzone"], ppid=50)
-        self.proc.add(50, "retroarch", ["/usr/bin/retroarch"])
-        self.assertFalse(self.running(["retroarch"], self_pid=100))
-        self.assertTrue(self.running(["retroarch"], self_pid=999))
-
-    def test_other_instance_is_still_found_next_to_self(self) -> None:
-        self.proc.add(100, "retroarch", ["retroarch"])
-        self.proc.add(200, "retroarch", ["retroarch"])
-        self.assertTrue(self.running(["retroarch"], self_pid=100))
-
-    def test_unreadable_entries_are_ignored(self) -> None:
-        self.proc.add(100, None, None)
-        (self.proc.path / "200").mkdir()
-        (self.proc.path / "self").mkdir()  # not a pid
-        (self.proc.path / "meminfo").write_text("x")
-        self.proc.add(300, "retroarch", None)  # cmdline unreadable, comm is enough
-        self.assertTrue(self.running(["retroarch"]))
-
-    def test_empty_cmdline_of_a_kernel_thread(self) -> None:
-        self.proc.add(2, "kthreadd", [])
-        self.assertFalse(self.running(["retroarch"]))
-
-    def test_missing_proc_raises(self) -> None:
-        with self.assertRaises(st.NoProc):
-            st.running(["retroarch"], self.tmp / "nope")
 
 
 class SnapshotTests(TmpCase):
@@ -222,74 +150,6 @@ class BackupTests(TmpCase):
     def test_missing_source_raises(self) -> None:
         with self.assertRaises(FileNotFoundError):
             st.backup(self.tmp / "none", "e", "f", root=self.root, now=self.t0)
-
-
-class AtomicWriteTests(TmpCase):
-    def setUp(self) -> None:
-        super().setUp()
-        self.path = self.tmp / "a.cfg"
-        self.path.write_bytes(b"old\n")
-        self.path.chmod(0o640)
-
-    def test_stamp(self) -> None:
-        s = st.stamp(self.path)
-        self.assertEqual(s.size, 4)
-        self.assertEqual(len(s.sha256), 64)
-        self.assertEqual(s, st.stamp(self.path))
-        self.path.write_bytes(b"new\n")
-        self.assertNotEqual(s, st.stamp(self.path))
-
-    def test_writes_and_preserves_mode(self) -> None:
-        self.assertTrue(st.atomic_write(self.path, b"new\n", expect=st.stamp(self.path)))
-        self.assertEqual(self.path.read_bytes(), b"new\n")
-        self.assertEqual(stat.S_IMODE(self.path.stat().st_mode), 0o640)
-        self.assertEqual([p.name for p in self.tmp.iterdir()], ["a.cfg"])
-
-    def test_refuses_when_the_file_changed_after_stamp(self) -> None:
-        expect = st.stamp(self.path)
-        self.path.write_bytes(b"edited elsewhere\n")
-        self.assertFalse(st.atomic_write(self.path, b"new\n", expect=expect))
-        self.assertEqual(self.path.read_bytes(), b"edited elsewhere\n")
-        self.assertEqual([p.name for p in self.tmp.iterdir()], ["a.cfg"])
-
-    def test_refuses_when_only_the_mtime_changed(self) -> None:
-        expect = st.stamp(self.path)
-        os.utime(self.path, ns=(1, expect.mtime_ns + 5_000_000_000))
-        self.assertFalse(st.atomic_write(self.path, b"new\n", expect=expect))
-        self.assertEqual(self.path.read_bytes(), b"old\n")
-
-    def test_refuses_when_the_file_vanished(self) -> None:
-        expect = st.stamp(self.path)
-        self.path.unlink()
-        self.assertFalse(st.atomic_write(self.path, b"new\n", expect=expect))
-        self.assertFalse(self.path.exists())
-
-    def test_writes_through_a_symlink(self) -> None:
-        target_dir = self.tmp / "real"
-        target_dir.mkdir()
-        target = target_dir / "real.cfg"
-        target.write_bytes(b"old\n")
-        link = self.tmp / "link.cfg"
-        link.symlink_to(target)
-        self.assertTrue(st.atomic_write(link, b"new\n", expect=st.stamp(link)))
-        self.assertTrue(link.is_symlink())
-        self.assertEqual(target.read_bytes(), b"new\n")
-        self.assertEqual(sorted(p.name for p in target_dir.iterdir()), ["real.cfg"])
-
-    def test_stale_temp_file_is_replaced(self) -> None:
-        (self.tmp / ".a.cfg.wz-tmp").write_bytes(b"junk")
-        self.assertTrue(st.atomic_write(self.path, b"new\n", expect=st.stamp(self.path)))
-        self.assertEqual([p.name for p in self.tmp.iterdir()], ["a.cfg"])
-
-    def test_create_new_file_with_missing_directories(self) -> None:
-        new = self.tmp / "deep" / "er" / "n.cfg"
-        self.assertTrue(st.atomic_write(new, b"x", expect=None))
-        self.assertEqual(new.read_bytes(), b"x")
-        self.assertEqual(stat.S_IMODE(new.stat().st_mode) & 0o600, 0o600)
-
-    def test_create_refuses_when_the_file_appeared(self) -> None:
-        self.assertFalse(st.atomic_write(self.path, b"new\n", expect=None))
-        self.assertEqual(self.path.read_bytes(), b"old\n")
 
 
 class LogTests(TmpCase):

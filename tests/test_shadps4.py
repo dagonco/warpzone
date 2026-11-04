@@ -232,6 +232,21 @@ class Device:
     def start(self, comm: str) -> None:
         self.proc.add(4242, comm)
 
+    def after_backup(self, action):
+        """Run `action(file)` right after the backup of the first file: the race the re-check
+        right before the write is there for."""
+        real = provision_mod.settings_state.backup
+        done: list[Path] = []
+
+        def backup(path, *args, **kw):
+            result = real(path, *args, **kw)
+            if not done:
+                done.append(path)
+                action(path)
+            return result
+
+        return mock.patch.object(provision_mod.settings_state, "backup", backup)
+
     @staticmethod
     def mine(rep) -> list[str]:
         """The warnings about shadPS4's config files (a Steam device warns about much else)."""
@@ -305,6 +320,37 @@ class ProvisionTests(Device, unittest.TestCase):
                 self.assertIn("provision device deck", warning)
                 self.assertEqual(self.backups(), [])
                 shutil.rmtree(self.proc.path / "4242")
+
+    def test_shadps4_started_during_the_backup_stops_the_edits(self) -> None:
+        before = self.json.read_text(), self.toml.read_text()
+        with self.after_backup(lambda path: self.start("shadps4")):
+            rep, _ = self.provision()
+        self.assertEqual((self.json.read_text(), self.toml.read_text()), before)
+        self.assertEqual(len([w for w in rep.warnings if "is running" in w]), 1)
+
+    def test_a_config_edited_during_the_backup_is_left_alone_and_the_next_goes_on(self) -> None:
+        edited: list[Path] = []
+
+        def edit(path: Path) -> None:
+            edited.append(path)
+            path.write_text(path.read_text() + "\n")
+
+        with self.after_backup(edit):
+            rep, _ = self.provision()
+        (first,) = edited
+        (other,) = {self.json, self.toml} - {first}
+        self.assertNotIn(self.games, first.read_text())
+        self.assertIn(self.games, other.read_text())
+        (warning,) = [w for w in rep.warnings if "changed while" in w]
+        self.assertIn(str(first), warning)
+
+    def test_an_edit_that_fails_after_the_check_leaves_the_file_alone(self) -> None:
+        before = self.json.read_text(), self.toml.read_text()
+        error = shadps4.Shadps4ConfigError("cannot add it")
+        with mock.patch.object(shadps4, "apply", side_effect=error):
+            rep, _ = self.provision()
+        self.assertEqual((self.json.read_text(), self.toml.read_text()), before)
+        self.assertEqual(len([w for w in rep.warnings if "was left alone: cannot add" in w]), 2)
 
     def test_without_proc_nothing_is_edited_and_it_says_why(self) -> None:
         before = self.json.read_text()

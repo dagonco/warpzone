@@ -1217,7 +1217,7 @@ class EsdeScriptTests(unittest.TestCase):
 
     def test_a_file_that_changes_during_the_edit_is_not_overwritten(self) -> None:
         self.write_settings()
-        with mock.patch("warpzone.provision.settings_state.atomic_write", return_value=False):
+        with mock.patch("warpzone.provision.safefile.atomic_write", return_value=False):
             rep, _ = self.provision()
         self.assertEqual(self.settings.read_text(), ES_SETTINGS)
         (warning,) = rep.warnings
