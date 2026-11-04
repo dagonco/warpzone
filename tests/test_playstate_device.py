@@ -25,11 +25,9 @@ from warpzone.config import parse_config
 from warpzone.model import ESDE_ID, PLAY_STATE_ID, ModelError, device_specs, hub_specs
 from warpzone.playstate import Ledger, Record
 from warpzone.profiles import ProfileError, load_profile, parse_profile
-from warpzone.provision import (
-    ensure_play_state_script,
-    ensure_play_state_timer,
-    provision_device,
-)
+from warpzone.provision import provision_device
+from warpzone.provision_scripts import ensure_play_state_script
+from warpzone.provision_timers import ensure_play_state_timer
 from warpzone.syncthing import Client
 
 STEAM = load_profile("steamos-emudeck")

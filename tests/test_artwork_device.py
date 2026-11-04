@@ -20,11 +20,11 @@ from warpzone.cli import main
 from warpzone.doctor import OK, WARN, Context, check_frontend
 from warpzone.model import device_specs
 from warpzone.provision import (
-    ensure_artwork_timer,
     ensure_gamelists,
     refresh_artwork,
     sync_artwork_scope,
 )
+from warpzone.provision_timers import ensure_artwork_timer
 from warpzone.syncthing import Client
 
 setUpModule = stub_self_update
