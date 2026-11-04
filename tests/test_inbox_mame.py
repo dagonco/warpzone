@@ -12,6 +12,7 @@ from xml.sax.saxutils import quoteattr
 
 import test_inbox
 from test_cli import run
+from warpzone import gamelist
 from warpzone import inbox_mame as mame
 from warpzone.config import InboxSettings, parse_inbox
 from warpzone.inbox import run_inbox
@@ -618,9 +619,9 @@ class GamelistTests(unittest.TestCase):
 
     def test_every_other_entry_survives_and_the_result_parses(self) -> None:
         new, _ = update_gamelist(GAMELIST, "solo", EMU_FBNEO)
-        before, after = mame.gamelist_emulators(GAMELIST), mame.gamelist_emulators(new)
+        before, after = gamelist.emulators(GAMELIST), gamelist.emulators(new)
         self.assertEqual(after, {**before, "solo.zip": EMU_FBNEO})
-        self.assertTrue(mame._well_formed(new))
+        self.assertTrue(gamelist.well_formed(new))
         self.assertIn('<custom attr="1">kept</custom>', new)
         self.assertIn("<name>Old &amp; Gold</name>", new)
 
@@ -631,19 +632,19 @@ class GamelistTests(unittest.TestCase):
         self.assertIn("<path>./solo.zip</path>\r\n", new)
 
     def test_an_empty_or_new_gamelist_gets_its_first_entry(self) -> None:
-        for text in (mame.EMPTY_GAMELIST, '<?xml version="1.0"?>\n<gameList />\n'):
+        for text in (gamelist.EMPTY_GAMELIST, '<?xml version="1.0"?>\n<gameList />\n'):
             new, action = update_gamelist(text, "dino", EMU_FBNEO)
             self.assertEqual(action, "added")
-            self.assertEqual(mame.gamelist_emulators(new), {"dino.zip": EMU_FBNEO})
-            self.assertTrue(mame._well_formed(new))
+            self.assertEqual(gamelist.emulators(new), {"dino.zip": EMU_FBNEO})
+            self.assertTrue(gamelist.well_formed(new))
 
     def test_names_are_escaped(self) -> None:
         new, _ = update_gamelist(GAMELIST, "a&b", "X<Y")
         self.assertIn("<path>./a&amp;b.zip</path>", new)
-        self.assertEqual(mame.gamelist_emulators(new)["a&b.zip"], "X<Y")
+        self.assertEqual(gamelist.emulators(new)["a&b.zip"], "X<Y")
 
     def test_no_game_list_is_refused(self) -> None:
-        with self.assertRaises(mame.GamelistError):
+        with self.assertRaises(gamelist.GamelistError):
             update_gamelist("<other/>", "dino", EMU_FBNEO)
 
 
@@ -687,7 +688,7 @@ class FlowBase(test_inbox.Base):
         self.gamelist.write_text(text)
 
     def emulators(self) -> dict[str, str | None]:
-        return mame.gamelist_emulators(self.gamelist.read_text())
+        return gamelist.emulators(self.gamelist.read_text())
 
     def backup_files(self) -> list[Path]:
         folder = self.hub / "tools" / "logs" / "gamelist-backups"
@@ -725,11 +726,11 @@ class FlowTests(FlowBase):
         self.write_gamelist(GAMELIST.replace("<altemulator>FinalBurn Neo</altemulator>", ""))
         self.put_library("qsound_hle.zip", **{"dl-1425__bin": DSP})  # MAME would fit too
         self.zip_of("dino.zip", {"cde_23a.8f": DINO_R1, "cde_22a.7f": DINO_R2})
-        before = mame.gamelist_emulators(self.gamelist.read_text())
+        before = gamelist.emulators(self.gamelist.read_text())
         self.assertEqual(self.go(apply=False), 0, self.out)
         self.assertIn("emulator: FinalBurn Neo", self.out)
         self.assertIn("would add the emulator of dino.zip: FinalBurn Neo", self.out)
-        self.assertEqual(mame.gamelist_emulators(self.gamelist.read_text()), before)
+        self.assertEqual(gamelist.emulators(self.gamelist.read_text()), before)
         self.assertEqual(self.go(), 0, self.out)
         self.assertEqual(self.emulators()["dino.zip"], EMU_FBNEO)
         self.assertEqual(self.emulators()["old.zip"], EMU_2003PLUS)
@@ -796,10 +797,10 @@ class FlowTests(FlowBase):
         elsewhere = self.tmp / "es-de" / "gl.xml"
         self.zip_of("old.zip", {"o1.bin": OLD_R1, "o2.bin": OLD_R2})
         self.assertEqual(self.go(settings=self.settings(gamelist_mame=str(elsewhere))), 0)
-        self.assertEqual(mame.gamelist_emulators(elsewhere.read_text()), {"old.zip": EMU_2003PLUS})
+        self.assertEqual(gamelist.emulators(elsewhere.read_text()), {"old.zip": EMU_2003PLUS})
 
     def test_backup_keeps_the_state_before_the_run_outside_the_synced_tree(self) -> None:
-        self.write_gamelist(mame.EMPTY_GAMELIST)
+        self.write_gamelist(gamelist.EMPTY_GAMELIST)
         self.zip_of("old.zip", {"o1.bin": OLD_R1, "o2.bin": OLD_R2})
         self.zip_of("dino.zip", {"cde_23a.8f": DINO_R1, "cde_22a.7f": DINO_R2})
         stamp = time.time()
@@ -808,11 +809,11 @@ class FlowTests(FlowBase):
         self.assertEqual(self.emulators(), {"old.zip": EMU_2003PLUS, "dino.zip": EMU_FBNEO})
         folder = self.hub / "tools" / "logs" / "gamelist-backups"
         self.assertEqual([p.name for p in folder.iterdir()], [name])
-        self.assertEqual(self.backup_files()[0].read_text(), mame.EMPTY_GAMELIST)
+        self.assertEqual(self.backup_files()[0].read_text(), gamelist.EMPTY_GAMELIST)
         self.assertEqual(sorted(p.name for p in self.gamelist.parent.iterdir()), ["gamelist.xml"])
 
     def test_a_recently_modified_gamelist_warns_once_and_is_still_edited(self) -> None:
-        self.write_gamelist(mame.EMPTY_GAMELIST)  # written just now
+        self.write_gamelist(gamelist.EMPTY_GAMELIST)  # written just now
         self.zip_of("old.zip", {"o1.bin": OLD_R1, "o2.bin": OLD_R2})
         self.zip_of("dino.zip", {"cde_23a.8f": DINO_R1, "cde_22a.7f": DINO_R2})
         self.assertEqual(self.go(), 0, self.out)
@@ -823,7 +824,7 @@ class FlowTests(FlowBase):
         self.assertEqual(self.emulators(), {"old.zip": EMU_2003PLUS, "dino.zip": EMU_FBNEO})
 
     def test_an_old_gamelist_and_a_report_run_do_not_warn(self) -> None:
-        self.write_gamelist(mame.EMPTY_GAMELIST)
+        self.write_gamelist(gamelist.EMPTY_GAMELIST)
         self.zip_of("old.zip", {"o1.bin": OLD_R1, "o2.bin": OLD_R2})
         self.assertEqual(self.go(apply=False), 0, self.out)  # report only: nothing is edited
         self.assertNotIn("quit ES-DE", self.out)
@@ -936,7 +937,7 @@ class FlowTests(FlowBase):
         self.assertTrue((self.mame_dir / "old.zip").exists())
         self.assertIn("is in the library but the gamelist was not updated", self.reason("old.zip"))
         self.assertEqual(self.gamelist.read_text(), "<other/>")
-        self.write_gamelist(mame.EMPTY_GAMELIST)  # fixed: a rerun retries the gamelist
+        self.write_gamelist(gamelist.EMPTY_GAMELIST)  # fixed: a rerun retries the gamelist
         self.zip_of("old.zip", {"o1.bin": OLD_R1, "o2.bin": OLD_R2})
         self.assertEqual(self.go(), 0, self.out)
         self.assertIn("old.zip: already in the library", self.out)

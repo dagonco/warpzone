@@ -37,7 +37,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from warpzone import inbox_core
+from warpzone import inbox_core, safefile
 from warpzone.errors import WarpzoneError
 from warpzone.inbox_core import Context, InboxError, ItemFailure, ItemResult, Options, UnitResult
 
@@ -382,9 +382,9 @@ def load_region(path: Path, cache_dir: Path | None) -> Region:
     stat = path.stat()
     stamp = [stat.st_size, stat.st_mtime_ns]
     cache = cache_dir / (path.name + ".cache") if cache_dir else None
-    if cache and cache.is_file():
+    saved = safefile.read_json_cache(cache) if cache else None
+    if saved is not None:
         try:
-            saved = json.loads(cache.read_text(encoding="utf-8"))
             if saved.get("stamp") == stamp:
                 return Region(
                     saved["names"],
@@ -398,23 +398,15 @@ def load_region(path: Path, cache_dir: Path | None) -> Region:
     except (OSError, ValueError) as exc:
         raise SwitchError(f"titledb: cannot read {path.name} ({exc})") from exc
     if cache:
-        try:
-            cache.parent.mkdir(parents=True, exist_ok=True)
-            tmp = cache.with_name(cache.name + ".tmp")
-            tmp.write_text(
-                json.dumps(
-                    {
-                        "stamp": stamp,
-                        "names": region.names,
-                        "solo": sorted(region.solo),
-                        "bundles": region.bundles,
-                    }
-                ),
-                encoding="utf-8",
-            )
-            os.replace(tmp, cache)
-        except OSError:
-            pass
+        safefile.write_json_cache(
+            cache,
+            {
+                "stamp": stamp,
+                "names": region.names,
+                "solo": sorted(region.solo),
+                "bundles": region.bundles,
+            },
+        )
     return region
 
 

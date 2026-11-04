@@ -5,10 +5,12 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import test_shadps4
 from test_doctor import by_name
 from test_shadps4 import PROFILE
+from warpzone import provision as provision_mod
 from warpzone import shadps4
 from warpzone.doctor import OK, WARN
 from warpzone.profiles import ProfileError, parse_profile
@@ -215,6 +217,37 @@ class ProvisionTests(LaunchDevice, unittest.TestCase):
         rep, _ = self.provision()
         self.assertEqual(self.rules.read_text(), RULES)
         self.assertTrue(any("ES-DE is running" in w for w in rep.warnings), rep.warnings)
+
+    def test_es_de_started_during_the_backup_stops_the_edit(self) -> None:
+        real = provision_mod.settings_state.backup
+
+        def backup(path, *args, **kw):
+            result = real(path, *args, **kw)
+            if path == self.rules:
+                self.start("es-de")
+            return result
+
+        with mock.patch.object(provision_mod.settings_state, "backup", backup):
+            rep, _ = self.provision()
+        self.assertEqual(self.rules.read_text(), RULES)
+        self.assertEqual(len(self.backups_of_rules()), 1)
+        self.assertTrue(any("ES-DE is running" in w for w in rep.warnings), rep.warnings)
+
+    def test_rules_edited_during_the_backup_are_left_alone(self) -> None:
+        edited = RULES + "<!-- by hand -->\n"
+        real = provision_mod.settings_state.backup
+
+        def backup(path, *args, **kw):
+            result = real(path, *args, **kw)
+            if path == self.rules:
+                path.write_text(edited)
+            return result
+
+        with mock.patch.object(provision_mod.settings_state, "backup", backup):
+            rep, _ = self.provision()
+        self.assertEqual(self.rules.read_text(), edited)
+        (warning,) = [w for w in rep.warnings if "changed while" in w]
+        self.assertIn(str(self.rules), warning)
 
     def test_unattended_defers_while_es_de_runs(self) -> None:
         self.start("es-de")

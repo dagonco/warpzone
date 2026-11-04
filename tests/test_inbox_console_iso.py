@@ -17,8 +17,8 @@ from console_iso_support import (
 )
 from inbox_support import age, make_stub, write_dat
 from test_inbox import Base
+from warpzone import gamelist
 from warpzone import inbox_console_iso as ci
-from warpzone import inbox_mame
 from warpzone.config import InboxSettings, parse_inbox
 from warpzone.inbox_core import Tools, whitelist_line
 
@@ -178,7 +178,7 @@ class FlowBase(Base):
         return target
 
     def emulators(self) -> dict[str, str | None]:
-        return inbox_mame.gamelist_emulators(self.gamelist.read_text(encoding="utf-8"))
+        return gamelist.emulators(self.gamelist.read_text(encoding="utf-8"))
 
 
 class PlacementTests(FlowBase):
@@ -216,7 +216,7 @@ class PlacementTests(FlowBase):
         self.drop(PS3_NAME, ps3_iso())
         self.assertEqual(self.go(settings=InboxSettings(gamelist_ps3=str(elsewhere))), 0)
         self.assertEqual(
-            inbox_mame.gamelist_emulators(elsewhere.read_text(encoding="utf-8")),
+            gamelist.emulators(elsewhere.read_text(encoding="utf-8")),
             {PS3_NAME: ci.EMU_RPCS3_ISO},
         )
         self.assertFalse(self.gamelist.exists())

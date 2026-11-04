@@ -238,6 +238,37 @@ class FrontendStateTests(Shared):
         record = self.ledger().records[ALPHA]
         self.assertEqual((record.plays, record.included), (2, 0))
 
+    def test_es_de_started_during_the_backup_leaves_the_gamelist_alone(self) -> None:
+        self.peer("ark", "ark", {ALPHA: Record(plays=3)})
+        real = settings_state.backup
+
+        def backup_then_start(*args, **kw):
+            result = real(*args, **kw)
+            self.start("es-de")
+            return result
+
+        with mock.patch.object(settings_state, "backup", backup_then_start):
+            self.sync()
+        self.assertEqual(self.gamelist.read_text(encoding="utf-8"), GAMELIST)
+        self.assertEqual(len(self.warnings), 1)
+        self.assertIn("ES-DE started", self.warnings[0])
+
+    def test_a_gamelist_edited_during_the_backup_is_left_alone(self) -> None:
+        self.peer("ark", "ark", {ALPHA: Record(plays=3)})
+        real = settings_state.backup
+        edited = GAMELIST + "<!-- by hand -->\n"
+
+        def backup_then_edit(*args, **kw):
+            result = real(*args, **kw)
+            self.gamelist.write_text(edited, encoding="utf-8")
+            return result
+
+        with mock.patch.object(settings_state, "backup", backup_then_edit):
+            self.sync()
+        self.assertEqual(self.gamelist.read_text(encoding="utf-8"), edited)
+        self.assertEqual(len(self.warnings), 1)
+        self.assertIn("changed while", self.warnings[0])
+
     def test_the_merge_waits_and_happens_when_es_de_closes(self) -> None:
         self.start("es-de")
         self.peer("ark", "ark", {ALPHA: Record(plays=3)})

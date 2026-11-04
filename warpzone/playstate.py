@@ -14,7 +14,7 @@ from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, tzinfo
 from xml.etree import ElementTree as ET
 
-from warpzone import artwork
+from warpzone import artwork, gamelist
 from warpzone.errors import WarpzoneError
 
 VERSION = 1
@@ -27,11 +27,9 @@ FUTURE_SLACK = 86400
 ELEMENT = "warpzonePlayState"
 _TIME = re.compile(r"\d{8}T\d{6}")
 _TIME_FORMAT = "%Y%m%dT%H%M%S"
-_GAME = re.compile(r"<game(?:\s[^>]*)?>.*?</game\s*>", re.DOTALL)
 _OPEN = re.compile(r"<gameList(?:\s[^>]*)?>[ \t]*(?:\r?\n)?")
 _CLOSE = re.compile(r"[ \t]*</gameList\s*>")
 _BLOCK = re.compile(rf"[ \t]*<{ELEMENT}(?:\s*/>|\s*>.*?</{ELEMENT}\s*>)[ \t]*(?:\r?\n)?", re.DOTALL)
-_PATH_INDENT = re.compile(r"^([ \t]*)<path\b", re.MULTILINE)
 _SHARED_FIELDS = ("playcount", "favorite", "lastplayed")
 
 Key = tuple[str, str]  # hub system, ROM path relative to it
@@ -384,11 +382,6 @@ def included_in(text: str, system: str) -> dict[Key, int] | None:
 # ------------------------------------------------------------------ editing gamelists
 
 
-def _escape(text: str) -> str:
-    """XML text. `xml.sax.saxutils` would load `urllib.request`, on ES-DE's startup path."""
-    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-
-
 def element(included: Mapping[str, int], eol: str = "\n") -> str:
     """The element a shared gamelist carries: it says what its counts hold of other replicas.
 
@@ -398,7 +391,7 @@ def element(included: Mapping[str, int], eol: str = "\n") -> str:
     """
     lines = [f"\t<{ELEMENT}>"]
     for rel, plays in sorted(included.items()):
-        path = _escape("./" + rel).replace('"', "&quot;")
+        path = gamelist.escape("./" + rel).replace('"', "&quot;")
         lines.append(f'\t\t<included path="{path}" plays="{plays}" />')
     lines.append(f"\t</{ELEMENT}>")
     return eol.join(lines) + eol
@@ -409,15 +402,11 @@ def _set_tag(block: str, tag: str, value: str | None, eol: str) -> str:
     if value is None:
         line = re.compile(rf"[ \t]*(?:{whole.pattern})[ \t]*(?:\r?\n)?")
         return line.sub("", block, count=1)
-    text = f"<{tag}>{_escape(value)}</{tag}>"
+    text = f"<{tag}>{gamelist.escape(value)}</{tag}>"
     if whole.search(block):
         return whole.sub(lambda _: text, block, count=1)
-    close = block.rindex("</game")
-    start = block.rfind("\n", 0, close) + 1
-    if not start or block[start:close].strip():  # all on one line
-        return f"{block[:close]}{text}{block[close:]}"
-    indent = _PATH_INDENT.search(block)
-    return f"{block[:start]}{indent.group(1) if indent else ''}{text}{eol}{block[start:]}"
+    indent = gamelist.child_indent(block, "", line_start_only=True)
+    return gamelist.add_child(block, text, eol, indent)
 
 
 def _values(change: Wanted, zone: tzinfo | None) -> list[tuple[str, str | None]]:
@@ -432,7 +421,7 @@ def _values(change: Wanted, zone: tzinfo | None) -> list[tuple[str, str | None]]
 
 
 def _new_game(rel: str, change: Wanted, zone: tzinfo | None, eol: str) -> str:
-    lines = ["\t<game>", f"\t\t<path>{_escape('./' + rel)}</path>"]
+    lines = ["\t<game>", f"\t\t<path>{gamelist.escape('./' + rel)}</path>"]
     for tag, value in _values(change, zone):
         if value is not None:
             lines.append(f"\t\t<{tag}>{value}</{tag}>")
@@ -469,7 +458,7 @@ def edit_gamelist(
         return text
     if included_in(text, system) == {(system, k): v for k, v in included.items()} and not changes:
         return text
-    eol = "\r\n" if "\r\n" in text else "\n"
+    eol = gamelist.eol_of(text)
     done: set[str] = set()
 
     def game(match: re.Match[str]) -> str:
@@ -487,14 +476,18 @@ def edit_gamelist(
         return block
 
     new = _BLOCK.sub("", text)
-    new = _GAME.sub(game, new)
+    new = gamelist.expand_empty_list(new, eol)
+    edited, at = [], 0
+    for match in gamelist.game_blocks(new):
+        edited += [new[at : match.start()], game(match)]
+        at = match.end()
+    new = "".join(edited) + new[at:]
     opening = _OPEN.search(new)
     if opening is None or opening.group(0).rstrip().endswith("/>"):
         raise PlayStateError("the file has no <gameList> to edit")
-    closings = list(_CLOSE.finditer(new))
-    if not closings:
+    closing = gamelist.last_outside_comments(_CLOSE, new)
+    if closing is None:
         raise PlayStateError("the file has no </gameList>")
-    closing = closings[-1]
     extra = "".join(
         _new_game(rel, change, zone, eol)
         for rel, change in sorted(changes.items())

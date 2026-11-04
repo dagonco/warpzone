@@ -516,7 +516,7 @@ and not what it points at.
   pointing anywhere else is not ours. Both lists are re-checked right before each change
   (`readlink` and `exists`), and a link that appears meanwhile (`FileExistsError`) is not an
   error.
-- Nothing is changed while a process of `process` runs (`settings_state.running`) or when that
+- Nothing is changed while a process of `process` runs (`procs.running`) or when that
   cannot be told (no `/proc`); the run says so. A missing `source` is "nothing to link"; a
   missing `target` means the emulator has not run yet, and it is not created. `--dry-run`
   prints "would link" and "would remove" and changes nothing. A second run changes nothing.
@@ -2559,7 +2559,7 @@ leaves no status at all.
   the reference again, and the release is under suspicion as described above.
 
 **Deferring while the menu is open.** The script scans `/proc/*/comm` and `argv[0]` the way
-`settings_state.running` does (`WZ_PROC` points it at a fake tree in tests, and a test checks
+`procs.running` does (`WZ_PROC` points it at a fake tree in tests, and a test checks
 that both agree). The names come from `esde.ESDE_PROCESSES` (unconfirmed on a console, as
 that module says) or from `es_systems.process`, depending on the profile. ES-DE stays alive
 during a game, so nothing updates while playing either. When it is open the tick sets
@@ -2575,7 +2575,7 @@ menu looks open for as long as the console is on, and every write is already gua
 set, since otherwise a release could never be accepted on such a device. Where `/proc`
 cannot be read, the script goes on (waiting would never help). `updater.sh menu` prints
 `open`, `closed` or `unknown` and exits 0, 1 or 2; a test compares it with
-`settings_state.running` on the same fake `/proc` trees.
+`procs.running` on the same fake `/proc` trees.
 
 **Python.** The interpreter must run `python3 -I -c "import tomllib, sys"` and be 3.11 or
 newer; the candidates are the one in `conf`, `/usr/bin/python3` and `python3`. With none the
@@ -2745,7 +2745,7 @@ warpzone/
   dat.py             Redump / No-Intro DAT parsing, cache, matching, disc grouping (pure)
   inbox.py           unpack, identify, convert, place, file the originals
   inbox_switch.py    Switch games: identify with nsz, titledb names, decompress, place
-  inbox_mame.py      arcade sets: MAME / FBNeo / 2003-Plus fit, emulator choice, ES-DE gamelist
+  inbox_mame.py      arcade sets: MAME / FBNeo / 2003-Plus fit, emulator choice, gamelist backup and write
   inbox_console_iso.py  PS3, Xbox, Xbox 360 and Wii U images: identify by signature, place
   inbox_ps4.py       PS4 packages: extract with orbis-pkg-util, place the game folder, shortcut
   inbox_vita.py      PS Vita game dumps: identify by param.sfo, place the folder and the .psvita file
@@ -2760,12 +2760,15 @@ warpzone/
   settings_tree.py   format handlers json, toml (pure)
   settings_layers.py layer files: parse, validate, merge, render (pure) and atomic write
   settings_plan.py   apply plan, capture candidates and pre-selection, audit rows (pure)
-  settings_state.py  device state: snapshots, backups, log, lock, atomic write, processes
+  settings_state.py  device state: snapshots, backups, log, lock
+  safefile.py        safe writes: atomic write, stamps, `guarded_edit`, JSON cache
+  procs.py           process detection from `/proc` (`running`)
   esde.py            ES-DE startup script, `es_settings.xml` check and edit (pure)
   frontend.py        frontend system list rewrite, RetroArch key gap (pure)
+  gamelist.py        ES-DE gamelist text edits: the per-game emulator and the helpers `playstate` shares (pure)
   artwork.py         frontend artwork: ES-DE gamelist -> the frontend's gamelist, scope ignores,
                      system names, timer units (pure; the reads are passed in)
-  playstate.py       play state: ledgers, merge rules, times, gamelist edits (pure)
+  playstate.py       play state: ledgers, merge rules, times, its tags in a gamelist (pure)
   playstate_device.py  play state on a device: files, ES-DE gamelists, generated gamelists
   tomlw.py           TOML scalar and key writer (tomllib only reads)
   doctor.py          machine checklist (`warpzone doctor`): checks, install hints, renderer

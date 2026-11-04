@@ -17,7 +17,6 @@ the disk. The module plugs into `inbox.py` through `inbox.kind_handlers()`.
 from __future__ import annotations
 
 import hashlib
-import json
 import os
 import re
 import shutil
@@ -30,10 +29,9 @@ from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import IO
-from xml.sax.saxutils import escape, unescape
 
-from warpzone import inbox_core
-from warpzone.errors import WarpzoneError
+from warpzone import gamelist, inbox_core, safefile
+from warpzone.gamelist import EMPTY_GAMELIST, GamelistError
 from warpzone.inbox_core import Context, InboxError, ItemFailure, ItemResult, Options, UnitResult
 
 SYSTEM = "mame"  # roms/<system>/ where arcade sets live
@@ -69,10 +67,6 @@ SOURCES: tuple[tuple[str, str | None, str | None], ...] = (
 KIND_RANK = {"game": 0, "bios": 1, "device": 2}
 Key = tuple[int, str]  # (size, crc32 as 8 lower-case hex digits)
 Support = Callable[[str], "frozenset[Key] | None"]  # zip name -> its members, None if absent
-
-
-class GamelistError(WarpzoneError):
-    """The ES-DE gamelist cannot be updated; the message says why."""
 
 
 # ------------------------------------------------------------------ the set databases
@@ -250,9 +244,9 @@ def load_sets(path: Path, cache_dir: Path | None) -> tuple[dict[str, Machine], s
     stat = path.stat()
     cache = _cache_file(cache_dir, path) if cache_dir else None
     if cache:
+        data = safefile.read_json_cache(cache)
         try:
-            data = json.loads(cache.read_text(encoding="utf-8"))
-            if (
+            if data is not None and (
                 data["version"] == CACHE_VERSION
                 and data["size"] == stat.st_size
                 and data["mtime_ns"] == stat.st_mtime_ns
@@ -276,13 +270,7 @@ def load_sets(path: Path, cache_dir: Path | None) -> tuple[dict[str, Machine], s
             "build": build,
             "machines": [_machine_json(m) for m in machines.values()],
         }
-        tmp = cache.with_name(cache.name + ".tmp")
-        try:
-            cache.parent.mkdir(parents=True, exist_ok=True)
-            tmp.write_text(json.dumps(data, separators=(",", ":")), encoding="utf-8")
-            os.replace(tmp, cache)
-        except OSError:
-            pass  # a cache that cannot be written only costs time
+        safefile.write_json_cache(cache, data)
     return machines, build, False
 
 
@@ -548,175 +536,11 @@ def decide(outcomes: Sequence[Outcome]) -> Decision:
 
 # ------------------------------------------------------------------ the gamelist (pure)
 
-_COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
-_GAME = re.compile(r"<game(?:\s[^>]*)?>.*?</game\s*>", re.DOTALL)
-_PATH = re.compile(r"<path>(.*?)</path>", re.DOTALL)
-_ALT = re.compile(r"<altemulator>(.*?)</altemulator>", re.DOTALL)
-_ALT_LINE = re.compile(
-    r"^[ \t]*<altemulator>.*?</altemulator>[ \t]*\r?\n?", re.DOTALL | re.MULTILINE
-)
-_LIST_CLOSE = re.compile(r"</gameList\s*>")
-_LIST_EMPTY = re.compile(r"<gameList\s*/>")
-EMPTY_GAMELIST = '<?xml version="1.0"?>\n<gameList>\n</gameList>\n'
-
-
-def _outside_comments(text: str) -> list[tuple[int, int]]:
-    """Spans of `text` that are not inside an XML comment."""
-    spans, at = [], 0
-    for c in _COMMENT.finditer(text):
-        spans.append((at, c.start()))
-        at = c.end()
-    spans.append((at, len(text)))
-    return spans
-
-
-def _game_blocks(text: str) -> list[re.Match[str]]:
-    blocks = []
-    for start, end in _outside_comments(text):
-        blocks.extend(_GAME.finditer(text, start, end))
-    return blocks
-
-
-def _entry_path(block: str) -> str:
-    m = _PATH.search(block)
-    if not m:
-        return ""
-    path = unescape(m.group(1).strip())
-    return path[2:] if path.startswith("./") else path
-
-
-def gamelist_emulators(text: str) -> dict[str, str | None]:
-    """File name -> its <altemulator> (None when the entry has none), for the tests and
-    the report."""
-    result: dict[str, str | None] = {}
-    for m in _game_blocks(text):
-        alt = _ALT.search(m.group(0))
-        result[_entry_path(m.group(0))] = unescape(alt.group(1).strip()) if alt else None
-    return result
-
-
-def _well_formed(text: str) -> bool:
-    """ES-DE writes more than one top-level element; wrap before parsing."""
-    body = re.sub(r"^\s*<\?xml[^>]*\?>", "", text)
-    try:
-        ET.fromstring(f"<w>{body}</w>")
-    except ET.ParseError:
-        return False
-    return True
-
 
 def update_gamelist(text: str, set_name: str, emulator: str | None) -> tuple[str, str]:
     """`text` with the per-game emulator of `<set_name>.zip` set to `emulator` (removed
-    when None), and what was done: "unchanged", "added", "changed" or "removed".
-    Everything else, comments and unknown elements included, stays as it is."""
-    return update_gamelist_entry(text, f"{set_name}.zip", emulator)
-
-
-def update_gamelist_entry(text: str, file_name: str, emulator: str | None) -> tuple[str, str]:
-    """`update_gamelist` for any game file name (`inbox_console_iso` uses it for PS3)."""
-    nl = "\r\n" if "\r\n" in text else "\n"
-    target = next((m for m in _game_blocks(text) if _entry_path(m.group(0)) == file_name), None)
-    if target is None:
-        if emulator is None:
-            return text, "unchanged"
-        new = _insert_entry(text, file_name, emulator, nl)
-        action = "added"
-    else:
-        block = target.group(0)
-        alt = _ALT.search(block)
-        if emulator is None:
-            if alt is None:
-                return text, "unchanged"
-            stripped = _ALT_LINE.sub("", block, count=1)
-            if stripped == block:  # on a line with other things: take only the element
-                stripped = _ALT.sub("", block, count=1)
-            inner = re.sub(r"^<game(?:\s[^>]*)?>|</game\s*>$", "", stripped)
-            if re.fullmatch(r"\s*<path>[^<]*</path>\s*", inner):
-                new = _drop_block(text, target)
-            else:
-                new = text[: target.start()] + stripped + text[target.end() :]
-            action = "removed"
-        else:
-            wanted = escape(emulator)
-            if alt is not None:
-                if unescape(alt.group(1).strip()) == emulator:
-                    return text, "unchanged"
-                edited = block[: alt.start(1)] + wanted + block[alt.end(1) :]
-                action = "changed"
-            else:
-                edited = _add_to_block(block, wanted, nl)
-                action = "added"
-            new = text[: target.start()] + edited + text[target.end() :]
-    if _well_formed(text) and not _well_formed(new):
-        raise GamelistError("the edited gamelist would not be well-formed XML; left untouched")
-    return new, action
-
-
-def _indent_before(text: str, pos: int) -> str | None:
-    """The whitespace between the start of the line and `pos`, None if there is more."""
-    start = text.rfind("\n", 0, pos) + 1
-    before = text[start:pos]
-    return before if not before.strip() else None
-
-
-def _add_to_block(block: str, emulator: str, nl: str) -> str:
-    close = block.rindex("</game")
-    path = _PATH.search(block)
-    child = (_indent_before(block, path.start()) if path else None) or "\t\t"
-    head = block[:close].rstrip(" \t")
-    if not head.endswith(("\n", "\r")):
-        head += nl
-    closing_indent = _indent_before(block, close)
-    tail = block[close:]
-    if closing_indent is None:  # "</game>" shares a line with other content
-        return f"{block[:close]}<altemulator>{emulator}</altemulator>{tail}"
-    return f"{head}{child}<altemulator>{emulator}</altemulator>{nl}{closing_indent}{tail}"
-
-
-def _drop_block(text: str, match: re.Match[str]) -> str:
-    start, end = match.start(), match.end()
-    line_start = text.rfind("\n", 0, start) + 1
-    if not text[line_start:start].strip():  # the entry owns its lines: take them whole
-        start = line_start
-        tail = re.match(r"[ \t]*\r?\n", text[end:])
-        if tail:
-            end += tail.end()
-    return text[:start] + text[end:]
-
-
-def _insert_entry(text: str, file_name: str, emulator: str, nl: str) -> str:
-    if _LIST_EMPTY.search(text):
-        text = _LIST_EMPTY.sub(f"<gameList>{nl}</gameList>", text, count=1)
-    close = None
-    for start, end in _outside_comments(text):
-        for m in _LIST_CLOSE.finditer(text, start, end):
-            close = m
-    if close is None:
-        raise GamelistError("no <gameList> element found")
-    blocks = _game_blocks(text)
-    entry, child = "\t", "\t\t"
-    if blocks:
-        first = blocks[0]
-        entry = _indent_before(text, first.start()) or entry
-        path = _PATH.search(first.group(0))
-        if path:
-            child = _indent_before(first.group(0), path.start()) or child
-    else:
-        wrapper = _indent_before(text, close.start())
-        if wrapper:
-            entry = wrapper + "\t"
-            child = entry + "\t"
-    lines = (
-        f"{entry}<game>{nl}"
-        f"{child}<path>./{escape(file_name)}</path>{nl}"
-        f"{child}<altemulator>{escape(emulator)}</altemulator>{nl}"
-        f"{entry}</game>{nl}"
-    )
-    at = close.start()
-    indent = _indent_before(text, at)
-    if indent is not None:
-        return text[: at - len(indent)] + lines + text[at - len(indent) :]
-    return text[:at] + nl + lines + text[at:]
+    when None), and what was done: "unchanged", "added", "changed" or "removed"."""
+    return gamelist.update_entry(text, f"{set_name}.zip", emulator)
 
 
 # ------------------------------------------------------------------ disk
