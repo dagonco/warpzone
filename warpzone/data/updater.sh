@@ -31,7 +31,6 @@
 #   WZ_FETCH_TIMEOUT   seconds for the fetch (default 120)
 #   WZ_MIN_FREE_KB     free space in KiB needed before switching (default 51200)
 #   WZ_PYTHON_FALLBACKS  interpreters to try after the one in the settings
-#   WZ_RETIRED_MAX       retirement tags whose signature is checked per tick (default 50)
 #   WZ_ALLOWED_SIGNERS   the allowed-signers file (ssh-keygen -Y format) that tags must be
 #                        signed against, for tests (default: the one in the version known to
 #                        work, warpzone/data/allowed_signers; empty or without keys, no
@@ -62,8 +61,6 @@ SIGNERS_FILE=
 SIGNERS_SRC=
 SIGNERS_TMP=$STATE_DIR/.allowed_signers
 SIGNERS_LAST=$STATE_DIR/allowed_signers.last
-RETIRED_MAX=${WZ_RETIRED_MAX:-50}
-RETIRED_SCAN=500
 STEP_TIMEOUT=${WZ_STEP_TIMEOUT:-}
 FETCH_TIMEOUT=${WZ_FETCH_TIMEOUT:-120}
 TICK_BUDGET=${WZ_TICK_BUDGET:-1500}
@@ -234,7 +231,6 @@ case $STEP_TIMEOUT in '' | 0 | *[!0-9]*) STEP_TIMEOUT= ;; esac
 case $FETCH_TIMEOUT in '' | *[!0-9]*) FETCH_TIMEOUT=120 ;; esac
 case $TICK_BUDGET in '' | *[!0-9]*) TICK_BUDGET=1500 ;; esac
 case $MIN_FREE_KB in '' | *[!0-9]*) MIN_FREE_KB=51200 ;; esac
-case $RETIRED_MAX in '' | 0 | *[!0-9]*) RETIRED_MAX=50 ;; esac
 
 # ---- run with a time limit ------------------------------------------------------------
 # run_limited SECONDS COMMAND...: the command's exit status, or 124 when it ran out of
@@ -780,10 +776,12 @@ clear_stale_index_lock() {
 # signers hold a key it only counts if it is signed by one, like any release (below); without
 # keys it counts as it is. A lightweight tag, one whose name is not a release or a candidate,
 # or one with a signature that does not verify, retires nothing and is logged. The reason is
-# text for the log, never run.
+# text for the log, never run. A retirement is looked up by the name of the tag the tick asks
+# about (is_retired), never by going through the `retired/` tags: however many tags anyone
+# publishes there, they cannot hide a real retirement or use up the tick's time.
 RETIRED_TAGS=' '
+RETIRED_NOT=' '
 RETIRED_INFO=
-RETIRED_BAD=
 
 # retired_ok TAG: the tag object retired/TAG sits on the commit of the release TAG (vX.Y.Z).
 # What it points at is peeled first, so `git tag -s retired/v1.2.3 v1.2.3`, which nests the
@@ -805,96 +803,33 @@ retired_formed() {
 		retired_ok "$1" && release_ok "$1" && tag_signed "$1"
 }
 
-# retired_scope: what this tick may need to know about retirements, from the running version
-# (RM_CUR and its key) and whether it is itself retired (RM_DOWN: then every tag of the
-# channel is a candidate, whatever its version). Needs signing_setup first.
-RM_CUR=
-RM_CUR_KEY=
-RM_DOWN=0
-retired_scope() {
-	RM_CUR=$(version_at HEAD)
-	ver_key "$RM_CUR"
-	RM_CUR_KEY=$VK
-	RM_DOWN=0
-	if [ -z "$C_pin" ] && [ -n "$RM_CUR" ] && rel_key "v$RM_CUR" && retired_formed "v$RM_CUR" && tag_signed "retired/v$RM_CUR"; then
-		RM_DOWN=1
-	fi
-}
-
-# retired_matters TAG: a retirement of TAG can change what this tick does: TAG is the running
-# version, the pin, a version being tried or under suspicion, or a candidate that pick_target
-# looks at (newer than the running version and of the channel, or any of the channel when the
-# running version is retired; with a pin, nothing else is a target). RK is the key of TAG.
-retired_matters() {
-	[ "$1" = "v$RM_CUR" ] && return 0
-	[ "$1" = "$C_pin" ] && return 0
-	[ "$1" = "$S_trying_tag" ] && return 0
-	[ "$1" = "$S_suspect_tag" ] && return 0
-	[ -z "$C_pin" ] || return 1
-	if [ "$RM_DOWN" = 0 ]; then
-		key_gt "$RK" "$RM_CUR_KEY" || return 1
-	fi
-	[ "$C_channel" != stable ] || is_plain_tag "$1"
-}
-
-# retired_load: the retirements the clone has (it takes them with the daily fetch), the newest
-# versions first. Only those of tags that matter (retired_matters) are looked at: unsigned or
-# fake retirements of other real releases, such as the candidates of the running version
-# (they sort above it), cannot use up the limit. A tag that is no retirement (not annotated,
-# no version for a name, not on the commit of its release, or of a release that is no valid tag
-# itself: fake pairs of `vX` and `retired/vX` are cheap to make) does not count towards the
-# limit; at most RETIRED_MAX that are well formed get their own signature checked, so that a
-# pile of bad ones cannot use up the tick's budget, and RETIRED_SCAN tags are looked at in all.
-# Needs signing_setup first.
-retired_load() {
+# retired_reset: forget what is_retired found out, for a tick whose keys are now known. Needs
+# signing_setup first.
+retired_reset() {
 	RETIRED_TAGS=' '
+	RETIRED_NOT=' '
 	RETIRED_INFO=
-	RETIRED_BAD=
-	_rmore=0
-	_rcount=0
-	_rlines=0
-	_rbadn=0
-	retired_scope
-	_rf="$STATE_DIR/.retired.$$"
-	g for-each-ref --sort=-v:refname --format='%(refname) %(objecttype) %(taggerdate:short) %(contents:subject)' refs/tags/retired/ 2>/dev/null | head -n "$RETIRED_SCAN" >"$_rf" 2>/dev/null
-	while read -r _rref _rtype _rdate _rreason; do
-		_rlines=$((_rlines + 1))
-		_rtag=${_rref#refs/tags/retired/}
-		_rok=0
-		if rel_key "$_rtag" && ! retired_matters "$_rtag"; then
-			continue # a well formed name that no choice of this tick depends on
-		fi
-		if rel_key "$_rtag" && [ "$_rtype" = tag ] && retired_ok "$_rtag" && release_ok "$_rtag" && tag_signed "$_rtag"; then
-			if [ "$_rcount" -ge "$RETIRED_MAX" ]; then
-				_rmore=1
-				break
-			fi
-			_rcount=$((_rcount + 1))
-			tag_signed "retired/$_rtag" && _rok=1
-		fi
-		if [ "$_rok" = 1 ]; then
-			RETIRED_TAGS="$RETIRED_TAGS$_rtag "
-			RETIRED_INFO="$RETIRED_INFO$_rtag $_rdate $_rreason
-"
-		else
-			_rbadn=$((_rbadn + 1))
-			[ "$_rbadn" -gt 10 ] || RETIRED_BAD="$RETIRED_BAD $_rtag"
-		fi
-	done <"$_rf"
-	rm -f "$_rf"
-	if [ "$_rbadn" -gt 0 ]; then
-		log_daily "retirement tags ignored ($_rbadn: not annotated, not a version, not on that release's commit, of a release that is no valid tag, or not signed by an allowed key):$RETIRED_BAD"
-	fi
-	if [ "$_rmore" = 1 ]; then
-		log_daily "more than $RETIRED_MAX retirement tags: only the newest $RETIRED_MAX were looked at"
-	elif [ "$_rlines" -ge "$RETIRED_SCAN" ]; then
-		log_daily "only the newest $RETIRED_SCAN retirement tags were scanned"
-	fi
-	return 0
 }
 
+# is_retired TAG: retired/TAG is a retirement (retired_formed) with a good signature when one
+# is required. Looked up the first time the tick asks and remembered until retired_reset; a
+# `retired/TAG` that retires nothing is logged then.
 is_retired() {
 	case $RETIRED_TAGS in *" $1 "*) return 0 ;; esac
+	case $RETIRED_NOT in *" $1 "*) return 1 ;; esac
+	if ! rel_key "$1" || ! g rev-parse -q --verify "refs/tags/retired/$1" >/dev/null 2>&1; then
+		RETIRED_NOT="$RETIRED_NOT$1 "
+		return 1
+	fi
+	if retired_formed "$1" && tag_signed "retired/$1"; then
+		_ri=$(g for-each-ref --count=1 --format='%(taggerdate:short) %(contents:subject)' "refs/tags/retired/$1" 2>/dev/null)
+		RETIRED_TAGS="$RETIRED_TAGS$1 "
+		RETIRED_INFO="$RETIRED_INFO$1 $_ri
+"
+		return 0
+	fi
+	RETIRED_NOT="$RETIRED_NOT$1 "
+	log_daily "retirement tag ignored: retired/$1 (not annotated, not on the commit of $1, of a release that is no valid tag, or not signed by an allowed key)"
 	return 1
 }
 
@@ -1087,10 +1022,11 @@ target_ok() {
 		case $C_channel in
 		stable) is_plain_tag "$1" || return 1 ;;
 		esac
-		is_retired "$1" && return 1
 	fi
 	is_bad "$1" && return 1
-	tag_valid "$1"
+	tag_valid "$1" || return 1
+	# looked up only for a valid release: tags that anyone can publish cost no lookup
+	[ -n "$C_pin" ] || ! is_retired "$1"
 }
 
 # pick_target sets PICK to the best valid tag that is newer than what is checked out, or to
@@ -2187,7 +2123,7 @@ tick_trust() {
 
 	# The keys are the ones of the version known to work, so this comes after the reference.
 	signing_setup
-	retired_load
+	retired_reset
 	S_pin_retired=
 	if [ -n "$C_pin" ] && is_retired "$C_pin"; then
 		S_pin_retired=$C_pin
@@ -2358,7 +2294,7 @@ cmd_install() {
 	S_good_sha=$(head_sha)
 	signing_setup
 	[ "$SIGN_ON" = 1 ] || log "signatures are not required: $SIGN_WHY"
-	retired_load
+	retired_reset
 	_i_pick=
 	for _tag in $(g tag --list 'v*' 2>/dev/null | order_tags); do
 		target_ok "$_tag" || continue

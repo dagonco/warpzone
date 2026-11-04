@@ -421,24 +421,19 @@ then set to `stable` moves up to the release when it exists and otherwise stays.
 annotated `retired/vX.Y.Z` (or `retired/vX.Y.ZrcN`) whose message is the reason, normally on
 the retired release's commit and signed like a release. There is no file to edit: a file in
 `main` would let whoever controls the account (but not the signing key) withdraw the good
-version and force a device down. The script reads the retirements from the clone's tags
-(`git for-each-ref refs/tags/retired/`), which it takes with its regular fetch, so a device sees
-one within its fetch interval (12 hours at most). When the allowed signers hold a key, a retirement counts only if its tag
+version and force a device down. The script looks a retirement up in the clone's tags, which
+it takes with its regular fetch, so a device sees one within its fetch interval (12 hours at
+most). It looks it up by name, `retired/vX`, and only for a tag the tick asks about: the
+running version, the pin, a version being tried or under suspicion, and each candidate once
+that candidate has proved a valid release (so tags that anyone can publish cost no lookup).
+It never goes through the `retired/` tags, so however many of them anyone publishes, they
+cannot hide a real retirement or use up the tick's time. When the allowed signers hold a key, a retirement counts only if its tag
 passes the same check as a release (below); without keys it counts unsigned. A lightweight
-tag, a name that is not a release or a candidate (`retired/latest`, `retired/v0.3.0-rc1`), a tag
-that does not sit on the commit of the release it names (what it points at is peeled, so
-`git tag -s retired/v0.3.0 v0.3.0`, which nests it in the release's tag object, counts) and a
-signature that does not verify retire nothing and are logged (once a day). Only the cheap
-checks (a version name, an annotated tag, the commit) count tags towards the limit: the
-signatures of at most 50 well formed `retired/` tags are checked per tick (`RETIRED_MAX`, `WZ_RETIRED_MAX` for tests,
-newest version first), so a pile of tags with invalid signatures cannot use up the tick's
-budget, and tags that are no retirement cannot push a real one out; 500 tags are looked at in
-all (`RETIRED_SCAN`). It logs when there are more. Only retirements of tags that matter to
-the tick are looked at and counted: the running version, the pin, a version being tried or
-under suspicion, and the candidates the tick considers (newer than the running version and of
-the channel, or every one of the channel when the running version is retired). Fake or
-unsigned retirements of other real releases, such as the candidates of the running version
-(`retired/v0.3.0rc1` sorts above `retired/v0.3.0`), cannot use up the limit. The reason, taken
+tag, a tag that does not sit on the commit of the release it names (what it points at is
+peeled, so `git tag -s retired/v0.3.0 v0.3.0`, which nests it in the release's tag object,
+counts), the retirement of a tag that is no valid release and a signature that does not
+verify retire nothing and are logged (once a day) when the tick looks them up; a name that is
+not a release or a candidate (`retired/latest`, `retired/v0.3.0-rc1`) is never looked up. The reason, taken
 from the tag's subject, is only text for the log; nothing in a tag is run. A retired tag is
 never a candidate. When the running version is retired the device goes to the best valid
 candidate of its channel, even a lower one (there is no floor), and stays where it is when
