@@ -10,7 +10,7 @@ from __future__ import annotations
 from warpzone.provision_artwork import artwork_scope, refresh_artwork
 from warpzone.provision_device import provision_device
 from warpzone.provision_folders import ProvisionError, folder_status
-from warpzone.provision_hub import check_hub, provision_hub
+from warpzone.provision_hub import check_hub, provision_hub, provision_hub_additive
 
 __all__ = [
     "ProvisionError",
@@ -19,5 +19,6 @@ __all__ = [
     "folder_status",
     "provision_device",
     "provision_hub",
+    "provision_hub_additive",
     "refresh_artwork",
 ]

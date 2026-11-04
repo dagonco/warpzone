@@ -2,17 +2,22 @@
 
 from __future__ import annotations
 
+import posixpath
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Collection
+from dataclasses import dataclass
+from typing import Any
 
 from warpzone.config import HUB_WAIT_SECONDS, Config
 from warpzone.model import FolderSpec, hub_specs
 from warpzone.profiles import Profile
 from warpzone.provision_folders import (
+    PREFIX,
     ProvisionError,
     apply_ignores,
     ensure_device,
     in_index,
+    same_path,
     unpause,
     upsert_folder,
     wait_pending,
@@ -127,6 +132,135 @@ def provision_hub(
             missing = _missing_on(client, spec)
             if missing:
                 rep.warn(f"{spec.id}: missing in {spec.path}: {', '.join(missing)}")
+
+
+@dataclass(frozen=True)
+class AdditivePlan:
+    """What an additive run does, decided from the specs and the hub's folders."""
+
+    create: tuple[FolderSpec, ...]  # missing and not whitelisted: the only ones it makes
+    whitelisted: tuple[FolderSpec, ...]  # missing and whitelisted: a person makes these
+    differences: tuple[str, ...]  # folders the hub has that differ from the config; left alone
+    clashes: tuple[str, ...] = ()  # missing, but another hub folder is at that path: not made
+
+
+def _path_key(path: str) -> str:
+    """A folder path as compared for clashes: no trailing slash, any case."""
+    return posixpath.normpath(path).casefold() if path else ""
+
+
+def additive_plan(
+    specs: list[FolderSpec],
+    existing: dict[str, dict[str, Any]],
+    names: dict[str, str],
+    only: Collection[str] | None = None,
+) -> AdditivePlan:
+    """Which hub folders an additive run creates (pure).
+
+    Only a folder that is not on the hub and is not whitelisted is created. A folder the hub
+    has is never touched, whatever it looks like: its differences are only reported. `names`
+    maps a device ID to its name, for the report; `only` limits the run to those folder IDs.
+    A missing folder whose path another hub folder already has (compared without a trailing
+    slash and in any case) is not created either: two folders on one directory would each
+    sync it their own way.
+    """
+    create: list[FolderSpec] = []
+    whitelisted: list[FolderSpec] = []
+    differences: list[str] = []
+    clashes: list[str] = []
+    taken = {_path_key(f.get("path", "")): fid for fid, f in existing.items() if f.get("path")}
+    for spec in specs:
+        if not spec.id.startswith(PREFIX) or (only is not None and spec.id not in only):
+            continue
+        current = existing.get(spec.id)
+        if current is None:
+            if spec.bootstrap_ignores is not None:
+                whitelisted.append(spec)
+                continue
+            other = taken.get(_path_key(spec.path))
+            if other is not None:
+                clashes.append(
+                    f"{spec.id}: not created, the hub's folder {other!r} is already at "
+                    f"{spec.path!r}"
+                )
+                continue
+            taken[_path_key(spec.path)] = spec.id
+            create.append(spec)
+            continue
+        if not same_path(current.get("path", ""), spec.path):
+            differences.append(
+                f"{spec.id}: the hub has it at {current.get('path')!r}, not {spec.path!r}"
+            )
+        if current.get("type") != spec.type:
+            differences.append(
+                f"{spec.id}: the hub has type {current.get('type')!r}, not {spec.type!r}"
+            )
+        shared = {d["deviceID"] for d in current.get("devices") or []}
+        lacking = [names.get(d, d[:7]) for d in spec.devices if d not in shared]
+        if lacking:
+            differences.append(f"{spec.id}: not shared with {', '.join(lacking)} on the hub")
+    return AdditivePlan(tuple(create), tuple(whitelisted), tuple(differences), tuple(clashes))
+
+
+def provision_hub_additive(
+    cfg: Config,
+    profiles: dict[str, Profile],
+    client: Client,
+    rep: Reporter,
+    *,
+    only: Collection[str] | None = None,
+    report_whitelisted: bool = True,
+) -> list[str]:
+    """Create the `wz-*` folders the hub lacks, and change nothing else on it.
+
+    Used by `provision hub --additive` and by a device with `auto_hub = true`. A folder the
+    hub already has is never patched (so a console with an old config or channel reverts
+    nothing); a whitelisted folder is left to a person. The hub's folders are read again right
+    before each creation, and the API must answer as the hub. A new folder is created paused,
+    gets its ignores, and is resumed. Returns the IDs it created.
+    """
+    actual = client.my_id()
+    if actual != cfg.hub.device_id:
+        raise ProvisionError(
+            f"the API at {cfg.hub.api_url} belongs to device {actual[:7]}..., "
+            f"but hub.device_id starts with {cfg.hub.device_id[:7]}..."
+        )
+    devices = {d.device_id: d for d in cfg.devices.values()}
+    plan = additive_plan(
+        hub_specs(cfg, profiles),
+        {f["id"]: f for f in client.folders()},
+        {i: d.name for i, d in devices.items()},
+        only,
+    )
+    for text in plan.differences:
+        rep.warn(f"{text} (left as it is; `warpzone provision hub` changes it)")
+    for text in plan.clashes:
+        rep.warn(text)
+    if report_whitelisted:
+        for spec in plan.whitelisted:
+            rep.warn(
+                f"{spec.id} is not on the hub: whitelisted folders are made by "
+                "`warpzone provision hub`, not by an additive run"
+            )
+    created: list[str] = []
+    for spec in plan.create:
+        known = {d["deviceID"] for d in client.devices()}
+        for device_id in spec.devices:
+            device = devices[device_id]
+            ensure_device(client, device_id, device.name, device.addresses, known, rep)
+        # The last look before writing, after the device writes: POST /rest/config/folders
+        # replaces a folder with the same ID, and someone may have made it since the list
+        # was read.
+        if any(f["id"] == spec.id for f in client.folders()):
+            rep.out(f"{spec.id}: already on the hub, left as it is")
+            continue
+        upsert_folder(client, spec, None, rep)
+        apply_ignores(client, spec, None, True, rep)
+        rep.flush(spec.id)
+        created.append(spec.id)
+    if not plan.create:
+        rep.out("hub: no folder to create")
+    return created
 
 
 def check_hub(cfg: Config, profiles: dict[str, Profile], client: Client, rep: Reporter) -> int:

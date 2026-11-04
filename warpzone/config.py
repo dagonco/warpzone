@@ -59,6 +59,9 @@ class Device:
     channel: str = "stable"
     # A tag (vX.Y.Z or vX.Y.ZrcN) the device stays on, whatever the channel; None for none.
     pin: str | None = None
+    # Whether `provision device` creates on the hub the folders this device needs and the hub
+    # lacks (never a whitelisted one, and never a change to a folder the hub has).
+    auto_hub: bool = False
 
 
 INBOX_KEYS = (
@@ -270,6 +273,7 @@ def parse_config(data: dict[str, Any], known_profiles: set[str] | None = None) -
                 "self_update",
                 "channel",
                 "pin",
+                "auto_hub",
             },
             where,
             errors,
@@ -316,6 +320,10 @@ def parse_config(data: dict[str, Any], known_profiles: set[str] | None = None) -
         if "pin" in entry and (not isinstance(pin, str) or tag_key(pin) is None):
             errors.append(f"{where}.pin: must be a release tag such as v0.3.0 or v0.3.0rc1")
             pin = None
+        auto_hub = entry.get("auto_hub", False)
+        if not isinstance(auto_hub, bool):
+            errors.append(f"{where}.auto_hub: must be true or false")
+            auto_hub = False
         devices[dev_name] = Device(
             dev_name,
             device_id,
@@ -326,6 +334,7 @@ def parse_config(data: dict[str, Any], known_profiles: set[str] | None = None) -
             self_update,
             channel,
             pin,
+            auto_hub,
         )
 
     if errors:
