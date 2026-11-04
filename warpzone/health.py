@@ -1,7 +1,7 @@
 """`warpzone health`: does this version of warpzone work on this device? Writes no user data.
 
-The third step of verifying a version after an update (development/design.md, "Autonomous updates
-(contract)"). It loads the config and the profiles, runs as dry runs what ES-DE and the timers
+The third step of verifying a version after an update (development/design/autonomous-updates.md).
+It loads the config and the profiles, runs as dry runs what ES-DE and the timers
 run on their own (`settings apply`, `play-state sync`, `links sync`, `frontend refresh`) and
 checks that the startup scripts and the units are there and run a working interpreter.
 

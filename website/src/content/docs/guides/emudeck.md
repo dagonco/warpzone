@@ -147,7 +147,7 @@ One caveat belongs here. The xemu EEPROM is shared as a whole file, which gives 
 
 These are done once per device, by hand.
 
-**Ryujinx keys.** Ryujinx has no placement. Its `system/` folder would need the same `prod.keys` and `title.keys` that Eden already receives, and two Syncthing folders cannot share one hub folder cleanly (see [the design document](/warpzone/development/design/#library-exclusions-and-bios-placements)). Copy the two files from Eden's keys folder to `~/.config/Ryujinx/system/`.
+**Ryujinx keys.** Ryujinx has no placement. Its `system/` folder would need the same `prod.keys` and `title.keys` that Eden already receives, and two Syncthing folders cannot share one hub folder cleanly (see [the design document](/warpzone/development/design/profiles/#library-exclusions-and-bios-placements)). Copy the two files from Eden's keys folder to `~/.config/Ryujinx/system/`.
 
 **Ryujinx firmware.** Ryujinx cannot receive its firmware as files either. Install it from Ryujinx (Tools > Install Firmware), pointing at the Eden firmware folder, `~/Emulation/storage/eden/nand/system/Contents/registered`.
 

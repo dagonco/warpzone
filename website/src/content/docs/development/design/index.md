@@ -1,0 +1,56 @@
+---
+title: "warpzone design"
+---
+
+warpzone keeps one game library on a home server (the **hub**, typically a NAS)
+and delivers it to every console you own (the **devices**: Steam Deck, Steam
+Machine, a spare Mac...). Saves follow you from one device to the next. It is a
+thin layer of conventions and automation on top of [Syncthing](https://syncthing.net):
+warpzone never moves game data itself, it only configures Syncthing and keeps
+each device's copy honest.
+
+These pages are the contract for the implementation: a behaviour change updates the page
+that describes it in the same pull request. Anything not described here is out of scope.
+The pages after this one cover one subject each.
+
+## Goals
+
+- One source of truth for ROMs, BIOS and extras: the hub. Devices only receive.
+- Each device chooses what it gets with a whitelist that is **edited only on the
+  hub**. No file is ever edited by hand on a device after provisioning.
+- Saves sync in both directions between all devices, with history kept on the hub.
+- Emulator settings are changed in each emulator's own interface, on any device, and
+  captured to the hub as key-level layers (common and per device) that every device
+  applies. Config files are never copied whole and never edited by hand.
+- Adding a device is one command.
+- No dependencies beyond the Python standard library (3.11+), so the tool runs
+  unchanged on SteamOS, macOS and any Linux box.
+
+## Non-goals
+
+- Moving, renaming or converting ROMs that are already in the library. New content goes through `warpzone inbox`, which only ever adds.
+- Shipping or locating any copyrighted content (ROMs, BIOS, keys, firmware).
+  The BIOS checker compares what the user has with public names, sizes and hashes.
+- Running on the hub itself. Many NAS ship an old Python; the hub is driven
+  remotely through its Syncthing REST API.
+- Per-game emulator settings (RetroArch core and game overrides, per-game INI files),
+  controller mappings and input profiles. Settings travel only as single keys.
+- Moving logins. RetroAchievements and other sessions are made on each console and
+  never leave it.
+
+## Pages
+
+- [Hub, folders and ignores](/warpzone/development/design/hub-and-folders/): the hub layout, the Syncthing folders, the ignore files and the bootstrap problem.
+- [Profiles](/warpzone/development/design/profiles/): where things live on a kind of device, library exclusions and BIOS placements, frontend and RetroArch overrides, shadPS4.
+  - [Title links](/warpzone/development/design/title-links/): symlinks from the library's games into an emulator's own folder.
+  - [Frontend artwork](/warpzone/development/design/frontend-artwork/): the artwork folders and the generated gamelists.
+  - [Play state](/warpzone/development/design/play-state/): favourites and play statistics across devices.
+- [Configuration and command line](/warpzone/development/design/configuration/): the private config, every command, the two rules for writing commands, exit codes.
+- [Pruning](/warpzone/development/design/prune/): detecting and deleting what a device no longer whitelists.
+- [BIOS check](/warpzone/development/design/bios/): the manifest and the judgements.
+- [Inbox](/warpzone/development/design/inbox/): identifying, converting and filing new games, kind by kind.
+- [Emulator settings](/warpzone/development/design/emulator-settings/): layers, apply, capture and audit.
+- [Doctor](/warpzone/development/design/doctor/): the machine checklist.
+- [Self-update](/warpzone/development/design/self-update/): the device install, the settings, the timer.
+  - [Autonomous updates (contract)](/warpzone/development/design/autonomous-updates/): what the updater script guarantees, release channels, verification, rollback, `warpzone health`.
+- [Code, testing and CI](/warpzone/development/design/code-and-testing/): the Syncthing API surface, the code layout, the tests and the CI jobs.

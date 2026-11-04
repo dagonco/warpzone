@@ -1,6 +1,7 @@
 """Process detection: whether a program is running, read from `/proc`.
 
-Nothing here touches the network or Syncthing. See docs/design.md, "Process detection".
+Nothing here touches the network or Syncthing. See "Process detection" in
+development/design/emulator-settings.md.
 """
 
 from __future__ import annotations

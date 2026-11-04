@@ -92,4 +92,4 @@ On a device that subscribes to `library` with a profile that moves the frontend 
 - **Artwork timer.** Only when the profile sets `refresh`: `warpzone-artwork.timer` is installed in `~/.config/systemd/user`. Otherwise the fix is `warpzone provision device <name>`.
 - **Play state.** For a device that lists `play-state`: its folder is set up in Syncthing and, with ES-DE, the startup script and `warpzone-play-state.timer` are installed. Otherwise the fix is `warpzone provision device <name>`.
 
-Details in [the design document](/warpzone/development/design/#doctor).
+Details in [the design document](/warpzone/development/design/doctor/).

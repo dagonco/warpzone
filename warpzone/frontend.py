@@ -3,7 +3,7 @@
 A profile with `[es_systems]` gets a copy of the frontend's system list in which the ROM
 folders are moved to the library; a profile with `[retroarch]` gets a few keys of
 `retroarch.cfg` pinned. No I/O here: `provision device` reads and writes the files and
-`doctor` reads them. See development/design.md, "Frontend and RetroArch overrides".
+`doctor` reads them. See development/design/profiles.md, "Frontend and RetroArch overrides".
 """
 
 from __future__ import annotations

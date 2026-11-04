@@ -97,7 +97,7 @@ Add it to every device that takes part, run `warpzone provision hub`, then `warp
 - **When.** Each `frontend refresh` publishes what EmulationStation saved (on exit) and merges the others, every 15 minutes while it is closed. While it is open only publishing happens, and the merge waits.
 - **Games that are not here.** Their state waits in the files and applies if the game arrives. `hidden` and `kidgame` stay on this device.
 
-See [the design document](/warpzone/development/design/#play-state) for the rules.
+See [the design document](/warpzone/development/design/play-state/) for the rules.
 
 ## Doctor
 

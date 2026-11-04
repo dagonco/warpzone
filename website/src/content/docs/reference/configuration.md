@@ -51,7 +51,7 @@ One table per console. The table name is the device's name, used in commands (`w
 | `self_update` | boolean | `true` | no | Whether `provision device` installs the updater and its timer. `false` writes `enabled=false` in the [updater settings](#the-updater-settings-file) and installs nothing new. |
 | `channel` | string | `"stable"` | no | `"stable"` (only `vX.Y.Z` tags) or `"rc"` (also `vX.Y.ZrcN`). |
 | `pin` | string | none | no | A release tag such as `v0.3.0` or `v0.3.0rc1` (`v0.3.0-rc1` is rejected). The device stays on this tag, whatever the channel. |
-| `auto_hub` | boolean | `false` | no | Whether `provision device` first creates on the hub the folders this device needs and the hub lacks, using the hub's API key from this config. It never creates a whitelisted folder (`library`, `songs`) and never changes a folder the hub already has. See [Hub folders from a console](/warpzone/development/design/#hub-folders-from-a-console-auto_hub). |
+| `auto_hub` | boolean | `false` | no | Whether `provision device` first creates on the hub the folders this device needs and the hub lacks, using the hub's API key from this config. It never creates a whitelisted folder (`library`, `songs`) and never changes a folder the hub already has. See [Hub folders from a console](/warpzone/development/design/autonomous-updates/#hub-folders-from-a-console-auto_hub). |
 
 Folder groups for `folders`:
 

@@ -77,4 +77,4 @@ It asks Syncthing which files it ignores (after a full rescan) instead of guessi
 | `--list` | Prints every file. |
 | `--notify-url URL` | POSTs a JSON summary (`device`, `folder`, `files`, `bytes`, `applied`) to a webhook, for example a Home Assistant automation. |
 
-The algorithm and its safety rules are in [the design document](/warpzone/development/design/#pruning).
+The algorithm and its safety rules are in [the design document](/warpzone/development/design/prune/).

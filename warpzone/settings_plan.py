@@ -3,7 +3,7 @@
 Nothing here touches a disk or a network. `plan_apply` and `plan_data` decide what `settings
 apply` writes, `candidates`, `preselect`, `decide` and `apply_decisions` decide what `settings
 capture` proposes and what each answer changes, and `audit_rows` and `render_audit` describe the
-state for `settings audit`. See "Emulator settings" in development/design.md.
+state for `settings audit`. See "Emulator settings" in development/design/emulator-settings.md.
 
 Values are `str | int | float | bool` and are compared by type and value (`1`, `1.0`, `true`
 and `"1"` all differ). Secret keys never appear in any result: they are filtered by `tracked`
