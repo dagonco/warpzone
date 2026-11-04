@@ -8,12 +8,10 @@ import tempfile
 import tomllib
 import unittest
 from pathlib import Path
-from unittest import addModuleCleanup, mock
 
-from support import API_KEY, DECK_ID, HUB_ID, FakeProc, FakeSyncthing, config_data
+from support import API_KEY, DECK_ID, HUB_ID, FakeProc, FakeSyncthing, config_data, stub_self_update
 from test_doctor import by_name, context
 from test_provision import reporter
-from warpzone import provision as provision_mod
 from warpzone import shadps4
 from warpzone.config import parse_config
 from warpzone.doctor import OK, WARN, Context, check_frontend
@@ -21,13 +19,7 @@ from warpzone.profiles import ProfileError, load_profile, parse_profile
 from warpzone.provision import provision_device
 from warpzone.syncthing import Client
 
-
-def setUpModule() -> None:
-    """provision_device would install the updater and its timer: tests/test_update_timer.py
-    covers that."""
-    patcher = mock.patch.object(provision_mod, "ensure_self_update")
-    patcher.start()
-    addModuleCleanup(patcher.stop)
+setUpModule = stub_self_update
 
 
 PROFILE = load_profile("steamos-emudeck")

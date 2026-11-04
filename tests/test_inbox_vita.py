@@ -6,9 +6,9 @@ from pathlib import Path
 from console_iso_support import sfo
 from inbox_support import age
 from test_inbox import Base
-from warpzone import inbox, inbox_vita
+from warpzone import inbox_core, inbox_vita
 from warpzone.config import InboxSettings
-from warpzone.inbox import Tools
+from warpzone.inbox_core import Tools
 from warpzone.report import Reporter
 
 TITLE_ID = "PCSF00024"
@@ -586,7 +586,7 @@ class LicenseTests(FlowBase):
 
 class ClaimTests(FlowBase):
     def claims(self, item: Path) -> bool:
-        ctx = inbox.Context(self.options(), Reporter(self.lines.append), None, self.tmp)  # type: ignore[arg-type]
+        ctx = inbox_core.Context(self.options(), Reporter(self.lines.append), None, self.tmp)  # type: ignore[arg-type]
         return inbox_vita.HANDLER.claims(ctx, item)
 
     def test_only_a_game_layout_is_claimed(self) -> None:

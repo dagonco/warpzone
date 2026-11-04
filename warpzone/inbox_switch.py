@@ -13,11 +13,10 @@ falls back to the `[TitleID][vN]` in its file name and the report says so. `.nsz
 decompressed with `nsz -D`, checked with `nsz -V` and by parsing the PFS0 header, and only
 the `.nsp` reaches the library. `.xci` is never converted: it goes to review.
 
-`inbox.py` loads `HANDLER` late (`kind_handlers`), so this module can import it. The
-decisions (`classify`, `base_title_id`, `normalize_text`, `dlc_display_name`, `build_names`,
-`parse_nsz_info`, `parse_pfs0`, `ids_from_filename`, `verdict`) are pure; the rest touches
-the disk or runs `nsz`. The keys file is only passed to `nsz` by path: its content is never
-read, printed or logged.
+`inbox.py` registers `HANDLER` (`kind_handlers`). The decisions (`classify`,
+`base_title_id`, `normalize_text`, `dlc_display_name`, `build_names`, `parse_nsz_info`,
+`parse_pfs0`, `ids_from_filename`, `verdict`) are pure; the rest touches the disk or runs `nsz`.
+The keys file is only passed to `nsz` by path: its content is never read, printed or logged.
 See docs/design.md.
 """
 
@@ -38,9 +37,9 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from warpzone import inbox
+from warpzone import inbox_core
 from warpzone.errors import WarpzoneError
-from warpzone.inbox import Context, InboxError, ItemFailure, ItemResult, Options, UnitResult
+from warpzone.inbox_core import Context, InboxError, ItemFailure, ItemResult, Options, UnitResult
 
 EXTENSIONS = frozenset({".nsp", ".nsz", ".xci", ".xcz"})
 BASE, UPD, DLC = "BASE", "UPD", "DLC"
@@ -747,7 +746,7 @@ _STATE: weakref.WeakKeyDictionary[Context, SwitchState] = weakref.WeakKeyDiction
 
 def _copy(src: Path, dest: Path) -> None:
     try:
-        inbox.copy_verified(src, dest)
+        inbox_core.copy_verified(src, dest)
     except ItemFailure as exc:
         raise SwitchError(str(exc)) from exc
 
@@ -778,8 +777,8 @@ class SwitchHandler:
                 else is_switch_name(item.name)
             )
         for _, dirs, names in os.walk(item):
-            dirs[:] = [d for d in dirs if not inbox.skip_name(d)]
-            if any(is_switch_name(n) for n in names if not inbox.skip_name(n)):
+            dirs[:] = [d for d in dirs if not inbox_core.skip_name(d)]
+            if any(is_switch_name(n) for n in names if not inbox_core.skip_name(n)):
                 return True
         return False
 
@@ -789,7 +788,7 @@ class SwitchHandler:
                 with zipfile.ZipFile(item) as z:
                     return any(is_switch_name(n) for n in z.namelist())
             if ctx.tools.bsdtar:
-                code, text = inbox._run([ctx.tools.bsdtar, "-tf", str(item)])
+                code, text = inbox_core.run([ctx.tools.bsdtar, "-tf", str(item)])
                 return code == 0 and any(is_switch_name(n) for n in text.splitlines())
         except (zipfile.BadZipFile, OSError):
             pass
@@ -808,14 +807,14 @@ class SwitchHandler:
             cache_dir=opts.cache_dir.parent / "titledb" if opts.cache_dir else None,
         )
         state = _STATE.setdefault(ctx, SwitchState())
-        staged, notes, failures = inbox.stage_item(item, work, ctx.tools)
+        staged, notes, failures = inbox_core.stage_item(item, work, ctx.tools)
         result.notes.extend(notes)
         if failures:
             result.reasons.extend(failures)
             return
         others = [x.rel for x in staged if not is_switch_name(x.path.name)]
         others = [
-            r for r in others if os.path.splitext(r)[1].lower() not in inbox.SIDECAR_EXTENSIONS
+            r for r in others if os.path.splitext(r)[1].lower() not in inbox_core.SIDECAR_EXTENSIONS
         ]
         for n, x in enumerate(f for f in staged if is_switch_name(f.path.name)):
             out = process_file(env, state, x.path, x.rel, work / f"sw{n}")
@@ -836,7 +835,7 @@ class SwitchHandler:
 
 
 def _is_archive(path: Path) -> bool:
-    return path.suffix.lower() in inbox.ARCHIVE_EXTENSIONS
+    return path.suffix.lower() in inbox_core.ARCHIVE_EXTENSIONS
 
 
 HANDLER = SwitchHandler()

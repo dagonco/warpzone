@@ -14,7 +14,8 @@ import test_inbox
 from test_cli import run
 from warpzone import inbox_mame as mame
 from warpzone.config import InboxSettings, parse_inbox
-from warpzone.inbox import InboxError, run_inbox
+from warpzone.inbox import run_inbox
+from warpzone.inbox_core import InboxError
 from warpzone.inbox_mame import (
     EMU_2003PLUS,
     EMU_FBNEO,
