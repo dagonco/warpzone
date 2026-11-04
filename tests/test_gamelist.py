@@ -3,9 +3,10 @@ entities, existing tags, indentation, comments).
 
 The expected texts were taken from the two editors that existed before they shared a module
 (the arcade emulator editor of `inbox` and the play state editor), so they pin their output
-byte for byte. The two differ on purpose, and the cases show where: the emulator editor
-skips entries and closing tags inside comments and keeps the file's own indentation, the
-play state editor edits whatever its pattern finds.
+byte for byte, except where a case says it fixes an old edge: both editors skip entries and
+closing tags inside comments and take `<gameList/>` as an empty list, and the emulator editor
+replaces a self-closing `<altemulator/>`. The two still differ in how they read the file's
+indentation, and the cases show where.
 """
 
 import unittest
@@ -383,7 +384,7 @@ MAME_CASES = {
         ),
         "added",
     ),
-    "self_closing_emulator_is_not_recognised": (
+    "self_closing_emulator_is_replaced": (
         (
             "<gameList>\n"
             "\t<game>\n"
@@ -398,12 +399,54 @@ MAME_CASES = {
             "<gameList>\n"
             "\t<game>\n"
             "\t\t<path>./a.zip</path>\n"
-            "\t\t<altemulator/>\n"
             "\t\t<altemulator>E</altemulator>\n"
             "\t</game>\n"
             "</gameList>\n"
         ),
-        "added",
+        "changed",
+    ),
+    "self_closing_emulator_with_a_space_is_replaced": (
+        (
+            "<gameList>\n"
+            "\t<game>\n"
+            "\t\t<path>./a.zip</path>\n"
+            "\t\t<altemulator />\n"
+            "\t</game>\n"
+            "</gameList>\n"
+        ),
+        "a.zip",
+        "E",
+        (
+            "<gameList>\n"
+            "\t<game>\n"
+            "\t\t<path>./a.zip</path>\n"
+            "\t\t<altemulator>E</altemulator>\n"
+            "\t</game>\n"
+            "</gameList>\n"
+        ),
+        "changed",
+    ),
+    "self_closing_emulator_is_removed": (
+        (
+            "<gameList>\n"
+            "\t<game>\n"
+            "\t\t<path>./a.zip</path>\n"
+            "\t\t<name>A</name>\n"
+            "\t\t<altemulator/>\n"
+            "\t</game>\n"
+            "</gameList>\n"
+        ),
+        "a.zip",
+        None,
+        (
+            "<gameList>\n"
+            "\t<game>\n"
+            "\t\t<path>./a.zip</path>\n"
+            "\t\t<name>A</name>\n"
+            "\t</game>\n"
+            "</gameList>\n"
+        ),
+        "removed",
     ),
     "entries_in_comments_are_ignored": (
         (
@@ -1048,7 +1091,7 @@ STATE_CASES = {
             "</gameList>\n"
         ),
     ),
-    "entries_in_comments_are_edited": (
+    "entries_in_comments_are_ignored": (
         ("<gameList>\n<!--\n\t<game>\n\t\t<path>./a.zip</path>\n\t</game>\n-->\n</gameList>\n"),
         {"a.zip": Wanted(plays=4)},
         {},
@@ -1057,9 +1100,12 @@ STATE_CASES = {
             "<!--\n"
             "\t<game>\n"
             "\t\t<path>./a.zip</path>\n"
-            "\t\t<playcount>4</playcount>\n"
             "\t</game>\n"
             "-->\n"
+            "\t<game>\n"
+            "\t\t<path>./a.zip</path>\n"
+            "\t\t<playcount>4</playcount>\n"
+            "\t</game>\n"
             "</gameList>\n"
         ),
     ),
@@ -1114,7 +1160,45 @@ STATE_CASES = {
         "<gameList />\n",
         {"a.zip": Wanted(plays=4)},
         {},
-        None,
+        (
+            "<gameList>\n"
+            "\t<game>\n"
+            "\t\t<path>./a.zip</path>\n"
+            "\t\t<playcount>4</playcount>\n"
+            "\t</game>\n"
+            "</gameList>\n"
+        ),
+    ),
+    "self_closing_gamelist_without_a_space": (
+        "<gameList/>\r\n",
+        {"a.zip": Wanted(plays=4)},
+        {},
+        (
+            "<gameList>\r\n"
+            "\t<game>\r\n"
+            "\t\t<path>./a.zip</path>\r\n"
+            "\t\t<playcount>4</playcount>\r\n"
+            "\t</game>\r\n"
+            "</gameList>\r\n"
+        ),
+    ),
+    "self_closing_gamelist_gets_the_element": (
+        "<gameList/>\n",
+        {},
+        {"a.zip": 1},
+        (
+            "<gameList>\n"
+            "\t<warpzonePlayState>\n"
+            '\t\t<included path="./a.zip" plays="1" />\n'
+            "\t</warpzonePlayState>\n"
+            "</gameList>\n"
+        ),
+    ),
+    "self_closing_gamelist_with_nothing_to_do": (
+        "<gameList/>\n",
+        {},
+        {},
+        "<gameList/>\n",
     ),
     "no_closing_tag": (
         "<gameList>\n",
@@ -1135,11 +1219,35 @@ STATE_CASES = {
             "</gameList>"
         ),
     ),
-    "closing_tag_in_a_comment_breaks_the_edit": (
+    "closing_tag_only_in_a_comment_is_no_closing_tag": (
         ("<gameList>\n\t<game>\n\t\t<path>./a.zip</path>\n\t</game>\n<!-- </gameList> -->\n"),
         {"b.zip": Wanted(plays=4)},
         {},
         None,
+    ),
+    "closing_tag_in_a_comment_after_the_list_is_ignored": (
+        (
+            "<gameList>\n"
+            "\t<game>\n"
+            "\t\t<path>./a.zip</path>\n"
+            "\t</game>\n"
+            "</gameList>\n"
+            "<!-- </gameList> -->\n"
+        ),
+        {"b.zip": Wanted(plays=4)},
+        {},
+        (
+            "<gameList>\n"
+            "\t<game>\n"
+            "\t\t<path>./a.zip</path>\n"
+            "\t</game>\n"
+            "\t<game>\n"
+            "\t\t<path>./b.zip</path>\n"
+            "\t\t<playcount>4</playcount>\n"
+            "\t</game>\n"
+            "</gameList>\n"
+            "<!-- </gameList> -->\n"
+        ),
     ),
     "opening_tag_with_content_after_it": (
         ("<gameList>\t<game>\n\t\t<path>./a.zip</path>\n\t</game>\n</gameList>\n"),

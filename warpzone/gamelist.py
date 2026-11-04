@@ -26,10 +26,10 @@ COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
 GAME = re.compile(r"<game(?:\s[^>]*)?>.*?</game\s*>", re.DOTALL)
 _PATH = re.compile(r"<path>(.*?)</path>", re.DOTALL)
 _PATH_AT_LINE_START = re.compile(r"^([ \t]*)<path\b", re.MULTILINE)
-_ALT = re.compile(r"<altemulator>(.*?)</altemulator>", re.DOTALL)
-_ALT_LINE = re.compile(
-    r"^[ \t]*<altemulator>.*?</altemulator>[ \t]*\r?\n?", re.DOTALL | re.MULTILINE
-)
+# `<altemulator>X</altemulator>` or the self-closing `<altemulator/>` (no group 1: empty).
+_ALT_TAG = r"<altemulator>.*?</altemulator>|<altemulator\s*/>"
+_ALT = re.compile(r"<altemulator>(.*?)</altemulator>|<altemulator\s*/>", re.DOTALL)
+_ALT_LINE = re.compile(rf"^[ \t]*(?:{_ALT_TAG})[ \t]*\r?\n?", re.DOTALL | re.MULTILINE)
 _LIST_CLOSE = re.compile(r"</gameList\s*>")
 _LIST_EMPTY = re.compile(r"<gameList\s*/>")
 
@@ -71,6 +71,21 @@ def _outside_comments(text: str) -> list[tuple[int, int]]:
         at = c.end()
     spans.append((at, len(text)))
     return spans
+
+
+def last_outside_comments(pattern: re.Pattern[str], text: str) -> re.Match[str] | None:
+    """The last match of `pattern` in `text` that is not inside an XML comment."""
+    found = None
+    for start, end in _outside_comments(text):
+        for m in pattern.finditer(text, start, end):
+            found = m
+    return found
+
+
+def expand_empty_list(text: str, eol: str) -> str:
+    """`text` with a self-closing `<gameList/>` opened and closed on separate lines, so
+    that entries can go inside it; `text` itself when it has none."""
+    return _LIST_EMPTY.sub(f"<gameList>{eol}</gameList>", text, count=1)
 
 
 def game_blocks(text: str, *, skip_comments: bool = True) -> list[re.Match[str]]:
@@ -132,7 +147,7 @@ def emulators(text: str) -> dict[str, str | None]:
     result: dict[str, str | None] = {}
     for m in game_blocks(text):
         alt = _ALT.search(m.group(0))
-        result[entry_path(m.group(0))] = unescape(alt.group(1).strip()) if alt else None
+        result[entry_path(m.group(0))] = unescape((alt.group(1) or "").strip()) if alt else None
     return result
 
 
@@ -175,9 +190,10 @@ def update_entry(text: str, file_name: str, emulator: str | None) -> tuple[str, 
         else:
             wanted = escape(emulator)
             if alt is not None:
-                if unescape(alt.group(1).strip()) == emulator:
+                if unescape((alt.group(1) or "").strip()) == emulator:
                     return text, "unchanged"
-                edited = block[: alt.start(1)] + wanted + block[alt.end(1) :]
+                element = f"<altemulator>{wanted}</altemulator>"
+                edited = block[: alt.start()] + element + block[alt.end() :]
                 action = "changed"
             else:
                 edited = add_child(
@@ -205,12 +221,8 @@ def _drop_block(text: str, match: re.Match[str]) -> str:
 
 
 def _insert_entry(text: str, file_name: str, emulator: str, nl: str) -> str:
-    if _LIST_EMPTY.search(text):
-        text = _LIST_EMPTY.sub(f"<gameList>{nl}</gameList>", text, count=1)
-    close = None
-    for start, end in _outside_comments(text):
-        for m in _LIST_CLOSE.finditer(text, start, end):
-            close = m
+    text = expand_empty_list(text, nl)
+    close = last_outside_comments(_LIST_CLOSE, text)
     if close is None:
         raise GamelistError("no <gameList> element found")
     blocks = game_blocks(text)
