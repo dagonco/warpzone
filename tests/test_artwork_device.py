@@ -14,16 +14,11 @@ from test_anbernic import ARK_ID, PROFILE, Device, ark_config
 from test_artwork import source_xml
 from test_doctor import by_name, context
 from test_provision import reporter
-from warpzone import artwork, safefile
-from warpzone import provision as provision_mod
+from warpzone import artwork, provision_artwork, safefile
 from warpzone.cli import main
 from warpzone.doctor import OK, WARN, Context, check_frontend
 from warpzone.model import device_specs
-from warpzone.provision import (
-    ensure_gamelists,
-    refresh_artwork,
-    sync_artwork_scope,
-)
+from warpzone.provision_artwork import ensure_gamelists, refresh_artwork, sync_artwork_scope
 from warpzone.provision_timers import ensure_artwork_timer
 from warpzone.syncthing import Client
 
@@ -219,7 +214,7 @@ class GamelistTests(Art, unittest.TestCase):
         self.ensure()
         self.scraped("gba", GBA.replace("A &amp; B", "Changed"))
         before = self.out("gba").read_bytes()
-        real = provision_mod.busy
+        real = provision_artwork.busy
         calls: list[int] = []
 
         def busy(*args, **kw):
@@ -229,7 +224,7 @@ class GamelistTests(Art, unittest.TestCase):
                 self.proc.add(4242, "emulationstatio")
             return result
 
-        with mock.patch.object(provision_mod, "busy", busy):
+        with mock.patch.object(provision_artwork, "busy", busy):
             rep, _ = self.ensure()
         self.assertEqual(self.out("gba").read_bytes(), before)
         self.assertEqual(len(calls), 2)

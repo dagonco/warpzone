@@ -6,19 +6,11 @@ import os
 import sys
 from pathlib import Path
 
-from warpzone import (
-    esde,
-    procs,
-    safefile,
-    settings_state,
-)
+from warpzone import esde, procs, safefile, settings_state
 from warpzone.paths import expand_home
 from warpzone.profiles import Profile
 from warpzone.report import Reporter
-from warpzone.runners import (
-    ImportCheck,
-    run_import_check,
-)
+from warpzone.runners import ImportCheck, run_import_check
 
 
 def _enable_event_scripts(

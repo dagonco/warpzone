@@ -13,8 +13,7 @@ from unittest import mock
 from support import API_KEY, DECK_ID, HUB_ID, FakeProc, FakeSyncthing, config_data, stub_self_update
 from test_doctor import by_name, context
 from test_provision import reporter
-from warpzone import provision as provision_mod
-from warpzone import shadps4
+from warpzone import settings_state, shadps4
 from warpzone.config import parse_config
 from warpzone.doctor import OK, WARN, Context, check_frontend
 from warpzone.profiles import ProfileError, load_profile, parse_profile
@@ -229,7 +228,7 @@ class Device:
     def after_backup(self, action):
         """Run `action(file)` right after the backup of the first file: the race the re-check
         right before the write is there for."""
-        real = provision_mod.settings_state.backup
+        real = settings_state.backup
         done: list[Path] = []
 
         def backup(path, *args, **kw):
@@ -239,7 +238,7 @@ class Device:
                 action(path)
             return result
 
-        return mock.patch.object(provision_mod.settings_state, "backup", backup)
+        return mock.patch.object(settings_state, "backup", backup)
 
     @staticmethod
     def mine(rep) -> list[str]:

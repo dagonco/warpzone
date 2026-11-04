@@ -9,12 +9,7 @@ import tempfile
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
-from warpzone import (
-    safefile,
-    selfupdate,
-    settings_state,
-    updatetimer,
-)
+from warpzone import safefile, selfupdate, settings_state, updatetimer
 from warpzone.config import Device
 from warpzone.profiles import Profile
 from warpzone.report import Reporter

@@ -9,8 +9,7 @@ from unittest import mock
 from support import API_KEY, HUB_ID, FakeProc, FakeSyncthing, config_data, stub_self_update
 from test_doctor import by_name, context
 from test_provision import reporter
-from warpzone import frontend
-from warpzone import provision as provision_mod
+from warpzone import frontend, settings_state
 from warpzone.config import parse_config
 from warpzone.doctor import CHECKS, OK, WARN, Context, check_frontend
 from warpzone.model import ModelError, device_specs
@@ -289,7 +288,7 @@ class ProvisionTests(Device, unittest.TestCase):
     def after_backup(self, action):
         """Run `action(file)` right after the backup of the first file: the race the re-check
         right before the write is there for."""
-        real = provision_mod.settings_state.backup
+        real = settings_state.backup
         done: list[Path] = []
 
         def backup(path, *args, **kw):
@@ -299,7 +298,7 @@ class ProvisionTests(Device, unittest.TestCase):
                 action(path)
             return result
 
-        return mock.patch.object(provision_mod.settings_state, "backup", backup)
+        return mock.patch.object(settings_state, "backup", backup)
 
     def stale_override(self) -> None:
         self.override.parent.mkdir(parents=True)

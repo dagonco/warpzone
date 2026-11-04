@@ -19,8 +19,7 @@ from support import (
     make_config,
     stub_self_update,
 )
-from warpzone import esde
-from warpzone import provision as provision_mod
+from warpzone import esde, provision_emulators, settings_state
 from warpzone.config import Config, parse_config
 from warpzone.profiles import Profile, load_profile
 from warpzone.provision import (
@@ -29,8 +28,8 @@ from warpzone.provision import (
     folder_status,
     provision_device,
     provision_hub,
-    wait_for_files,
 )
+from warpzone.provision_folders import wait_for_files
 from warpzone.report import Reporter
 from warpzone.runners import run_import_check
 from warpzone.syncthing import Client
@@ -1106,7 +1105,7 @@ class EsdeScriptTests(unittest.TestCase):
             mock.patch.dict(
                 "os.environ", {"PYTHONPATH": "/clone", "PYTHONHOME": "/x", "KEEP": "1"}
             ),
-            mock.patch("warpzone.provision.subprocess.run", fake_run),
+            mock.patch("warpzone.runners.subprocess.run", fake_run),
         ):
             self.assertTrue(run_import_check(PYTHON))
         ((command, kw),) = calls
@@ -1116,11 +1115,11 @@ class EsdeScriptTests(unittest.TestCase):
         self.assertNotIn("PYTHONPATH", kw["env"])
         self.assertNotIn("PYTHONHOME", kw["env"])
         with mock.patch(
-            "warpzone.provision.subprocess.run",
+            "warpzone.runners.subprocess.run",
             lambda command, **kw: subprocess.CompletedProcess(command, 1),
         ):
             self.assertFalse(run_import_check(PYTHON))
-        with mock.patch("warpzone.provision.subprocess.run", side_effect=FileNotFoundError):
+        with mock.patch("warpzone.runners.subprocess.run", side_effect=FileNotFoundError):
             self.assertFalse(run_import_check(PYTHON))
 
     def test_turns_the_event_scripts_on_with_a_backup(self) -> None:
@@ -1213,7 +1212,7 @@ class EsdeScriptTests(unittest.TestCase):
 
     def test_a_file_that_changes_during_the_edit_is_not_overwritten(self) -> None:
         self.write_settings()
-        with mock.patch("warpzone.provision.safefile.atomic_write", return_value=False):
+        with mock.patch("warpzone.safefile.atomic_write", return_value=False):
             rep, _ = self.provision()
         self.assertEqual(self.settings.read_text(), ES_SETTINGS)
         (warning,) = rep.warnings
@@ -1221,14 +1220,14 @@ class EsdeScriptTests(unittest.TestCase):
 
     def test_esde_started_just_before_the_write_stops_the_edit(self) -> None:
         self.write_settings()
-        real = provision_mod.settings_state.backup
+        real = settings_state.backup
 
         def backup_then_start(*args, **kw):
             result = real(*args, **kw)
             self.start_esde()
             return result
 
-        with mock.patch("warpzone.provision.settings_state.backup", backup_then_start):
+        with mock.patch("warpzone.settings_state.backup", backup_then_start):
             rep, _ = self.provision()
         self.assertEqual(self.settings.read_text(), ES_SETTINGS)
         self.assertIn("quit ES-DE", rep.warnings[0])
@@ -1254,14 +1253,14 @@ class EsdeScriptTests(unittest.TestCase):
 
     def test_esde_started_just_before_the_write_defers_too(self) -> None:
         self.write_settings()
-        real = provision_mod.settings_state.backup
+        real = settings_state.backup
 
         def backup_then_start(*args, **kw):
             result = real(*args, **kw)
             self.start_esde()
             return result
 
-        with mock.patch("warpzone.provision.settings_state.backup", backup_then_start):
+        with mock.patch("warpzone.settings_state.backup", backup_then_start):
             rep, _ = self.provision(unattended=True)
         self.assertTrue(rep.deferred)
 
@@ -1269,7 +1268,7 @@ class EsdeScriptTests(unittest.TestCase):
         self.start_esde()
         rep, _ = reporter()
         self.assertTrue(
-            provision_mod.busy(
+            provision_emulators.busy(
                 esde.ESDE_PROCESSES, "ES-DE", "a file", "run again", rep, self.proc.path
             )
         )
@@ -1277,7 +1276,7 @@ class EsdeScriptTests(unittest.TestCase):
         rep, _ = reporter()
         self.proc.clear()
         self.assertFalse(
-            provision_mod.busy(
+            provision_emulators.busy(
                 esde.ESDE_PROCESSES, "ES-DE", "a file", "run again", rep, self.proc.path
             )
         )
