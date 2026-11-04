@@ -2745,7 +2745,7 @@ warpzone/
   dat.py             Redump / No-Intro DAT parsing, cache, matching, disc grouping (pure)
   inbox.py           unpack, identify, convert, place, file the originals
   inbox_switch.py    Switch games: identify with nsz, titledb names, decompress, place
-  inbox_mame.py      arcade sets: MAME / FBNeo / 2003-Plus fit, emulator choice, ES-DE gamelist
+  inbox_mame.py      arcade sets: MAME / FBNeo / 2003-Plus fit, emulator choice, gamelist backup and write
   inbox_console_iso.py  PS3, Xbox, Xbox 360 and Wii U images: identify by signature, place
   inbox_ps4.py       PS4 packages: extract with orbis-pkg-util, place the game folder, shortcut
   inbox_vita.py      PS Vita game dumps: identify by param.sfo, place the folder and the .psvita file
@@ -2765,9 +2765,10 @@ warpzone/
   procs.py           process detection from `/proc` (`running`)
   esde.py            ES-DE startup script, `es_settings.xml` check and edit (pure)
   frontend.py        frontend system list rewrite, RetroArch key gap (pure)
+  gamelist.py        ES-DE gamelist text edits: the per-game emulator and the helpers `playstate` shares (pure)
   artwork.py         frontend artwork: ES-DE gamelist -> the frontend's gamelist, scope ignores,
                      system names, timer units (pure; the reads are passed in)
-  playstate.py       play state: ledgers, merge rules, times, gamelist edits (pure)
+  playstate.py       play state: ledgers, merge rules, times, its tags in a gamelist (pure)
   playstate_device.py  play state on a device: files, ES-DE gamelists, generated gamelists
   tomlw.py           TOML scalar and key writer (tomllib only reads)
   doctor.py          machine checklist (`warpzone doctor`): checks, install hints, renderer
