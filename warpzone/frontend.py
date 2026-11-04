@@ -13,6 +13,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 from warpzone import settings_formats
+from warpzone.settings_formats import Value
 
 LIBRARY_PLACEHOLDER = "{library}"
 
@@ -57,7 +58,7 @@ def systems_current(
 @dataclass(frozen=True)
 class RetroArchGap:
     # Key -> its value now (None when the key is absent) for every key that is not as wanted.
-    differs: dict[str, str | None]
+    differs: dict[str, Value | None]
     # Wanted keys that appear twice or are malformed: they cannot be edited safely.
     unwritable: frozenset[str]
 

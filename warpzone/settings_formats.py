@@ -270,8 +270,8 @@ class _IniHandler:
         tail: list[str] = []
         new_sections: dict[str, list[str]] = {}
 
-        existing = []
-        added = []
+        existing: list[tuple[str, str]] = []
+        added: list[tuple[str, str]] = []
         for key, raw in changes.items():
             if key in fixed:
                 raise NotWritable(key, "the key is present more than once or outside a section")

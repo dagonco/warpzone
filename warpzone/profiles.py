@@ -8,7 +8,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from importlib import resources
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeGuard
 
 from warpzone.errors import UsageError
 from warpzone.shadps4 import kind_of
@@ -378,7 +378,7 @@ def parse_profile(data: dict[str, Any], source: str) -> Profile:
     )
 
 
-def _names(raw: Any) -> bool:
+def _names(raw: Any) -> TypeGuard[list[str]]:
     return isinstance(raw, list) and bool(raw) and all(isinstance(p, str) and p for p in raw)
 
 
@@ -578,7 +578,7 @@ def _parse_shadps4(raw: Any, has_library: bool, err: Callable[[str], None]) -> S
     for extra in extras:
         err(f"shadps4.{extra}: unknown key")
     problems = len(extras)
-    config = raw.get("config")
+    config: Any = raw.get("config")
     if not _names(config) or not all(kind_of(c) for c in config):
         err("shadps4.config: required, a non-empty list of paths ending in .json or .toml")
         problems += 1
@@ -772,7 +772,7 @@ def _parse_bios(raw: Any, err: Callable[[str], None]) -> dict[str, BiosPlacement
     return placements
 
 
-def _string_list(raw: Any) -> bool:
+def _string_list(raw: Any) -> TypeGuard[list[str]]:
     return isinstance(raw, list) and all(isinstance(i, str) for i in raw)
 
 
@@ -792,7 +792,7 @@ def _parse_settings(raw: Any, err: Callable[[str], None]) -> dict[str, EmulatorS
         for extra in sorted(set(entry) - {"process", "files", "data", "verify"}):
             err(f"{where}: unknown key {extra!r}")
         ok = True
-        process = entry.get("process")
+        process: Any = entry.get("process")
         if (
             not isinstance(process, list)
             or not process
@@ -839,7 +839,7 @@ def _parse_settings_files(
             err(f"{at}: unknown key {extra!r}")
             all_ok = False
         ok = True
-        path = entry.get("path")
+        path: Any = entry.get("path")
         if not isinstance(path, str) or not path:
             err(f"{at}.path: must be a non-empty string")
             ok = False
@@ -848,7 +848,7 @@ def _parse_settings_files(
             if problem:
                 err(f"{at}.path: {problem}")
                 ok = False
-        fmt = entry.get("format")
+        fmt: Any = entry.get("format")
         if fmt not in SETTINGS_FORMATS:
             err(f"{at}.format: must be one of {', '.join(SETTINGS_FORMATS)}")
             ok = False
@@ -912,7 +912,7 @@ def _parse_settings_data(
             err(f"{at}: unknown key {extra!r}")
             all_ok = False
         ok = True
-        path = entry.get("path")
+        path: Any = entry.get("path")
         if not isinstance(path, str) or not path:
             err(f"{at}.path: must be a non-empty string")
             ok = False

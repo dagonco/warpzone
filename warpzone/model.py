@@ -242,7 +242,7 @@ def device_specs(
                 device.name, profile.library_excludes() if item.id == LIBRARY_ID else ()
             )
             bootstrap: tuple[str, ...] | None = ignores.BOOTSTRAP_LINES
-            required = (ignores.COMMON_FILE, ignores.device_file(device.name))
+            required: tuple[str, ...] = (ignores.COMMON_FILE, ignores.device_file(device.name))
         else:
             final = ignores.inline(item.fixed_ignores)
             bootstrap = None

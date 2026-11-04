@@ -37,6 +37,12 @@ version = { attr = "warpzone.__version__" }
 "warpzone.data" = ["*.toml", "*.sh", "allowed_signers"]
 "warpzone.data.profiles" = ["*.toml"]
 
+[tool.mypy]
+python_version = "3.11"
+files = ["warpzone"]
+warn_unused_ignores = true
+warn_redundant_casts = true
+
 [tool.ruff]
 line-length = 100
 target-version = "py311"

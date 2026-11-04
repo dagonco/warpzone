@@ -190,8 +190,8 @@ class _JsonHandler:
             node = expected
             *parents, last = key.split(".")
             for part in parents:
-                node = node[part]  # type: ignore[index]
-            node[last] = value  # type: ignore[index]
+                node = node[part]
+            node[last] = value
         for start, end, new in sorted(edits, reverse=True):
             body = body[:start] + new + body[end:]
         if edits:
