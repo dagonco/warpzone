@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ## [Unreleased]
 
+### Security
+
+- `warpzone/data/allowed_signers` now lists the maintainer's release key. A device that runs this release keeps trusting that key, and from the next release on it only accepts release, candidate, pin and `retired/` tags signed with it.
+
 ### Added
 
 - `auto_hub = true` under a device lets `provision device` create on the hub the folders the device needs and the hub lacks, and `warpzone provision hub --additive` does the same from anywhere. Both only create: whitelisted folders and folders the hub already has are never created or changed, and no folder is created at a path another hub folder uses.
