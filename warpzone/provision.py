@@ -9,6 +9,7 @@ import sys
 import tempfile
 import time
 from collections.abc import Callable, Iterable, Sequence
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +19,8 @@ from warpzone import (
     flatpak,
     frontend,
     playstate_device,
+    procs,
+    safefile,
     selfupdate,
     settings_state,
     shadps4,
@@ -588,24 +591,6 @@ def ensure_flatpak_access(
     rep.warn(RESTART_SYNCTHING)
 
 
-def _write_script(path: Path, text: str, mode: int = 0o755) -> None:
-    """Write a file (executable by default) atomically, creating its directories."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(f".{path.name}{settings_state.TMP_SUFFIX}")
-    tmp.unlink(missing_ok=True)
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode)
-    try:
-        with os.fdopen(fd, "wb") as fh:
-            os.fchmod(fh.fileno(), mode)
-            fh.write(text.encode())
-            fh.flush()
-            os.fsync(fh.fileno())
-        os.replace(tmp, path)
-    except BaseException:
-        tmp.unlink(missing_ok=True)
-        raise
-
-
 def _enable_event_scripts(
     name: str,
     esde_dir: Path,
@@ -631,7 +616,7 @@ def _enable_event_scripts(
         )
         return
     try:
-        before = settings_state.stamp(path)
+        before = safefile.stamp(path)
         text = path.read_bytes().decode("utf-8")
     except (OSError, UnicodeDecodeError) as exc:
         rep.warn(f"cannot read {path} ({exc}); {by_hand}")
@@ -642,8 +627,8 @@ def _enable_event_scripts(
 
     def running() -> bool | None:
         try:
-            return settings_state.running(esde.ESDE_PROCESSES, proc=proc)
-        except settings_state.NoProc:
+            return procs.running(esde.ESDE_PROCESSES, proc=proc)
+        except procs.NoProc:
             return None
 
     def refuse(state: bool | None) -> bool:
@@ -670,10 +655,16 @@ def _enable_event_scripts(
     if dry_run:
         rep.out(f"es-de: dry-run: would set CustomEventScripts to true in {path}")
         return
-    settings_state.backup(path, "esde", "es_settings", root=state_root)
-    if refuse(running()):  # ES-DE may have started while the backup was made
+    outcome = safefile.guarded_edit(
+        path,
+        new.encode(),
+        expect=before,
+        busy=lambda: refuse(running()),  # ES-DE may have started while the backup was made
+        backup=lambda: settings_state.backup(path, "esde", "es_settings", root=state_root),
+    )
+    if outcome is safefile.Edit.BUSY:
         return
-    if not settings_state.atomic_write(path, new.encode(), expect=before):
+    if outcome is safefile.Edit.CHANGED:
         rep.warn(f"{path} changed while it was being edited, so it was left alone: run again")
         return
     rep.out(f"es-de: set CustomEventScripts to true in {path} (old file backed up)")
@@ -832,7 +823,7 @@ def _install_startup_script(
         for line in text.splitlines():
             rep.out(f"  {line}")
     else:
-        _write_script(path, text)
+        safefile.write_script(path, text)
         rep.out(f"es-de: wrote {path}")
     root = state_root if state_root is not None else settings_state.state_dir(home=home)
     _enable_event_scripts(name, esde_dir, rep, dry_run=dry_run, proc=proc, state_root=root)
@@ -931,7 +922,7 @@ def ensure_updater(
                 return latest is not None
             current = latest
         if current is not None:
-            _write_script(live.with_name(f"{live.name}.prev"), current)
+            safefile.write_script(live.with_name(f"{live.name}.prev"), current)
         os.replace(tmp, live)
     except OSError as exc:
         rep.warn(f"the updater was not installed: {exc}")
@@ -952,7 +943,7 @@ def ensure_updater_conf(conf: Path, text: str, rep: Reporter, *, dry_run: bool) 
         rep.out(f"updater settings: dry-run: would write {conf}")
         return
     try:
-        _write_script(conf, text, 0o644)
+        safefile.write_script(conf, text, 0o644)
     except OSError as exc:
         rep.warn(f"the updater settings were not written ({exc})")
         return
@@ -1018,7 +1009,7 @@ def ensure_update_timer(
     enable = f"systemctl --user enable --now {updatetimer.TIMER}"
     try:
         for path in changed:
-            _write_script(path, wanted[path], 0o644)
+            safefile.write_script(path, wanted[path], 0o644)
         steps = [("daemon-reload",)] if changed else []
         steps.append(("enable", "--now", updatetimer.TIMER))
         if changed and active:
@@ -1113,8 +1104,8 @@ def _busy(
     file) and when there is no /proc to tell.
     """
     try:
-        running = settings_state.running(names, proc=proc)
-    except settings_state.NoProc:
+        running = procs.running(names, proc=proc)
+    except procs.NoProc:
         rep.warn(
             f"cannot tell whether {label} is running (no /proc), so {what} was left alone: "
             f"{again} on a system with /proc"
@@ -1159,7 +1150,7 @@ def ensure_systems_override(
         rep.warn(f"{source} has no <path> below {rule.prefix}, so {override} was not written")
         return
     try:
-        before: settings_state.FileStamp | None = settings_state.stamp(override)
+        before: safefile.FileStamp | None = safefile.stamp(override)
         current: bytes | None = override.read_bytes()
     except FileNotFoundError:
         before, current = None, None
@@ -1176,11 +1167,22 @@ def ensure_systems_override(
     if dry_run:
         rep.out(f"es_systems.cfg: dry-run: would write {override} (ROM folders below {target})")
         return
-    if before is not None:
-        settings_state.backup(override, "emulationstation", "es_systems", root=state_root)
-        if _busy(rule.process, label, what, again, rep, proc):  # it may have started meanwhile
-            return
-    if not settings_state.atomic_write(override, wanted, expect=before):
+    outcome = safefile.guarded_edit(
+        override,
+        wanted,
+        expect=before,
+        busy=lambda: _busy(rule.process, label, what, again, rep, proc),  # it may have started
+        backup=(
+            None
+            if before is None
+            else lambda: settings_state.backup(
+                override, "emulationstation", "es_systems", root=state_root
+            )
+        ),
+    )
+    if outcome is safefile.Edit.BUSY:
+        return
+    if outcome is safefile.Edit.CHANGED:
         rep.warn(f"{override} changed while it was being written, so it was left alone: {again}")
         return
     rep.out(f"es_systems.cfg: wrote {override}" + (" (old file backed up)" if before else ""))
@@ -1239,15 +1241,25 @@ def ensure_retroarch_pins(
         if dry_run:
             rep.out(f"retroarch: dry-run: would set {keys} in {path}")
             continue
-        before = settings_state.stamp(path)
-        settings_state.backup(path, "retroarch", path.parent.name, root=state_root)
-        if _busy(rule.process, "RetroArch", what, again, rep, proc):
+        outcome = safefile.guarded_edit(
+            path,
+            frontend.retroarch_apply(text, wants).encode("utf-8"),
+            expect=safefile.stamp(path),
+            busy=lambda: _busy(rule.process, "RetroArch", what, again, rep, proc),
+            backup=partial(
+                settings_state.backup, path, "retroarch", path.parent.name, root=state_root
+            ),
+        )
+        if outcome is safefile.Edit.BUSY:
             return
-        new = frontend.retroarch_apply(text, wants)
-        if not settings_state.atomic_write(path, new.encode("utf-8"), expect=before):
+        if outcome is safefile.Edit.CHANGED:
             rep.warn(f"{path} changed while it was being edited, so it was left alone: {again}")
             continue
         rep.out(f"retroarch: set {keys} in {path} (old file backed up)")
+
+
+def _shadps4_apply(kind: str, text: str, wants: Sequence[str]) -> bytes:
+    return shadps4.apply(kind, text, wants).encode("utf-8")
 
 
 def ensure_shadps4_dirs(
@@ -1309,16 +1321,20 @@ def ensure_shadps4_dirs(
         if dry_run:
             rep.out(f"shadps4: dry-run: would add the install folder {folders} to {path}")
             continue
-        before = settings_state.stamp(path)
-        settings_state.backup(path, "shadps4", path.name, root=state_root)
-        if _busy(rule.process, "shadPS4", what, again, rep, proc):  # it may have started meanwhile
-            return
         try:
-            new = shadps4.apply(kind, text, wants)
+            outcome = safefile.guarded_edit(
+                path,
+                partial(_shadps4_apply, kind, text, wants),
+                expect=safefile.stamp(path),
+                busy=lambda: _busy(rule.process, "shadPS4", what, again, rep, proc),
+                backup=partial(settings_state.backup, path, "shadps4", path.name, root=state_root),
+            )
         except shadps4.Shadps4ConfigError as exc:
             rep.warn(f"{path} was left alone: {exc}")
             continue
-        if not settings_state.atomic_write(path, new.encode("utf-8"), expect=before):
+        if outcome is safefile.Edit.BUSY:
+            return
+        if outcome is safefile.Edit.CHANGED:
             rep.warn(f"{path} changed while it was being edited, so it was left alone: {again}")
             continue
         rep.out(f"shadps4: added the install folder {folders} to {path} (old file backed up)")
@@ -1377,7 +1393,7 @@ def ensure_shadps4_launch(
     )
     path = Path(expand_home(launch.find_rules, home))
     try:
-        before = settings_state.stamp(path)
+        before = safefile.stamp(path)
         rules = path.read_bytes().decode("utf-8")
     except FileNotFoundError:
         rep.warn(
@@ -1399,7 +1415,7 @@ def ensure_shadps4_launch(
     elif dry_run:
         rep.out(f"shadps4: dry-run: would write the launch script {script}")
     else:
-        _write_script(script, text)
+        safefile.write_script(script, text)
         rep.out(f"shadps4: wrote the launch script {script}")
     try:
         new = shadps4.point_find_rule(rules, launch.emulator, str(script))
@@ -1412,8 +1428,8 @@ def ensure_shadps4_launch(
 
     def running() -> bool | None:
         try:
-            return settings_state.running(esde.ESDE_PROCESSES, proc=proc)
-        except settings_state.NoProc:
+            return procs.running(esde.ESDE_PROCESSES, proc=proc)
+        except procs.NoProc:
             return None
 
     def refuse() -> bool:
@@ -1430,10 +1446,16 @@ def ensure_shadps4_launch(
     if dry_run:
         rep.out(f"shadps4: dry-run: would point the {launch.emulator} rule of {path} at {script}")
         return
-    settings_state.backup(path, "shadps4", path.name, root=state_root)
-    if refuse():  # ES-DE may have started while the backup was made
+    outcome = safefile.guarded_edit(
+        path,
+        new.encode("utf-8"),
+        expect=before,
+        busy=refuse,  # ES-DE may have started while the backup was made
+        backup=lambda: settings_state.backup(path, "shadps4", path.name, root=state_root),
+    )
+    if outcome is safefile.Edit.BUSY:
         return
-    if not settings_state.atomic_write(path, new.encode("utf-8"), expect=before):
+    if outcome is safefile.Edit.CHANGED:
         rep.warn(f"{path} changed while it was being edited, so it was left alone: {again}")
         return
     rep.out(
@@ -1536,11 +1558,11 @@ def ensure_gamelists(
     except (OSError, UnicodeDecodeError) as exc:
         rep.warn(f"cannot read the system list {source} ({exc}), so no gamelist was written")
         return
-    stamps: dict[Path, settings_state.FileStamp] = {}
+    stamps: dict[Path, safefile.FileStamp] = {}
 
     def read(path: Path) -> bytes | None:
         try:
-            stamp = settings_state.stamp(path)
+            stamp = safefile.stamp(path)
             data = path.read_bytes()
         except FileNotFoundError:
             return None
@@ -1607,13 +1629,20 @@ def ensure_gamelists(
     for item in pending:
         if dry_run:
             rep.out(f"gamelists: dry-run: would write {item.path} ({item.games} games)")
-        elif _busy(rule.process, label, what, again, rep, proc):  # it may have started
-            return
-        elif not settings_state.atomic_write(item.path, item.data, expect=stamps.get(item.path)):
-            rep.warn(
-                f"{item.path} changed while it was being written, so it was left alone: {again}"
-            )
         else:
+            outcome = safefile.guarded_edit(
+                item.path,
+                item.data,
+                expect=stamps.get(item.path),
+                busy=lambda: _busy(rule.process, label, what, again, rep, proc),  # it may start
+            )
+            if outcome is safefile.Edit.BUSY:
+                return
+            if outcome is safefile.Edit.CHANGED:
+                rep.warn(
+                    f"{item.path} changed while it was being written, so it was left alone: {again}"
+                )
+                continue
             rep.out(f"gamelists: wrote {item.path} ({item.games} games, was {item.state})")
     if not dry_run:
         rep.out(f"gamelists: {len(plan.items) - len(pending)} current")
@@ -1718,7 +1747,7 @@ def _install_timer(
     for filename, text in wanted.items():
         path = folder / filename
         try:
-            before: settings_state.FileStamp | None = settings_state.stamp(path)
+            before: safefile.FileStamp | None = safefile.stamp(path)
             current: str | None = path.read_text(encoding="utf-8")
         except FileNotFoundError:
             before, current = None, None
@@ -1730,7 +1759,7 @@ def _install_timer(
         changed = True
         if dry_run:
             rep.out(f"timer: dry-run: would write {path}")
-        elif not settings_state.atomic_write(path, text.encode("utf-8"), expect=before):
+        elif not safefile.atomic_write(path, text.encode("utf-8"), expect=before):
             rep.warn(f"{path} changed while it was being written, so it was left alone: run again")
             return
         else:

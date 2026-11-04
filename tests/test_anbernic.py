@@ -4,11 +4,13 @@ import dataclasses
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from support import API_KEY, HUB_ID, FakeProc, FakeSyncthing, config_data, stub_self_update
 from test_doctor import by_name, context
 from test_provision import reporter
 from warpzone import frontend
+from warpzone import provision as provision_mod
 from warpzone.config import parse_config
 from warpzone.doctor import CHECKS, OK, WARN, Context, check_frontend
 from warpzone.model import ModelError, device_specs
@@ -283,6 +285,66 @@ class ProvisionTests(Device, unittest.TestCase):
         self.assertEqual(self.cfg32.read_text(), RETROARCH)
         self.assertTrue(self.override.exists())
         self.assertEqual(len([w for w in rep.warnings if "RetroArch" in w]), 1)
+
+    def after_backup(self, action):
+        """Run `action(file)` right after the backup of the first file: the race the re-check
+        right before the write is there for."""
+        real = provision_mod.settings_state.backup
+        done: list[Path] = []
+
+        def backup(path, *args, **kw):
+            result = real(path, *args, **kw)
+            if not done:
+                done.append(path)
+                action(path)
+            return result
+
+        return mock.patch.object(provision_mod.settings_state, "backup", backup)
+
+    def stale_override(self) -> None:
+        self.override.parent.mkdir(parents=True)
+        self.override.write_text("<systemList/>\n")
+
+    def test_emulationstation_started_during_the_backup_stops_the_override(self) -> None:
+        self.stale_override()
+        with self.after_backup(lambda path: self.start("emulationstatio")):
+            rep, _ = self.provision()
+        self.assertEqual(self.override.read_text(), "<systemList/>\n")
+        self.assertEqual(len([w for w in rep.warnings if "EmulationStation" in w]), 1)
+        self.assertEqual(len([p for p in self.backups("emulationstation") if p.is_file()]), 1)
+
+    def test_an_override_edited_during_the_backup_is_left_alone(self) -> None:
+        self.stale_override()
+        with self.after_backup(lambda path: path.write_text("<systemList>mine</systemList>\n")):
+            rep, _ = self.provision()
+        self.assertEqual(self.override.read_text(), "<systemList>mine</systemList>\n")
+        (warning,) = [w for w in rep.warnings if "changed while" in w]
+        self.assertIn(str(self.override), warning)
+
+    def test_retroarch_started_during_the_backup_stops_the_edits(self) -> None:
+        with self.after_backup(lambda path: self.start("retroarch")):
+            rep, _ = self.provision()
+        self.assertEqual(self.cfg.read_text(), RETROARCH)
+        self.assertEqual(self.cfg32.read_text(), RETROARCH)
+        self.assertEqual(len([w for w in rep.warnings if "RetroArch" in w]), 1)
+
+    def test_a_retroarch_config_edited_during_the_backup_is_left_alone_and_the_next_goes_on(
+        self,
+    ) -> None:
+        edited: list[Path] = []
+
+        def edit(path: Path) -> None:
+            edited.append(path)
+            path.write_text(RETROARCH + "# by hand\n")
+
+        with self.after_backup(edit):
+            rep, _ = self.provision()
+        (first,) = edited
+        (other,) = {self.cfg, self.cfg32} - {first}
+        self.assertEqual(first.read_text(), RETROARCH + "# by hand\n")
+        self.assertIn('"/roms/library/bios"', other.read_text())
+        (warning,) = [w for w in rep.warnings if "changed while" in w]
+        self.assertIn(str(first), warning)
 
     def test_without_proc_nothing_is_edited_and_it_says_why(self) -> None:
         rep, _ = self.provision(proc=self.proc.path / "missing")
