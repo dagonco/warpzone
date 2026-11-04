@@ -39,8 +39,15 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import NamedTuple
 
-from warpzone import inbox, inbox_ps4
-from warpzone.inbox import Context, ItemFailure, ItemResult, Options, UnitResult, whitelist_line
+from warpzone import inbox_core, inbox_ps4
+from warpzone.inbox_core import (
+    Context,
+    ItemFailure,
+    ItemResult,
+    Options,
+    UnitResult,
+    whitelist_line,
+)
 
 APP = "psvita/app"  # inside library/roms/
 SYSTEM = "psvita"
@@ -231,13 +238,13 @@ def _fail_kind(rel: str, kind: str, title_id: str) -> str:
 def _copy_tree(src: Path, dest: Path) -> None:
     dest.mkdir()
     for base, dirs, names in os.walk(src):
-        dirs[:] = sorted(d for d in dirs if not inbox.skip_name(d))
+        dirs[:] = sorted(d for d in dirs if not inbox_core.skip_name(d))
         target = dest / Path(base).relative_to(src)
         for d in dirs:
             (target / d).mkdir()
         for n in sorted(names):
-            if not inbox.skip_name(n):
-                inbox.copy_verified(Path(base) / n, target / n)
+            if not inbox_core.skip_name(n):
+                inbox_core.copy_verified(Path(base) / n, target / n)
 
 
 def _place_folder(src: Path, dest: Path) -> None:
@@ -366,20 +373,20 @@ def _names_in(ctx: Context, item: Path) -> list[str]:
     if item.is_dir():
         names: list[str] = []
         for base, dirs, files in os.walk(item):
-            dirs[:] = [d for d in dirs if not inbox.skip_name(d)]
+            dirs[:] = [d for d in dirs if not inbox_core.skip_name(d)]
             where = Path(base).relative_to(item).as_posix()
             names.extend(
-                n if where == "." else f"{where}/{n}" for n in files if not inbox.skip_name(n)
+                n if where == "." else f"{where}/{n}" for n in files if not inbox_core.skip_name(n)
             )
         return names
-    if item.suffix.lower() not in inbox.ARCHIVE_EXTENSIONS:
+    if item.suffix.lower() not in inbox_core.ARCHIVE_EXTENSIONS:
         return []
     try:
         if item.suffix.lower() == ".zip":
             with zipfile.ZipFile(item) as z:
                 return z.namelist()
         if ctx.tools.bsdtar:
-            code, text = inbox._run([ctx.tools.bsdtar, "-tf", str(item)])
+            code, text = inbox_core.run([ctx.tools.bsdtar, "-tf", str(item)])
             return text.splitlines() if code == 0 else []
     except (zipfile.BadZipFile, OSError):
         pass
@@ -419,7 +426,7 @@ class VitaHandler:
         return bool(game_roots(_names_in(ctx, item)))
 
     def process(self, ctx: Context, item: Path, work: Path, result: ItemResult) -> None:
-        staged, notes, failures = inbox.stage_item(item, work, ctx.tools)
+        staged, notes, failures = inbox_core.stage_item(item, work, ctx.tools)
         result.notes.extend(notes)
         if failures:
             result.reasons.extend(failures)

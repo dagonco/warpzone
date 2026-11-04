@@ -55,9 +55,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import BinaryIO, TypeVar
 
-from warpzone import inbox, inbox_mame, inbox_ps4
+from warpzone import inbox_core, inbox_mame, inbox_ps4
 from warpzone.dat import FileInfo
-from warpzone.inbox import Context, ItemFailure, ItemResult, Options, Staged, UnitResult
+from warpzone.inbox_core import Context, ItemFailure, ItemResult, Options, Staged, UnitResult
 from warpzone.sfo import MAX_SFO_BYTES, parse_sfo
 
 PS3, XBOX, XBOX360, XBOX_REDUMP, WIIU, PS4 = (
@@ -380,7 +380,9 @@ def _gamelist(ctx: Context, entry: str, res: UnitResult) -> None:
 
 def same_file(a: Path, b: Path) -> bool:
     try:
-        return a.stat().st_size == b.stat().st_size and inbox.file_sha1(a) == inbox.file_sha1(b)
+        return a.stat().st_size == b.stat().st_size and inbox_core.file_sha1(
+            a
+        ) == inbox_core.file_sha1(b)
     except OSError:
         return False
 
@@ -400,7 +402,7 @@ def place_image(ctx: Context, path: Path, rel: str, found: Detected) -> UnitResu
             if not ctx.opts.apply:
                 res.outcome = "exists"
                 res.notes.append("already in the library (content is compared with --apply)")
-            elif inbox.destination_verdict(True, same_file(dest, path)) == "already":
+            elif inbox_core.destination_verdict(True, same_file(dest, path)) == "already":
                 res.outcome = "already"
             else:
                 raise ItemFailure(
@@ -425,7 +427,7 @@ def place_file(src: Path, dest: Path) -> None:
     part = dest.with_name(dest.name + ".part")
     part.unlink(missing_ok=True)
     try:
-        inbox.copy_verified(src, part)
+        inbox_core.copy_verified(src, part)
         if dest.exists():
             raise ItemFailure(f"{dest.name}: appeared in the library while copying")
         os.rename(part, dest)
@@ -454,17 +456,17 @@ def names_in(ctx: Context, item: Path) -> list[str]:
     if item.is_dir():
         names: list[str] = []
         for _, dirs, files in os.walk(item):
-            dirs[:] = [d for d in dirs if not inbox.skip_name(d)]
-            names.extend(n for n in files if not inbox.skip_name(n))
+            dirs[:] = [d for d in dirs if not inbox_core.skip_name(d)]
+            names.extend(n for n in files if not inbox_core.skip_name(n))
         return names
-    if item.suffix.lower() not in inbox.ARCHIVE_EXTENSIONS:
+    if item.suffix.lower() not in inbox_core.ARCHIVE_EXTENSIONS:
         return [item.name]
     try:
         if item.suffix.lower() == ".zip":
             with zipfile.ZipFile(item) as z:
                 return z.namelist()
         if ctx.tools.bsdtar:
-            code, text = inbox._run([ctx.tools.bsdtar, "-tf", str(item)])
+            code, text = inbox_core.run([ctx.tools.bsdtar, "-tf", str(item)])
             return text.splitlines() if code == 0 else []
     except (zipfile.BadZipFile, OSError):
         pass
@@ -484,7 +486,7 @@ class ConsoleIsoHandler:
         return any(claimed_name(n) for n in names_in(ctx, item))
 
     def process(self, ctx: Context, item: Path, work: Path, result: ItemResult) -> None:
-        staged, notes, failures = inbox.stage_item(item, work, ctx.tools)
+        staged, notes, failures = inbox_core.stage_item(item, work, ctx.tools)
         result.notes.extend(notes)
         if failures:
             result.reasons.extend(failures)
@@ -493,7 +495,7 @@ class ConsoleIsoHandler:
         for s in staged:
             if sniffable_name(s.path.name):
                 self._one(ctx, s, result)
-            elif s.path.suffix.lower() not in inbox.SIDECAR_EXTENSIONS:
+            elif s.path.suffix.lower() not in inbox_core.SIDECAR_EXTENSIONS:
                 others.append(s.rel)
         if others:
             shown = ", ".join(others[:5]) + (", ..." if len(others) > 5 else "")
@@ -508,7 +510,7 @@ class ConsoleIsoHandler:
         if found is None and is_pkg(s.path.name):
             # PS3 and any other .pkg keep today's outcome
             result.reasons.append(
-                inbox.unsupported_reason([s.rel]) or f"{s.rel}: not recognised as a PS4 .pkg"
+                inbox_core.unsupported_reason([s.rel]) or f"{s.rel}: not recognised as a PS4 .pkg"
             )
             return
         if found is None:
