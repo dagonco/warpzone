@@ -90,22 +90,26 @@ warpzone check --offline
 ## `warpzone provision hub`
 
 ```
-warpzone provision hub [--config PATH] [--dry-run] [--timeout SECONDS]
+warpzone provision hub [--config PATH] [--dry-run] [--timeout SECONDS] [--additive]
 ```
 
 Configures the hub's Syncthing through its REST API: checks that the API belongs to the device named in `[hub]`, adds every configured device, creates or updates every `wz-*` folder and shares it with the devices that subscribe to it, and sets the hub's ignores. It is idempotent: run it once, then again whenever you add a device or a folder group.
+
+With `--additive` it does much less: it only creates the `wz-*` folders the hub lacks, and only those that are not whitelisted (`wz-library` and `wz-songs` are left to a plain `provision hub`, with a warning). A folder the hub has is never changed, and where it differs from the config (path, type, a device it is not shared with) the run only warns. It is what a device with `auto_hub = true` does for itself, so it is safe to run from anywhere.
 
 | Option | Default | Meaning |
 |---|---|---|
 | `--config PATH` | see above | The private config file. |
 | `--dry-run` | off | Print the REST calls it would make and make none. |
-| `--timeout SECONDS` | `120` | How long a newly created whitelisted folder waits for its whitelist files to be indexed before the full scan starts. |
+| `--timeout SECONDS` | `120` | How long a newly created whitelisted folder waits for its whitelist files to be indexed before the full scan starts. Not used with `--additive`. |
+| `--additive` | off | Only create the missing, non-whitelisted `wz-*` folders; change nothing that exists. |
 
 Exit `0` when it finished; `1` for a runtime error (for example the API answers as another device than `hub.device_id`); `2` for a config error.
 
 ```bash
 warpzone provision hub --dry-run
 warpzone provision hub
+warpzone provision hub --additive --dry-run
 ```
 
 See [Whitelists](/warpzone/setup/whitelists/) for the bootstrap it performs.
@@ -117,7 +121,7 @@ warpzone provision device NAME [--config PATH] [--dry-run] [--syncthing-config P
                                [--timeout SECONDS] [--unattended]
 ```
 
-Run on the console named `NAME` in the config. It reads the local Syncthing's API key from its `config.xml`, adds the hub, and creates the folders the device subscribes to, starting each whitelisted folder on bootstrap ignores until its whitelist has arrived. Depending on the device's folders and profile it also installs the ES-DE startup scripts, writes the frontend's system list and pins RetroArch's paths, adds shadPS4 install directories, links title folders, writes artwork gamelists, installs the user timers, and installs the live copy of the updater with its settings. It refuses to run when the local Syncthing is a different device than `devices.NAME.device_id`. Idempotent.
+Run on the console named `NAME` in the config. It reads the local Syncthing's API key from its `config.xml`, adds the hub, and creates the folders the device subscribes to, starting each whitelisted folder on bootstrap ignores until its whitelist has arrived. When the device has `auto_hub = true` it first creates on the hub the folders of this device that the hub lacks (the same as `provision hub --additive`, limited to this device's folders); a failure there is a warning, not an error. Depending on the device's folders and profile it also installs the ES-DE startup scripts, writes the frontend's system list and pins RetroArch's paths, adds shadPS4 install directories, links title folders, writes artwork gamelists, installs the user timers, and installs the live copy of the updater with its settings. It refuses to run when the local Syncthing is a different device than `devices.NAME.device_id`. Idempotent.
 
 | Option | Default | Meaning |
 |---|---|---|

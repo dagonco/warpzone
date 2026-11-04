@@ -98,6 +98,18 @@ class ConfigTests(unittest.TestCase):
                 "self_update: must be true or false",
             )
 
+    def test_auto_hub_is_off_by_default_and_must_be_a_boolean(self) -> None:
+        self.assertFalse(parse_config(config_data()).devices["deck"].auto_hub)
+        data = copy.deepcopy(config_data())
+        data["devices"]["deck"]["auto_hub"] = True
+        self.assertTrue(parse_config(data).devices["deck"].auto_hub)
+        self.assertFalse(parse_config(data).devices["machine"].auto_hub)
+        for bad in ("true", 1, None):
+            self.assert_error(
+                lambda d, bad=bad: d["devices"]["deck"].update(auto_hub=bad),
+                "auto_hub: must be true or false",
+            )
+
     def test_channel_defaults_to_stable_and_must_be_known(self) -> None:
         self.assertEqual(parse_config(config_data()).devices["deck"].channel, "stable")
         data = copy.deepcopy(config_data())

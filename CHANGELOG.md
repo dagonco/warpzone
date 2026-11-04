@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ### Added
 
+- `auto_hub = true` under a device lets `provision device` create on the hub the folders the device needs and the hub lacks, and `warpzone provision hub --additive` does the same from anywhere. Both only create: whitelisted folders and folders the hub already has are never created or changed.
 - `warpzone self-update --now` (and `updater.sh tick --fetch-now`) looks for a new release right away instead of waiting for the next fetch; it still waits while the menu is open.
 
 ### Changed

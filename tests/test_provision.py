@@ -31,6 +31,7 @@ from warpzone.provision import (
     provision_hub,
 )
 from warpzone.provision_folders import wait_for_files
+from warpzone.provision_hub import additive_plan, provision_hub_additive
 from warpzone.report import Reporter
 from warpzone.runners import run_import_check
 from warpzone.syncthing import Client
@@ -383,11 +384,14 @@ class DeviceFixture(unittest.TestCase):
         dry_run=False,
         sleeps=None,
         folders=None,
+        auto_hub=False,
         **extra,
     ):
         data = config_data(hub_fake.url if hub_fake else "http://127.0.0.1:1")
         if folders is not None:
             data["devices"]["deck"]["folders"] = folders
+        if auto_hub:
+            data["devices"]["deck"]["auto_hub"] = True
         cfg = parse_config(data)
         rep, lines = reporter()
         hub = Client(hub_fake.url, API_KEY, label="hub") if hub_fake else None
@@ -400,6 +404,7 @@ class DeviceFixture(unittest.TestCase):
             hub,
             rep,
             home=self.home,
+            profiles=PROFILES,
             wait_timeout=timeout,
             poll=1.0,
             probes=DeviceProbes(sleep=(sleeps.append if sleeps is not None else lambda s: None)),
@@ -785,6 +790,248 @@ class UnattendedTests(DeviceFixture):
             self.lists_on_disk(local)
             self.run_device(local, hub, unattended=True, dry_run=True)
             self.assertEqual(local.writes(), [])
+
+
+def _hub_specs():
+    from warpzone.model import hub_specs
+
+    return hub_specs(make_config(), PROFILES)
+
+
+class AdditivePlanTests(unittest.TestCase):
+    """The decision of `provision hub --additive`, with no network."""
+
+    def plan(self, existing=None, only=None):
+        names = {DECK_ID: "deck", MACHINE_ID: "machine"}
+        return additive_plan(_hub_specs(), existing or {}, names, only)
+
+    def test_an_empty_hub_gets_every_folder_that_is_not_whitelisted(self) -> None:
+        plan = self.plan()
+        created = {s.id for s in plan.create}
+        self.assertNotIn("wz-library", created)
+        self.assertNotIn("wz-songs", created)
+        self.assertEqual({s.id for s in plan.whitelisted}, {"wz-library", "wz-songs"})
+        self.assertIn("wz-tools", created)
+        self.assertIn("wz-save-ryujinx-user", created)
+        self.assertEqual(plan.differences, ())
+
+    def test_a_folder_the_hub_has_is_never_created_again(self) -> None:
+        by_id = {s.id: s for s in _hub_specs()}
+        tools = by_id["wz-tools"]
+        existing = {
+            "wz-tools": {
+                "path": tools.path,
+                "type": tools.type,
+                "devices": [{"deviceID": d} for d in tools.devices],
+            }
+        }
+        plan = self.plan(existing)
+        self.assertNotIn("wz-tools", {s.id for s in plan.create})
+        self.assertEqual(plan.differences, ())
+
+    def test_differences_are_reported_and_never_acted_on(self) -> None:
+        by_id = {s.id: s for s in _hub_specs()}
+        tools = by_id["wz-tools"]
+        existing = {
+            "wz-tools": {
+                "path": "/elsewhere",
+                "type": "sendreceive",
+                "devices": [{"deviceID": MACHINE_ID}],
+            }
+        }
+        plan = self.plan(existing)
+        self.assertNotIn("wz-tools", {s.id for s in plan.create})
+        text = "\n".join(plan.differences)
+        self.assertIn("'/elsewhere'", text)
+        self.assertIn(f"not {tools.path!r}", text)
+        self.assertIn("type 'sendreceive'", text)
+        self.assertIn("not shared with deck", text)
+
+    def test_only_limits_the_run_to_those_folders(self) -> None:
+        plan = self.plan(only={"wz-tools", "wz-library"})
+        self.assertEqual([s.id for s in plan.create], ["wz-tools"])
+        self.assertEqual([s.id for s in plan.whitelisted], ["wz-library"])
+
+    def test_a_trailing_slash_is_not_a_difference(self) -> None:
+        tools = {s.id: s for s in _hub_specs()}["wz-tools"]
+        existing = {
+            "wz-tools": {
+                "path": tools.path + "/",
+                "type": tools.type,
+                "devices": [{"deviceID": d} for d in tools.devices],
+            }
+        }
+        self.assertEqual(self.plan(existing).differences, ())
+
+
+class AdditiveHubTests(unittest.TestCase):
+    def additive(self, fake, **kw):
+        rep, lines = reporter()
+        created = provision_hub_additive(
+            make_config(fake.url), PROFILES, Client(fake.url, API_KEY), rep, **kw
+        )
+        return created, rep, lines
+
+    def test_creates_the_missing_folders_but_no_whitelisted_one(self) -> None:
+        with FakeSyncthing(HUB_ID) as fake:
+            created, rep, _ = self.additive(fake)
+            self.assertIn("wz-tools", created)
+            self.assertNotIn("wz-library", fake.folders)
+            self.assertNotIn("wz-songs", fake.folders)
+            self.assertEqual(fake.folders["wz-tools"]["type"], "sendonly")
+            self.assertFalse(fake.folders["wz-tools"]["paused"])
+            self.assertEqual(fake.ignores["wz-tools"][-1], "/logs")
+            self.assertEqual({d["deviceID"] for d in fake.devices}, {HUB_ID, DECK_ID, MACHINE_ID})
+            self.assertTrue(any("wz-library" in w for w in rep.warnings))
+
+    def test_a_folder_the_hub_has_is_left_exactly_as_it_is(self) -> None:
+        with FakeSyncthing(HUB_ID) as fake:
+            fake.folders["wz-tools"] = {
+                "id": "wz-tools",
+                "path": "/elsewhere",
+                "type": "sendreceive",
+                "label": "mine",
+                "devices": [],
+            }
+            fake.ignores["wz-tools"] = ["custom"]
+            before = {k: dict(v) for k, v in fake.folders.items()}
+            _, rep, _ = self.additive(fake)
+            self.assertEqual(fake.folders["wz-tools"], before["wz-tools"])
+            self.assertEqual(fake.ignores["wz-tools"], ["custom"])
+            self.assertFalse([w for w in fake.writes() if "wz-tools/" in w[1]])
+            self.assertTrue(any("wz-tools" in w and "/elsewhere" in w for w in rep.warnings))
+
+    def test_the_second_run_writes_nothing(self) -> None:
+        with FakeSyncthing(HUB_ID) as fake:
+            self.additive(fake)
+            fake.requests.clear()
+            created, _, _ = self.additive(fake)
+            self.assertEqual(created, [])
+            self.assertEqual(fake.writes(), [])
+
+    def test_a_folder_that_appears_before_the_write_is_not_created(self) -> None:
+        with FakeSyncthing(HUB_ID) as fake:
+            original = fake.route
+            reads: list[int] = []
+
+            def route(method, path, query, body):
+                result = original(method, path, query, body)
+                if (method, path) == ("GET", "/rest/config/folders"):
+                    reads.append(1)
+                    if len(reads) == 1:
+                        # The first read answered without it; now someone makes it.
+                        fake.folders["wz-tools"] = {
+                            "id": "wz-tools",
+                            "path": "/theirs",
+                            "type": "sendonly",
+                            "devices": [],
+                        }
+                return result
+
+            fake.route = route
+            created, _, lines = self.additive(fake)
+            self.assertNotIn("wz-tools", created)
+            self.assertEqual(fake.folders["wz-tools"]["path"], "/theirs")
+            self.assertIn("wz-tools: already on the hub, left as it is", lines)
+
+    def test_an_api_that_is_not_the_hub_is_refused_before_any_write(self) -> None:
+        with FakeSyncthing(DECK_ID) as fake:
+            with self.assertRaises(ProvisionError):
+                self.additive(fake)
+            self.assertEqual(fake.writes(), [])
+
+    def test_dry_run_makes_no_writes(self) -> None:
+        with FakeSyncthing(HUB_ID) as fake:
+            out: list[str] = []
+            rep, _ = reporter()
+            provision_hub_additive(
+                make_config(fake.url),
+                PROFILES,
+                Client(fake.url, API_KEY, dry_run=True, sink=out.append),
+                rep,
+            )
+            self.assertEqual(fake.writes(), [])
+            self.assertTrue(any("POST /rest/config/folders" in o for o in out))
+
+
+class AutoHubTests(DeviceFixture):
+    """A device with `auto_hub = true` creates the hub folders it needs."""
+
+    def test_the_hub_gets_the_device_folders_that_are_not_whitelisted(self) -> None:
+        with FakeSyncthing(DECK_ID) as local, FakeSyncthing(HUB_ID) as hub:
+            self.hub_with_whitelists(hub)
+            hub.folders["wz-library"] = {
+                "id": "wz-library",
+                "path": "/data/games/library",
+                "type": "sendonly",
+                "devices": [{"deviceID": DECK_ID}],
+            }
+            for name in ("patterns-common.stignore", "patterns-deck.stignore"):
+                local.arrives_after[("wz-library", name)] = 0
+            self.run_device(local, hub, auto_hub=True)
+            self.assertIn("wz-tools", hub.folders)
+            self.assertIn("wz-media", hub.folders)
+            self.assertIn("wz-save-retroarch-saves", hub.folders)
+            self.assertIn("wz-tools", local.folders)
+            # What the device does not have is not made, and neither is another device's.
+            self.assertNotIn("wz-songs", hub.folders)
+            self.assertNotIn("wz-save-ryujinx-user", hub.folders)  # its directory is not there
+
+    def test_without_auto_hub_the_hub_is_not_written(self) -> None:
+        with FakeSyncthing(DECK_ID) as local, FakeSyncthing(HUB_ID) as hub:
+            self.hub_with_whitelists(hub)
+            hub.folders["wz-library"] = {"id": "wz-library", "path": "/x", "devices": []}
+            for name in ("patterns-common.stignore", "patterns-deck.stignore"):
+                local.arrives_after[("wz-library", name)] = 0
+            self.run_device(local, hub)
+            self.assertEqual(hub.writes(), [])
+
+    def test_a_missing_whitelisted_folder_is_still_for_a_person(self) -> None:
+        with FakeSyncthing(DECK_ID) as local, FakeSyncthing(HUB_ID) as hub:
+            rep, _ = self.run_device(local, hub, unattended=True, auto_hub=True, timeout=0.0)
+            self.assertNotIn("wz-library", hub.folders)
+            self.assertNotIn("wz-library", local.folders)
+            self.assertTrue(any("wz-library" in w and "provision hub" in w for w in rep.warnings))
+            self.assertIn("wz-tools", hub.folders)
+            self.assertEqual(
+                [w for w in rep.warnings if "whitelisted folders are made by" in w], []
+            )
+
+    def test_a_hub_that_answers_as_another_device_is_a_warning_not_a_failure(self) -> None:
+        with FakeSyncthing(DECK_ID) as local, FakeSyncthing(MACHINE_ID) as hub:
+            rep, _ = self.run_device(local, hub, unattended=True, auto_hub=True, timeout=0.0)
+            self.assertEqual(hub.writes(), [])
+            self.assertTrue(any(w.startswith("auto_hub:") for w in rep.warnings))
+            self.assertIn("wz-tools", local.folders)
+
+    def test_a_hub_that_refuses_the_key_is_a_warning_not_a_failure(self) -> None:
+        with FakeSyncthing(DECK_ID) as local, FakeSyncthing(HUB_ID, api_key="other") as hub:
+            rep, _ = self.run_device(local, hub, unattended=True, auto_hub=True, timeout=0.0)
+            self.assertTrue(any(w.startswith("auto_hub:") for w in rep.warnings))
+
+    def test_a_dry_run_of_the_device_never_writes_to_the_hub(self) -> None:
+        with FakeSyncthing(DECK_ID) as local, FakeSyncthing(HUB_ID) as hub:
+            self.hub_with_whitelists(hub)
+            hub.folders["wz-library"] = {"id": "wz-library", "path": "/x", "devices": []}
+            self.run_device(local, hub, dry_run=True, auto_hub=True)
+            self.assertEqual(hub.writes(), [])
+            self.assertEqual(local.writes(), [])
+
+    def test_an_existing_hub_folder_is_not_changed_by_a_device_with_another_view(self) -> None:
+        with FakeSyncthing(DECK_ID) as local, FakeSyncthing(HUB_ID) as hub:
+            self.hub_with_whitelists(hub)
+            hub.folders["wz-library"] = {"id": "wz-library", "path": "/x", "devices": []}
+            hub.folders["wz-tools"] = {
+                "id": "wz-tools",
+                "path": "/elsewhere",
+                "type": "sendreceive",
+                "devices": [],
+            }
+            for name in ("patterns-common.stignore", "patterns-deck.stignore"):
+                local.arrives_after[("wz-library", name)] = 0
+            before = dict(hub.folders["wz-tools"])
+            self.run_device(local, hub, auto_hub=True)
+            self.assertEqual(hub.folders["wz-tools"], before)
 
 
 RA_APP = "org.libretro.RetroArch"

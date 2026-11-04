@@ -41,6 +41,7 @@ folders = ["library", "saves"]
 | `addresses` | Optional. Where the hub finds the device. Default `["dynamic"]`. |
 | `rescan_seconds` | Optional. How often whitelisted folders rescan. Default 300, minimum 5. |
 | `self_update`, `channel`, `pin` | Optional. The updater ([Updates](/warpzone/operation/self-update/)). |
+| `auto_hub` | Optional, default `false`. Let `provision device` create on the hub the folders the device needs and the hub lacks (never a whitelisted one). |
 
 The device name is lowercase letters, digits, `-` or `_`. A device can only subscribe to a group its profile has a place for: `library`, `songs`, `tools` and `settings` need the matching key under `[paths]`, and `frontend` needs `paths.media` and `paths.esde` or an `[artwork]` table. Otherwise warpzone refuses with an error naming the missing key. Every key is described in [Configuration](/warpzone/reference/configuration/).
 
@@ -110,6 +111,8 @@ warpzone provision hub
 ```
 
 `check` validates the config and the profile and lists missing whitelists. `render-ignores` prints the ignore lines the device's folders would get, which is a quick way to see what a profile change does. `provision hub` adds the device and creates its folders on the hub.
+
+With `auto_hub = true` on a device, later changes that only need new folders on the hub (a release that adds a save folder, say) no longer need this step: the console creates them itself when it runs `provision device`, which the updater does after each release. Whitelisted folders (`library`, `songs`), a device that is new to an existing folder, and any change to a folder the hub already has still need `provision hub`; the console says so in a warning.
 
 Then, on the device, with the config in `~/.config/warpzone/config.toml`:
 
