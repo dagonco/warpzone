@@ -89,3 +89,10 @@ refresh = "15min"
 # change. `(?d)` lets Syncthing remove a ROM folder that the hub deleted anyway.
 [library]
 ignore = ["(?d)/roms/*/gamelist.xml"]
+
+# ArkOS lists every executable .sh in /opt/system in its Options menu. `provision device`
+# adds "Warpzone Status.sh" (version, updater state and the problems `warpzone doctor`
+# finds, read from local files) and "Warpzone Update Now.sh" there, and touches nothing
+# else in the folder.
+[options_menu]
+dir = "/opt/system"

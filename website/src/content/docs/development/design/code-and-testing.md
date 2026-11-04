@@ -54,7 +54,7 @@ warpzone/
   provision_device.py  `provision device`: the subscribed folders, then the steps below, in order
   provision_emulators.py  device edits for ES-DE's system list, RetroArch, shadPS4 and title links
   provision_artwork.py  frontend artwork on a device: the scope of the artwork folders, the gamelists
-  provision_scripts.py  the ES-DE startup scripts and turning ES-DE's event scripts on
+  provision_scripts.py  the ES-DE startup scripts, turning ES-DE's event scripts on, the Options menu entries
   provision_timers.py  the artwork and play state systemd user timers
   provision_updater.py  the autonomous update: settings file, live updater script, its timer
   prune.py           leftover detection (pure `classify`), delete, webhook
@@ -84,6 +84,7 @@ warpzone/
   safefile.py        safe writes: atomic write, stamps, `guarded_edit`, JSON cache
   procs.py           process detection from `/proc` (`running`)
   esde.py            ES-DE startup script, `es_settings.xml` check and edit (pure)
+  options_menu.py    the bash scripts of the ArkOS Options menu entries (pure)
   frontend.py        frontend system list rewrite, RetroArch key gap (pure)
   gamelist.py        ES-DE gamelist text edits: the per-game emulator and the helpers `playstate` shares (pure)
   artwork.py         frontend artwork: ES-DE gamelist -> the frontend's gamelist, scope ignores,
