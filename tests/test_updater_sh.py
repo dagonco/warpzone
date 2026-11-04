@@ -1952,7 +1952,20 @@ class SignedNameTests(UpdaterCase):
         rig.release("0.2.0", sign=self.key)
         rig.release("0.3.0", sign=self.key)
         rig.move_to("v0.3.0")
-        for n in range(1, 5):  # a name and a commit in order, but a release nobody signed
+        for n in range(1, 5):  # real releases on main, but nobody signed them or their retirement
+            rig.release(f"1.0.{n}")
+            rig.retire(f"v1.0.{n}", "fake")
+        rig.retire("v0.3.0", "the real one, older than four fakes", sign=self.key)
+        proc = rig.tick(WZ_RETIRED_MAX="3", **self.allowed)
+        self.assertTick(proc, 0)
+        self.assertEqual(rig.on_tag(), "v0.2.0", proc.output)
+
+    def test_retirements_of_tags_that_are_no_release_do_not_use_up_the_limit(self) -> None:
+        rig = self.rig
+        rig.release("0.2.0", sign=self.key)
+        rig.release("0.3.0", sign=self.key)
+        rig.move_to("v0.3.0")
+        for n in range(1, 5):  # a name and a commit in order, but not that version
             git(rig.work, "update-ref", f"refs/tags/v1.0.{n}", "HEAD")
             git(rig.work, "tag", "-a", "-m", "fake", f"retired/v1.0.{n}", "HEAD")
         git(rig.work, "push", "-q", "origin", "refs/tags/*:refs/tags/*")
