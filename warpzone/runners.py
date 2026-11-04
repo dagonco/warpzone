@@ -1,8 +1,8 @@
 """The subprocess edge: the commands warpzone runs on a device, each behind a small function.
 
-The callers take these functions as parameters (`FlatpakRunner`, `ImportCheck`,
-`SystemctlRunner`), so tests pass a fake and nothing here is unit-tested without a real
-command.
+The device commands take them through `probes.DeviceProbes` (`FlatpakRunner`, `ImportCheck`,
+`SystemctlRunner` and the rest), so tests pass a fake and nothing here is unit-tested without
+a real command.
 """
 
 from __future__ import annotations

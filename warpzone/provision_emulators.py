@@ -12,12 +12,13 @@ from pathlib import Path
 
 from warpzone import esde, frontend, procs, safefile, settings_state, shadps4, titlelinks
 from warpzone.paths import expand_home
+from warpzone.probes import REAL_PROBES, DeviceProbes
 from warpzone.profiles import Profile
 from warpzone.report import Reporter
 
 
 def busy(
-    names: Sequence[str], label: str, what: str, again: str, rep: Reporter, proc: Path
+    names: Sequence[str], label: str, what: str, again: str, rep: Reporter, probes: DeviceProbes
 ) -> bool:
     """True, with a warning, when `what` must not be written now.
 
@@ -25,7 +26,7 @@ def busy(
     file) and when there is no /proc to tell.
     """
     try:
-        running = procs.running(names, proc=proc)
+        running = procs.running(names, proc=probes.proc)
     except procs.NoProc:
         rep.warn(
             f"cannot tell whether {label} is running (no /proc), so {what} was left alone: "
@@ -45,7 +46,7 @@ def ensure_systems_override(
     rep: Reporter,
     *,
     dry_run: bool,
-    proc: Path = Path("/proc"),
+    probes: DeviceProbes = REAL_PROBES,
     state_root: Path,
 ) -> None:
     """Write the frontend's system list with the ROM folders moved into the library.
@@ -83,7 +84,7 @@ def ensure_systems_override(
         rep.out(f"es_systems.cfg: already current ({override})")
         return
     label, what = "EmulationStation", f"{override}"
-    if busy(rule.process, label, what, again, rep, proc):
+    if busy(rule.process, label, what, again, rep, probes):
         return
     if dry_run:
         rep.out(f"es_systems.cfg: dry-run: would write {override} (ROM folders below {target})")
@@ -92,7 +93,7 @@ def ensure_systems_override(
         override,
         wanted,
         expect=before,
-        busy=lambda: busy(rule.process, label, what, again, rep, proc),  # it may have started
+        busy=lambda: busy(rule.process, label, what, again, rep, probes),  # it may have started
         backup=(
             None
             if before is None
@@ -116,7 +117,7 @@ def ensure_retroarch_pins(
     rep: Reporter,
     *,
     dry_run: bool,
-    proc: Path = Path("/proc"),
+    probes: DeviceProbes = REAL_PROBES,
     state_root: Path,
 ) -> None:
     """Set the profile's keys in each `retroarch.cfg`, only while RetroArch is not running.
@@ -155,7 +156,7 @@ def ensure_retroarch_pins(
     if not pending:
         return
     what = "RetroArch's config files"
-    if busy(rule.process, "RetroArch", what, again, rep, proc):
+    if busy(rule.process, "RetroArch", what, again, rep, probes):
         return
     for path, text, gap in pending:
         keys = ", ".join(sorted(gap.differs))
@@ -166,7 +167,7 @@ def ensure_retroarch_pins(
             path,
             frontend.retroarch_apply(text, wants).encode("utf-8"),
             expect=safefile.stamp(path),
-            busy=lambda: busy(rule.process, "RetroArch", what, again, rep, proc),
+            busy=lambda: busy(rule.process, "RetroArch", what, again, rep, probes),
             backup=partial(
                 settings_state.backup, path, "retroarch", path.parent.name, root=state_root
             ),
@@ -190,7 +191,7 @@ def ensure_shadps4_dirs(
     rep: Reporter,
     *,
     dry_run: bool,
-    proc: Path = Path("/proc"),
+    probes: DeviceProbes = REAL_PROBES,
     state_root: Path,
 ) -> None:
     """List the profile's install folders in shadPS4's config files, while it is closed.
@@ -235,7 +236,7 @@ def ensure_shadps4_dirs(
         )
         return
     what = "shadPS4's config files"
-    if not pending or busy(rule.process, "shadPS4", what, again, rep, proc):
+    if not pending or busy(rule.process, "shadPS4", what, again, rep, probes):
         return
     for path, kind, text, gap in pending:
         folders = ", ".join(gap)
@@ -247,7 +248,7 @@ def ensure_shadps4_dirs(
                 path,
                 partial(_shadps4_apply, kind, text, wants),
                 expect=safefile.stamp(path),
-                busy=lambda: busy(rule.process, "shadPS4", what, again, rep, proc),
+                busy=lambda: busy(rule.process, "shadPS4", what, again, rep, probes),
                 backup=partial(settings_state.backup, path, "shadps4", path.name, root=state_root),
             )
         except shadps4.Shadps4ConfigError as exc:
@@ -268,7 +269,7 @@ def ensure_title_links(
     rep: Reporter,
     *,
     dry_run: bool,
-    proc: Path = Path("/proc"),
+    probes: DeviceProbes = REAL_PROBES,
     state_root: Path | None = None,
 ) -> None:
     """Link every library game of each `[links.*]` rule into the emulator's game folder,
@@ -282,7 +283,7 @@ def ensure_title_links(
         say=rep.out,
         warn=rep.warn,
         dry_run=dry_run,
-        proc=proc,
+        proc=probes.proc,
         on_busy=rep.defer,
     )
 
@@ -294,7 +295,7 @@ def ensure_shadps4_launch(
     rep: Reporter,
     *,
     dry_run: bool,
-    proc: Path = Path("/proc"),
+    probes: DeviceProbes = REAL_PROBES,
     state_root: Path,
 ) -> None:
     """Install the shadPS4 launch script and point ES-DE's find rule at it.
@@ -349,7 +350,7 @@ def ensure_shadps4_launch(
 
     def running() -> bool | None:
         try:
-            return procs.running(esde.ESDE_PROCESSES, proc=proc)
+            return procs.running(esde.ESDE_PROCESSES, proc=probes.proc)
         except procs.NoProc:
             return None
 

@@ -9,7 +9,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from support import API_KEY, HUB_ID, FakeSyncthing, stub_self_update
+from support import API_KEY, HUB_ID, FakeSyncthing, device_probes, stub_self_update
 from test_anbernic import ARK_ID, PROFILE, Device, ark_config
 from test_artwork import source_xml
 from test_doctor import by_name, context
@@ -18,6 +18,7 @@ from warpzone import artwork, provision_artwork, safefile
 from warpzone.cli import main
 from warpzone.doctor import OK, WARN, Context, check_frontend
 from warpzone.model import device_specs
+from warpzone.probes import DeviceProbes
 from warpzone.provision_artwork import ensure_gamelists, refresh_artwork, sync_artwork_scope
 from warpzone.provision_timers import ensure_artwork_timer
 from warpzone.syncthing import Client
@@ -93,7 +94,7 @@ class Art(Device):
 
     def ensure(self, *, dry_run=False, **kw):
         rep, lines = reporter()
-        kw.setdefault("proc", self.proc.path)
+        kw.setdefault("probes", device_probes(self.proc.path))
         ensure_gamelists("ark", self.profile, self.home, rep, dry_run=dry_run, **kw)
         return rep, lines
 
@@ -187,7 +188,7 @@ class GamelistTests(Art, unittest.TestCase):
         self.assertEqual(rep.warnings, [])
 
     def test_without_proc_nothing_is_written_and_it_says_why(self) -> None:
-        rep, _ = self.ensure(proc=self.proc.path / "missing")
+        rep, _ = self.ensure(probes=device_probes(self.proc.path / "missing"))
         self.assertFalse(self.out("gba").exists())
         self.assertTrue(any("cannot tell whether" in w for w in rep.warnings))
 
@@ -253,7 +254,9 @@ class GamelistTests(Art, unittest.TestCase):
     def test_a_profile_without_artwork_does_nothing(self) -> None:
         rep, lines = reporter()
         bare = dataclasses.replace(self.profile, artwork=None)
-        ensure_gamelists("ark", bare, self.home, rep, dry_run=False, proc=self.proc.path)
+        ensure_gamelists(
+            "ark", bare, self.home, rep, dry_run=False, probes=device_probes(self.proc.path)
+        )
         self.assertEqual((rep.warnings, lines), ([], []))
 
     def test_a_missing_system_list_warns(self) -> None:
@@ -265,11 +268,12 @@ class GamelistTests(Art, unittest.TestCase):
 class ProvisionArtTests(Art, unittest.TestCase):
     FOLDERS = ("library", "frontend")
 
-    def provision(self, **kw):
+    def provision(self, *, systemctl=lambda args: True, **kw):
         kw.setdefault("folders", self.FOLDERS)
         kw.setdefault("python", "/usr/bin/python3")
-        kw.setdefault("import_check", lambda python: True)
-        kw.setdefault("systemctl", lambda args: True)
+        kw["probes"] = device_probes(
+            self.proc.path, import_check=lambda python: True, user_systemctl=systemctl
+        )
         return super().provision(**kw)
 
     def test_the_artwork_folders_are_created_receive_only_with_the_scope(self) -> None:
@@ -336,13 +340,17 @@ class ProvisionArtTests(Art, unittest.TestCase):
 
 
 class TimerTests(Art, unittest.TestCase):
-    def install(self, profile=None, **kw):
+    def install(self, profile=None, *, import_check=lambda python: True, systemctl=None, **kw):
         rep, lines = reporter()
         calls: list[tuple[str, ...]] = []
         kw.setdefault("python", "/opt/py thon/bin/python3")
-        kw.setdefault("import_check", lambda python: True)
-        kw.setdefault("systemctl", lambda args: calls.append(tuple(args)) or True)
-        ensure_artwork_timer("ark", profile or self.profile, self.home, rep, dry_run=False, **kw)
+        probes = DeviceProbes(
+            import_check=import_check,
+            user_systemctl=systemctl or (lambda args: calls.append(tuple(args)) or True),
+        )
+        ensure_artwork_timer(
+            "ark", profile or self.profile, self.home, rep, dry_run=False, probes=probes, **kw
+        )
         return rep, lines, calls
 
     def test_the_service_quotes_what_systemd_would_split(self) -> None:
@@ -420,7 +428,14 @@ class ScopeTests(Art, unittest.TestCase):
         cfg = ark_config(("library", "frontend"))
         rep, _ = reporter()
         refresh_artwork(
-            cfg, "ark", self.profile, self.home, rep, local=None, dry_run=False, proc=self.proc.path
+            cfg,
+            "ark",
+            self.profile,
+            self.home,
+            rep,
+            local=None,
+            dry_run=False,
+            probes=device_probes(self.proc.path),
         )
         self.assertTrue(self.out("gba").is_file())
         self.assertTrue(any("Syncthing" in w for w in rep.warnings))  # no client: scope unchecked

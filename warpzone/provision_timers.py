@@ -6,10 +6,11 @@ import sys
 from pathlib import Path
 
 from warpzone import artwork, safefile
+from warpzone.probes import REAL_PROBES, DeviceProbes
 from warpzone.profiles import Profile
 from warpzone.provision_scripts import script_config
 from warpzone.report import Reporter
-from warpzone.runners import ImportCheck, SystemctlRunner, run_import_check, run_user_systemctl
+from warpzone.runners import SystemctlRunner
 
 
 def ensure_artwork_timer(
@@ -20,9 +21,8 @@ def ensure_artwork_timer(
     *,
     dry_run: bool,
     python: str | None = None,
-    import_check: ImportCheck = run_import_check,
     config_path: Path | None = None,
-    systemctl: SystemctlRunner = run_user_systemctl,
+    probes: DeviceProbes = REAL_PROBES,
 ) -> None:
     """Install and start the `systemd --user` timer that runs `frontend refresh`.
 
@@ -34,7 +34,7 @@ def ensure_artwork_timer(
     if art is None or art.refresh is None:
         return
     python = python or sys.executable
-    if not import_check(python):
+    if not probes.import_check(python):
         rep.warn(
             f"the artwork timer was not installed: {python} cannot import warpzone from "
             "outside the current folder (run from a clone?). Set the device up with "
@@ -45,7 +45,15 @@ def ensure_artwork_timer(
         python, name, script_config(config_path, home), art.refresh
     )
     _install_timer(
-        artwork.UNIT_NAME, service, timer, art.refresh, "artwork", home, rep, dry_run, systemctl
+        artwork.UNIT_NAME,
+        service,
+        timer,
+        art.refresh,
+        "artwork",
+        home,
+        rep,
+        dry_run,
+        probes.user_systemctl,
     )
 
 
@@ -57,9 +65,8 @@ def ensure_play_state_timer(
     *,
     dry_run: bool,
     python: str | None = None,
-    import_check: ImportCheck = run_import_check,
     config_path: Path | None = None,
-    systemctl: SystemctlRunner = run_user_systemctl,
+    probes: DeviceProbes = REAL_PROBES,
 ) -> None:
     """Install and start the `systemd --user` timer that runs `play-state sync`.
 
@@ -71,7 +78,7 @@ def ensure_play_state_timer(
     if rule is None or rule.refresh is None:
         return
     python = python or sys.executable
-    if not import_check(python):
+    if not probes.import_check(python):
         rep.warn(
             f"the play state timer was not installed: {python} cannot import warpzone from "
             "outside the current folder (run from a clone?). Set the device up with "
@@ -90,7 +97,7 @@ def ensure_play_state_timer(
         home,
         rep,
         dry_run,
-        systemctl,
+        probes.user_systemctl,
     )
 
 

@@ -8,9 +8,9 @@ from pathlib import Path
 
 from warpzone import esde, procs, safefile, settings_state
 from warpzone.paths import expand_home
+from warpzone.probes import REAL_PROBES, DeviceProbes
 from warpzone.profiles import Profile
 from warpzone.report import Reporter
-from warpzone.runners import ImportCheck, run_import_check
 
 
 def _enable_event_scripts(
@@ -19,7 +19,7 @@ def _enable_event_scripts(
     rep: Reporter,
     *,
     dry_run: bool,
-    proc: Path,
+    probes: DeviceProbes,
     state_root: Path,
 ) -> None:
     """Turn ES-DE's `CustomEventScripts` on, only while ES-DE is not running.
@@ -49,7 +49,7 @@ def _enable_event_scripts(
 
     def running() -> bool | None:
         try:
-            return procs.running(esde.ESDE_PROCESSES, proc=proc)
+            return procs.running(esde.ESDE_PROCESSES, proc=probes.proc)
         except procs.NoProc:
             return None
 
@@ -108,8 +108,7 @@ def ensure_esde_script(
     *,
     dry_run: bool,
     python: str | None = None,
-    import_check: ImportCheck = run_import_check,
-    proc: Path = Path("/proc"),
+    probes: DeviceProbes = REAL_PROBES,
     state_root: Path | None = None,
     config_path: Path | None = None,
 ) -> None:
@@ -135,8 +134,7 @@ def ensure_esde_script(
         text,
         dry_run=dry_run,
         python=python,
-        import_check=import_check,
-        proc=proc,
+        probes=probes,
         state_root=state_root,
     )
 
@@ -149,8 +147,7 @@ def ensure_play_state_script(
     *,
     dry_run: bool,
     python: str | None = None,
-    import_check: ImportCheck = run_import_check,
-    proc: Path = Path("/proc"),
+    probes: DeviceProbes = REAL_PROBES,
     state_root: Path | None = None,
     config_path: Path | None = None,
 ) -> None:
@@ -168,8 +165,7 @@ def ensure_play_state_script(
         text,
         dry_run=dry_run,
         python=python,
-        import_check=import_check,
-        proc=proc,
+        probes=probes,
         state_root=state_root,
     )
 
@@ -182,8 +178,7 @@ def ensure_links_script(
     *,
     dry_run: bool,
     python: str | None = None,
-    import_check: ImportCheck = run_import_check,
-    proc: Path = Path("/proc"),
+    probes: DeviceProbes = REAL_PROBES,
     state_root: Path | None = None,
     config_path: Path | None = None,
 ) -> None:
@@ -201,8 +196,7 @@ def ensure_links_script(
         text,
         dry_run=dry_run,
         python=python,
-        import_check=import_check,
-        proc=proc,
+        probes=probes,
         state_root=state_root,
     )
 
@@ -217,12 +211,11 @@ def _install_startup_script(
     *,
     dry_run: bool,
     python: str,
-    import_check: ImportCheck,
-    proc: Path,
+    probes: DeviceProbes,
     state_root: Path | None,
 ) -> None:
     esde_dir = Path(expand_home(profile.paths["esde"], home))
-    if not import_check(python):
+    if not probes.import_check(python):
         rep.warn(
             f"the ES-DE startup script was not installed: {python} cannot import warpzone "
             "from outside the current folder (run from a clone?). Set the device up with "
@@ -248,4 +241,4 @@ def _install_startup_script(
         safefile.write_script(path, text)
         rep.out(f"es-de: wrote {path}")
     root = state_root if state_root is not None else settings_state.state_dir(home=home)
-    _enable_event_scripts(name, esde_dir, rep, dry_run=dry_run, proc=proc, state_root=root)
+    _enable_event_scripts(name, esde_dir, rep, dry_run=dry_run, probes=probes, state_root=root)

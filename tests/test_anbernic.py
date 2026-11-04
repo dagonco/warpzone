@@ -6,7 +6,15 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from support import API_KEY, HUB_ID, FakeProc, FakeSyncthing, config_data, stub_self_update
+from support import (
+    API_KEY,
+    HUB_ID,
+    FakeProc,
+    FakeSyncthing,
+    config_data,
+    device_probes,
+    stub_self_update,
+)
 from test_doctor import by_name, context
 from test_provision import reporter
 from warpzone import frontend, settings_state
@@ -194,7 +202,7 @@ class Device:
     def provision(self, *, dry_run=False, folders=("library", "saves"), **kw):
         cfg = ark_config(folders)
         rep, lines = reporter()
-        kw.setdefault("proc", self.proc.path)
+        kw.setdefault("probes", device_probes(self.proc.path))
         with FakeSyncthing(ARK_ID) as local:
             for name in ("patterns-common.stignore", "patterns-ark.stignore"):
                 local.arrives_after[("wz-library", name)] = 0
@@ -209,7 +217,6 @@ class Device:
                 home=self.home,
                 wait_timeout=0.0,
                 poll=1.0,
-                sleep=lambda s: None,
                 state_root=self.state,
                 **kw,
             )
@@ -346,7 +353,7 @@ class ProvisionTests(Device, unittest.TestCase):
         self.assertIn(str(first), warning)
 
     def test_without_proc_nothing_is_edited_and_it_says_why(self) -> None:
-        rep, _ = self.provision(proc=self.proc.path / "missing")
+        rep, _ = self.provision(probes=device_probes(self.proc.path / "missing"))
         self.assertFalse(self.override.exists())
         self.assertEqual(self.cfg.read_text(), RETROARCH)
         self.assertTrue(any("cannot tell whether" in w for w in rep.warnings))

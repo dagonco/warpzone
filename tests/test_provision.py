@@ -21,6 +21,7 @@ from support import (
 )
 from warpzone import esde, provision_emulators, settings_state
 from warpzone.config import Config, parse_config
+from warpzone.probes import DeviceProbes
 from warpzone.profiles import Profile, load_profile
 from warpzone.provision import (
     ProvisionError,
@@ -401,7 +402,7 @@ class DeviceFixture(unittest.TestCase):
             home=self.home,
             wait_timeout=timeout,
             poll=1.0,
-            sleep=(sleeps.append if sleeps is not None else lambda s: None),
+            probes=DeviceProbes(sleep=(sleeps.append if sleeps is not None else lambda s: None)),
             **extra,
         )
         return rep, lines
@@ -554,7 +555,7 @@ class DeviceTests(DeviceFixture):
                 Client(url, API_KEY, timeout=2),
                 rep,
                 home=self.home,
-                sleep=lambda s: None,
+                probes=DeviceProbes(sleep=lambda s: None),
             )
             self.assertTrue(any("pre-check" in w for w in rep.warnings))
             self.assertEqual(local.ignores["wz-library"], DECK_LIBRARY_IGNORES)
@@ -847,9 +848,8 @@ class FlatpakAccessTests(unittest.TestCase):
                 home=self.home,
                 wait_timeout=0.0,
                 poll=1.0,
-                sleep=lambda s: None,
+                probes=DeviceProbes(sleep=lambda s: None, flatpak=flatpak),
                 syncthing_config=path.get(config),
-                flatpak_run=flatpak,
                 unattended=unattended,
             )
         return rep, lines
@@ -977,13 +977,18 @@ class EsdeScriptTests(unittest.TestCase):
     def start_esde(self, comm: str = "es-de", argv0: str | None = None) -> None:
         self.proc.add(4242, comm, argv0 or comm)
 
+    def probes(self, **fakes: Any) -> DeviceProbes:
+        return DeviceProbes(
+            **{"import_check": lambda python: True, "proc": self.proc.path, "sleep": lambda s: None}
+            | fakes
+        )
+
     def provision(self, *, folders=("settings",), dry_run=False, profile=None, **kw):
         data = config_data()
         data["devices"]["deck"]["folders"] = list(folders)
         cfg = parse_config(data)
         rep, lines = reporter()
-        kw.setdefault("import_check", lambda python: True)
-        kw.setdefault("proc", self.proc.path)
+        kw.setdefault("probes", self.probes())
         with FakeSyncthing(DECK_ID) as local:
             client = Client(local.url, API_KEY, label="local", dry_run=dry_run, sink=lines.append)
             provision_device(
@@ -996,7 +1001,6 @@ class EsdeScriptTests(unittest.TestCase):
                 home=self.home,
                 wait_timeout=0.0,
                 poll=1.0,
-                sleep=lambda s: None,
                 python=PYTHON,
                 state_root=self.state,
                 **kw,
@@ -1087,7 +1091,7 @@ class EsdeScriptTests(unittest.TestCase):
             seen.append(python)
             return False
 
-        rep, _ = self.provision(import_check=cannot)
+        rep, _ = self.provision(probes=self.probes(import_check=cannot))
         self.assertEqual(seen, [PYTHON])
         self.assertFalse(self.script.exists())
         self.assertEqual(self.settings.read_text(), ES_SETTINGS)
@@ -1183,7 +1187,7 @@ class EsdeScriptTests(unittest.TestCase):
 
     def test_without_proc_it_is_left_alone_and_says_why(self) -> None:
         self.write_settings()
-        rep, _ = self.provision(proc=self.proc.path / "missing")
+        rep, _ = self.provision(probes=self.probes(proc=self.proc.path / "missing"))
         self.assertEqual(self.settings.read_text(), ES_SETTINGS)
         (warning,) = rep.warnings
         self.assertIn("cannot tell whether ES-DE is running", warning)
@@ -1247,7 +1251,9 @@ class EsdeScriptTests(unittest.TestCase):
 
     def test_without_proc_the_run_is_not_deferred(self) -> None:
         self.write_settings()
-        rep, _ = self.provision(unattended=True, proc=self.proc.path / "missing")
+        rep, _ = self.provision(
+            unattended=True, probes=self.probes(proc=self.proc.path / "missing")
+        )
         self.assertFalse(rep.deferred)
         self.assertTrue(rep.warnings)
 
@@ -1269,7 +1275,12 @@ class EsdeScriptTests(unittest.TestCase):
         rep, _ = reporter()
         self.assertTrue(
             provision_emulators.busy(
-                esde.ESDE_PROCESSES, "ES-DE", "a file", "run again", rep, self.proc.path
+                esde.ESDE_PROCESSES,
+                "ES-DE",
+                "a file",
+                "run again",
+                rep,
+                DeviceProbes(proc=self.proc.path),
             )
         )
         self.assertTrue(rep.deferred)
@@ -1277,7 +1288,12 @@ class EsdeScriptTests(unittest.TestCase):
         self.proc.clear()
         self.assertFalse(
             provision_emulators.busy(
-                esde.ESDE_PROCESSES, "ES-DE", "a file", "run again", rep, self.proc.path
+                esde.ESDE_PROCESSES,
+                "ES-DE",
+                "a file",
+                "run again",
+                rep,
+                DeviceProbes(proc=self.proc.path),
             )
         )
         self.assertFalse(rep.deferred)

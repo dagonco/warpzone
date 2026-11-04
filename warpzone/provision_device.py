@@ -5,8 +5,7 @@ from __future__ import annotations
 import dataclasses
 import os
 import subprocess
-import time
-from collections.abc import Callable, Iterable
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +13,7 @@ from warpzone import flatpak, settings_state
 from warpzone.config import DEFAULT_WAIT_SECONDS, Config
 from warpzone.model import FolderSpec, device_specs
 from warpzone.paths import expand_home
+from warpzone.probes import REAL_PROBES, DeviceProbes
 from warpzone.profiles import Profile
 from warpzone.provision_artwork import (
     artwork_layout,
@@ -47,14 +47,6 @@ from warpzone.provision_scripts import (
 from warpzone.provision_timers import ensure_artwork_timer, ensure_play_state_timer
 from warpzone.provision_updater import UPDATER_SOURCE, ensure_self_update
 from warpzone.report import Reporter
-from warpzone.runners import (
-    FlatpakRunner,
-    ImportCheck,
-    SystemctlRunner,
-    run_flatpak,
-    run_import_check,
-    run_user_systemctl,
-)
 from warpzone.syncthing import Client, SyncthingError
 
 
@@ -125,7 +117,7 @@ def _provision_whitelisted(
     timeout: float,
     poll: float,
     rep: Reporter,
-    sleep: Callable[[float], None],
+    probes: DeviceProbes,
     unattended: bool = False,
 ) -> None:
     """Bring a whitelisted device folder to its final ignores.
@@ -174,8 +166,8 @@ def _provision_whitelisted(
             timeout=timeout,
             poll=poll,
             rep=rep,
-            sleep=sleep,
-            clock=time.monotonic,
+            sleep=probes.sleep,
+            clock=probes.clock,
         )
         if pending:
             rep.warn(
@@ -185,7 +177,15 @@ def _provision_whitelisted(
             )
             return
     else:
-        wait_for_files(client, spec, timeout=timeout, poll=poll, rep=rep, sleep=sleep)
+        wait_for_files(
+            client,
+            spec,
+            timeout=timeout,
+            poll=poll,
+            rep=rep,
+            sleep=probes.sleep,
+            clock=probes.clock,
+        )
     client.set_ignores(spec.id, final)
     client.scan(spec.id)
     rep.note(spec.id, "whitelist active, rescanning")
@@ -221,7 +221,7 @@ def ensure_flatpak_access(
     rep: Reporter,
     *,
     dry_run: bool,
-    run: FlatpakRunner = run_flatpak,
+    probes: DeviceProbes = REAL_PROBES,
     unattended: bool = False,
 ) -> None:
     """Grant the SyncThingy flatpak the data folders of the emulators it must sync.
@@ -240,7 +240,7 @@ def ensure_flatpak_access(
         return
     manual = " ".join(flatpak.override_command(apps))
     try:
-        code, shown = run(flatpak.show_command())
+        code, shown = probes.flatpak(flatpak.show_command())
         if code != 0:
             raise OSError(shown.strip() or f"exit code {code}")
     except (OSError, subprocess.SubprocessError) as exc:
@@ -267,7 +267,7 @@ def ensure_flatpak_access(
         rep.out(f"syncthing flatpak: dry-run: then you would need to {RESTART_SYNCTHING}")
         return
     try:
-        code, out = run(command)
+        code, out = probes.flatpak(command)
         if code != 0:
             raise OSError(out.strip() or f"exit code {code}")
     except (OSError, subprocess.SubprocessError) as exc:
@@ -288,16 +288,11 @@ def provision_device(
     home: Path,
     wait_timeout: float = DEFAULT_WAIT_SECONDS,
     poll: float = 2.0,
-    sleep: Callable[[float], None] = time.sleep,
     syncthing_config: Path | None = None,
-    flatpak_run: FlatpakRunner = run_flatpak,
     python: str | None = None,
-    import_check: ImportCheck = run_import_check,
-    proc: Path = Path("/proc"),
+    probes: DeviceProbes = REAL_PROBES,
     state_root: Path | None = None,
     config_path: Path | None = None,
-    systemctl: SystemctlRunner = run_user_systemctl,
-    systemctl_run: FlatpakRunner | None = None,
     unattended: bool = False,
     clone: Path | None = None,
     updater_source: Path = UPDATER_SOURCE,
@@ -361,7 +356,7 @@ def provision_device(
         home,
         rep,
         dry_run=local.dry_run,
-        run=flatpak_run,
+        probes=probes,
         unattended=unattended,
     )
 
@@ -382,7 +377,7 @@ def provision_device(
                 timeout=wait_timeout,
                 poll=poll,
                 rep=rep,
-                sleep=sleep,
+                probes=probes,
                 unattended=unattended,
             )
         rep.flush(spec.id)
@@ -396,7 +391,7 @@ def provision_device(
             ensure_shadps4_launch,
             ensure_title_links,
         ):
-            ensure(name, profile, home, rep, dry_run=local.dry_run, proc=proc, state_root=root)
+            ensure(name, profile, home, rep, dry_run=local.dry_run, probes=probes, state_root=root)
 
     if with_artwork:
         layout = artwork_layout(profile, home)
@@ -408,7 +403,7 @@ def provision_device(
             home,
             rep,
             dry_run=local.dry_run,
-            proc=proc,
+            probes=probes,
             play_state="play-state" in device.folders,
         )
         ensure_artwork_timer(
@@ -418,9 +413,8 @@ def provision_device(
             rep,
             dry_run=local.dry_run,
             python=python,
-            import_check=import_check,
             config_path=config_path,
-            systemctl=systemctl,
+            probes=probes,
         )
 
     if "settings" in device.folders:
@@ -431,8 +425,7 @@ def provision_device(
             rep,
             dry_run=local.dry_run,
             python=python,
-            import_check=import_check,
-            proc=proc,
+            probes=probes,
             state_root=state_root,
             config_path=config_path,
         )
@@ -445,8 +438,7 @@ def provision_device(
             rep,
             dry_run=local.dry_run,
             python=python,
-            import_check=import_check,
-            proc=proc,
+            probes=probes,
             state_root=state_root,
             config_path=config_path,
         )
@@ -459,8 +451,7 @@ def provision_device(
             rep,
             dry_run=local.dry_run,
             python=python,
-            import_check=import_check,
-            proc=proc,
+            probes=probes,
             state_root=state_root,
             config_path=config_path,
         )
@@ -471,9 +462,8 @@ def provision_device(
             rep,
             dry_run=local.dry_run,
             python=python,
-            import_check=import_check,
             config_path=config_path,
-            systemctl=systemctl,
+            probes=probes,
         )
 
     ensure_self_update(
@@ -483,10 +473,9 @@ def provision_device(
         rep,
         dry_run=local.dry_run,
         python=python,
-        import_check=import_check,
         clone=clone,
         config_path=config_path,
         state_root=state_root,
-        systemctl=systemctl_run,
+        probes=probes,
         updater_source=updater_source,
     )

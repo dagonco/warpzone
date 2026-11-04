@@ -25,6 +25,7 @@ from warpzone import artwork, esde, localst, settings, settings_state, updatetim
 from warpzone.config import Config, ConfigError, Device
 from warpzone.model import ModelError
 from warpzone.paths import expand_home
+from warpzone.probes import DeviceProbes
 from warpzone.profiles import Profile, ProfileError
 from warpzone.report import Reporter
 from warpzone.runners import run_import_check, run_systemctl
@@ -294,7 +295,12 @@ def _run_step(
             rep,
             local=_client(local) if local is not None else None,
             dry_run=True,
-            proc=probes.proc,
+            probes=DeviceProbes(
+                proc=probes.proc,
+                import_check=probes.import_check,
+                systemctl=probes.systemctl,
+                clock=probes.clock,
+            ),
         )
         warnings.extend(rep.warnings)
 

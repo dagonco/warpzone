@@ -6,20 +6,13 @@ import os
 import subprocess
 import sys
 import tempfile
-from collections.abc import Callable, Sequence
 from pathlib import Path
 
 from warpzone import safefile, selfupdate, settings_state, updatetimer
 from warpzone.config import Device
+from warpzone.probes import REAL_PROBES, DeviceProbes
 from warpzone.profiles import Profile
 from warpzone.report import Reporter
-from warpzone.runners import (
-    FlatpakRunner,
-    ImportCheck,
-    run_import_check,
-    run_script_check,
-    run_systemctl,
-)
 
 UPDATER_SOURCE = selfupdate.UPDATER_SOURCE
 
@@ -45,7 +38,7 @@ def ensure_updater(
     *,
     dry_run: bool,
     source: Path = UPDATER_SOURCE,
-    run: Callable[[Sequence[str], float], tuple[int, str]] | None = None,
+    probes: DeviceProbes = REAL_PROBES,
 ) -> bool:
     """Put `source` (the script that ships with this version) in place as the live copy
     outside the clone, and say whether there is a usable live copy afterwards.
@@ -56,7 +49,7 @@ def ensure_updater(
     one is never installed: a rollback to an older release must not downgrade the script.
     """
     live = selfupdate.live_path(home)
-    check = run or run_script_check
+    check = probes.script_check
     candidate = _read_text(source)
     if candidate is None:
         rep.warn(f"the updater was not installed: cannot read {source}")
@@ -150,7 +143,7 @@ def ensure_update_timer(
     *,
     dry_run: bool,
     updater: Path,
-    systemctl: FlatpakRunner | None = None,
+    probes: DeviceProbes = REAL_PROBES,
 ) -> None:
     """Install and enable the systemd user timer that starts one tick of the updater.
 
@@ -159,7 +152,7 @@ def ensure_update_timer(
     manager. The units are rewritten only when their content differs, and the timer is enabled
     only when it is not already.
     """
-    ctl = systemctl or run_systemctl
+    ctl = probes.systemctl
     units = home / updatetimer.UNIT_DIR
     manual = (
         f"run `sh {updater} tick` from another scheduler (cron, for example), or "
@@ -226,11 +219,10 @@ def ensure_self_update(
     *,
     dry_run: bool,
     python: str | None = None,
-    import_check: ImportCheck = run_import_check,
     clone: Path | None = None,
     config_path: Path | None = None,
     state_root: Path | None = None,
-    systemctl: FlatpakRunner | None = None,
+    probes: DeviceProbes = REAL_PROBES,
     updater_source: Path = UPDATER_SOURCE,
 ) -> None:
     """Everything the autonomous update needs on this device: the settings file written from
@@ -276,7 +268,7 @@ def ensure_self_update(
             f"{device.name}` (see https://dagonco.github.io/warpzone/operation/self-update/)"
         )
         return
-    if not import_check(python):
+    if not probes.import_check(python):
         rep.warn(
             f"the updater was not installed: {python} cannot import warpzone from outside the "
             "current folder (run from the clone's venv?). Set the device up with "
@@ -284,6 +276,6 @@ def ensure_self_update(
         )
         return
     ensure_updater_conf(conf, text, rep, dry_run=dry_run)
-    installed = ensure_updater(home, rep, dry_run=dry_run, source=updater_source)
+    installed = ensure_updater(home, rep, dry_run=dry_run, source=updater_source, probes=probes)
     if installed or dry_run:
-        ensure_update_timer(home, rep, dry_run=dry_run, updater=live, systemctl=systemctl)
+        ensure_update_timer(home, rep, dry_run=dry_run, updater=live, probes=probes)

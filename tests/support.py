@@ -15,6 +15,7 @@ from urllib.parse import parse_qs, urlsplit
 
 from warpzone import ignores, provision_device
 from warpzone.config import Config, parse_config
+from warpzone.probes import DeviceProbes
 from warpzone.profiles import load_profile
 
 HUB_ID = "AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA"
@@ -63,6 +64,12 @@ class FakeProc:
         """Remove every process, keeping the (now empty) /proc."""
         shutil.rmtree(self.path)
         self.path.mkdir()
+
+
+def device_probes(proc: Path, **fakes: Any) -> DeviceProbes:
+    """Device probes for a test: the fake `/proc` at `proc` and no waiting. `fakes` replace or
+    add pieces (`import_check=...`, `systemctl=...`); the rest stays the real thing."""
+    return DeviceProbes(**{"proc": proc, "sleep": lambda s: None} | fakes)
 
 
 def stub_self_update() -> None:

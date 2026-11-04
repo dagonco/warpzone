@@ -9,6 +9,7 @@ from warpzone import artwork, playstate_device, safefile
 from warpzone.config import Config
 from warpzone.model import ESDE_ID, MEDIA_ID, device_specs
 from warpzone.paths import expand_home
+from warpzone.probes import REAL_PROBES, DeviceProbes
 from warpzone.profiles import Profile
 from warpzone.provision_emulators import busy
 from warpzone.report import Reporter
@@ -80,7 +81,7 @@ def ensure_gamelists(
     rep: Reporter,
     *,
     dry_run: bool,
-    proc: Path = Path("/proc"),
+    probes: DeviceProbes = REAL_PROBES,
     play_state: bool = False,
 ) -> None:
     """Write the frontend's gamelists from the scraped data that Syncthing delivered.
@@ -172,7 +173,7 @@ def ensure_gamelists(
         publish(applied=True)
         return
     label, what = "EmulationStation", "its gamelists"
-    if busy(rule.process, label, what, again, rep, proc):
+    if busy(rule.process, label, what, again, rep, probes):
         publish(applied=False)
         return
     # First the ledger: a run cut short between the two loses at worst the plays made in that
@@ -186,7 +187,7 @@ def ensure_gamelists(
                 item.path,
                 item.data,
                 expect=stamps.get(item.path),
-                busy=lambda: busy(rule.process, label, what, again, rep, proc),  # it may start
+                busy=lambda: busy(rule.process, label, what, again, rep, probes),  # it may start
             )
             if outcome is safefile.Edit.BUSY:
                 return
@@ -209,7 +210,7 @@ def refresh_artwork(
     *,
     local: Client | None,
     dry_run: bool,
-    proc: Path = Path("/proc"),
+    probes: DeviceProbes = REAL_PROBES,
 ) -> None:
     """`frontend refresh`: bring the artwork scope up to date, then the gamelists."""
     layout = artwork_layout(profile, home)
@@ -225,6 +226,6 @@ def refresh_artwork(
         home,
         rep,
         dry_run=dry_run,
-        proc=proc,
+        probes=probes,
         play_state="play-state" in cfg.devices[name].folders,
     )

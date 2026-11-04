@@ -15,11 +15,10 @@ import fnmatch
 import json
 import os
 import re
-import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -29,6 +28,7 @@ from warpzone.config import DEFAULT_MAX_GIB, DEFAULT_RESCAN_TIMEOUT, Config
 from warpzone.errors import WarpzoneError
 from warpzone.model import FolderSpec, device_specs
 from warpzone.paths import expand_home
+from warpzone.probes import REAL_PROBES, DeviceProbes
 from warpzone.profiles import Profile
 from warpzone.provision_folders import in_sync
 from warpzone.report import Reporter
@@ -170,13 +170,12 @@ def rescan(
     timeout: float,
     poll: float,
     grace: float,
-    sleep: Callable[[float], None] = time.sleep,
-    clock: Callable[[], float] = time.monotonic,
+    probes: DeviceProbes = REAL_PROBES,
 ) -> None:
     """Full rescan, then wait for it. Ignore flags are only refreshed by a full scan."""
     before = client.db_status(folder_id).get("stateChanged")
     client.scan(folder_id)
-    start = clock()
+    start = probes.clock()
     seen = False
     while True:
         st = client.db_status(folder_id)
@@ -187,12 +186,12 @@ def rescan(
         # A scan of a small folder can start and end between two polls, so a changed
         # timestamp (or the grace period) also counts as "it ran".
         if state not in SCANNING and (
-            seen or st.get("stateChanged") != before or clock() - start >= grace
+            seen or st.get("stateChanged") != before or probes.clock() - start >= grace
         ):
             return
-        if clock() - start >= timeout:
+        if probes.clock() - start >= timeout:
             raise PruneError(f"the rescan did not finish within {timeout:.0f}s")
-        sleep(poll)
+        probes.sleep(poll)
 
 
 def _norm(path: str) -> str:
@@ -208,8 +207,7 @@ def inspect_folder(
     rescan_timeout: float,
     poll: float,
     grace: float,
-    sleep: Callable[[float], None],
-    clock: Callable[[], float],
+    probes: DeviceProbes,
 ) -> FolderReport:
     """Check the folder is in its normal whitelisted state, rescan, classify every file."""
     current = configured.get(spec.id)
@@ -239,9 +237,7 @@ def inspect_folder(
     if waiting:
         raise PruneError(f"{', '.join(waiting)} not in sync with the hub yet")
 
-    rescan(
-        client, spec.id, timeout=rescan_timeout, poll=poll, grace=grace, sleep=sleep, clock=clock
-    )
+    rescan(client, spec.id, timeout=rescan_timeout, poll=poll, grace=grace, probes=probes)
 
     skip = {
         _norm(expand_home(f.get("path", ""), home))
@@ -388,8 +384,7 @@ def prune_device(
     rescan_timeout: float = DEFAULT_RESCAN_TIMEOUT,
     poll: float = 1.0,
     grace: float = 5.0,
-    sleep: Callable[[float], None] = time.sleep,
-    clock: Callable[[], float] = time.monotonic,
+    probes: DeviceProbes = REAL_PROBES,
 ) -> int:
     """Report (default) or delete leftovers in every whitelisted folder. Returns problems."""
     device = cfg.devices[name]
@@ -421,8 +416,7 @@ def prune_device(
                 rescan_timeout=rescan_timeout,
                 poll=poll,
                 grace=grace,
-                sleep=sleep,
-                clock=clock,
+                probes=probes,
             )
         except PruneError as exc:
             rep.warn(f"{spec.id}: skipped, {exc}")
