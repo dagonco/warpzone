@@ -1,11 +1,11 @@
 ---
 name: release
-description: Use when the maintainer wants to publish a warpzone release or release candidate (vX.Y.Z or vX.Y.ZrcN), cut a version, tag main, or check a release that was published. Follows docs/releasing.md exactly.
+description: Use when the maintainer wants to publish a warpzone release or release candidate (vX.Y.Z or vX.Y.ZrcN), cut a version, tag main, or check a release that was published. Follows the releasing guide (website/src/content/docs/development/releasing.md) exactly.
 ---
 
 # Publish a release
 
-Follow [releasing.md](../../../docs/releasing.md) exactly; it is the contract and wins over this summary. Releases are published by pushing an annotated (or signed) tag on `main`, which triggers `.github/workflows/release.yml`. Nothing goes to PyPI.
+Follow [releasing.md](../../../website/src/content/docs/development/releasing.md) exactly; it is the contract and wins over this summary. Releases are published by pushing an annotated (or signed) tag on `main`, which triggers `.github/workflows/release.yml`. Nothing goes to PyPI.
 
 `main` is protected: changes land through a pull request, squash-merged, with all CI checks green. No force pushes, no direct pushes to `main`. Commit messages are a single imperative title line, no body, no trailers. Do not touch `.github/workflows/`.
 
@@ -52,8 +52,8 @@ Confirm with the user first: the version and that it should ship now. Releases a
 
    Expect the wheel, the sdist and `SHA256SUMS`, the changelog section as notes, and `isPrerelease` true for an rc and false for a stable release.
 
-Devices with the updater timer fetch once a day and move to the new tag at the tick after that ([self-update.md](../../../docs/self-update.md)).
+Devices with the updater timer fetch once a day and move to the new tag at the tick after that ([self-update.md](../../../website/src/content/docs/operation/self-update.md)).
 
 ## When it fails
 
-See "When a release fails" in [releasing.md](../../../docs/releasing.md#when-a-release-fails). In short: if `verify` fails, nothing was published; delete the tag locally and on the remote (`git tag -d vX.Y.Z`, `git push origin :refs/tags/vX.Y.Z`), fix it through a normal pull request and tag again, each with the user's OK. For transient `build` or `release` failures re-run the failed jobs. A wrong release whose code is bad is never fixed by moving the tag: publish a new patch version, and withdraw the bad one with a signed `retired/vX.Y.Z` tag if needed ([Retiring a release](../../../docs/releasing.md#retiring-a-release)).
+See "When a release fails" in [releasing.md](../../../website/src/content/docs/development/releasing.md#when-a-release-fails). In short: if `verify` fails, nothing was published; delete the tag locally and on the remote (`git tag -d vX.Y.Z`, `git push origin :refs/tags/vX.Y.Z`), fix it through a normal pull request and tag again, each with the user's OK. For transient `build` or `release` failures re-run the failed jobs. A wrong release whose code is bad is never fixed by moving the tag: publish a new patch version, and withdraw the bad one with a signed `retired/vX.Y.Z` tag if needed ([Retiring a release](../../../website/src/content/docs/development/releasing.md#retiring-a-release)).
