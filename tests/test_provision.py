@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from typing import Any
-from unittest import addModuleCleanup, mock
+from unittest import mock
 
 from support import (
     API_KEY,
@@ -17,6 +17,7 @@ from support import (
     FakeSyncthing,
     config_data,
     make_config,
+    stub_self_update,
 )
 from warpzone import esde
 from warpzone import provision as provision_mod
@@ -37,12 +38,7 @@ from warpzone.syncthing import Client
 PROFILES = {"steamos-emudeck": load_profile("steamos-emudeck")}
 
 
-def setUpModule() -> None:
-    """provision_device would install the updater and its timer: tests/test_update_timer.py
-    covers that."""
-    patcher = mock.patch.object(provision_mod, "ensure_self_update")
-    patcher.start()
-    addModuleCleanup(patcher.stop)
+setUpModule = stub_self_update
 
 
 def reporter() -> tuple[Reporter, list[str]]:

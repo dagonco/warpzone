@@ -29,8 +29,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import BinaryIO
 
-from warpzone import inbox, inbox_console_iso
-from warpzone.inbox import Context, ItemFailure, ItemResult, Options, Staged, UnitResult
+from warpzone import inbox_console_iso, inbox_core
+from warpzone.inbox_core import Context, ItemFailure, ItemResult, Options, Staged, UnitResult
 
 SYSTEM = "n3ds"  # the ES-DE system folder inside library/roms/
 CLAIMED_SUFFIXES = (".3ds", ".cci")
@@ -151,7 +151,7 @@ def place_image(ctx: Context, path: Path, rel: str, verdict: Verdict) -> UnitRes
             if not ctx.opts.apply:
                 res.outcome = "exists"
                 res.notes.append("already in the library (content is compared with --apply)")
-            elif inbox.destination_verdict(True, inbox_console_iso.same_file(dest, path)) == (
+            elif inbox_core.destination_verdict(True, inbox_console_iso.same_file(dest, path)) == (
                 "already"
             ):
                 res.outcome = "already"
@@ -183,7 +183,7 @@ class N3dsHandler:
         return any(claimed_name(n) for n in inbox_console_iso.names_in(ctx, item))
 
     def process(self, ctx: Context, item: Path, work: Path, result: ItemResult) -> None:
-        staged, notes, failures = inbox.stage_item(item, work, ctx.tools)
+        staged, notes, failures = inbox_core.stage_item(item, work, ctx.tools)
         result.notes.extend(notes)
         if failures:
             result.reasons.extend(failures)
@@ -193,7 +193,7 @@ class N3dsHandler:
         for s in staged:
             if claimed_name(s.path.name):
                 self._one(ctx, s, targets, result)
-            elif s.path.suffix.lower() not in inbox.SIDECAR_EXTENSIONS:
+            elif s.path.suffix.lower() not in inbox_core.SIDECAR_EXTENSIONS:
                 others.append(s.rel)
         if others:
             shown = ", ".join(others[:5]) + (", ..." if len(others) > 5 else "")

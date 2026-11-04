@@ -10,9 +10,11 @@ from collections.abc import Sequence
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
+from unittest import addModuleCleanup, mock
 from urllib.parse import parse_qs, urlsplit
 
 from warpzone import ignores
+from warpzone import provision as provision_mod
 from warpzone.config import Config, parse_config
 from warpzone.profiles import load_profile
 
@@ -62,6 +64,15 @@ class FakeProc:
         """Remove every process, keeping the (now empty) /proc."""
         shutil.rmtree(self.path)
         self.path.mkdir()
+
+
+def stub_self_update() -> None:
+    """For a test module's `setUpModule`: `provision_device` would install the updater and its
+    timer, which runs a real self-test of the script (seconds, inside a clone).
+    tests/test_update_timer.py covers that. Undone when the module ends."""
+    patcher = mock.patch.object(provision_mod, "ensure_self_update")
+    patcher.start()
+    addModuleCleanup(patcher.stop)
 
 
 def config_data(api_url: str = "http://127.0.0.1:1") -> dict[str, Any]:

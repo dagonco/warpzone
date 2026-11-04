@@ -455,7 +455,7 @@ class ExitCodeTests(unittest.TestCase):
 
     def test_the_usage_errors_of_the_commands_exit_2(self) -> None:
         from warpzone.bios import BiosError
-        from warpzone.inbox import InboxError
+        from warpzone.inbox_core import InboxError
 
         for cls in (BiosError, InboxError):
             with self.subTest(cls.__name__):
