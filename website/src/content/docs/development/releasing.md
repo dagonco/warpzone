@@ -22,7 +22,7 @@ Versions follow [SemVer](https://semver.org/). The single source of the version 
    git push origin vX.Y.Z
    ```
 
-8. Watch the `release` workflow in the Actions tab, then open the release and check its notes and assets. Devices with the updater timer ([Updating a device](/warpzone/operation/self-update/)) fetch once a day and check out the new tag at the tick after that.
+8. Watch the `release` workflow in the Actions tab, then open the release and check its notes and assets. Devices with the updater timer ([Updating a device](/warpzone/operation/self-update/)) fetch every hour on the `rc` channel and every 12 hours on `stable`, and check out the new tag in that tick (or later, if the menu is open); `warpzone self-update --now` on a device looks at once.
 
 ## What the workflow does
 
@@ -84,7 +84,7 @@ git tag -s retired/v0.3.0 v0.3.0 -m "settings apply overwrote a captured key"
 git push origin retired/v0.3.0
 ```
 
-The tag must be named `retired/` plus the exact tag it withdraws and point at that release (its tag or its commit, which is the same to a device): a retirement made for another name or another release is ignored, and so is a signed object published under another name. There is no file to edit and no pull request: the tag is the retirement, and devices take it with their daily fetch. The `release` workflow does not run for it (it only runs for `v*.*.*`). When the allowed signers hold a key, a retirement that is not signed by one of them (or is only a lightweight tag) is ignored, so nobody without the key can pull a good version. From then on:
+The tag must be named `retired/` plus the exact tag it withdraws and point at that release (its tag or its commit, which is the same to a device): a retirement made for another name or another release is ignored, and so is a signed object published under another name. There is no file to edit and no pull request: the tag is the retirement, and devices take it with their next fetch. The `release` workflow does not run for it (it only runs for `v*.*.*`). When the allowed signers hold a key, a retirement that is not signed by one of them (or is only a lightweight tag) is ignored, so nobody without the key can pull a good version. From then on:
 
 - no device picks the tag as a target;
 - a device that runs it moves to the best release that is not retired, even a lower one, after verifying it like any update;

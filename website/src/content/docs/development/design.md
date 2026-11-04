@@ -811,7 +811,7 @@ error messages; the RetroAchievements key is read from `RA_API_KEY`, never from 
 | `warpzone bios` | on a device or the hub | Reports which BIOS and firmware files a library has, lacks or has wrong (see [BIOS check](#bios-check)). Read-only. Exit 1 if a required item is missing or wrong. |
 | `warpzone inbox` | a desktop that mounts the hub's share | Identifies, converts and files new games dropped in `inbox/` (see [Inbox](#inbox)). Report only by default, `--apply` acts. Exit 1 if any item needs review. |
 | `sh <clone>/warpzone/data/updater.sh install <device>` | on the device, from a fresh `git clone` | The one way to install a device: checks out the best release of the channel, makes the venv next to the clone, and runs `provision device` (see [Self-update](#self-update)). |
-| `warpzone self-update` | on the device | Runs one tick of the updater script's live copy (`sh ~/.local/share/warpzone/updater/updater.sh tick`), as the timer does, and exits with its code (see [Self-update](#self-update)). Needs no config. Without a live copy it says so and exits 1. |
+| `warpzone self-update` | on the device | Runs one tick of the updater script's live copy (`sh ~/.local/share/warpzone/updater/updater.sh tick`), as the timer does, and exits with its code (see [Self-update](#self-update)); `--now` passes `--fetch-now`. Needs no config. Without a live copy it says so and exits 1. |
 | `warpzone health [device]` | on the device | Checks that this version works here: loads the config and the profiles, runs `settings apply`, `play-state sync`, `links sync` and `frontend refresh` as dry runs within the 15 seconds ES-DE gives its startup scripts, and checks that the startup scripts and the units exist with an interpreter that imports warpzone (see [`warpzone health`](#warpzone-health)). Writes no user data, needs no DATs or tools. Exit 0 when it works, 1 when a check failed. |
 | `warpzone doctor` | any machine | Checklist of this machine: tools, config, local Syncthing, DATs, hub folder (see [Doctor](#doctor)). Offline, never changes anything. Exit 1 if a required check fails. |
 | `warpzone settings apply` | on the device | Writes the layered emulator settings into each emulator's config file: only the layered keys, with a backup, never while the emulator runs (see [Emulator settings](#emulator-settings)). Run by ES-DE at startup and by hand. |
@@ -2243,7 +2243,7 @@ do.
 | Ordering of release candidates (`tag_key`, `version_key`) | Implemented |
 | `provision device --unattended` and its exit code `3` | Implemented |
 | `warpzone health` | Implemented |
-| `warpzone/data/updater.sh tick`: lock, `enabled`, deferral while the menu is open (72 hours at most), fetch once a day, the target (the best valid tag, see Channels), the three-step verification with a time limit, the differential verdict and its back-off, `bad/<tag>`, the state file, the attempts loop, probation, the kind of checkout, the stale `index.lock`, `menu` and `selftest` | Implemented (`tests/test_updater_sh.py`) |
+| `warpzone/data/updater.sh tick`: lock, `enabled`, deferral while the menu is open (72 hours at most), fetch at a pace set by the channel, `tick --fetch-now`, the target (the best valid tag, see Channels), the three-step verification with a time limit, the differential verdict and its back-off, `bad/<tag>`, the state file, the attempts loop, probation, the kind of checkout, the stale `index.lock`, `menu` and `selftest` | Implemented (`tests/test_updater_sh.py`) |
 | In `updater.sh`: the `rc` channel, retirement by `retired/vX.Y.Z` tags, `pin`, and the check of tag signatures against the `allowed_signers` of the running version | Implemented (`tests/test_updater_sh.py`) |
 | `updater.sh install` (the human install from a `git clone`), the Python repair (`venv --without-pip --clear`, a `.pth` to the clone, the `bin/warpzone` shim), `UPDATER_ABI` | Implemented (`tests/test_updater_sh.py`) |
 | The live copy `~/.local/share/warpzone/updater/updater.sh` (`provision_updater.ensure_updater`: atomic, after `sh -n` and `selftest`, `.prev` kept, never a lower ABI) and the settings file written by `provision device` (`selfupdate.render_conf`) | Implemented (`tests/test_update_timer.py`, `tests/test_selfupdate.py`) |
@@ -2272,9 +2272,12 @@ without systemd can start the same `tick` from another launcher. Each tick, in t
 2. Read the configuration; if the device is not `enabled` (`self_update = false`), stop.
 3. If the menu is open, defer (see below).
 4. Look for an interpreter that can run warpzone (`no-python` when none).
-5. Fetch the remote at most once a day. The moment is offset by a number derived from the
-   device name (a delay of up to a twenty-fourth of the interval, `cksum` of the name modulo
-   that), so devices do not all arrive together. A fetch that fails is logged and tried again
+5. Fetch the remote at most once per interval: one hour on the `rc` channel, 12 hours on
+   `stable` or with a pin (a pin only needs new tags to find its target);
+   `WZ_FETCH_INTERVAL` sets another interval, and `tick --fetch-now` fetches at once. The
+   moment is offset by a number derived from the device name (a delay of up to a
+   twenty-fourth of the interval, `cksum` of the name modulo that), so devices do not all
+   arrive together. A fetch that fails is logged and tried again
    at the next tick; the tags already fetched are still used. Then repair the venv when it no
    longer works (see "Python repair" under Self-update).
 6. Pick the target tag. When there is one, switch to it and verify it. When there is none,
@@ -2607,8 +2610,8 @@ annotated `retired/vX.Y.Z` (or `retired/vX.Y.ZrcN`) whose message is the reason,
 the retired release's commit and signed like a release. There is no file to edit: a file in
 `main` would let whoever controls the account (but not the signing key) withdraw the good
 version and force a device down. The script reads the retirements from the clone's tags
-(`git for-each-ref refs/tags/retired/`), which it takes with the daily fetch, so a device sees
-one within a day. When the allowed signers hold a key, a retirement counts only if its tag
+(`git for-each-ref refs/tags/retired/`), which it takes with its regular fetch, so a device sees
+one within its fetch interval (12 hours at most). When the allowed signers hold a key, a retirement counts only if its tag
 passes the same check as a release (below); without keys it counts unsigned. A lightweight
 tag, a name that is not a release or a candidate (`retired/latest`, `retired/v0.3.0-rc1`), a tag
 that does not sit on the commit of the release it names (what it points at is peeled, so
@@ -2919,7 +2922,7 @@ logic is unit-tested without a network.
   over, the second attempt, the give-up with `retry_after`), a menu that opens during the
   check, the 72 hour limit, probation at the next boot, the kinds of checkout (`dev`, `dirty`,
   a loose commit, an adopted branch that comes back to its branch), the stale `index.lock`, the
-  daily fetch, state and settings that contain shell syntax, `install` (the best valid release
+  fetch interval of each channel and `--fetch-now`, state and settings that contain shell syntax, `install` (the best valid release
   of the channel that carries the script, the venv without pip with its `.pth` and shim,
   `provision device` and its arguments, every refusal before any change) and the venv repair (a
   venv that is gone, whose Python is gone, that cannot find the clone or whose `.pth` points

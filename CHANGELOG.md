@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ## [Unreleased]
 
+### Added
+
+- `warpzone self-update --now` (and `updater.sh tick --fetch-now`) looks for a new release right away instead of waiting for the next fetch; it still waits while the menu is open.
+
+### Changed
+
+- The updater looks for new releases every hour on the `rc` channel and every 12 hours on `stable` (or with a pin), instead of once a day, so a release candidate reaches devices soon after it is published.
+
 ## [0.3.0rc2] - 2026-11-04
 
 Second release candidate of 0.3.0: the documentation moves to a website, the updater gets safer around signatures and rollbacks, and a large internal clean-up lands with no change in behaviour.

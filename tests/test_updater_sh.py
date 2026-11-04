@@ -419,8 +419,8 @@ class Rig:
         proc.output = out.read_text()  # type: ignore[attr-defined]
         return proc
 
-    def tick(self, **kwargs) -> subprocess.CompletedProcess:
-        return self.run("tick", **kwargs)
+    def tick(self, *args: str, **kwargs) -> subprocess.CompletedProcess:
+        return self.run("tick", *args, **kwargs)
 
     def state(self) -> dict[str, str]:
         path = self.state_dir / "state"
@@ -510,14 +510,68 @@ class UpdateTests(UpdaterCase):
         self.assertEqual(rig.on_tag(), "v0.2.0")
         self.assertEqual(rig.state()["good_tag"], "v0.2.0")
 
-    def test_the_remote_is_fetched_at_most_once_a_day(self) -> None:
+    def test_an_interval_in_the_environment_wins_over_the_channel(self) -> None:
         rig = self.rig
+        rig.write_conf(channel="rc")
         self.assertTick(rig.tick(WZ_FETCH_INTERVAL=str(DAY)), 0)
         rig.release("0.2.0")
         self.assertTick(rig.tick(now=NOW + HOUR, WZ_FETCH_INTERVAL=str(DAY)), 0)
         self.assertEqual(rig.on_tag(), "v0.1.0")
         self.assertTick(rig.tick(now=NOW + 26 * HOUR, WZ_FETCH_INTERVAL=str(DAY)), 0)
         self.assertEqual(rig.on_tag(), "v0.2.0")
+
+    def test_the_rc_channel_looks_for_a_release_every_hour(self) -> None:
+        rig = self.rig
+        rig.write_conf(channel="rc")
+        self.assertTick(rig.tick(WZ_FETCH_INTERVAL=""), 0)
+        rig.release("0.2.0rc1")
+        self.assertTick(rig.tick(now=NOW + HOUR // 2, WZ_FETCH_INTERVAL=""), 0)
+        self.assertEqual(rig.on_tag(), "v0.1.0")
+        # The delay of each device is below a twenty-fourth of the interval.
+        self.assertTick(rig.tick(now=NOW + HOUR + HOUR // 24 + 1, WZ_FETCH_INTERVAL=""), 0)
+        self.assertEqual(rig.on_tag(), "v0.2.0rc1")
+
+    def test_the_stable_channel_looks_for_a_release_every_twelve_hours(self) -> None:
+        rig = self.rig
+        self.assertTick(rig.tick(WZ_FETCH_INTERVAL=""), 0)
+        rig.release("0.2.0")
+        self.assertTick(rig.tick(now=NOW + 11 * HOUR, WZ_FETCH_INTERVAL=""), 0)
+        self.assertEqual(rig.on_tag(), "v0.1.0")
+        self.assertTick(rig.tick(now=NOW + 12 * HOUR + HOUR // 2 + 1, WZ_FETCH_INTERVAL=""), 0)
+        self.assertEqual(rig.on_tag(), "v0.2.0")
+
+    def test_a_pin_looks_for_tags_at_the_stable_pace(self) -> None:
+        rig = self.rig
+        rig.write_conf(channel="rc", pin="v0.1.0")
+        self.assertTick(rig.tick(WZ_FETCH_INTERVAL=""), 0)
+        self.assertEqual(rig.state()["last_fetch"], str(NOW))
+        self.assertTick(rig.tick(now=NOW + 2 * HOUR, WZ_FETCH_INTERVAL=""), 0)
+        self.assertEqual(rig.state()["last_fetch"], str(NOW))
+        later = NOW + 12 * HOUR + HOUR // 2 + 1
+        self.assertTick(rig.tick(now=later, WZ_FETCH_INTERVAL=""), 0)
+        self.assertEqual(rig.state()["last_fetch"], str(later))
+
+    def test_fetch_now_looks_for_a_release_before_it_is_due(self) -> None:
+        rig = self.rig
+        self.assertTick(rig.tick(WZ_FETCH_INTERVAL=""), 0)
+        rig.release("0.2.0")
+        self.assertTick(rig.tick("--fetch-now", now=NOW + 60, WZ_FETCH_INTERVAL=""), 0)
+        self.assertEqual(rig.on_tag(), "v0.2.0")
+
+    def test_fetch_now_still_waits_while_the_menu_is_open(self) -> None:
+        rig = self.rig
+        self.assertTick(rig.tick(WZ_FETCH_INTERVAL=""), 0)
+        rig.release("0.2.0")
+        rig.proc.add(123, "es-de", ["es-de"])
+        proc = rig.tick("--fetch-now", now=NOW + 60, WZ_FETCH_INTERVAL="")
+        self.assertTick(proc, 0)
+        self.assertIn("menu is open", proc.output)
+        self.assertEqual(rig.on_tag(), "v0.1.0")
+
+    def test_tick_refuses_an_unknown_option(self) -> None:
+        proc = self.rig.tick("--bogus")
+        self.assertEqual(proc.returncode, 2, proc.output)
+        self.assertIn("usage: updater.sh tick [--fetch-now]", proc.output)
 
     def test_a_disabled_device_is_left_alone(self) -> None:
         rig = self.rig

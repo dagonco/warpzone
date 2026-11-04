@@ -50,9 +50,10 @@ then writes `warpzone-clone.pth` (the clone's path) in its `site-packages` and `
 
 ```bash
 warpzone self-update            # on the device
+warpzone self-update --now      # also look for a new release right away
 ```
 
-It runs one tick of the live copy (`sh ~/.local/share/warpzone/updater/updater.sh tick`), exactly as the timer does, prints what the script prints and exits with its code. It needs no config and has no `--dry-run`. Without a live copy it says so and exits `1`. What a tick does is in [The updater script](#the-updater-script).
+It runs one tick of the live copy (`sh ~/.local/share/warpzone/updater/updater.sh tick`), exactly as the timer does, prints what the script prints and exits with its code. `--now` makes that tick fetch the remote even when the interval below has not passed, for example to take a release candidate as soon as it is published; the tick still waits while the menu is open. It needs no config and has no `--dry-run`. Without a live copy it says so and exits `1`. What a tick does is in [The updater script](#the-updater-script).
 
 ### Log
 
@@ -112,6 +113,7 @@ Each run of `provision device` also renews the live copy of the script and its s
 
 ```bash
 sh warpzone/data/updater.sh tick       # one run of the timer
+sh warpzone/data/updater.sh tick --fetch-now   # the same, fetching even when not due
 sh warpzone/data/updater.sh install DEVICE   # the install above
 sh warpzone/data/updater.sh menu       # open (exit 0), closed (1) or unknown (2)
 sh warpzone/data/updater.sh selftest   # its tools and helpers; prints "selftest: ok abi=N"
@@ -122,7 +124,7 @@ It reads `~/.local/state/warpzone/updater/conf` and keeps its state in `state` a
 
 1. Takes a lock and stops if another tick holds it, or if `enabled` is `false`.
 2. Defers if the frontend (ES-DE) is running, for at most 72 hours from the first deferral; after that it goes on.
-3. Looks for a Python 3.11 or newer, fetches the remote at most once a day, then repairs the venv if it no longer works (see [Python repair](#python-repair)), and picks the best tag of its channel (`stable`: `vX.Y.Z`; `rc`: those and `vX.Y.ZrcN`, where `v0.3.0rc1` < `v0.3.0rc2` < `v0.3.0`) that is newer than the checkout, is an ancestor of `origin/main`, carries the same `__version__`, is not marked bad, is not retired (a signed tag `retired/vX.Y.Z`, see [Releasing](/warpzone/development/releasing/#retiring-a-release)) and, when the `warpzone/data/allowed_signers` of the version it runs holds a key, has a tag signed by it with SSH. What was chosen at one tick is checked again at the next, so a version that is retired, or off the channel, or no longer signed, while it was being tried is dropped. It never goes down, except when the version it runs has been retired: then it goes to the best valid one, even a lower one. With a `pin` the pinned tag is the target instead, whatever the channel, the running version or a retirement; the log and the `pin_retired` key of the state say when the pin is retired.
+3. Looks for a Python 3.11 or newer, fetches the remote at most once an hour on the `rc` channel and once every 12 hours on `stable` or with a pin (each device a little later, by up to a twenty-fourth of the interval; `WZ_FETCH_INTERVAL` sets another interval, `tick --fetch-now` fetches at once), then repairs the venv if it no longer works (see [Python repair](#python-repair)), and picks the best tag of its channel (`stable`: `vX.Y.Z`; `rc`: those and `vX.Y.ZrcN`, where `v0.3.0rc1` < `v0.3.0rc2` < `v0.3.0`) that is newer than the checkout, is an ancestor of `origin/main`, carries the same `__version__`, is not marked bad, is not retired (a signed tag `retired/vX.Y.Z`, see [Releasing](/warpzone/development/releasing/#retiring-a-release)) and, when the `warpzone/data/allowed_signers` of the version it runs holds a key, has a tag signed by it with SSH. What was chosen at one tick is checked again at the next, so a version that is retired, or off the channel, or no longer signed, while it was being tried is dropped. It never goes down, except when the version it runs has been retired: then it goes to the best valid one, even a lower one. With a `pin` the pinned tag is the target instead, whatever the channel, the running version or a retirement; the log and the `pin_retired` key of the state say when the pin is retired.
 4. Checks the tag out (after checking there is room for it) and verifies it in three steps with a time limit each, and 25 minutes for the whole tick: warpzone imports from the checkout and `--version` is the tag; `provision device <device> --unattended`; `warpzone health <device>`. A step that is cut off takes its whole process group with it.
 5. If a step fails it goes back to the version it came from and runs the same check. If that passes, the new tag is checked once more, and only if it fails again is it bad and never tried again (`bad/<tag>`). If the previous version fails too, the environment is at fault: the tag is not blamed and the device waits 1, 2, 4 and then 7 days. Running out of the tick's time counts as the environment too.
 6. A power cut or a kill halfway never counts against a tag: after two attempts without a verdict it goes back and waits a day. A checkout that was cut in the middle is finished again by the next tick, as long as the only changed files are the update's own.

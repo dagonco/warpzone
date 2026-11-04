@@ -538,6 +538,15 @@ if __name__ == "__main__":
 
 
 class SelfUpdateCommandTests(unittest.TestCase):
+    def test_now_asks_for_a_fetch_and_plain_does_not(self) -> None:
+        with mock.patch("warpzone.selfupdate.run_tick", return_value=0) as tick:
+            code, _, err = run("self-update", "--now")
+            self.assertEqual(code, 0, err)
+            self.assertTrue(tick.call_args.kwargs["fetch_now"])
+            code, _, err = run("self-update")
+            self.assertEqual(code, 0, err)
+            self.assertFalse(tick.call_args.kwargs["fetch_now"])
+
     def test_it_runs_the_live_copy_of_the_updater_and_needs_no_config(self) -> None:
         with (
             tempfile.TemporaryDirectory() as tmp,
