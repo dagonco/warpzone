@@ -10,7 +10,7 @@ import unittest.mock
 from pathlib import Path
 
 import test_shadps4
-from support import DECK_ID, HUB_ID, FakeProc, stub_self_update
+from support import DECK_ID, HUB_ID, FakeProc, device_probes, stub_self_update
 from test_cli import run, write_config
 from test_doctor import by_name
 from test_shadps4 import PROFILE
@@ -434,7 +434,8 @@ class ProvisionTests(Helpers, test_shadps4.Device, unittest.TestCase):
         self.script = self.esde / "scripts" / "startup" / esde.LINKS_SCRIPT
 
     def prov(self, **kw):
-        return self.provision(import_check=lambda python: True, python="/usr/bin/python3", **kw)
+        probes = device_probes(self.proc.path, import_check=lambda python: True)
+        return self.provision(probes=probes, python="/usr/bin/python3", **kw)
 
     def test_provision_links_the_games_and_installs_the_startup_script(self) -> None:
         self.game()

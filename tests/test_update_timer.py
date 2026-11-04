@@ -9,17 +9,14 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from support import API_KEY, FakeSyncthing, config_data
+from support import API_KEY, FakeSyncthing, config_data, device_probes
 from test_provision import reporter
 from warpzone import selfupdate, updatetimer
 from warpzone.config import parse_config
+from warpzone.probes import DeviceProbes
 from warpzone.profiles import load_profile
-from warpzone.provision import (
-    ensure_self_update,
-    ensure_update_timer,
-    ensure_updater,
-    provision_device,
-)
+from warpzone.provision import provision_device
+from warpzone.provision_updater import ensure_self_update, ensure_update_timer, ensure_updater
 from warpzone.syncthing import Client
 
 TIMER = "warpzone-self-update.timer"
@@ -122,7 +119,7 @@ class EnsureTests(TmpHome):
             self.rep,
             dry_run=dry_run,
             updater=updater or self.updater,
-            systemctl=systemctl,
+            probes=DeviceProbes(systemctl=systemctl),
         )
 
     def test_installs_and_enables_the_timer(self) -> None:
@@ -191,9 +188,8 @@ class EnsureTests(TmpHome):
             mock.Mock(side_effect=FileNotFoundError("systemctl")),
         ):
             rep, _ = reporter()
-            ensure_update_timer(
-                self.home, rep, dry_run=False, updater=self.updater, systemctl=ctl
-            )  # fmt: skip
+            probes = DeviceProbes(systemctl=ctl)
+            ensure_update_timer(self.home, rep, dry_run=False, updater=self.updater, probes=probes)
             self.assertEqual(len(rep.warnings), 1)
             self.assertIn("systemd", rep.warnings[0])
             self.assertIn("updater.sh tick", rep.warnings[0])
@@ -306,10 +302,14 @@ class EnsureUpdaterTests(TmpHome):
     def test_a_script_that_hangs_in_its_selftest_is_cut_off(self) -> None:
         text = "UPDATER_ABI=2\ncase ${1:-} in selftest) sleep 30 ;; esac\n"
         self.source.write_text(text)
-        with mock.patch("warpzone.provision.UPDATER_CHECK_SECONDS", 1):
+        with mock.patch("warpzone.provision_updater.UPDATER_CHECK_SECONDS", 1):
             self.assertFalse(ensure_updater(self.home, self.rep, dry_run=False, source=self.source))
         self.assertIn("selftest", self.rep.warnings[0])
         self.assertFalse(self.live.exists())
+
+    def checked_by(self, script_check) -> bool:
+        probes = DeviceProbes(script_check=script_check)
+        return ensure_updater(self.home, self.rep, dry_run=False, source=self.source, probes=probes)
 
     def runner(self, during=None):
         """A fake `sh -n` and `selftest`; `during` runs at the moment of the selftest."""
@@ -329,9 +329,7 @@ class EnsureUpdaterTests(TmpHome):
         self.live.parent.mkdir(parents=True)
         self.source.write_text(SCRIPT_V1)
         run = self.runner(lambda: names.append(self.leftovers()))
-        self.assertTrue(
-            ensure_updater(self.home, self.rep, dry_run=False, source=self.source, run=run)
-        )
+        self.assertTrue(self.checked_by(run))
         (temp,) = names[0]
         self.assertNotEqual(temp, ".updater.sh.new")
         self.assertTrue(temp.startswith(".updater.sh."), temp)
@@ -342,9 +340,7 @@ class EnsureUpdaterTests(TmpHome):
         self.offer(SCRIPT_V1)
         self.source.write_text(SCRIPT_V1 + "# a fix\n")
         run = self.runner(lambda: self.live.write_text(SCRIPT_V2))
-        self.assertTrue(
-            ensure_updater(self.home, self.rep, dry_run=False, source=self.source, run=run)
-        )
+        self.assertTrue(self.checked_by(run))
         self.assertEqual(self.live.read_text(), SCRIPT_V2)
         self.assertFalse((self.live.parent / "updater.sh.prev").exists())
         self.assertEqual(self.leftovers(), ["updater.sh"])
@@ -354,9 +350,7 @@ class EnsureUpdaterTests(TmpHome):
         self.source.write_text(SCRIPT_V1 + "# a fix\n")
         midway = SCRIPT_V1 + "# installed meanwhile\n"
         run = self.runner(lambda: self.live.write_text(midway))
-        self.assertTrue(
-            ensure_updater(self.home, self.rep, dry_run=False, source=self.source, run=run)
-        )
+        self.assertTrue(self.checked_by(run))
         self.assertTrue(self.live.read_text().endswith("# a fix\n"))
         self.assertEqual((self.live.parent / "updater.sh.prev").read_text(), midway)
 
@@ -423,11 +417,10 @@ class EnsureSelfUpdateTests(FakeSource):
             self.rep,
             dry_run=dry_run,
             python=PYTHON,
-            import_check=check,
             clone=clone or self.clone,
             config_path=Path("/home/deck/.config/warpzone/config.toml"),
             state_root=self.state_root,
-            systemctl=ctl,
+            probes=DeviceProbes(import_check=check, systemctl=ctl),
             updater_source=self.source,
         )
         return ctl
@@ -576,12 +569,11 @@ class ProvisionDeviceTests(FakeSource):
                 home=self.home,
                 wait_timeout=0.0,
                 poll=1.0,
-                sleep=lambda s: None,
                 python=PYTHON,
-                import_check=lambda p: True,
-                systemctl_run=ctl,
+                probes=device_probes(
+                    self.home / "no-proc", import_check=lambda p: True, systemctl=ctl
+                ),
                 state_root=self.state_root,
-                proc=self.home / "no-proc",
                 clone=self.clone,
                 updater_source=self.source,
             )

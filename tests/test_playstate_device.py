@@ -12,7 +12,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from support import API_KEY, HUB_ID, FakeProc, FakeSyncthing, config_data
+from support import API_KEY, HUB_ID, FakeProc, FakeSyncthing, config_data, device_probes
 from test_anbernic import ARK_ID
 from test_artwork import source_xml
 from test_artwork_device import Art
@@ -24,12 +24,11 @@ from warpzone.cli import main
 from warpzone.config import parse_config
 from warpzone.model import ESDE_ID, PLAY_STATE_ID, ModelError, device_specs, hub_specs
 from warpzone.playstate import Ledger, Record
+from warpzone.probes import DeviceProbes
 from warpzone.profiles import ProfileError, load_profile, parse_profile
-from warpzone.provision import (
-    ensure_play_state_script,
-    ensure_play_state_timer,
-    provision_device,
-)
+from warpzone.provision import provision_device
+from warpzone.provision_scripts import ensure_play_state_script
+from warpzone.provision_timers import ensure_play_state_timer
 from warpzone.syncthing import Client
 
 STEAM = load_profile("steamos-emudeck")
@@ -597,8 +596,7 @@ class WiringTests(unittest.TestCase):
             rep,
             dry_run=False,
             python="/opt/wz/bin/python",
-            import_check=lambda _: True,
-            proc=self.proc.path,
+            probes=device_probes(self.proc.path, import_check=lambda _: True),
             state_root=Path(self._tmp.name) / "state",
         )
         script = esde.script_path(self.home / "ES-DE", esde.PLAY_STATE_SCRIPT)
@@ -624,8 +622,7 @@ class WiringTests(unittest.TestCase):
         kw = {
             "dry_run": False,
             "python": "/opt/wz/bin/python",
-            "import_check": lambda _: True,
-            "systemctl": systemctl,
+            "probes": DeviceProbes(import_check=lambda _: True, user_systemctl=systemctl),
         }
         ensure_play_state_timer("deck", STEAM, self.home, rep, **kw)
         units = self.home / ".config/systemd/user"
@@ -662,11 +659,13 @@ class WiringTests(unittest.TestCase):
                         rep,
                         home=home,
                         python="/p",
-                        import_check=lambda _: True,
-                        proc=self.proc.path,
+                        probes=device_probes(
+                            self.proc.path,
+                            import_check=lambda _: True,
+                            user_systemctl=lambda _: True,
+                            flatpak=lambda _: (0, ""),
+                        ),
                         state_root=Path(self._tmp.name) / "state",
-                        systemctl=lambda _: True,
-                        flatpak_run=lambda _: (0, ""),
                     )
                     self.assertEqual(PLAY_STATE_ID in local.folders, wanted)
                 script = esde.script_path(home / "ES-DE", esde.PLAY_STATE_SCRIPT)

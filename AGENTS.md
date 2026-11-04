@@ -17,7 +17,7 @@ Guidance for coding agents working on this repository. Humans: see [README.md](R
 
 ## Layout
 
-See "Code layout" in [website/src/content/docs/development/design.md](website/src/content/docs/development/design.md). In short: `cli.py` wires argparse and exit codes; `config.py` and `profiles.py` load and validate TOML; `model.py` expands them into desired folder specs (pure); `syncthing.py` is the REST client; `provision.py`, `prune.py` and `bios.py` implement the commands; `warpzone/data/` (with `data/profiles/`) holds shipped TOML data.
+See "Code layout" in [website/src/content/docs/development/design.md](website/src/content/docs/development/design.md). In short: `cli.py` wires argparse and exit codes; `config.py` and `profiles.py` load and validate TOML; `model.py` expands them into desired folder specs (pure); `syncthing.py` is the REST client; `provision_hub.py`, `provision_device.py` (with the other `provision_*` modules; `provision.py` is only the name `cli` imports), `prune.py` and `bios.py` implement the commands; `probes.py` groups what a device command reads from the machine, so tests fake one object; `warpzone/data/` (with `data/profiles/`) holds shipped TOML data.
 
 ## Documentation website
 

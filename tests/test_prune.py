@@ -10,6 +10,7 @@ from unittest import mock
 
 from support import API_KEY, DECK_ID, DECK_LIBRARY_IGNORES, FakeSyncthing, make_config
 from test_cli import run, write_config
+from warpzone.probes import DeviceProbes
 from warpzone.profiles import load_profile
 from warpzone.prune import (
     Entry,
@@ -390,7 +391,14 @@ class RescanTests(unittest.TestCase):
         client = mock.Mock()
         client.db_status.side_effect = lambda _f: {"state": next(states), "stateChanged": "t"}
         slept: list[float] = []
-        rescan(client, "f", timeout=60, poll=1, grace=30, sleep=slept.append, clock=lambda: 0)
+        rescan(
+            client,
+            "f",
+            timeout=60,
+            poll=1,
+            grace=30,
+            probes=DeviceProbes(sleep=slept.append, clock=lambda: 0),
+        )
         client.scan.assert_called_once_with("f")
         self.assertEqual(slept, [1, 1, 1])
 
@@ -404,8 +412,7 @@ class RescanTests(unittest.TestCase):
             timeout=60,
             poll=1,
             grace=3,
-            sleep=lambda _s: None,
-            clock=lambda: next(ticks),
+            probes=DeviceProbes(sleep=lambda _s: None, clock=lambda: next(ticks)),
         )
 
     def test_error_state_and_timeout(self) -> None:
@@ -422,8 +429,7 @@ class RescanTests(unittest.TestCase):
                 timeout=5,
                 poll=0,
                 grace=0,
-                sleep=lambda _s: None,
-                clock=lambda: next(ticks),
+                probes=DeviceProbes(sleep=lambda _s: None, clock=lambda: next(ticks)),
             )
 
 

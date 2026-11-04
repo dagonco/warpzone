@@ -10,11 +10,19 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from support import API_KEY, DECK_ID, HUB_ID, FakeProc, FakeSyncthing, config_data, stub_self_update
+from support import (
+    API_KEY,
+    DECK_ID,
+    HUB_ID,
+    FakeProc,
+    FakeSyncthing,
+    config_data,
+    device_probes,
+    stub_self_update,
+)
 from test_doctor import by_name, context
 from test_provision import reporter
-from warpzone import provision as provision_mod
-from warpzone import shadps4
+from warpzone import settings_state, shadps4
 from warpzone.config import parse_config
 from warpzone.doctor import OK, WARN, Context, check_frontend
 from warpzone.profiles import ProfileError, load_profile, parse_profile
@@ -229,7 +237,7 @@ class Device:
     def after_backup(self, action):
         """Run `action(file)` right after the backup of the first file: the race the re-check
         right before the write is there for."""
-        real = provision_mod.settings_state.backup
+        real = settings_state.backup
         done: list[Path] = []
 
         def backup(path, *args, **kw):
@@ -239,7 +247,7 @@ class Device:
                 action(path)
             return result
 
-        return mock.patch.object(provision_mod.settings_state, "backup", backup)
+        return mock.patch.object(settings_state, "backup", backup)
 
     @staticmethod
     def mine(rep) -> list[str]:
@@ -253,7 +261,7 @@ class Device:
     def provision(self, *, dry_run=False, **kw):
         cfg = parse_config(config_data())
         rep, lines = reporter()
-        kw.setdefault("proc", self.proc.path)
+        kw.setdefault("probes", device_probes(self.proc.path))
         with FakeSyncthing(DECK_ID) as local:
             for name in ("patterns-common.stignore", "patterns-deck.stignore"):
                 local.arrives_after[("wz-library", name)] = 0
@@ -268,7 +276,6 @@ class Device:
                 home=self.home,
                 wait_timeout=0.0,
                 poll=1.0,
-                sleep=lambda s: None,
                 state_root=self.state,
                 **kw,
             )
@@ -348,7 +355,7 @@ class ProvisionTests(Device, unittest.TestCase):
 
     def test_without_proc_nothing_is_edited_and_it_says_why(self) -> None:
         before = self.json.read_text()
-        rep, _ = self.provision(proc=self.proc.path / "missing")
+        rep, _ = self.provision(probes=device_probes(self.proc.path / "missing"))
         self.assertEqual(self.json.read_text(), before)
         self.assertTrue(any("/proc" in w and "shadPS4" in w for w in rep.warnings))
 
@@ -392,8 +399,8 @@ class ProvisionTests(Device, unittest.TestCase):
             client = Client(local.url, API_KEY, label="local", sink=lines.append)
             provision_device(
                 cfg, "deck", self.profile, client, None, rep, home=self.home,
-                wait_timeout=0.0, poll=1.0, sleep=lambda s: None, state_root=self.state,
-                proc=self.proc.path,
+                wait_timeout=0.0, poll=1.0, state_root=self.state,
+                probes=device_probes(self.proc.path),
             )  # fmt: skip
         self.assertEqual(self.json.read_text(), before)
 

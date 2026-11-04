@@ -13,7 +13,7 @@ from unittest import mock
 
 from support import API_KEY, DECK_ID, HUB_ID
 from test_cli import run
-from warpzone import __version__, doctor, esde, provision, selfupdate, updatetimer
+from warpzone import __version__, doctor, esde, selfupdate, updatetimer
 from warpzone.doctor import (
     FAIL,
     GIB,
@@ -1897,7 +1897,7 @@ class UpdaterCheckTests(TmpCase):
         )
         self.base = self.home / ".local/state/warpzone"
         self.live = selfupdate.live_path(self.home)
-        self.shipped = provision.UPDATER_SOURCE.read_text(encoding="utf-8")
+        self.shipped = selfupdate.UPDATER_SOURCE.read_text(encoding="utf-8")
 
     def install(self, *, state: str | None = "default", conf: str | None = "default") -> None:
         self.live.parent.mkdir(parents=True, exist_ok=True)
