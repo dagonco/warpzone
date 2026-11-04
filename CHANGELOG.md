@@ -17,7 +17,7 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ### Fixed
 
-- The updater stops with a log line when it finds no clone to work on, instead of acting on whatever folder it runs from; only retirements of tags that matter to the tick (the running version, the pin and the candidates) count towards the limit of retirements checked, so unsigned retirements of other releases cannot push a real one out; and no move to a lower version is accepted in a tick where the copy of the allowed signers failed.
+- The updater stops with a log line when it finds no clone to work on, instead of acting on whatever folder it runs from; a retirement is looked up by name for the tags the tick considers (the running version, the pin, a version being tried or under suspicion and each valid candidate) instead of going through a limited number of `retired/` tags, so no amount of fake retirement tags can hide a real one, also after a trial that was given up; and no move to a lower version is accepted in a tick where the copy of the allowed signers failed.
 
 ## [0.3.0rc2] - 2026-11-04
 
