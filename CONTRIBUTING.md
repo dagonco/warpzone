@@ -9,9 +9,10 @@ Small, focused pull requests are welcome. New device profiles are the easiest co
 ```bash
 uvx ruff check .
 uvx ruff format --check .
+uvx mypy==2.4.1
 ```
 
-CI pins the ruff version in `.github/workflows/ci.yml`.
+CI pins the ruff and mypy versions in `.github/workflows/ci.yml`. mypy runs in its default (non-strict) mode over the `warpzone` package, as configured in `pyproject.toml`; the tests are not type-checked.
 
 ## Tests
 

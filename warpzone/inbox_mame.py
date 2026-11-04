@@ -232,7 +232,7 @@ def _machine_from_json(row: list[object]) -> Machine:
         str(cloneof),
         str(romof),
         str(kind),
-        tuple(SetRom(*r) for r in roms),  # type: ignore[attr-defined,arg-type]
+        tuple(SetRom(*r) for r in roms),  # type: ignore[attr-defined]
         tuple(devices),  # type: ignore[arg-type]
         tuple(disks),  # type: ignore[arg-type]
     )

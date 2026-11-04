@@ -36,8 +36,11 @@ Run all of these before pushing; CI runs the same:
 ```bash
 uvx ruff check .
 uvx ruff format --check .
+uvx mypy==2.4.1
 python3 -m unittest discover -s tests -v
 ```
+
+mypy checks the `warpzone` package in its default mode (configured in `pyproject.toml`; CI pins the version in the `typecheck` job). The tests are not type-checked. Fix a type error in the code; use `# type: ignore[code]` only where the standard library's typing is wrong, with a short reason.
 
 The end-to-end test starts two real Syncthing instances and is skipped unless `WARPZONE_E2E_SYNCTHING` points at a Syncthing v2 binary (CI pins the version and its SHA-256 in `.github/workflows/ci.yml`):
 

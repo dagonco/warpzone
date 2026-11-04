@@ -197,7 +197,7 @@ def ensure_update_timer(
     try:
         for path in changed:
             safefile.write_script(path, wanted[path], 0o644)
-        steps = [("daemon-reload",)] if changed else []
+        steps: list[tuple[str, ...]] = [("daemon-reload",)] if changed else []
         steps.append(("enable", "--now", updatetimer.TIMER))
         if changed and active:
             steps.append(("restart", updatetimer.TIMER))

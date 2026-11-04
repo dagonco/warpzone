@@ -25,7 +25,7 @@ from dataclasses import dataclass, field
 from importlib import resources
 from itertools import chain
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeGuard
 
 from warpzone.config import Config
 from warpzone.errors import UsageError
@@ -153,7 +153,7 @@ class Report:
 # ---------------------------------------------------------------- manifest
 
 
-def _path_ok(path: object) -> bool:
+def _path_ok(path: object) -> TypeGuard[str]:
     if not isinstance(path, str) or not path or path.startswith("/") or "\\" in path:
         return False
     return ".." not in path.split("/") and "" not in path.split("/")

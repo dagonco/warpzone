@@ -499,7 +499,7 @@ class SwitchOutcome:
 
 
 def _keys_ok(env: SwitchEnv) -> bool:
-    return bool(env.keys) and env.keys.is_file()
+    return env.keys is not None and env.keys.is_file()
 
 
 def run_nsz(command: Sequence[str]) -> tuple[int, str]:

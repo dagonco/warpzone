@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import re
 import tomllib
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -125,7 +126,7 @@ DEFAULT_MAX_GIB = 50.0  # `prune`: the most it deletes in one run
 DEFAULT_RESCAN_TIMEOUT = 600.0  # `prune`: how long it waits for the rescan
 
 
-def default_config_path(env: dict[str, str] | None = None) -> Path:
+def default_config_path(env: Mapping[str, str] | None = None) -> Path:
     env = os.environ if env is None else env
     base = env.get("XDG_CONFIG_HOME")
     root = Path(base) if base else Path.home() / ".config"

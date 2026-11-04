@@ -283,12 +283,12 @@ def build(
         seen.add(key)
         built.append(Entry(old.tag, "./" + rel, merged(base + rel, mine)))
     for rel in sorted(extra):
-        emitted = rel[len(base) :] if rel.startswith(base) else None
-        key = ("game", f"./{emitted}")
+        extra_rel = rel[len(base) :] if rel.startswith(base) else None
+        key = ("game", f"./{extra_rel}")
         fields = merged(rel, {})
-        if emitted and key not in seen and fields and rom_exists(rel):
+        if extra_rel and key not in seen and fields and rom_exists(rel):
             seen.add(key)
-            built.append(Entry("game", f"./{emitted}", fields))
+            built.append(Entry("game", f"./{extra_rel}", fields))
     return built
 
 
