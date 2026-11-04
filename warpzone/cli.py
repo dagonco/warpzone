@@ -232,6 +232,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help="convert, place and move the originals (default: report)",
     )
     inb.add_argument(
+        "--force-lock",
+        action="store_true",
+        help="with --apply, take over a stale inbox lock (older than 12 hours, or held by a "
+        "process that is gone from this machine); a live lock is never taken",
+    )
+    inb.add_argument(
         "--work-dir",
         type=Path,
         help="local folder for unpacked archives and conversions (default: [inbox] work_dir, "
@@ -458,6 +464,7 @@ def _inbox(args: argparse.Namespace, rep: Reporter) -> int:
         dats_dir=dats,
         tools=inbox_core.find_tools(settings),
         apply=args.apply,
+        force_lock=args.force_lock,
         work_dir=work,
         cache_dir=inbox.default_cache_dir(),
         ra_key=os.environ.get(ra.KEY_ENV) or None,
