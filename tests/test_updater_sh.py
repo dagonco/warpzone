@@ -1750,25 +1750,22 @@ class RetiredTests(UpdaterCase):
             git(rig.work, "update-ref", f"refs/tags/retired/v1.0.{n}", "HEAD")
         git(rig.work, "push", "-q", "origin", "refs/tags/retired/*:refs/tags/retired/*")
         rig.retire("v0.3.0", "the real one, after four that are not")
-        proc = rig.tick(WZ_RETIRED_MAX="3")
+        proc = rig.tick()
         self.assertTick(proc, 0)
         self.assertEqual(rig.on_tag(), "v0.2.0")
 
-    def test_only_the_newest_well_formed_retirements_are_looked_at(self) -> None:
+    def test_retirements_of_newer_releases_do_not_hide_that_of_the_running_version(self) -> None:
         rig = self.rig
         rig.release("0.2.0")
         rig.release("0.3.0")
         rig.move_to("v0.3.0")
-        for n in range(1, 4):  # real releases, all retired: they use up the limit
+        for n in range(1, 4):  # real releases, all retired, all sorting above it
             rig.release(f"1.0.{n}")
             rig.retire(f"v1.0.{n}", "x")
-        rig.retire("v0.3.0", "the fourth by version: too old to be looked at")
-        proc = rig.tick(WZ_RETIRED_MAX="3")
+        rig.retire("v0.3.0", "the fourth by version")
+        proc = rig.tick()
         self.assertTick(proc, 0)
-        self.assertEqual(rig.on_tag(), "v0.3.0")
-        self.assertRegex(proc.output, r"more than 3 retirement")
-        self.assertTick(rig.tick(), 0)  # with the default limit it is looked at
-        self.assertEqual(rig.on_tag(), "v0.2.0")
+        self.assertEqual(rig.on_tag(), "v0.2.0", proc.output)
 
     def test_only_an_annotated_tag_with_a_version_name_retires_and_nothing_runs(self) -> None:
         rig = self.rig
@@ -2039,7 +2036,7 @@ class SignedNameTests(UpdaterCase):
             rig.release(f"1.0.{n}")
             rig.retire(f"v1.0.{n}", "fake")
         rig.retire("v0.3.0", "the real one, older than four fakes", sign=self.key)
-        proc = rig.tick(WZ_RETIRED_MAX="3", **self.allowed)
+        proc = rig.tick(**self.allowed)
         self.assertTick(proc, 0)
         self.assertEqual(rig.on_tag(), "v0.2.0", proc.output)
 
@@ -2052,7 +2049,7 @@ class SignedNameTests(UpdaterCase):
         rig.release("0.3.0", sign=self.key)
         rig.move_to("v0.3.0")
         rig.retire("v0.3.0", "the real one, below four fakes", sign=self.key)
-        proc = rig.tick(WZ_RETIRED_MAX="3", **self.allowed)
+        proc = rig.tick(**self.allowed)
         self.assertTick(proc, 0)
         self.assertEqual(rig.on_tag(), "v0.2.0", proc.output)
 
@@ -2066,7 +2063,44 @@ class SignedNameTests(UpdaterCase):
             git(rig.work, "tag", "-a", "-m", "fake", f"retired/v1.0.{n}", "HEAD")
         git(rig.work, "push", "-q", "origin", "refs/tags/*:refs/tags/*")
         rig.retire("v0.3.0", "the real one, older than four fakes", sign=self.key)
-        proc = rig.tick(WZ_RETIRED_MAX="3", **self.allowed)
+        proc = rig.tick(**self.allowed)
+        self.assertTick(proc, 0)
+        self.assertEqual(rig.on_tag(), "v0.2.0", proc.output)
+
+    def flood_retirements(self, count: int = 600) -> None:
+        """Publish `count` retirement tags that are no retirement, sorting above every real
+        one: what anyone who can push tags, and cannot sign, can do."""
+        rig = self.rig
+        head = git(rig.work, "rev-parse", "HEAD")
+        refs = "".join(f"create refs/tags/retired/v9.0.{n} {head}\n" for n in range(count))
+        subprocess.run(
+            ["git", "-C", str(rig.work), "update-ref", "--stdin"],
+            input=refs,
+            text=True,
+            env={**os.environ, **GIT_ENV},
+            check=True,
+        )
+        git(rig.work, "push", "-q", "origin", "refs/tags/retired/*:refs/tags/retired/*")
+
+    def test_a_flood_of_fake_retirements_does_not_hide_that_of_the_running_version(self) -> None:
+        rig = self.rig
+        rig.release("0.2.0", sign=self.key)
+        rig.release("0.3.0", sign=self.key)
+        rig.move_to("v0.3.0")
+        rig.retire("v0.3.0", "the real one", sign=self.key)
+        self.flood_retirements()
+        proc = rig.tick(**self.allowed)
+        self.assertTick(proc, 0)
+        self.assertEqual(rig.on_tag(), "v0.2.0", proc.output)
+
+    def test_a_flood_of_fake_retirements_does_not_hide_that_of_a_candidate(self) -> None:
+        rig = self.rig
+        rig.release("0.2.0", sign=self.key)
+        rig.release("0.3.0", sign=self.key)
+        rig.retire("v0.3.0", "the real one", sign=self.key)
+        rig.move_to("v0.2.0")
+        self.flood_retirements()
+        proc = rig.tick(**self.allowed)
         self.assertTick(proc, 0)
         self.assertEqual(rig.on_tag(), "v0.2.0", proc.output)
 
@@ -2257,6 +2291,19 @@ class StaleTargetTests(UpdaterCase):
         rig.retire("v0.2.0", "found out in the meantime")
         rig.tick()
         self.assert_left_alone(rig, "0.2.0")
+
+    def test_a_retired_release_below_a_dropped_trial_is_not_installed(self) -> None:
+        rig = self.rig
+        rig.release("0.2.0")
+        rig.retire("v0.2.0", "withdrawn")
+        rig.release("0.3.0rc1")
+        rig.write_conf(channel="stable")
+        self.prepare(rig, "0.3.0rc1", trying_tag="v0.3.0rc1", trying_sha="{sha}", attempts="1")
+        git(rig.clone, "checkout", "-q", "--detach", "v0.3.0rc1")  # a power cut in the check
+        proc = rig.tick()
+        self.assertEqual(rig.on_tag(), "v0.1.0", proc.output)
+        self.assertEqual(rig.state()["trying_tag"], "")
+        self.assertEqual([c for c in rig.calls() if "@ 0.2.0" in c], [])
 
     def test_a_suspect_candidate_is_dropped_when_the_channel_goes_back_to_stable(self) -> None:
         rig = self.rig

@@ -507,5 +507,4 @@ The script reads its settings from a `key=value` file (see [the updater settings
 | `WZ_FETCH_TIMEOUT` | `120` | Seconds for the fetch. |
 | `WZ_MIN_FREE_KB` | `51200` | Free space in KiB needed before switching. |
 | `WZ_PYTHON_FALLBACKS` | `/usr/bin/python3 python3` | Interpreters to try after the one in the settings. |
-| `WZ_RETIRED_MAX` | `50` | Retirement tags whose signature is checked per tick. |
 | `WZ_ALLOWED_SIGNERS` | the file in the version known to work | The allowed-signers file (`ssh-keygen -Y` format) that tags must be signed against; empty or without keys, no signature is required. |
