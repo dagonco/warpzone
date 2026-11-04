@@ -1676,11 +1676,10 @@ class RetiredTests(UpdaterCase):
         rig.release("0.2.0")
         rig.release("0.3.0")
         rig.move_to("v0.3.0")
-        for n in range(1, 5):  # well formed retirements of tags that are no candidates
-            git(rig.work, "update-ref", f"refs/tags/v1.0.{n}", "HEAD")
-            git(rig.work, "tag", "-a", "-m", "x", f"retired/v1.0.{n}", "HEAD")
-        git(rig.work, "push", "-q", "origin", "refs/tags/*:refs/tags/*")
-        rig.retire("v0.3.0", "the fifth by version: too old to be looked at")
+        for n in range(1, 4):  # real releases, all retired: they use up the limit
+            rig.release(f"1.0.{n}")
+            rig.retire(f"v1.0.{n}", "x")
+        rig.retire("v0.3.0", "the fourth by version: too old to be looked at")
         proc = rig.tick(WZ_RETIRED_MAX="3")
         self.assertTick(proc, 0)
         self.assertEqual(rig.on_tag(), "v0.3.0")
@@ -1948,6 +1947,33 @@ class SignedNameTests(UpdaterCase):
         self.assertEqual(rig.on_tag(), "v0.3.0")
         self.assertRegex(proc.output, r"retirement.*ignored.*v0\.3\.0")
 
+    def test_retirements_of_unsigned_releases_do_not_use_up_the_limit(self) -> None:
+        rig = self.rig
+        rig.release("0.2.0", sign=self.key)
+        rig.release("0.3.0", sign=self.key)
+        rig.move_to("v0.3.0")
+        for n in range(1, 5):  # real releases on main, but nobody signed them or their retirement
+            rig.release(f"1.0.{n}")
+            rig.retire(f"v1.0.{n}", "fake")
+        rig.retire("v0.3.0", "the real one, older than four fakes", sign=self.key)
+        proc = rig.tick(WZ_RETIRED_MAX="3", **self.allowed)
+        self.assertTick(proc, 0)
+        self.assertEqual(rig.on_tag(), "v0.2.0", proc.output)
+
+    def test_retirements_of_tags_that_are_no_release_do_not_use_up_the_limit(self) -> None:
+        rig = self.rig
+        rig.release("0.2.0", sign=self.key)
+        rig.release("0.3.0", sign=self.key)
+        rig.move_to("v0.3.0")
+        for n in range(1, 5):  # a name and a commit in order, but not that version
+            git(rig.work, "update-ref", f"refs/tags/v1.0.{n}", "HEAD")
+            git(rig.work, "tag", "-a", "-m", "fake", f"retired/v1.0.{n}", "HEAD")
+        git(rig.work, "push", "-q", "origin", "refs/tags/*:refs/tags/*")
+        rig.retire("v0.3.0", "the real one, older than four fakes", sign=self.key)
+        proc = rig.tick(WZ_RETIRED_MAX="3", **self.allowed)
+        self.assertTick(proc, 0)
+        self.assertEqual(rig.on_tag(), "v0.2.0", proc.output)
+
     def test_a_signed_retirement_on_another_commit_retires_nothing(self) -> None:
         rig = self.rig
         rig.release("0.2.0", sign=self.key)
@@ -2021,6 +2047,44 @@ class KeysNeverGoBackTests(UpdaterCase):
         rig.release("0.9.1", sign=self.new, extra=only_new)
         self.assertTick(rig.tick(), 0)
         self.assertEqual(rig.on_tag(), "v0.9.1", "the newer key still works")
+
+    def test_the_version_of_the_keys_is_kept_only_when_they_were_copied(self) -> None:
+        rig = self.rig
+        only_new = {"warpzone/data/allowed_signers": self.new.allowed}
+        rig.release("0.4.0", sign=self.new, extra=only_new)
+        rig.move_to("v0.4.0")
+        blocked = rig.state_dir / "allowed_signers.last.new"
+        blocked.mkdir()  # the copy cannot be written, as on a full disk
+        self.assertTick(rig.tick(), 0)
+        self.assertFalse((rig.state_dir / "allowed_signers.last").exists())
+        self.assertEqual(rig.state().get("signers_version", ""), "", "no copy, no version")
+        blocked.rmdir()
+        self.assertTick(rig.tick(), 0)
+        self.assertEqual(rig.state()["signers_version"], "0.4.0")
+        self.assertTrue((rig.state_dir / "allowed_signers.last").is_file())
+
+    def test_without_the_copy_of_the_keys_an_older_release_does_not_bring_back_older_ones(
+        self,
+    ) -> None:
+        rig = self.rig
+        both = {"warpzone/data/allowed_signers": self.old.allowed + self.new.allowed}
+        only_new = {"warpzone/data/allowed_signers": self.new.allowed}
+        rig.release("0.3.5", sign=self.new, extra=both)
+        rig.release("0.4.0", sign=self.new, extra=only_new)
+        rig.move_to("v0.4.0")
+        self.assertTick(rig.tick(), 0)
+        self.assertEqual(rig.state()["signers_version"], "0.4.0")
+        # the copy is lost while the known-good version goes down to one that lists both keys
+        (rig.state_dir / "allowed_signers.last").unlink()
+        rig.move_to("v0.3.5")
+        rig.write_state(
+            **{**rig.state(), "good_tag": "v0.3.5", "good_sha": git(rig.clone, "rev-parse", "HEAD")}
+        )
+        rig.release("0.9.0", sign=self.old, extra=both)
+        proc = rig.tick()
+        self.assertTick(proc, 0)
+        self.assertEqual(rig.on_tag(), "v0.3.5", proc.output)
+        self.assertEqual(rig.state()["signers_version"], "0.4.0")
 
     def test_a_retirement_made_on_the_release_tag_itself_counts(self) -> None:
         rig = self.rig
@@ -2429,7 +2493,7 @@ class InstallTests(RealPythonCase):
         marker.write_text("mine")
         # one that warpzone made, but whose mark a power cut kept from being written
         (self.venv / "warpzone-venv").unlink()
-        (self.rig.state_dir / "venv-owned").unlink()
+        (self.rig.state_dir / "venv-owned").unlink(missing_ok=True)  # dropped with the mark
         self.assertEqual(self.install("deck").returncode, 0)
         self.assertEqual(marker.read_text(), "mine")
         self.assertTrue((self.venv / "warpzone-venv").exists(), "marked now")
@@ -2530,10 +2594,26 @@ class RepairTests(RealPythonCase):
         proc = self.tick()
         self.assertTick(proc, 0)
         self.assert_mended()
-        owned = (self.rig.state_dir / "venv-owned").read_text().split("\n")
-        self.assertIn(str(self.venv), owned, "noted outside the venv, which --clear empties")
+        self.assertTrue((self.venv / "warpzone-venv").exists(), "the mark is written")
+        self.assertNotIn(str(self.venv), self.owned_notes(), "the note lasts only until the mark")
         self.assertIn("venv", proc.output)
         self.assertEqual(self.rig.state()["last_result"], "ok")
+
+    def owned_notes(self) -> list[str]:
+        path = self.rig.state_dir / "venv-owned"
+        return path.read_text().splitlines() if path.exists() else []
+
+    def test_the_note_does_not_outlive_the_venv_it_was_for(self) -> None:
+        self.assertTick(self.tick(), 0)  # warpzone makes the venv: noted, then marked
+        self.assertTrue((self.venv / "warpzone-venv").exists())
+        shutil.rmtree(self.venv)
+        self.make_venv(pth=False, ours=False)  # the user makes one of their own, in its place
+        (self.venv / "mine.txt").write_text("my packages")
+        proc = self.tick()
+        self.assertTrue((self.venv / "mine.txt").exists(), "their venv was cleared")
+        self.assertEqual((self.venv / "mine.txt").read_text(), "my packages")
+        self.assertIn("not made by warpzone", proc.output)
+        self.assertEqual((self.base / "play-state" / "ledger").read_text(), "saves")
 
     def test_a_venv_whose_python_is_gone_is_made_again(self) -> None:
         self.make_venv(pth=True)
@@ -2820,6 +2900,25 @@ class BadReleaseLifecycleTests(RealPythonCase):
         self.assertTick(self.tick(now=NOW + 2 * DAY), 0)
         self.assertEqual(self.on_tag(), "v0.400.0")
         self.assertEqual(rig.bad(), ["v0.30.0"])
+
+    def test_a_stale_bytecode_of_the_bad_release_is_not_run_after_the_rollback(self) -> None:
+        rig = self.rig
+        # Both releases have a __init__.py of the same size ("0.2.0" and "0.3.0"), and every
+        # checkout leaves it with one and the same modification time: what a rollback in the
+        # second of the checkout does. Python then takes the `.pyc` of the bad release for
+        # the source of the good one.
+        hook = self.src / ".git" / "hooks" / "post-checkout"
+        hook.write_text("#!/bin/sh\ntouch -t 202401020000.00 warpzone/__init__.py\n")
+        hook.chmod(0o755)
+        init = self.src / "warpzone" / "__init__.py"
+        subprocess.run(["touch", "-t", "202401010000.00", str(init)], check=True)
+        rig.release("0.3.0", extra={**with_updater(), "warpzone/__main__.py": HEALTH_FAILS_MAIN})
+        self.assertTick(self.tick(now=NOW + DAY), 1)
+        state = rig.state()
+        self.assertEqual(self.on_tag(), "v0.2.0")
+        self.assertEqual(rig.bad(), ["v0.3.0"], state)
+        self.assertEqual(state["last_result"], "rolled-back")
+        self.assertEqual(self.shim_version(), "warpzone 0.2.0", "the shim runs the good source")
 
     def test_a_release_is_not_marked_bad_when_the_good_one_fails_the_same_way(self) -> None:
         rig = self.rig

@@ -13,6 +13,7 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ### Fixed
 
+- Updater: fake `retired/` tags can no longer push a real retirement out of the per-tick limit, a failed copy of the trusted keys no longer leaves their version recorded (and a missing copy refuses older keys), and the note that lets the updater clear its own venv is dropped once the venv is marked.
 - Editing an ES-DE gamelist no longer trips on awkward but valid files. The arcade and disc inbox replace a self-closing `<altemulator/>` instead of adding a second one, and the play state sync accepts an empty `<gameList/>` and ignores `<game>` and `</gameList>` inside XML comments.
 
 ## [0.3.0rc1] - 2026-11-03
