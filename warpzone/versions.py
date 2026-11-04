@@ -29,7 +29,8 @@ def version_key(version: str) -> VersionKey | None:
 
 def tag_key(tag: str) -> VersionKey | None:
     """The sort key of a release tag, `vX.Y.Z` or `vX.Y.ZrcN` (the tag is `v` plus
-    `__version__`, see docs/releasing.md); None for any other spelling, such as `v0.3.0-rc1`."""
+    `__version__`, see development/releasing.md); None for any other spelling, such as
+    `v0.3.0-rc1`."""
     if not tag.startswith("v") or _VERSION.fullmatch(tag[1:]) is None:
         return None
     key = version_key(tag[1:])

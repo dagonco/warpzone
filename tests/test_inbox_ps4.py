@@ -8,10 +8,10 @@ from unittest import mock
 from console_iso_support import ORBIS_PKG_UTIL, ps4_pkg, ps4_sfo
 from inbox_support import make_stub
 from test_inbox import Base
-from warpzone import inbox, inbox_ps4
+from warpzone import inbox, inbox_core, inbox_ps4
 from warpzone import inbox_console_iso as ci
 from warpzone.config import InboxSettings
-from warpzone.inbox import Tools
+from warpzone.inbox_core import Tools
 
 PKG_NAME = "Test Game EU-CUSA07934.pkg"
 TITLE_ID = "CUSA07934"
@@ -84,14 +84,14 @@ class PureTests(unittest.TestCase):
     def test_the_tool_is_found_in_the_settings_and_on_the_path(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             exe = make_stub(Path(tmp), "orbis-pkg-util", "")
-            found = inbox.find_tools(
+            found = inbox_core.find_tools(
                 InboxSettings(orbis_pkg_util=exe), which=lambda name: f"/usr/bin/{name}"
             )
             self.assertEqual(found.orbis_pkg_util, exe)
-            found = inbox.find_tools(InboxSettings(), which=lambda name: f"/usr/bin/{name}")
+            found = inbox_core.find_tools(InboxSettings(), which=lambda name: f"/usr/bin/{name}")
             self.assertEqual(found.orbis_pkg_util, "/usr/bin/orbis-pkg-util")
-            with self.assertRaises(inbox.InboxError):
-                inbox.find_tools(
+            with self.assertRaises(inbox_core.InboxError):
+                inbox_core.find_tools(
                     InboxSettings(orbis_pkg_util=str(Path(tmp) / "nope")), which=lambda n: None
                 )
         self.assertIn("orbis-pkg-util no", inbox._describe_tools(Tools()))
@@ -320,7 +320,7 @@ class ReviewTests(FlowBase):
 
     def test_a_copy_that_fails_leaves_nothing_behind(self) -> None:
         self.drop(PKG_NAME, ps4_pkg())
-        real = inbox.copy_verified
+        real = inbox_core.copy_verified
         seen: list[Path] = []
 
         def flaky(src: Path, dest: Path) -> None:
@@ -329,7 +329,7 @@ class ReviewTests(FlowBase):
                 raise OSError(28, "No space left on device")
             real(src, dest)
 
-        with mock.patch.object(inbox, "copy_verified", flaky):
+        with mock.patch.object(inbox_core, "copy_verified", flaky):
             self.assertEqual(self.go(), 1, self.out)
         self.assert_review("No space left")
         self.assertEqual([p for p in self.roms.rglob("*") if "CUSA" in p.name], [])

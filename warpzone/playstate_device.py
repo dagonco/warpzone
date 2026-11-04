@@ -1,7 +1,7 @@
 """Play state on a device: reads and writes the ledgers and the gamelists.
 
 The decisions are in `playstate`. This module imports no network code, because ES-DE waits for
-it at startup. See docs/design.md, "Play state".
+it at startup. See development/design.md, "Play state".
 """
 
 from __future__ import annotations

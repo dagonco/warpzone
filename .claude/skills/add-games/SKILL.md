@@ -5,7 +5,7 @@ description: Use when the user wants to add new games, ROMs, disc images, Switch
 
 # Add games through the inbox
 
-Every new game goes through `warpzone inbox`, without exception. It identifies the dump by content, converts it to the format the library holds, verifies it, places it and files the original. Reference: [inbox.md](../../../docs/inbox.md).
+Every new game goes through `warpzone inbox`, without exception. It identifies the dump by content, converts it to the format the library holds, verifies it, places it and files the original. Reference: [inbox.md](../../../website/src/content/docs/setup/inbox.md).
 
 `inbox` reports first and acts only with `--apply`. It runs on a desktop machine that mounts the hub's share (the NAS is too weak for conversions), not on a console.
 
@@ -35,9 +35,9 @@ Every new game goes through `warpzone inbox`, without exception. It identifies t
    ```
 
    Exit code `1` means some item needs review; read its `inbox/_revisar/<item>.reason.txt` to the user. Nothing is overwritten: the same content is "already in the library", different content under the same name goes to review.
-6. Arcade sets and PS3 games can get an ES-DE `<altemulator>` entry, which `--apply` writes into the hub's gamelist. Ask the user to quit ES-DE on the consoles first, or the edit may be overwritten ([Gamelist edits](../../../docs/inbox.md#gamelist-edits)).
+6. Arcade sets and PS3 games can get an ES-DE `<altemulator>` entry, which `--apply` writes into the hub's gamelist. Ask the user to quit ES-DE on the consoles first, or the edit may be overwritten ([Gamelist edits](../../../website/src/content/docs/setup/inbox.md#gamelist-edits)).
 7. warpzone does not edit whitelists. Hand the printed `whitelist:` lines to the `edit-whitelist` skill for the consoles that should get the games.
 
 ## Check
 
-Run `warpzone inbox` again: the items should be gone, or listed as already in the library. Optionally run `warpzone bios` to check BIOS coverage for the new system ([bios.md](../../../docs/bios.md)).
+Run `warpzone inbox` again: the items should be gone, or listed as already in the library. Optionally run `warpzone bios` to check BIOS coverage for the new system ([bios.md](../../../website/src/content/docs/setup/bios.md)).

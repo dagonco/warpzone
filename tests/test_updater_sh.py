@@ -1,7 +1,7 @@
 """`warpzone/data/updater.sh`, run against real git repositories and a fake Python.
 
 The script is POSIX sh that decides which release a device runs and puts it back when a
-release does not work (docs/design.md, "Autonomous updates"). Each test builds an upstream
+release does not work (development/design.md, "Autonomous updates"). Each test builds an upstream
 repository with tagged releases, a clone of it, and a fake `python` (a script that behaves
 like warpzone according to the checked-out version), then runs `updater.sh tick` the way
 the timer does. They run with whatever shells exist (`sh`, `dash`, `bash`) so a macOS and a
@@ -2754,6 +2754,156 @@ class ScriptTests(UpdaterCase):
         pyproject = (UPDATER.parent.parent.parent / "pyproject.toml").read_text()
         self.assertIn("allowed_signers", pyproject)
         self.assertTrue((UPDATER.parent / "allowed_signers").is_file())
+
+
+# What a bad release looks like to a real Python. The first breaks at import (the files are
+# not valid Python), the second imports and answers `--version` but fails its `health` run.
+SYNTAX_ERROR = "def broken(:\n"
+_MAIN_CALLS = 'with open(os.path.join(os.environ["WZ_FAKE_DIR"], "main-calls")'
+HEALTH_FAILS_MAIN = FAKE_MAIN.replace(
+    _MAIN_CALLS, 'if sys.argv[1:2] == ["health"]:\n    sys.exit(1)\n' + _MAIN_CALLS, 1
+)
+# The environment breaks every release alike (the flag file is in the fake folder).
+ENV_AWARE_MAIN = FAKE_MAIN.replace(
+    _MAIN_CALLS,
+    'if os.path.exists(os.path.join(os.environ["WZ_FAKE_DIR"], "env_broken")):\n'
+    "    sys.exit(1)\n" + _MAIN_CALLS,
+    1,
+)
+
+
+class BadReleaseLifecycleTests(RealPythonCase):
+    """A release that fails its checks, from the first tick to the next good release, with the
+    real script from the clone, a real venv and a real Python importing the checked-out
+    package (the fake is only what `python -m warpzone` does after it has been imported)."""
+
+    # The versions differ in length on purpose: Python trusts a cached `.pyc` when the source
+    # has the size and the second of modification it was compiled from, and a rollback in
+    # the same second as the checkout, as these tests do, would otherwise import the old one.
+
+    def setUp(self) -> None:
+        super().setUp()
+        rig = self.rig
+        self.src = self.base / "src"
+        self.venv = self.base / "venv"
+        rig.release("0.2.0", extra={**with_updater(), "warpzone/__main__.py": ENV_AWARE_MAIN})
+        subprocess.run(
+            ["git", "clone", "-q", str(rig.origin), str(self.src)],
+            check=True,
+            env={**os.environ, **GIT_ENV},
+        )
+        script = self.src / "warpzone" / "data" / "updater.sh"
+        proc = subprocess.run(
+            ["sh", str(script), "install", "deck", "--venv", str(self.venv)],
+            env=self.env(WZ_CONF=str(rig.root / "no-conf")),
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        # what `provision device` does on a device: the live copy and the settings
+        shutil.copy(script, rig.updater)
+        rig.write_conf(clone=str(self.src), python=str(self.venv / "bin" / "python"))
+
+    def tick(self, **kwargs) -> subprocess.CompletedProcess:
+        return self.rig.tick(WZ_PYTHON_FALLBACKS=sys.executable, **kwargs)
+
+    def on_tag(self) -> str:
+        try:
+            return git(
+                self.src, "describe", "--exact-match", "--tags", "--match", "v[0-9]*", "HEAD"
+            )
+        except AssertionError:
+            return ""
+
+    def shim_version(self) -> str:
+        """What the device itself reports: the shim of the venv running the clone."""
+        shown = subprocess.run(
+            [str(self.venv / "bin" / "warpzone"), "--version"],
+            cwd=self.rig.root,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        return shown.stdout.strip()
+
+    def publish_good(self, version: str) -> str:
+        return self.rig.release(
+            version,
+            extra={
+                **with_updater(),
+                "warpzone/__main__.py": ENV_AWARE_MAIN,
+                "warpzone/cli.py": "",
+            },
+        )
+
+    def test_a_bad_release_is_rolled_back_marked_bad_and_a_later_good_one_is_taken(self) -> None:
+        rig = self.rig
+        self.assertTick(self.tick(), 0)
+        self.assertEqual(rig.state()["good_tag"], "v0.2.0")
+        self.assertEqual(self.shim_version(), "warpzone 0.2.0")
+
+        bad_sha = rig.release("0.30.0", extra={**with_updater(), "warpzone/cli.py": SYNTAX_ERROR})
+        self.assertTick(self.tick(now=NOW + DAY), 1)
+        state = rig.state()
+        self.assertEqual(self.on_tag(), "v0.2.0", "the clone is back on the good release")
+        self.assertEqual(
+            git(self.src, "status", "--porcelain", "--untracked-files=no"), "", "and clean"
+        )
+        self.assertEqual(self.shim_version(), "warpzone 0.2.0", "the device still runs")
+        self.assertEqual(rig.bad(), ["v0.30.0"])
+        self.assertIn(f"sha={bad_sha}", (rig.state_dir / "bad" / "v0.30.0").read_text())
+        self.assertEqual(state["last_result"], "rolled-back")
+        self.assertEqual(state["good_tag"], "v0.2.0")
+        self.assertEqual(state["trying_tag"], "")
+        self.assertEqual(state["attempts"], "0")
+
+        # the bad tag is not tried again, on the next ticks or after a reboot
+        rig.boot_id.write_text("boot-2\n")
+        for later in (2, 3):
+            self.assertTick(self.tick(now=NOW + later * DAY), 0)
+            self.assertEqual(self.on_tag(), "v0.2.0")
+            self.assertEqual(rig.bad(), ["v0.30.0"])
+
+        # a later good release is taken, and the bad one stays bad
+        self.publish_good("0.400.0")
+        self.assertTick(self.tick(now=NOW + 4 * DAY), 0)
+        state = rig.state()
+        self.assertEqual(self.on_tag(), "v0.400.0")
+        self.assertEqual(self.shim_version(), "warpzone 0.400.0")
+        self.assertEqual((state["good_tag"], state["last_result"]), ("v0.400.0", "ok"))
+        self.assertEqual(rig.bad(), ["v0.30.0"])
+
+    def test_a_release_that_imports_but_fails_its_health_run_is_rolled_back_too(self) -> None:
+        rig = self.rig
+        rig.release("0.30.0", extra={**with_updater(), "warpzone/__main__.py": HEALTH_FAILS_MAIN})
+        self.assertTick(self.tick(now=NOW + DAY), 1)
+        self.assertEqual(self.on_tag(), "v0.2.0")
+        self.assertEqual(self.shim_version(), "warpzone 0.2.0")
+        self.assertEqual(rig.bad(), ["v0.30.0"])
+        self.publish_good("0.400.0")
+        self.assertTick(self.tick(now=NOW + 2 * DAY), 0)
+        self.assertEqual(self.on_tag(), "v0.400.0")
+        self.assertEqual(rig.bad(), ["v0.30.0"])
+
+    def test_a_release_is_not_marked_bad_when_the_good_one_fails_the_same_way(self) -> None:
+        rig = self.rig
+        rig.release("0.30.0", extra={**with_updater(), "warpzone/__main__.py": HEALTH_FAILS_MAIN})
+        rig.flag("env_broken")  # for example Syncthing is down: the good release fails too
+        self.assertTick(self.tick(now=NOW + DAY), 1)
+        state = rig.state()
+        self.assertEqual(self.on_tag(), "v0.2.0")
+        self.assertEqual(rig.bad(), [], "the tag is not burnt")
+        self.assertEqual(state["last_result"], "env")
+        self.assertEqual(state["retry_after"], str(NOW + 2 * DAY))
+        # the environment recovers: after the back-off the release is tried again, and it
+        # fails on its own merit this time
+        rig.flag("env_broken", False)
+        self.assertTick(self.tick(now=NOW + 2 * DAY), 1)
+        self.assertEqual(rig.bad(), ["v0.30.0"])
+        self.assertEqual(self.on_tag(), "v0.2.0")
 
 
 if __name__ == "__main__":

@@ -1,4 +1,6 @@
-# Adding new games: the inbox
+---
+title: "Adding new games: the inbox"
+---
 
 How `warpzone inbox` identifies, converts and files new dumps, including Switch, 3DS, PS3, PS4, PS Vita, Xbox, Xbox 360, Wii U and arcade.
 
@@ -26,7 +28,7 @@ report only: run again with --apply to convert and place
 
 ## Configuration
 
-Set the `[inbox]` table of the config (see [`examples/config.example.toml`](../examples/config.example.toml)). With `--root` and `--dats` it needs no config file.
+Set the `[inbox]` table of the config (see [`examples/config.example.toml`](https://github.com/dagonco/warpzone/blob/main/examples/config.example.toml)). With `--root` and `--dats` it needs no config file.
 
 ```toml
 [inbox]
@@ -40,7 +42,7 @@ fbneo_dat = "~/dats/fbneo-arcade.dat"
 mame2003plus_dat = "~/dats/mame2003-plus.xml"
 ```
 
-`bsdtar`, `dolphin_tool`, `nsz`, `orbis_pkg_util` and `switch_keys` work the same way, and `work_dir` moves the temporary files (they can take several GiB). Run `warpzone doctor` to see what is missing ([doctor.md](doctor.md)). Details in [design.md](design.md#inbox).
+`bsdtar`, `dolphin_tool`, `nsz`, `orbis_pkg_util` and `switch_keys` work the same way, and `work_dir` moves the temporary files (they can take several GiB). Run `warpzone doctor` to see what is missing ([the doctor guide](/warpzone/operation/doctor/)). Details in [the design document](/warpzone/development/design/#inbox).
 
 ## What it does for each item
 
@@ -61,7 +63,7 @@ mame2003plus_dat = "~/dats/mame2003-plus.xml"
 5. **Places** the result in `library/roms/<system>/` (copied to `<name>.part`, read back, then renamed). It never overwrites: the same content is reported as "already in the library", different content under the same name goes to review.
 6. **Files the original** in `inbox/_done/<date>/`, or in `inbox/_revisar/` with a `<item>.reason.txt` (no DAT match, incomplete multi-disc, conversion or verify failed, RA hash changed, conflict, missing tool). On every `--apply`, `_done` folders named like a date and older than 7 days are deleted, nothing else.
 
-Items modified in the last 30 seconds are left alone (they may still be copying), and `_*` folders, hidden files, `@eaDir` and `.DS_Store` are never items. warpzone does not edit whitelists: add the printed lines to the device whitelists yourself ([whitelists.md](whitelists.md)). Exit code 1 when any item needs review.
+Items modified in the last 30 seconds are left alone (they may still be copying), and `_*` folders, hidden files, `@eaDir` and `.DS_Store` are never items. warpzone does not edit whitelists: add the printed lines to the device whitelists yourself ([Whitelists and pruning](/warpzone/setup/whitelists/)). Exit code 1 when any item needs review.
 
 A PS Vita dump kept as a game folder is filed (see [PS Vita games](#ps-vita-games)). `.vpk` files, Vita `.pkg` files that need installing, PS3 or Xbox games kept as extracted folders and PS3 `.pkg` files are not supported yet and go to review ("not supported by inbox yet").
 
@@ -147,7 +149,7 @@ Name=<Title>
 Exec=shadps4 "/home/deck/Emulation/roms/ps4/games/<CUSAnnnnn>/eboot.bin"
 ```
 
-EmuDeck's `shadps4.sh` reads the quoted path of the `Exec=` line and runs shadPS4's Qt launcher with it, which boots the version you selected there. The path is written out because nothing expands `~` in it; it assumes the SteamOS home `/home/deck`. The consoles must also have `~/Emulation/roms/ps4/games` in shadPS4's install directories: `provision device` adds it for profiles that declare it ([emudeck.md](emudeck.md#shadps4-install-directory)).
+EmuDeck's `shadps4.sh` reads the quoted path of the `Exec=` line and runs shadPS4's Qt launcher with it, which boots the version you selected there. The path is written out because nothing expands `~` in it; it assumes the SteamOS home `/home/deck`. The consoles must also have `~/Emulation/roms/ps4/games` in shadPS4's install directories: `provision device` adds it for profiles that declare it ([the EmuDeck guide](/warpzone/guides/emudeck/#shadps4-install-directory)).
 
 - A game already in the library is reported and never replaced or compared; its shortcut is created if it is missing.
 - An update (patch) or DLC package goes to review: they are not merged into the game yet. The header shows it before anything is unpacked, and the `CATEGORY` of `param.sfo` is checked again afterwards.
@@ -183,7 +185,7 @@ The folder is copied file by file with a read-back to `<TITLEID>.part` and renam
 - A game that needs a licence and has none goes to review, saying so, and nothing is placed. Whether it needs one is read from `eboot.bin` as Vita3K does (the first 64 KiB, the SELF header only): a decrypted `eboot.bin` (as Vita3K's own "decrypt selfs" leaves it) keeps the `SCE\0` magic and needs none, and an `eboot.bin` with that magic and an unreadable header goes to review. A licence that comes along when the game does not need it is filed anyway. A file that is not a licence, one of another game or build, or several different ones go to review with the reason.
 - A Vitamin dump always goes to review, whether it is a loose folder or inside an archive. It is recognised by `sce_module/steroid.suprx` inside the game folder; Vita3K rejects that module, so the dump is never placed, even if the game might start, and the reason suggests a clean dump instead (a `.pkg` with its `work.bin`, or a NoNpDrm dump). What is already in the library is not touched.
 - An item with several games, a symbolic link inside the game, or an unreadable `param.sfo` goes to review. A PS3 game (`PS3_GAME/PARAM.SFO`) is not this layout and keeps its "not supported by inbox yet" outcome.
-- The consoles link the game folder and the licence folder into Vita3K's own storage, see [emudeck.md](emudeck.md#vita3k-games).
+- The consoles link the game folder and the licence folder into Vita3K's own storage, see [the EmuDeck guide](/warpzone/guides/emudeck/#vita3k-games).
 
 ## Arcade sets
 

@@ -9,26 +9,28 @@ from unittest import mock
 
 from inbox_support import CHDMAN, RAHASHER, age, make_hub, make_stub, stub_md5, write_dat
 from test_cli import run
-from warpzone import dat, inbox, ra
+from warpzone import dat, inbox, inbox_core, ra
 from warpzone.config import InboxSettings
 from warpzone.dat import DiscGroup, Game, GameMatch, Rom
 from warpzone.inbox import (
-    InboxError,
-    Options,
-    Staged,
-    Tools,
     cue_refs,
-    destination_verdict,
-    extract_bsdtar,
-    extract_zip,
     find_sidecar,
-    find_tools,
     gdi_refs,
     plan_units,
     resolve_refs,
     run_inbox,
     scan,
     select_purge,
+)
+from warpzone.inbox_core import (
+    InboxError,
+    Options,
+    Staged,
+    Tools,
+    destination_verdict,
+    extract_bsdtar,
+    extract_zip,
+    find_tools,
     skip_name,
     unsafe_member,
     unsupported_reason,
@@ -324,7 +326,7 @@ class ArchiveTests(unittest.TestCase):
             [("ok.bin", b"1"), link],
         ):
             out = self.tmp / "out"
-            with self.assertRaises(inbox.ItemFailure, msg=str(entries)):
+            with self.assertRaises(inbox_core.ItemFailure, msg=str(entries)):
                 extract_zip(self.make_zip(entries), out)
             self.assertFalse((out / "ok.bin").exists())
         self.assertFalse((self.tmp / "evil").exists())
@@ -332,7 +334,7 @@ class ArchiveTests(unittest.TestCase):
     def test_damaged_zip_is_a_failure(self) -> None:
         bad = self.tmp / "bad.zip"
         bad.write_bytes(b"not a zip at all")
-        with self.assertRaises(inbox.ItemFailure):
+        with self.assertRaises(inbox_core.ItemFailure):
             extract_zip(bad, self.tmp / "out")
 
     def stub_bsdtar(self, listing: str, *, link: bool = False) -> str:
@@ -351,10 +353,10 @@ class ArchiveTests(unittest.TestCase):
         archive.write_bytes(b"7z")
         extract_bsdtar(self.stub_bsdtar("x.bin"), archive, self.tmp / "ok")
         self.assertTrue((self.tmp / "ok/x.bin").exists())
-        with self.assertRaises(inbox.ItemFailure):
+        with self.assertRaises(inbox_core.ItemFailure):
             extract_bsdtar(self.stub_bsdtar("../x.bin"), archive, self.tmp / "bad")
         self.assertFalse((self.tmp / "bad/x.bin").exists())
-        with self.assertRaises(inbox.ItemFailure):
+        with self.assertRaises(inbox_core.ItemFailure):
             extract_bsdtar(self.stub_bsdtar("x.bin", link=True), archive, self.tmp / "link")
 
     def test_sidecar_must_name_the_games_files(self) -> None:

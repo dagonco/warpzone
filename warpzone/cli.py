@@ -29,7 +29,7 @@ from warpzone.profiles import Profile, ProfileError, available_profiles, load_pr
 
 # Everything that talks to the network (provision, prune, doctor, the inbox, the Syncthing
 # client) is imported inside the command that needs it, so `settings apply`, which ES-DE runs
-# at every start, loads none of it (see "Speed" in docs/design.md).
+# at every start, loads none of it (see "Speed" in development/design.md).
 if TYPE_CHECKING:
     from warpzone.report import Reporter
     from warpzone.syncthing import Client
@@ -427,8 +427,8 @@ def _bios(args: argparse.Namespace, rep: Reporter) -> int:
 
 
 def _inbox(args: argparse.Namespace, rep: Reporter) -> int:
-    from warpzone import inbox, ra
-    from warpzone.inbox import InboxError
+    from warpzone import inbox, inbox_core, ra
+    from warpzone.inbox_core import InboxError
 
     settings = load_inbox_settings(_config_path(args))
     root = args.root or (Path(settings.root) if settings.root else None)
@@ -442,10 +442,10 @@ def _inbox(args: argparse.Namespace, rep: Reporter) -> int:
             "no DATs: pass --dats or set `dats_dir` in the [inbox] table of the config"
         )
     work = args.work_dir or (Path(settings.work_dir) if settings.work_dir else None)
-    options = inbox.Options(
+    options = inbox_core.Options(
         root=root,
         dats_dir=dats,
-        tools=inbox.find_tools(settings),
+        tools=inbox_core.find_tools(settings),
         apply=args.apply,
         work_dir=work,
         cache_dir=inbox.default_cache_dir(),

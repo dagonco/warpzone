@@ -19,7 +19,7 @@ already in the library is reported and never overwritten. Without the tool the p
 placed as it is, as before.
 
 The decisions (`pkg_kind`, `category_kind`, `shortcut_name`, `desktop_text`) are pure
-functions of bytes or text; `install` touches the disk. See docs/design.md.
+functions of bytes or text; `install` touches the disk. See development/design.md.
 """
 
 from __future__ import annotations
@@ -31,8 +31,8 @@ import tempfile
 import unicodedata
 from pathlib import Path
 
-from warpzone import inbox
-from warpzone.inbox import Context, ItemFailure, UnitResult, whitelist_line
+from warpzone import inbox_core
+from warpzone.inbox_core import Context, ItemFailure, UnitResult, whitelist_line
 from warpzone.sfo import MAX_SFO_BYTES, parse_sfo
 
 GAMES = "ps4/games"  # inside library/roms/
@@ -129,9 +129,11 @@ def _fail_kind(rel: str, kind: str, title_id: str) -> str:
 
 
 def _extract(tool: str, pkg: Path, out: Path) -> None:
-    code, text = inbox._run([tool, "extract", "-q", "-o", str(out), str(pkg)])
+    code, text = inbox_core.run([tool, "extract", "-q", "-o", str(out), str(pkg)])
     if code != 0:
-        raise ItemFailure(f"{pkg.name}: orbis-pkg-util could not extract it ({inbox._tail(text)})")
+        raise ItemFailure(
+            f"{pkg.name}: orbis-pkg-util could not extract it ({inbox_core.tail(text)})"
+        )
 
 
 def _check_tree(root: Path, rel: str) -> int:
@@ -161,7 +163,7 @@ def _copy_tree(src: Path, dest: Path) -> None:
         for d in sorted(dirs):
             (target / d).mkdir()
         for n in sorted(names):
-            inbox.copy_verified(Path(base) / n, target / n)
+            inbox_core.copy_verified(Path(base) / n, target / n)
 
 
 def _place_folder(src: Path, dest: Path) -> None:

@@ -3,7 +3,7 @@
 #
 # POSIX sh, git and the usual tools only. It lives outside the warpzone package on purpose
 # (a broken release must not be able to stop the tool that puts the good one back) and its
-# rules are written in docs/design.md, "Autonomous updates (contract)".
+# rules are written in development/design.md, "Autonomous updates (contract)".
 #
 #   updater.sh tick      one run of the timer: update, verify, roll back, reconcile
 #   updater.sh install DEVICE [--config FILE] [--venv DIR] [--channel stable|rc] [-- ARGS...]

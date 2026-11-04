@@ -187,7 +187,7 @@ class TitleLinks:
     the emulator: nothing is changed while it runs. `noun` is what a title is called in
     messages (`game`, `license`). With `create_target`, a missing `target` folder is made
     when its parent exists (the emulator has run, but does not make this folder until it
-    needs it). See docs/design.md, "Title links".
+    needs it). See development/design.md, "Title links".
     """
 
     source: str

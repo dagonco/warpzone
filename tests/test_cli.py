@@ -150,7 +150,7 @@ class CliTests(unittest.TestCase):
 
 
 class ApplyPathImportTests(unittest.TestCase):
-    """The ES-DE startup run must stay fast: it imports no network code (docs/design.md)."""
+    """The ES-DE startup run must stay fast: it imports no network code (development/design.md)."""
 
     def test_settings_apply_loads_no_network_module(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -455,7 +455,7 @@ class ExitCodeTests(unittest.TestCase):
 
     def test_the_usage_errors_of_the_commands_exit_2(self) -> None:
         from warpzone.bios import BiosError
-        from warpzone.inbox import InboxError
+        from warpzone.inbox_core import InboxError
 
         for cls in (BiosError, InboxError):
             with self.subTest(cls.__name__):

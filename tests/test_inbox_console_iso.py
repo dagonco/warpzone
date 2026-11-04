@@ -20,7 +20,7 @@ from test_inbox import Base
 from warpzone import inbox_console_iso as ci
 from warpzone import inbox_mame
 from warpzone.config import InboxSettings, parse_inbox
-from warpzone.inbox import Tools, whitelist_line
+from warpzone.inbox_core import Tools, whitelist_line
 
 PS3_NAME = "Test Game (Europe) (En,Fr).dec.iso"
 XBOX_NAME = "Brick Racer (USA).xiso.iso"
@@ -422,7 +422,8 @@ class ReviewTests(FlowBase):
 
 class ClaimingTests(FlowBase):
     def claims(self, item: Path) -> bool:
-        from warpzone.inbox import Context, DatLibrary
+        from warpzone.dat import DatLibrary
+        from warpzone.inbox_core import Context
 
         ctx = Context(self.options(), None, DatLibrary(self.dats, None), self.tmp)  # type: ignore[arg-type]
         return ci.HANDLER.claims(ctx, item)

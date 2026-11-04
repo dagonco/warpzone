@@ -9,7 +9,7 @@ from n3ds_support import UNIT, ncsd
 from test_inbox import Base
 from warpzone import inbox_n3ds as n3
 from warpzone.config import InboxSettings
-from warpzone.inbox import whitelist_line
+from warpzone.inbox_core import whitelist_line
 
 NAME = "Plumber Kart 3D (Europe) (En,Fr,De).3ds"
 CCI = "Plumber Kart 3D (Europe) (En,Fr,De).cci"

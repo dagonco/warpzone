@@ -5,7 +5,7 @@ description: Use when the user wants to set up warpzone on a new console or devi
 
 # Install warpzone on a device
 
-Runs on the device itself, not on the hub. There is one supported device install: a git clone plus `updater.sh install`. A `pipx` or wheel install is not supported. Full detail: [self-update.md](../../../docs/self-update.md) and the "Install" section of the [README](../../../README.md).
+Runs on the device itself, not on the hub. There is one supported device install: a git clone plus `updater.sh install`. A `pipx` or wheel install is not supported. Full detail: [self-update.md](../../../website/src/content/docs/operation/self-update.md) and the [installation guide](../../../website/src/content/docs/overview/installation.md).
 
 Never print the contents of the config file or any API key. Show commands and their output.
 
@@ -16,7 +16,7 @@ Never print the contents of the config file or any API key. Show commands and th
 3. A console new to warpzone has no `[devices.<name>]` table yet. Then, on the admin machine (the one that can reach the hub), with the user doing the edits and you never inventing values:
    - the user adds the table with the device's real Syncthing ID (Actions > Show ID) and profile; the template is [examples/config.example.toml](../../../examples/config.example.toml);
    - the user creates `patterns-<name>.stignore` in the hub's `library/` (and `songs/` if it subscribes), from [templates/patterns-device.example.stignore](../../../templates/patterns-device.example.stignore);
-   - run `warpzone check`, then `warpzone provision hub --dry-run` and show it; after the user's OK run `warpzone provision hub` (README Quickstart step 3);
+   - run `warpzone check`, then `warpzone provision hub --dry-run` and show it; after the user's OK run `warpzone provision hub` (see the quick start guide);
    - copy the updated config to the device (next point).
 4. The config must be on the device. Copy it from the user's other machine (the same file works everywhere); never create one with made-up IDs. If `[hub]` uses `api_key_file`, copy that key file too, to the path the config names: a missing or empty key file is a config error and `provision device` exits `2`. Give it `chmod 600` and never print it.
 5. The hub must already be provisioned and its whitelist `patterns-<device>.stignore` must exist on it, or `provision device` stops before touching anything.
@@ -56,5 +56,5 @@ On a systemd device, check the timer: `systemctl --user status warpzone-self-upd
 ## Rules
 
 - The clone must stay on a release tag or a clean branch. Never leave local commits or edits in it: the updater will not move it.
-- To turn the updater off, set `self_update = false` in the config and run `warpzone provision device <device>`; see [Turning it off](../../../docs/self-update.md#turning-it-off).
+- To turn the updater off, set `self_update = false` in the config and run `warpzone provision device <device>`; see [Turning it off](../../../website/src/content/docs/operation/self-update.md#turning-it-off).
 - Do not use `sudo` and do not edit Syncthing's config by hand.
