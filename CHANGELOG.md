@@ -8,12 +8,16 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ### Added
 
-- `auto_hub = true` under a device lets `provision device` create on the hub the folders the device needs and the hub lacks, and `warpzone provision hub --additive` does the same from anywhere. Both only create: whitelisted folders and folders the hub already has are never created or changed.
+- `auto_hub = true` under a device lets `provision device` create on the hub the folders the device needs and the hub lacks, and `warpzone provision hub --additive` does the same from anywhere. Both only create: whitelisted folders and folders the hub already has are never created or changed, and no folder is created at a path another hub folder uses.
 - `warpzone self-update --now` (and `updater.sh tick --fetch-now`) looks for a new release right away instead of waiting for the next fetch; it still waits while the menu is open.
 
 ### Changed
 
 - The updater looks for new releases every hour on the `rc` channel and every 12 hours on `stable` (or with a pin), instead of once a day, so a release candidate reaches devices soon after it is published.
+
+### Fixed
+
+- The updater stops with a log line when it finds no clone to work on, instead of acting on whatever folder it runs from; only retirements of tags that matter to the tick (the running version, the pin and the candidates) count towards the limit of retirements checked, so unsigned retirements of other releases cannot push a real one out; and no move to a lower version is accepted in a tick where the copy of the allowed signers failed.
 
 ## [0.3.0rc2] - 2026-11-04
 

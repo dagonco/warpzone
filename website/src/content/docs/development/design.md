@@ -2301,7 +2301,8 @@ over a higher one, so a rollback does not downgrade the script. It reads its set
 runs), line by line and never with `source`, so a value cannot run anything. The script reads
 `device`, `python` (the interpreter to try first), `enabled` (`false`, `0`, `no` or `off`
 turn it off), `frontend` (the process names of the frontend, separated by spaces; default
-`es-de ES-DE.AppImage`), `clone` (the git checkout; default two folders above the script) and
+`es-de ES-DE.AppImage`), `clone` (the git checkout; default two folders above the script; a tick
+that ends up with no clone at all logs it and exits `1` without touching anything) and
 `config` (passed as `--config`), `channel` (`stable` or `rc`; anything else is `stable`, with a
 line in the log) and `pin` (a tag; one that is not a tag is ignored, with a line in the log).
 For tests every path
@@ -2408,15 +2409,19 @@ same step is `provision hub --additive`, which a person can run from anywhere. T
   devices, ignores or paused flag changed, so a console with an old config or channel reverts
   nothing and there is no question of whose config wins. Where an existing folder differs
   from the config (path, type, or a subscribing device it is not shared with) the run only
-  warns, naming `provision hub` as the way to change it.
+  warns, naming `provision hub` as the way to change it. A missing folder whose path another
+  hub folder already has (compared without a trailing slash and in any case, whatever that
+  folder's ID) is not created either, with a warning: two folders on one directory would each
+  sync it their own way.
 - **Only what the device needs.** From a device, the run is limited to the folders of that
   device that this run is going to provision (the ones left out because a save directory is
   missing are not made on the hub). The hub folder is shared with every device that
   subscribes to it in the config, as `provision hub` would, and a subscriber the hub does not
   know yet is added as a device first.
 - **Safe to write.** The API must answer as `hub.device_id` (else `ProvisionError`, nothing
-  written). The hub's folders are read again right before each creation, and a folder that
-  appeared in between is left alone. A new folder is created paused, gets its ignores and is
+  written). The hub's folders are read again right before each creation (after any device it
+  adds, since `POST /rest/config/folders` replaces a folder with the same ID), and a folder
+  that appeared in between is left alone. A new folder is created paused, gets its ignores and is
   then resumed, as `provision hub` does.
 - **Never a failure of the device.** From `provision device`, an unreachable hub, a refused
   key or another device behind the API is a warning (`auto_hub: ...`) and the run goes on
@@ -2658,7 +2663,12 @@ checks (a version name, an annotated tag, the commit) count tags towards the lim
 signatures of at most 50 well formed `retired/` tags are checked per tick (`RETIRED_MAX`, `WZ_RETIRED_MAX` for tests,
 newest version first), so a pile of tags with invalid signatures cannot use up the tick's
 budget, and tags that are no retirement cannot push a real one out; 500 tags are looked at in
-all (`RETIRED_SCAN`). It logs when there are more. The reason, taken
+all (`RETIRED_SCAN`). It logs when there are more. Only retirements of tags that matter to
+the tick are looked at and counted: the running version, the pin, a version being tried or
+under suspicion, and the candidates the tick considers (newer than the running version and of
+the channel, or every one of the channel when the running version is retired). Fake or
+unsigned retirements of other real releases, such as the candidates of the running version
+(`retired/v0.3.0rc1` sorts above `retired/v0.3.0`), cannot use up the limit. The reason, taken
 from the tag's subject, is only text for the log; nothing in a tag is run. A retired tag is
 never a candidate. When the running version is retired the device goes to the best valid
 candidate of its channel, even a lower one (there is no floor), and stays where it is when
@@ -2722,7 +2732,11 @@ the version known to work is older than `signers_version` (a `pin`, or a retirem
 device down to an old release), its `allowed_signers`, absent or listing keys that a newer
 release dropped, is ignored and the last keys are used, and the log says so; `.last` is only
 replaced by the keys of a version that is as new or newer. With no copy to use, every tag is
-refused. Trust is by first use: the first release that
+refused. When the copy of the keys of the version known to work cannot be written (a full
+disk) and `signers_version` is older than that version, no move down is accepted in that tick
+(a retirement, a pin, a version being tried, a suspect), with a line in the log: the stale
+version could let the next tick bring back a key that this version dropped. The next tick
+tries the copy again. Trust is by first use: the first release that
 carries keys is taken without a signature check (nothing on the device yet says whom to
 trust), and so is any release before it; from then on a release has to be signed by keys the
 device already trusts, which includes the release that rotates them.

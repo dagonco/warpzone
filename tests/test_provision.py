@@ -863,6 +863,16 @@ class AdditivePlanTests(unittest.TestCase):
         }
         self.assertEqual(self.plan(existing).differences, ())
 
+    def test_a_folder_is_not_created_where_another_folder_already_is(self) -> None:
+        tools = {s.id: s for s in _hub_specs()}["wz-tools"]
+        # Another ID at the same directory, spelt with a trailing slash and another case.
+        existing = {"old-tools": {"id": "old-tools", "path": tools.path.upper() + "/"}}
+        plan = self.plan(existing)
+        self.assertNotIn("wz-tools", {s.id for s in plan.create})
+        self.assertEqual(len(plan.clashes), 1)
+        self.assertIn("wz-tools", plan.clashes[0])
+        self.assertIn("old-tools", plan.clashes[0])
+
 
 class AdditiveHubTests(unittest.TestCase):
     def additive(self, fake, **kw):
@@ -933,6 +943,37 @@ class AdditiveHubTests(unittest.TestCase):
             self.assertNotIn("wz-tools", created)
             self.assertEqual(fake.folders["wz-tools"]["path"], "/theirs")
             self.assertIn("wz-tools: already on the hub, left as it is", lines)
+
+    def test_a_folder_that_appears_while_devices_are_added_is_not_replaced(self) -> None:
+        # POST /rest/config/folders replaces a folder with the same ID, so the last look
+        # must come after the device writes, right before the folder is created.
+        with FakeSyncthing(HUB_ID) as fake:
+            original = fake.route
+
+            def route(method, path, query, body):
+                result = original(method, path, query, body)
+                if (method, path) == ("POST", "/rest/config/devices"):
+                    fake.folders.setdefault(
+                        "wz-tools",
+                        {"id": "wz-tools", "path": "/theirs", "type": "sendonly", "devices": []},
+                    )
+                return result
+
+            fake.route = route
+            created, _, lines = self.additive(fake, only={"wz-tools"})
+            self.assertEqual(created, [])
+            self.assertEqual(fake.folders["wz-tools"]["path"], "/theirs")
+            self.assertIn("wz-tools: already on the hub, left as it is", lines)
+
+    def test_a_folder_at_the_path_of_another_is_not_created(self) -> None:
+        with FakeSyncthing(HUB_ID) as fake:
+            tools = {s.id: s for s in _hub_specs()}["wz-tools"]
+            fake.folders["old-tools"] = {"id": "old-tools", "path": tools.path, "devices": []}
+            created, rep, _ = self.additive(fake, only={"wz-tools"})
+            self.assertEqual(created, [])
+            self.assertNotIn("wz-tools", fake.folders)
+            self.assertEqual(fake.writes(), [])
+            self.assertTrue(any("old-tools" in w for w in rep.warnings))
 
     def test_an_api_that_is_not_the_hub_is_refused_before_any_write(self) -> None:
         with FakeSyncthing(DECK_ID) as fake:
