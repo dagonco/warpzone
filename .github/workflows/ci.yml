@@ -23,6 +23,52 @@ env:
   SYNCTHING_LINUX_AMD64_SHA256: 2edc416e7ed136b7c858ed5f3f02a3b8316589605e54c380228ceea7acbf0142
 
 jobs:
+  # Which jobs a pull request needs, from the files it changes. A job whose files did not
+  # change is skipped (a skipped job counts as passed for the required checks). Matrix jobs
+  # skip their steps instead of the whole job, because a skipped matrix job reports one check
+  # without the matrix name and the required checks would wait for ever. The weekly and
+  # manual runs run everything.
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      python: ${{ steps.diff.outputs.python }}
+      updater: ${{ steps.diff.outputs.updater }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - id: diff
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          python=false
+          updater=false
+          if [ "$EVENT" != pull_request ]; then
+            python=true
+            updater=true
+          else
+            for f in $(git diff --name-only "$BASE...$HEAD"); do
+              case $f in
+              # Documentation the tests do not read (they read the design pages, the
+              # changelog and examples/).
+              website/src/content/docs/development/*) python=true ;;
+              website/* | .claude/* | LICENSE | README.md | CONTRIBUTING.md | AGENTS.md) ;;
+              .github/dependabot.yml | .github/workflows/docs.yml) ;;
+              *) python=true ;;
+              esac
+              case $f in
+              warpzone/* | tests/test_updater_sh.py | tests/support.py | pyproject.toml) updater=true ;;
+              .github/workflows/ci.yml) python=true; updater=true ;;
+              esac
+            done
+          fi
+          echo "python=$python" >> "$GITHUB_OUTPUT"
+          echo "updater=$updater" >> "$GITHUB_OUTPUT"
+          echo "python=$python updater=$updater"
+
   lint:
     runs-on: ubuntu-latest
     steps:
@@ -39,6 +85,8 @@ jobs:
           args: format --check
 
   typecheck:
+    needs: changes
+    if: needs.changes.outputs.python == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -52,6 +100,7 @@ jobs:
       - run: python -m mypy
 
   test:
+    needs: changes
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -64,14 +113,17 @@ jobs:
           - { os: macos-latest, python: "3.14" }
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: needs.changes.outputs.python == 'true'
         with:
           persist-credentials: false
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        if: needs.changes.outputs.python == 'true'
         with:
           python-version: ${{ matrix.python }}
       # The updater script's tests (tests/test_updater_sh.py) take minutes on their own and
       # run in the `updater` job; WARPZONE_SKIP_UPDATER_SH makes them skip here.
       - name: Run the tests
+        if: needs.changes.outputs.python == 'true'
         timeout-minutes: 6
         env:
           WARPZONE_SKIP_UPDATER_SH: "1"
@@ -82,6 +134,7 @@ jobs:
   # Ubuntu runs it with dash as sh (what the devices have) and shellcheck, macOS with the
   # system sh (bash in POSIX mode), on one Python version.
   updater:
+    needs: changes
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     strategy:
@@ -94,12 +147,15 @@ jobs:
             shell: sh
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: needs.changes.outputs.updater == 'true'
         with:
           persist-credentials: false
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        if: needs.changes.outputs.updater == 'true'
         with:
           python-version: "3.13"
       - name: Install shellcheck
+        if: needs.changes.outputs.updater == 'true'
         timeout-minutes: 5
         run: |
           if command -v shellcheck >/dev/null 2>&1; then
@@ -112,6 +168,7 @@ jobs:
             brew install shellcheck
           fi
       - name: Run the updater script tests
+        if: needs.changes.outputs.updater == 'true'
         timeout-minutes: 10
         env:
           WZ_TEST_SHELL: ${{ matrix.shell }}
@@ -120,6 +177,8 @@ jobs:
           python -X faulthandler -m unittest discover -s tests -p test_updater_sh.py -v
 
   e2e:
+    needs: changes
+    if: needs.changes.outputs.python == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
