@@ -1,8 +1,10 @@
-# EmuDeck and the steamos-emudeck profile
+---
+title: "EmuDeck and the steamos-emudeck profile"
+---
 
 What the shipped profile covers, why save folders point at real directories, and the few steps that stay manual.
 
-A profile says where things live on one kind of device: [`warpzone/data/profiles/`](../warpzone/data/profiles). warpzone ships `steamos-emudeck` (Steam Deck, Steam Machine) and `anbernic-rg351mp` (see [anbernic.md](anbernic.md)). Profiles are plain TOML, so adding a setup is a small pull request. A save entry like `[saves.dolphin-gc]` maps to the folder ID `wz-save-dolphin-gc` and the hub path `saves/dolphin/gc`. A `[bios.cemu-keys]` placement maps to `wz-bios-cemu-keys`.
+A profile says where things live on one kind of device: [`warpzone/data/profiles/`](https://github.com/dagonco/warpzone/tree/main/warpzone/data/profiles). warpzone ships `steamos-emudeck` (Steam Deck, Steam Machine) and `anbernic-rg351mp` (see [the Anbernic guide](/warpzone/guides/anbernic/)). Profiles are plain TOML, so adding a setup is a small pull request. A save entry like `[saves.dolphin-gc]` maps to the folder ID `wz-save-dolphin-gc` and the hub path `saves/dolphin/gc`. A `[bios.cemu-keys]` placement maps to `wz-bios-cemu-keys`.
 
 ## Saves covered
 
@@ -53,7 +55,7 @@ The same trap exists in `~/Emulation/bios`. EmuDeck turns `eden/keys`, `eden/fir
 
 ## shadPS4 install directory
 
-shadPS4 has no package installer: it runs extracted games from its install directories. `warpzone inbox` extracts PS4 `.pkg` files into `library/roms/ps4/games/<CUSAnnnnn>/` and writes a shortcut in `roms/ps4/shortcuts/` that ES-DE lists ([inbox.md](inbox.md#ps4-games)). For a console to find those folders, `~/Emulation/roms/ps4/games` must be one of shadPS4's install directories. The profile declares it (`[shadps4]`), and `warpzone provision device <name>` adds it to `~/.local/share/shadPS4/config.json` (shadPS4 v0.21 and later, `General.install_dirs`) and to `config.toml` (`GUI.installDirs`) when they exist, keeping the entries already there (EmuDeck's `~/Emulation/storage/shadps4/games` stays). It backs the file up first and skips it while shadPS4, its Qt launcher or the game is running, so close them and run `provision device` again if it says so. `warpzone doctor` flags a console whose config lacks the folder. If shadPS4 has never run there is no config yet: start it once, then provision.
+shadPS4 has no package installer: it runs extracted games from its install directories. `warpzone inbox` extracts PS4 `.pkg` files into `library/roms/ps4/games/<CUSAnnnnn>/` and writes a shortcut in `roms/ps4/shortcuts/` that ES-DE lists ([Adding games](/warpzone/setup/inbox/#ps4-games)). For a console to find those folders, `~/Emulation/roms/ps4/games` must be one of shadPS4's install directories. The profile declares it (`[shadps4]`), and `warpzone provision device <name>` adds it to `~/.local/share/shadPS4/config.json` (shadPS4 v0.21 and later, `General.install_dirs`) and to `config.toml` (`GUI.installDirs`) when they exist, keeping the entries already there (EmuDeck's `~/Emulation/storage/shadps4/games` stays). It backs the file up first and skips it while shadPS4, its Qt launcher or the game is running, so close them and run `provision device` again if it says so. `warpzone doctor` flags a console whose config lacks the folder. If shadPS4 has never run there is no config yet: start it once, then provision.
 
 The shortcut and the version: EmuDeck's `shadps4.sh` takes the quoted path in the `Exec=` line and starts `Shadps4-qt.AppImage -d -g <path>`; `-d` means "the emulator version selected in the Qt launcher", so choose the version there once. With `[shadps4.launch]` ES-DE runs warpzone's launch script instead ([below](#shadps4-launch-script)), which still needs a version selected or downloaded in the Qt launcher. Add the whitelist lines that `inbox` prints (`!/roms/ps4/games/<CUSAnnnnn>` and the shortcut) to the console's whitelist.
 
@@ -68,7 +70,7 @@ EmuDeck may rewrite `es_find_rules.xml` on an update. `warpzone doctor` (`shadPS
 
 ## Vita3K games
 
-`warpzone inbox` files a decrypted Vita dump in `library/roms/psvita/app/<TITLEID>/` with a `roms/psvita/<Title>.psvita` file that holds the title id ([inbox.md](inbox.md#ps-vita-games)). ES-DE lists the `.psvita` file, and EmuDeck's `vita3k.sh` reads the title id from it and starts `Vita3K -Fr <TITLEID>`. Vita3K looks for the game in its own storage, `~/Emulation/storage/Vita3K/ux0/app/<TITLEID>`, which is not the library folder. The profile declares the bridge (`[links.vita3k]`: `source`, `target`, `process`, `match`, `require`), and one command keeps it up to date. A game whose `eboot.bin` is still encrypted also needs its licence in `ux0/license/<TITLEID>/<CONTENT_ID>.rif`, which `inbox` files in `roms/psvita/license/<TITLEID>/`; a second rule, `[links.vita3k-license]`, links that folder the same way (`noun = "license"` names it in messages; `create_target = true` makes `ux0/license` when `ux0` is there, because Vita3K only creates it when it installs a licence). Everything below applies to both rules, and `doctor` reports them as `Vita3K game links` and `Vita3K license links`:
+`warpzone inbox` files a decrypted Vita dump in `library/roms/psvita/app/<TITLEID>/` with a `roms/psvita/<Title>.psvita` file that holds the title id ([Adding games](/warpzone/setup/inbox/#ps-vita-games)). ES-DE lists the `.psvita` file, and EmuDeck's `vita3k.sh` reads the title id from it and starts `Vita3K -Fr <TITLEID>`. Vita3K looks for the game in its own storage, `~/Emulation/storage/Vita3K/ux0/app/<TITLEID>`, which is not the library folder. The profile declares the bridge (`[links.vita3k]`: `source`, `target`, `process`, `match`, `require`), and one command keeps it up to date. A game whose `eboot.bin` is still encrypted also needs its licence in `ux0/license/<TITLEID>/<CONTENT_ID>.rif`, which `inbox` files in `roms/psvita/license/<TITLEID>/`; a second rule, `[links.vita3k-license]`, links that folder the same way (`noun = "license"` names it in messages; `create_target = true` makes `ux0/license` when `ux0` is there, because Vita3K only creates it when it installs a licence). Everything below applies to both rules, and `doctor` reports them as `Vita3K game links` and `Vita3K license links`:
 
 - `warpzone provision device <name>` links every game of `roms/psvita/app` into `ux0/app`, and installs the ES-DE startup script `~/ES-DE/scripts/startup/warpzone-links.sh`, so a game that was whitelisted since the last start is linked when ES-DE starts, with no manual step. `warpzone links sync <name>` does the same by hand (`--dry-run` only says what it would do, `--quiet` prints nothing).
 - A game is linked when its folder is named like a Vita title id and already holds `eboot.bin` and `sce_sys/param.sfo`, so a game that is still syncing is linked once it is complete. The link is absolute (`~/Emulation/storage/Vita3K/ux0/app/<TITLEID>` points at `~/Emulation/roms/psvita/app/<TITLEID>`).
@@ -131,21 +133,21 @@ Keys and firmware reach the emulators through **BIOS placements**, listed in the
 
 A placement whose emulator is not installed is skipped with a warning, like a save folder. A profile may set `create_when` to create the missing folder when the emulator's data folder exists.
 
-Because the keys now live in the emulators' folders, `warpzone bios` on a device no longer sees them in `~/Emulation/bios`. Run it against the hub's `library/` ([bios.md](bios.md)).
+Because the keys now live in the emulators' folders, `warpzone bios` on a device no longer sees them in `~/Emulation/bios`. Run it against the hub's `library/` ([Checking BIOS files](/warpzone/setup/bios/)).
 
 xemu's disk image (`xbox_hdd.qcow2`, which holds that console's Xbox saves) is deliberately not synced: it is per device.
 
 ## Emulator settings
 
-The profile also declares the settings files of eleven emulators (language, region, graphics options), so a choice made on one console can reach the others. See [settings.md](settings.md).
+The profile also declares the settings files of eleven emulators (language, region, graphics options), so a choice made on one console can reach the others. See [Emulator settings](/warpzone/setup/settings/).
 
-One caveat belongs here. The xemu EEPROM is shared as a whole file, which gives every console the same Xbox serial number and signing key. A console that already had its own EEPROM may reject saves signed with the old key that sit inside its own xemu HDD image (which stays per device, as above). Leave the EEPROM out at capture if that matters ([settings.md](settings.md#the-xbox-eeprom-caveat)).
+One caveat belongs here. The xemu EEPROM is shared as a whole file, which gives every console the same Xbox serial number and signing key. A console that already had its own EEPROM may reject saves signed with the old key that sit inside its own xemu HDD image (which stays per device, as above). Leave the EEPROM out at capture if that matters ([Emulator settings](/warpzone/setup/settings/#the-xbox-eeprom-caveat)).
 
 ## Manual steps
 
 These are done once per device, by hand.
 
-**Ryujinx keys.** Ryujinx has no placement. Its `system/` folder would need the same `prod.keys` and `title.keys` that Eden already receives, and two Syncthing folders cannot share one hub folder cleanly (see [design.md](design.md#library-exclusions-and-bios-placements)). Copy the two files from Eden's keys folder to `~/.config/Ryujinx/system/`.
+**Ryujinx keys.** Ryujinx has no placement. Its `system/` folder would need the same `prod.keys` and `title.keys` that Eden already receives, and two Syncthing folders cannot share one hub folder cleanly (see [the design document](/warpzone/development/design/#library-exclusions-and-bios-placements)). Copy the two files from Eden's keys folder to `~/.config/Ryujinx/system/`.
 
 **Ryujinx firmware.** Ryujinx cannot receive its firmware as files either. Install it from Ryujinx (Tools > Install Firmware), pointing at the Eden firmware folder, `~/Emulation/storage/eden/nand/system/Contents/registered`.
 

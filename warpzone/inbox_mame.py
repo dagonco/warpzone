@@ -7,7 +7,7 @@ parent, of its BIOS and of its devices is present, in the dropped zip or in the 
 device zips already in `library/roms/mame/`. The first emulator that fits wins: FinalBurn
 Neo, then MAME (the ES-DE default, so no `<altemulator>`), then MAME 2003-Plus; the others
 are recorded as a per-game `<altemulator>` in the hub's ES-DE gamelist. Sega Atomiswave
-and Naomi games, which hang in MAME, go to Flycast instead. See docs/design.md.
+and Naomi games, which hang in MAME, go to Flycast instead. See development/design.md.
 
 The decisions (`evaluate`, `best_fit`, `decide`, `update_gamelist`, `parse_sets`,
 `describe_miss`) are pure; `MameHandler` and the cache and gamelist file helpers touch
@@ -17,7 +17,6 @@ the disk. The module plugs into `inbox.py` through `inbox.kind_handlers()`.
 from __future__ import annotations
 
 import hashlib
-import json
 import os
 import re
 import shutil
@@ -31,7 +30,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import IO
 
-from warpzone import gamelist, inbox_core
+from warpzone import gamelist, inbox_core, safefile
 from warpzone.gamelist import EMPTY_GAMELIST, GamelistError
 from warpzone.inbox_core import Context, InboxError, ItemFailure, ItemResult, Options, UnitResult
 
@@ -245,9 +244,9 @@ def load_sets(path: Path, cache_dir: Path | None) -> tuple[dict[str, Machine], s
     stat = path.stat()
     cache = _cache_file(cache_dir, path) if cache_dir else None
     if cache:
+        data = safefile.read_json_cache(cache)
         try:
-            data = json.loads(cache.read_text(encoding="utf-8"))
-            if (
+            if data is not None and (
                 data["version"] == CACHE_VERSION
                 and data["size"] == stat.st_size
                 and data["mtime_ns"] == stat.st_mtime_ns
@@ -271,13 +270,7 @@ def load_sets(path: Path, cache_dir: Path | None) -> tuple[dict[str, Machine], s
             "build": build,
             "machines": [_machine_json(m) for m in machines.values()],
         }
-        tmp = cache.with_name(cache.name + ".tmp")
-        try:
-            cache.parent.mkdir(parents=True, exist_ok=True)
-            tmp.write_text(json.dumps(data, separators=(",", ":")), encoding="utf-8")
-            os.replace(tmp, cache)
-        except OSError:
-            pass  # a cache that cannot be written only costs time
+        safefile.write_json_cache(cache, data)
     return machines, build, False
 
 

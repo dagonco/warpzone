@@ -12,7 +12,7 @@ from unittest import mock
 from support import API_KEY, DECK_ID, FakeProc, FakeSyncthing, config_data
 from test_anbernic import ARK_ID, ark_config
 from test_artwork_device import Art
-from warpzone import artwork, esde, health, localst, provision, selfupdate, updatetimer
+from warpzone import artwork, esde, health, localst, safefile, selfupdate, updatetimer
 from warpzone.cli import main
 from warpzone.config import Config, ConfigError, parse_config
 from warpzone.model import device_specs
@@ -271,11 +271,11 @@ class DeckBase(Base):
                 (esde.PLAY_STATE_SCRIPT, esde.render_play_state_script(self.python, "deck")),
                 (esde.LINKS_SCRIPT, esde.render_links_script(self.python, "deck")),
             ):
-                provision._write_script(esde.script_path(esde_dir, name), text)
+                safefile.write_script(esde.script_path(esde_dir, name), text)
         if units:
             folder = self.home / updatetimer.UNIT_DIR
             live = selfupdate.live_path(self.home)
-            provision._write_script(live, "UPDATER_ABI=1\n")
+            safefile.write_script(live, "UPDATER_ABI=1\n")
             service, timer = artwork.render_play_state_units(self.python, "deck", None, "15min")
             for name, text in (
                 (updatetimer.SERVICE, updatetimer.render_service(str(live))),
@@ -283,7 +283,7 @@ class DeckBase(Base):
                 (f"{artwork.PLAY_STATE_UNIT}.service", service),
                 (f"{artwork.PLAY_STATE_UNIT}.timer", timer),
             ):
-                provision._write_script(folder / name, text, 0o644)
+                safefile.write_script(folder / name, text, 0o644)
 
 
 class DeckTests(DeckBase, unittest.TestCase):
@@ -339,7 +339,7 @@ class DeckTests(DeckBase, unittest.TestCase):
 
     def test_a_script_whose_interpreter_is_gone_fails(self) -> None:
         text = esde.render_links_script(str(self.home / "gone/bin/python"), "deck")
-        provision._write_script(esde.script_path(self.home / "ES-DE", esde.LINKS_SCRIPT), text)
+        safefile.write_script(esde.script_path(self.home / "ES-DE", esde.LINKS_SCRIPT), text)
         code, lines = self.health("deck", self.cfg, self.profiles)
         self.assertEqual(code, 1)
         self.assertEqual(self.status(lines, esde.LINKS_SCRIPT), health.FAIL)
@@ -363,7 +363,7 @@ class DeckTests(DeckBase, unittest.TestCase):
 
     def test_a_unit_that_runs_a_missing_program_fails(self) -> None:
         gone = str(self.home / "gone/bin/python")
-        provision._write_script(
+        safefile.write_script(
             self.home / updatetimer.UNIT_DIR / f"{artwork.PLAY_STATE_UNIT}.service",
             f"[Service]\nExecStart={gone} -m warpzone play-state sync deck\n",
             0o644,

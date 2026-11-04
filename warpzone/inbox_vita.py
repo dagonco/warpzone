@@ -25,7 +25,7 @@ files keep their outcome.
 
 The decisions (`is_title_id`, `category_kind`, `game_roots`, `is_vitamin`, `file_name`,
 `eboot_needs_license`, `parse_license`, `license_sources`, `choose_license`) are pure;
-`install` touches the disk. See docs/design.md.
+`install` touches the disk. See development/design.md.
 """
 
 from __future__ import annotations

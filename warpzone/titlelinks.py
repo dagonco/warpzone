@@ -9,7 +9,7 @@ The rules (`plan`) are pure. The links are the only thing ever changed: a real f
 in the way is left alone, so is a link that points elsewhere, and only a dangling link that
 points into the library folder (one this module made for a game that is gone) is removed.
 Nothing is changed while the emulator runs, and `dry_run` changes nothing. No network code
-is imported, because ES-DE waits for the startup script. See docs/design.md, "Title links".
+is imported, because ES-DE waits for the startup script. See development/design.md, "Title links".
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
-from warpzone import settings_state
+from warpzone import procs
 from warpzone.paths import expand_home
 from warpzone.profiles import Profile, TitleLinks
 
@@ -291,8 +291,8 @@ def sync(
             say(f"links {item.key}: {len(todo.ok)} {item.rule.noun}(s) linked, nothing to do")
             continue
         try:
-            busy = settings_state.running(item.rule.process, proc=proc)
-        except settings_state.NoProc:
+            busy = procs.running(item.rule.process, proc=proc)
+        except procs.NoProc:
             warn(
                 f"links {item.key}: cannot tell whether {item.label} is running (no /proc), so "
                 f"the links were left alone: {again} on a system with /proc"

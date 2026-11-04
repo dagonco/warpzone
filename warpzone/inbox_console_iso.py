@@ -40,7 +40,7 @@ with `gamelist.update_entry`, written through the file helpers of `inbox_mame`.
 
 The decisions (`claimed_name`, `iso_records`, `xdvdfs_entries`, `detect`,
 `destination`) are pure functions of bytes or of a binary file object that is only read in
-small bounded pieces; the rest touches the disk. See docs/design.md.
+small bounded pieces; the rest touches the disk. See development/design.md.
 """
 
 from __future__ import annotations

@@ -1,4 +1,6 @@
-# warpzone design
+---
+title: "warpzone design"
+---
 
 warpzone keeps one game library on a home server (the **hub**, typically a NAS)
 and delivers it to every console you own (the **devices**: Steam Deck, Steam
@@ -96,7 +98,7 @@ Folder-level settings:
 
 - Save folders, `wz-settings` and `wz-play-state` on the hub: versioning `staggered`, `maxAge` 30 days.
 - Everything else: no versioning (the hub is the authority; filesystem
-  snapshots on the hub are recommended in [safety.md](safety.md) instead).
+  snapshots on the hub are recommended in [Safety](/warpzone/operation/safety/) instead).
 - `fsWatcherEnabled: true` everywhere.
 - `ignorePerms: true` on every folder of a device whose profile sets `ignore_perms`
   (the library sits on exFAT, which has no POSIX permissions). It is set on the device's
@@ -365,7 +367,7 @@ is the same on both ends, so the folder cannot be shared once and received at
 two paths; two hub folders over one directory would share its `.stfolder` and
 `.stignore` and scan and index the same files twice, which is the overlap the
 placements exist to avoid. Giving Ryujinx its own hub copy (`bios/ryujinx/keys`)
-would duplicate the keys. So the [EmuDeck guide](emudeck.md#manual-steps) tells the user to copy the
+would duplicate the keys. So the [EmuDeck guide](/warpzone/guides/emudeck/#manual-steps) tells the user to copy the
 two files once. Ryujinx firmware is installed from the emulator (Tools > Install
 Firmware, pointing at the Eden firmware folder), not delivered as files, like
 the PS3 firmware in RPCS3.
@@ -514,7 +516,7 @@ and not what it points at.
   pointing anywhere else is not ours. Both lists are re-checked right before each change
   (`readlink` and `exists`), and a link that appears meanwhile (`FileExistsError`) is not an
   error.
-- Nothing is changed while a process of `process` runs (`settings_state.running`) or when that
+- Nothing is changed while a process of `process` runs (`procs.running`) or when that
   cannot be told (no `/proc`); the run says so. A missing `source` is "nothing to link"; a
   missing `target` means the emulator has not run yet, and it is not created. `--dry-run`
   prints "would link" and "would remove" and changes nothing. A second run changes nothing.
@@ -2250,7 +2252,7 @@ do.
 | `provision hub --additive` | Not implemented |
 
 **Tag spelling.** A release is `vX.Y.Z` and a release candidate is `vX.Y.ZrcN`: the tag is
-`v` plus `__version__`, in the PEP 440 spelling that [releasing.md](releasing.md) requires
+`v` plus `__version__`, in the PEP 440 spelling that [Releasing](/warpzone/development/releasing/) requires
 (`v0.3.0-rc1` is not a tag warpzone knows). They order as `v0.3.0rc1` < `v0.3.0rc2` <
 `v0.3.0`, and every number is compared as a number (`rc10` is after `rc2`).
 `versions.tag_key` returns that key, or None for any other spelling; `version_key` gives
@@ -2557,7 +2559,7 @@ leaves no status at all.
   the reference again, and the release is under suspicion as described above.
 
 **Deferring while the menu is open.** The script scans `/proc/*/comm` and `argv[0]` the way
-`settings_state.running` does (`WZ_PROC` points it at a fake tree in tests, and a test checks
+`procs.running` does (`WZ_PROC` points it at a fake tree in tests, and a test checks
 that both agree). The names come from `esde.ESDE_PROCESSES` (unconfirmed on a console, as
 that module says) or from `es_systems.process`, depending on the profile. ES-DE stays alive
 during a game, so nothing updates while playing either. When it is open the tick sets
@@ -2573,7 +2575,7 @@ menu looks open for as long as the console is on, and every write is already gua
 set, since otherwise a release could never be accepted on such a device. Where `/proc`
 cannot be read, the script goes on (waiting would never help). `updater.sh menu` prints
 `open`, `closed` or `unknown` and exits 0, 1 or 2; a test compares it with
-`settings_state.running` on the same fake `/proc` trees.
+`procs.running` on the same fake `/proc` trees.
 
 **Python.** The interpreter must run `python3 -I -c "import tomllib, sys"` and be 3.11 or
 newer; the candidates are the one in `conf`, `/usr/bin/python3` and `python3`. With none the
@@ -2684,7 +2686,7 @@ refused. Trust is by first use: the first release that
 carries keys is taken without a signature check (nothing on the device yet says whom to
 trust), and so is any release before it; from then on a release has to be signed by keys the
 device already trusts, which includes the release that rotates them.
-[releasing.md](releasing.md) says how to sign.
+[Releasing](/warpzone/development/releasing/) says how to sign.
 
 **Never unattended.** `prune --apply`, `inbox --apply` and `settings capture`. The shadPS4
 version is the user's choice and is only read. `ensure_flatpak_access` asks for a Syncthing
@@ -2758,7 +2760,9 @@ warpzone/
   settings_tree.py   format handlers json, toml (pure)
   settings_layers.py layer files: parse, validate, merge, render (pure) and atomic write
   settings_plan.py   apply plan, capture candidates and pre-selection, audit rows (pure)
-  settings_state.py  device state: snapshots, backups, log, lock, atomic write, processes
+  settings_state.py  device state: snapshots, backups, log, lock
+  safefile.py        safe writes: atomic write, stamps, `guarded_edit`, JSON cache
+  procs.py           process detection from `/proc` (`running`)
   esde.py            ES-DE startup script, `es_settings.xml` check and edit (pure)
   frontend.py        frontend system list rewrite, RetroArch key gap (pure)
   artwork.py         frontend artwork: ES-DE gamelist -> the frontend's gamelist, scope ignores,
@@ -2780,7 +2784,8 @@ templates/
 examples/config.example.toml
 examples/bios.example.toml
 tests/               unittest; unit tests + e2e (two real Syncthing instances)
-docs/design.md       this file
+website/             documentation site (Starlight); this file is
+                     website/src/content/docs/development/design.md
 ```
 
 `model.py` is pure: config + profiles in, list of desired folder specs out. All

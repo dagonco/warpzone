@@ -16,3 +16,8 @@ venv/
 # Private: never commit
 config.toml
 *.key
+
+# Documentation website (built in CI)
+website/node_modules/
+website/dist/
+website/.astro/

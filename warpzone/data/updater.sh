@@ -3,7 +3,7 @@
 #
 # POSIX sh, git and the usual tools only. It lives outside the warpzone package on purpose
 # (a broken release must not be able to stop the tool that puts the good one back) and its
-# rules are written in docs/design.md, "Autonomous updates (contract)".
+# rules are written in development/design.md, "Autonomous updates (contract)".
 #
 #   updater.sh tick      one run of the timer: update, verify, roll back, reconcile
 #   updater.sh install DEVICE [--config FILE] [--venv DIR] [--channel stable|rc] [-- ARGS...]
@@ -565,7 +565,7 @@ release_lock() {
 
 # ---- processes ------------------------------------------------------------------------
 # proc_has NAME...: 0 when a process is one of the names, judged by `comm` (the kernel keeps
-# 15 characters) and the basename of argv[0] the way settings_state.running does; never by
+# 15 characters) and the basename of argv[0] the way procs.running does; never by
 # the rest of a command line. 1 when none is, 2 when /proc cannot be read.
 
 proc_has() {

@@ -7,7 +7,7 @@ with a backup and an atomic replace. It imports no network code: `capture` is ha
 with two read calls and asks it whether the `wz-settings` folder is up to date. Messages, log
 lines and output name keys and ids, never values (a prompt shows a value, cut, for the keys the
 user is asked about; secret keys are never asked about). See "Emulator settings" in
-docs/design.md.
+development/design.md.
 """
 
 from __future__ import annotations
@@ -23,6 +23,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Protocol
 
+from warpzone import procs, safefile
 from warpzone import settings_formats as formats
 from warpzone import settings_layers as layers_mod
 from warpzone import settings_plan as plan
@@ -260,7 +261,7 @@ class FileProblem(SettingsError):
 @dataclass(frozen=True)
 class Loaded:
     target: Target
-    stamp: state.FileStamp  # taken before the read, so a change since then is caught
+    stamp: safefile.FileStamp  # taken before the read, so a change since then is caught
     text: str
     values: dict[str, Value]
     fixed: frozenset[str]
@@ -271,7 +272,7 @@ def read_target(target: Target) -> Loaded | None:
     """Read and parse one file once; None when it does not exist."""
     handler = formats.handler(target.spec.format)
     try:
-        stamp = state.stamp(target.path)
+        stamp = safefile.stamp(target.path)
         data = target.path.read_bytes()
     except FileNotFoundError:
         return None
@@ -287,8 +288,8 @@ def read_target(target: Target) -> Loaded | None:
 
 def is_running(env: Env, names: Iterable[str]) -> bool:
     try:
-        return state.running(tuple(names), proc=env.proc)
-    except state.NoProc as exc:
+        return procs.running(tuple(names), proc=env.proc)
+    except procs.NoProc as exc:
         raise SettingsError(
             f"cannot tell whether an emulator is running: {exc}. "
             "This command needs /proc and runs on the console"
@@ -312,7 +313,7 @@ def sha256(data: bytes) -> str:
 @dataclass(frozen=True)
 class DataState:
     path: Path
-    stamp: state.FileStamp | None  # None: the local file does not exist
+    stamp: safefile.FileStamp | None  # None: the local file does not exist
     data: bytes | None
     hash: str | None
     hub_path: Path
@@ -326,7 +327,7 @@ def read_data(ctx: Context, emulator: str, entry: DataFile) -> DataState:
     path = Path(expand_home(entry.path, ctx.env.home))
     stamp = data = None
     try:
-        stamp = state.stamp(path)
+        stamp = safefile.stamp(path)
         data = path.read_bytes()
     except FileNotFoundError:
         stamp = data = None
@@ -561,7 +562,7 @@ class _Apply:
             self._skip(where, "the emulator started meanwhile")
             return False
         expect = loaded.stamp if loaded is not None else None
-        if not state.atomic_write(target.path, new_text.encode("utf-8"), expect=expect):
+        if not safefile.atomic_write(target.path, new_text.encode("utf-8"), expect=expect):
             self._skip(where, "the file changed while it was being processed")
             return False
         return True
@@ -611,7 +612,7 @@ class _Apply:
                 if is_running(self.env, emu.process):
                     self._skip(where, "the emulator started meanwhile")
                     return
-                if not state.atomic_write(st.path, st.hub_data, expect=st.stamp):
+                if not safefile.atomic_write(st.path, st.hub_data, expect=st.stamp):
                     self._skip(where, "the file changed while it was being processed")
                     return
             self.counts.written += 1
@@ -764,8 +765,8 @@ def audit_report(
     rows: list[plan.AuditRow] = []
     for emu in selected:
         try:
-            busy = state.running(emu.process, proc=env.proc)
-        except state.NoProc:
+            busy = procs.running(emu.process, proc=env.proc)
+        except procs.NoProc:
             busy = False  # nothing to compare with; the files are still read
         if busy:
             rows.append(plan.row_running(emu.id))
@@ -1147,7 +1148,7 @@ class _Capture:
     ) -> bool:
         """Check that nothing on the hub moved since it was read, then write it all; False
         (with an error shown) means nothing was written."""
-        todo: list[tuple[Path, bytes, state.FileStamp | None]] = []
+        todo: list[tuple[Path, bytes, safefile.FileStamp | None]] = []
         for cand in copies:
             st = self.data_states[cand.ref]
             where = f"{cand.emulator}/data/{cand.key}"
@@ -1161,7 +1162,7 @@ class _Capture:
                 return False
             hub_stamp = None
             try:
-                hub_stamp = state.stamp(st.hub_path)
+                hub_stamp = safefile.stamp(st.hub_path)
                 hub = st.hub_path.read_bytes()
             except FileNotFoundError:
                 hub = None
@@ -1172,7 +1173,7 @@ class _Capture:
         for name, entries in changes:
             path = self.ctx.folder / name
             try:
-                stamp = state.stamp(path)
+                stamp = safefile.stamp(path)
                 current: str | None = formats.decode(path.read_bytes())
             except FileNotFoundError:
                 stamp, current = None, None
@@ -1186,7 +1187,7 @@ class _Capture:
                 return False
             todo.append((path, layers_mod.render(Layer(entries)).encode("utf-8"), stamp))
         for path, data, stamp in todo:
-            if not state.atomic_write(path, data, expect=stamp):
+            if not safefile.atomic_write(path, data, expect=stamp):
                 self.problem(path.name, "changed while it was being written; stopped")
                 return False
         return True

@@ -1,7 +1,7 @@
 """Play state on a device: reads and writes the ledgers and the gamelists.
 
 The decisions are in `playstate`. This module imports no network code, because ES-DE waits for
-it at startup. See docs/design.md, "Play state".
+it at startup. See development/design.md, "Play state".
 """
 
 from __future__ import annotations
@@ -11,9 +11,10 @@ import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import tzinfo
+from functools import partial
 from pathlib import Path
 
-from warpzone import artwork, esde, playstate, settings_state
+from warpzone import artwork, esde, playstate, procs, safefile, settings_state
 from warpzone.model import ESDE_ID
 from warpzone.paths import expand_home
 from warpzone.playstate import Key, Ledger, LedgerError, Plan, PlayStateError, Seen
@@ -73,14 +74,14 @@ def publish(where: Path, ledger: Ledger) -> bool:
     path = where / f"{ledger.device}.jsonl"
     text = playstate.render_ledger(ledger).encode("utf-8")
     try:
-        current: settings_state.FileStamp | None = settings_state.stamp(path)
+        current: safefile.FileStamp | None = safefile.stamp(path)
         if path.read_bytes() == text:
             return False
     except FileNotFoundError:
         current = None
         if not ledger.records:
             return False
-    return settings_state.atomic_write(path, text, expect=current)
+    return safefile.atomic_write(path, text, expect=current)
 
 
 def _clock(path: Path, now: int) -> int:
@@ -95,7 +96,7 @@ class _Gamelist:
     system: str
     path: Path
     text: str
-    stamp: settings_state.FileStamp
+    stamp: safefile.FileStamp
     included: Mapping[Key, int] | None
 
 
@@ -109,7 +110,7 @@ def _read_gamelists(
         if not artwork.is_plain(system):
             continue
         try:
-            stamp = settings_state.stamp(path)
+            stamp = safefile.stamp(path)
             text = _read(path)
             entries = artwork.parse_gamelist(text)
             clock = _clock(path, now)
@@ -129,8 +130,8 @@ def _frontend_open(names: Iterable[str], proc: Path, starting: bool) -> bool | N
     yet, so with `starting` the processes above this one do not count.
     """
     try:
-        return settings_state.running(names, proc=proc, skip_ancestors=starting)
-    except settings_state.NoProc:
+        return procs.running(names, proc=proc, skip_ancestors=starting)
+    except procs.NoProc:
         return None
 
 
@@ -219,15 +220,25 @@ def _sync_shared(
         return
     publish(where, plan.applied)
     for gamelist, text in edits:
-        settings_state.backup(gamelist.path, "play-state", gamelist.system, root=state_root)
-        if _frontend_open(esde.ESDE_PROCESSES, proc, starting) is not False:
+        outcome = safefile.guarded_edit(
+            gamelist.path,
+            text.encode("utf-8"),
+            expect=gamelist.stamp,
+            busy=lambda: _frontend_open(esde.ESDE_PROCESSES, proc, starting) is not False,
+            backup=partial(
+                settings_state.backup,
+                gamelist.path,
+                "play-state",
+                gamelist.system,
+                root=state_root,
+            ),
+        )
+        if outcome is safefile.Edit.BUSY:
             warn(f"ES-DE started, so {gamelist.path} was left alone")
-        elif settings_state.atomic_write(
-            gamelist.path, text.encode("utf-8"), expect=gamelist.stamp
-        ):
-            say(f"play state: updated {gamelist.path}")
-        else:
+        elif outcome is safefile.Edit.CHANGED:
             warn(f"{gamelist.path} changed while it was being edited, so it was left alone")
+        else:
+            say(f"play state: updated {gamelist.path}")
     say(f"play state: {len(edits)} gamelists updated, {len(seen)} games read")
 
 
