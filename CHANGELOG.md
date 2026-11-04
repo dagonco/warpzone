@@ -6,15 +6,24 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ## [Unreleased]
 
+## [0.3.0rc2] - 2026-11-04
+
+Second release candidate of 0.3.0: the documentation moves to a website, the updater gets safer around signatures and rollbacks, and a large internal clean-up lands with no change in behaviour.
+
 ### Added
 
 - A documentation website at <https://dagonco.github.io/warpzone>, built with Starlight and published from `main`. The guides moved from `docs/` into it, and the README is now a short introduction.
 - Agent skills in `.claude/skills/` for installing a console, adding games through the inbox, editing a whitelist, diagnosing a machine and publishing a release.
 
+### Changed
+
+- Internal clean-up with no change in behaviour: safe file writes, the inbox framework, ES-DE gamelist editing and device provisioning now live in their own modules, with more tests around concurrent edits.
+
 ### Fixed
 
 - Updater: fake `retired/` tags can no longer push a real retirement out of the per-tick limit, a failed copy of the trusted keys no longer leaves their version recorded (and a missing copy refuses older keys), and the note that lets the updater clear its own venv is dropped once the venv is marked.
 - Editing an ES-DE gamelist no longer trips on awkward but valid files. The arcade and disc inbox replace a self-closing `<altemulator/>` instead of adding a second one, and the play state sync accepts an empty `<gameList/>` and ignores `<game>` and `</gameList>` inside XML comments.
+- Updater: after going back to the previous release, Python could run the cached bytecode of the bad release when both files had the same size and timestamp, so a bad release could be taken for a broken environment. The bytecode caches are now cleared on every checkout and before each check.
 
 ## [0.3.0rc1] - 2026-11-03
 
@@ -110,7 +119,8 @@ First public release. warpzone keeps one game library on a home server and deliv
 - `warpzone doctor` checks the tools, config, Syncthing, DATs and hub folder of a machine and prints the fix for each problem.
 - `warpzone status`, `check` and `render-ignores` to inspect folder state, validate the config and preview a device's ignore lines. `provision` supports `--dry-run`.
 
-[Unreleased]: https://github.com/dagonco/warpzone/compare/v0.3.0rc1...HEAD
+[Unreleased]: https://github.com/dagonco/warpzone/compare/v0.3.0rc2...HEAD
+[0.3.0rc2]: https://github.com/dagonco/warpzone/compare/v0.3.0rc1...v0.3.0rc2
 [0.3.0rc1]: https://github.com/dagonco/warpzone/compare/v0.2.0...v0.3.0rc1
 [0.2.0]: https://github.com/dagonco/warpzone/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/dagonco/warpzone/releases/tag/v0.1.0
