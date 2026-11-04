@@ -565,7 +565,7 @@ release_lock() {
 
 # ---- processes ------------------------------------------------------------------------
 # proc_has NAME...: 0 when a process is one of the names, judged by `comm` (the kernel keeps
-# 15 characters) and the basename of argv[0] the way settings_state.running does; never by
+# 15 characters) and the basename of argv[0] the way procs.running does; never by
 # the rest of a command line. 1 when none is, 2 when /proc cannot be read.
 
 proc_has() {
