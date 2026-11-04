@@ -14,6 +14,10 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 - The updater looks for new releases every hour on the `rc` channel and every 12 hours on `stable` (or with a pin), instead of once a day, so a release candidate reaches devices soon after it is published.
 
+### Fixed
+
+- The updater stops with a log line when it finds no clone to work on, instead of acting on whatever folder it runs from; only retirements of tags that matter to the tick (the running version, the pin and the candidates) count towards the limit of retirements checked, so unsigned retirements of other releases cannot push a real one out; and no move to a lower version is accepted in a tick where the copy of the allowed signers failed.
+
 ## [0.3.0rc2] - 2026-11-04
 
 Second release candidate of 0.3.0: the documentation moves to a website, the updater gets safer around signatures and rollbacks, and a large internal clean-up lands with no change in behaviour.

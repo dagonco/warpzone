@@ -637,7 +637,7 @@ version_at() {
 # the checkout, and a version string has the same size) could run in place of the good source,
 # for the checks and for the shim alike. Python writes them again, from the right source.
 clear_pyc() {
-	[ -d "$CLONE/warpzone" ] || return 0
+	[ -n "$CLONE" ] && [ -d "$CLONE/warpzone" ] || return 0
 	find "$CLONE/warpzone" -name __pycache__ -type d -prune -exec rm -rf {} + >/dev/null 2>&1
 	return 0
 }
@@ -798,13 +798,54 @@ retired_ok() {
 	[ -n "$_ro_commit" ] && [ "$_ro_target" = "$_ro_commit" ]
 }
 
+# retired_formed TAG: the tag retired/TAG is an annotated tag on the commit of the release TAG,
+# and TAG is a valid release (an ancestor of main, its own version, signed when required).
+retired_formed() {
+	[ "$(g cat-file -t "refs/tags/retired/$1" 2>/dev/null </dev/null)" = tag ] &&
+		retired_ok "$1" && release_ok "$1" && tag_signed "$1"
+}
+
+# retired_scope: what this tick may need to know about retirements, from the running version
+# (RM_CUR and its key) and whether it is itself retired (RM_DOWN: then every tag of the
+# channel is a candidate, whatever its version). Needs signing_setup first.
+RM_CUR=
+RM_CUR_KEY=
+RM_DOWN=0
+retired_scope() {
+	RM_CUR=$(version_at HEAD)
+	ver_key "$RM_CUR"
+	RM_CUR_KEY=$VK
+	RM_DOWN=0
+	if [ -z "$C_pin" ] && [ -n "$RM_CUR" ] && rel_key "v$RM_CUR" && retired_formed "v$RM_CUR" && tag_signed "retired/v$RM_CUR"; then
+		RM_DOWN=1
+	fi
+}
+
+# retired_matters TAG: a retirement of TAG can change what this tick does: TAG is the running
+# version, the pin, a version being tried or under suspicion, or a candidate that pick_target
+# looks at (newer than the running version and of the channel, or any of the channel when the
+# running version is retired; with a pin, nothing else is a target). RK is the key of TAG.
+retired_matters() {
+	[ "$1" = "v$RM_CUR" ] && return 0
+	[ "$1" = "$C_pin" ] && return 0
+	[ "$1" = "$S_trying_tag" ] && return 0
+	[ "$1" = "$S_suspect_tag" ] && return 0
+	[ -z "$C_pin" ] || return 1
+	if [ "$RM_DOWN" = 0 ]; then
+		key_gt "$RK" "$RM_CUR_KEY" || return 1
+	fi
+	[ "$C_channel" != stable ] || is_plain_tag "$1"
+}
+
 # retired_load: the retirements the clone has (it takes them with the daily fetch), the newest
-# versions first. A tag that is no retirement (not annotated, no version for a name, not on
-# the commit of its release, or of a release that is no valid tag itself: fake pairs of
-# `vX` and `retired/vX` are cheap to make) does not count towards the limit; at most
-# RETIRED_MAX that are well formed get their own signature checked, so that a pile of bad
-# ones cannot use up the tick's budget, and RETIRED_SCAN tags are looked at in all. Needs
-# signing_setup first.
+# versions first. Only those of tags that matter (retired_matters) are looked at: unsigned or
+# fake retirements of other real releases, such as the candidates of the running version
+# (they sort above it), cannot use up the limit. A tag that is no retirement (not annotated,
+# no version for a name, not on the commit of its release, or of a release that is no valid tag
+# itself: fake pairs of `vX` and `retired/vX` are cheap to make) does not count towards the
+# limit; at most RETIRED_MAX that are well formed get their own signature checked, so that a
+# pile of bad ones cannot use up the tick's budget, and RETIRED_SCAN tags are looked at in all.
+# Needs signing_setup first.
 retired_load() {
 	RETIRED_TAGS=' '
 	RETIRED_INFO=
@@ -813,12 +854,16 @@ retired_load() {
 	_rcount=0
 	_rlines=0
 	_rbadn=0
+	retired_scope
 	_rf="$STATE_DIR/.retired.$$"
 	g for-each-ref --sort=-v:refname --format='%(refname) %(objecttype) %(taggerdate:short) %(contents:subject)' refs/tags/retired/ 2>/dev/null | head -n "$RETIRED_SCAN" >"$_rf" 2>/dev/null
 	while read -r _rref _rtype _rdate _rreason; do
 		_rlines=$((_rlines + 1))
 		_rtag=${_rref#refs/tags/retired/}
 		_rok=0
+		if rel_key "$_rtag" && ! retired_matters "$_rtag"; then
+			continue # a well formed name that no choice of this tick depends on
+		fi
 		if rel_key "$_rtag" && [ "$_rtype" = tag ] && retired_ok "$_rtag" && release_ok "$_rtag" && tag_signed "$_rtag"; then
 			if [ "$_rcount" -ge "$RETIRED_MAX" ]; then
 				_rmore=1
@@ -874,6 +919,23 @@ retired_why() {
 
 SIGN_ON=0
 SIGN_WHY=
+SIGN_NODOWN=0
+SIGN_NODOWN_SAID=0
+
+# down_blocked TAG REV: TAG is below the version at REV and no move down is accepted in this
+# tick (the copy of the keys failed, see signing_setup). Says so once.
+down_blocked() {
+	[ "$SIGN_NODOWN" = 1 ] || return 1
+	rel_key "$1" || return 1
+	_db_key=$RK
+	ver_key "$(version_at "$2")"
+	key_gt "$VK" "$_db_key" || return 1
+	if [ "$SIGN_NODOWN_SAID" = 0 ]; then
+		SIGN_NODOWN_SAID=1
+		log "not moving down to $1: the allowed signers could not be copied, so the version of the keys on record may be stale; the next tick tries again"
+	fi
+	return 0
+}
 
 # signers_judge: set SIGN_ON from SIGNERS_FILE (and SIGN_WHY when no signature is required).
 signers_judge() {
@@ -903,8 +965,11 @@ keys_older() {
 # older release does not turn them off (that release has no file) or bring back the keys it
 # listed and a newer release dropped (it has an older file). The last keys are then the ones
 # used, and with none to use, every tag is refused. Keys are only replaced by those of a
-# version that is as new or newer.
+# version that is as new or newer. When the keys of the version in use could not be copied
+# (SIGN_NODOWN), `signers_version` may be older than that version, so no move down is accepted
+# in that tick (down_blocked above).
 signing_setup() {
+	SIGN_NODOWN=0
 	rm -f "$SIGNERS_TMP"
 	if [ -n "${WZ_ALLOWED_SIGNERS+x}" ]; then
 		SIGNERS_FILE=$WZ_ALLOWED_SIGNERS
@@ -934,6 +999,10 @@ signing_setup() {
 				S_signers_version=$_good_ver
 			else
 				rm -f "$SIGNERS_LAST.new" 2>/dev/null
+					# the version on record may be older than the one in use: a move down now
+					# could end on a release that lists a key this one dropped, and the next
+					# tick would take that key back
+					[ "$S_signers_version" = "$_good_ver" ] || SIGN_NODOWN=1
 			fi
 		elif [ "$SIGN_ON" = 1 ] || [ "$S_signing" = 1 ]; then
 			SIGN_ON=1
@@ -1001,6 +1070,7 @@ pick_pin() {
 		return 1
 	fi
 	tag_valid "$C_pin" || return 1
+	down_blocked "$C_pin" HEAD && return 1
 	PICK=$C_pin
 	return 0
 }
@@ -1049,6 +1119,7 @@ pick_target() {
 		if [ "$_down" = 0 ] && ! key_gt "$RK" "$_cur_key"; then
 			break # the rest is lower still
 		fi
+		down_blocked "$_tag" HEAD && continue
 		target_ok "$_tag" || continue
 		PICK=$_tag
 		return 0
@@ -1060,11 +1131,15 @@ pick_target() {
 # version is retired, or TAG is the pin (and with a pin nothing else is a target).
 move_allowed() {
 	if [ -n "$C_pin" ]; then
-		[ "$1" = "$C_pin" ]
+		[ "$1" = "$C_pin" ] || return 1
+		! down_blocked "$1" HEAD
 		return
 	fi
 	_ma_cur=$(version_at HEAD)
-	is_retired "v$_ma_cur" && return 0
+	if is_retired "v$_ma_cur"; then
+		! down_blocked "$1" HEAD
+		return
+	fi
 	rel_key "$1" || return 1
 	_ma_key=$RK
 	ver_key "$_ma_cur"
@@ -1800,6 +1875,12 @@ resume() {
 		clear_trying
 		return 0
 	fi
+	if down_blocked "$S_trying_tag" "$S_good_sha"; then
+		log "going back to the previous version, without marking $S_trying_tag bad"
+		back_to_good
+		clear_trying
+		return 0
+	fi
 	if [ "$S_attempts" -ge "$MAX_ATTEMPTS" ]; then
 		log "$S_trying_tag has had $S_attempts attempts without a verdict; going back without marking it bad"
 		back_to_good
@@ -1972,6 +2053,11 @@ cmd_tick() {
 		C_clone=$(cd "$(dirname "$0")/../.." 2>/dev/null && pwd)
 	fi
 	CLONE=$C_clone
+	if [ -z "$CLONE" ]; then
+		# an empty path is the folder the tick happens to run in, and `$CLONE/warpzone` is `/warpzone`
+		log "no clone: the settings name none and the script is not inside one"
+		exit 1
+	fi
 	if ! command -v git >/dev/null 2>&1; then
 		log "git is not installed"
 		exit 1

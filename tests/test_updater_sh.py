@@ -737,6 +737,35 @@ class EdgeTests(UpdaterCase):
         self.assertEqual(rig.bad(), [])
 
 
+class NoCloneTests(UpdaterCase):
+    def test_a_tick_that_finds_no_clone_stops_and_touches_nothing(self) -> None:
+        rig = self.rig
+        rig.release("0.2.0")
+        git(rig.clone, "fetch", "-q", "--tags")
+        rig.write_conf(clone=None)  # no clone in the settings
+        # the folder two levels above the script cannot be entered: a `dirname` that names none
+        fake = rig.python.parent / "dirname"
+        fake.write_text("#!/bin/sh\necho /nonexistent-folder/for/the/clone\n")
+        fake.chmod(0o755)
+        # the tick runs from inside a checkout, which is what an empty clone would end up acting on
+        proc = subprocess.run(
+            ["sh", str(rig.updater), "tick"],
+            cwd=rig.clone,
+            env=rig.env(),
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+        )
+        output = proc.stdout + proc.stderr
+        self.assertEqual(proc.returncode, 1, output)
+        self.assertIn("no clone", output)
+        self.assertEqual(rig.on_tag(), "v0.1.0")
+        self.assertEqual(rig.calls(), [])
+        self.assertFalse((rig.state_dir / "state").exists())
+
+
 class PowerCutTests(UpdaterCase):
     def test_a_power_cut_halfway_does_not_burn_the_tag(self) -> None:
         rig = self.rig
@@ -2014,6 +2043,19 @@ class SignedNameTests(UpdaterCase):
         self.assertTick(proc, 0)
         self.assertEqual(rig.on_tag(), "v0.2.0", proc.output)
 
+    def test_unsigned_retirements_of_tags_that_do_not_matter_do_not_use_up_the_limit(self) -> None:
+        rig = self.rig
+        rig.release("0.2.0", sign=self.key)
+        for n in range(1, 5):  # real, signed candidates of the running version: lower than it
+            rig.release(f"0.3.0rc{n}", sign=self.key)
+            rig.retire(f"v0.3.0rc{n}", "fake")  # unsigned; it sorts above retired/v0.3.0
+        rig.release("0.3.0", sign=self.key)
+        rig.move_to("v0.3.0")
+        rig.retire("v0.3.0", "the real one, below four fakes", sign=self.key)
+        proc = rig.tick(WZ_RETIRED_MAX="3", **self.allowed)
+        self.assertTick(proc, 0)
+        self.assertEqual(rig.on_tag(), "v0.2.0", proc.output)
+
     def test_retirements_of_tags_that_are_no_release_do_not_use_up_the_limit(self) -> None:
         rig = self.rig
         rig.release("0.2.0", sign=self.key)
@@ -2116,6 +2158,33 @@ class KeysNeverGoBackTests(UpdaterCase):
         self.assertTick(rig.tick(), 0)
         self.assertEqual(rig.state()["signers_version"], "0.4.0")
         self.assertTrue((rig.state_dir / "allowed_signers.last").is_file())
+
+    def test_no_move_down_is_accepted_in_a_tick_whose_keys_could_not_be_copied(self) -> None:
+        rig = self.rig
+        both = {"warpzone/data/allowed_signers": self.old.allowed + self.new.allowed}
+        only_new = {"warpzone/data/allowed_signers": self.new.allowed}
+        rig.release("0.3.5", sign=self.new, extra=both)
+        rig.release("0.4.0", sign=self.new, extra=only_new)
+        rig.move_to("v0.3.5")
+        self.assertTick(rig.tick(), 0)
+        self.assertEqual(rig.on_tag(), "v0.4.0")
+        # the version of the keys on record is still the old one: v0.4.0 dropped a key
+        self.assertEqual(rig.state()["signers_version"], "0.3.5")
+        rig.retire("v0.4.0", "withdrawn", sign=self.new)
+        blocked = rig.state_dir / "allowed_signers.last.new"
+        blocked.mkdir()  # the copy cannot be written, as on a full disk
+        proc = rig.tick()
+        self.assertTick(proc, 0)
+        self.assertEqual(rig.on_tag(), "v0.4.0", "no way down with a stale version of the keys")
+        self.assertRegex(proc.output, r"not moving down.*keys")
+        blocked.rmdir()
+        self.assertTick(rig.tick(), 0)
+        self.assertEqual(rig.on_tag(), "v0.3.5", "with the copy made, the retirement goes down")
+        self.assertEqual(rig.state()["signers_version"], "0.4.0")
+        rig.release("0.9.0", sign=self.old, extra=both)
+        proc = rig.tick()
+        self.assertTick(proc, 0)
+        self.assertEqual(rig.on_tag(), "v0.3.5", "the dropped key is still not trusted")
 
     def test_without_the_copy_of_the_keys_an_older_release_does_not_bring_back_older_ones(
         self,
