@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ## [Unreleased]
 
+### Fixed
+
+- On SteamOS, the files RetroArch's Flycast and mame2003-plus cores write into the BIOS folder (`bios/dc/vulkan_pipeline.cache`, `bios/dc/data`, `bios/mame2003-plus/hiscore.dat` and `artwork`) are ignored, so they no longer show up as local changes of the library. Run `provision device` to apply it.
+
 ## [0.3.0rc6] - 2026-11-05
 
 Sixth release candidate of 0.3.0: on the Anbernic the Warpzone menu shows a progress bar while it installs, stays open until Exit and has a Doctor item, and the console keeps looking for releases after an update.

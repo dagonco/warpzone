@@ -93,7 +93,10 @@ The profile ignores files EmuDeck creates that are not on the hub, so a receive-
 - `bios/PPSSPP/` and every `readme.txt` under `bios/`.
 - The emulator-owned `bios/` folders `HdPacks`, `Mupen64plus`, `fbneo`, `kronos`, `same_cdi`, `ryujinx`, `shadps4` and `yuzu`.
 - Each `roms/*/systeminfo.txt` and `metadata.txt`.
-- RetroArch's Flycast VMUs and flash in `bios/dc/` (`vmu_save_*.bin`, `dc_nvmem.bin`). These two are ignored without `(?d)`, so a hub-side delete of `bios/dc` never takes them along. See [Dreamcast saves](#dreamcast-saves-retroarch-flycast).
+- RetroArch's Flycast VMUs and flash in `bios/dc/` (`vmu_save_*.bin`, `dc_nvmem.bin`), and what the same core writes next to them (`vulkan_pipeline.cache` and the `data` folder). These are ignored without `(?d)`, so a hub-side delete of `bios/dc` never takes them along. See [Dreamcast saves](#dreamcast-saves-retroarch-flycast).
+- The high score list and artwork folder of RetroArch's mame2003-plus core (`bios/mame2003-plus/hiscore.dat` and `artwork/`).
+
+EmuDeck also creates the empty folders `bios/mame/bios` and `bios/neocd`, and the mame2003-plus core creates `bios/mame2003-plus`. They are not ignored, because the hub may deliver BIOS files into them, so a console lists them as local changes until the hub has them too: create them, empty, in the hub's `bios/` folder.
 
 These come from the profile's `[library] ignore` list. The hub's library folder ignores the hub paths of the BIOS placements, so each file belongs to one folder. A line may start with `(?d)`. Run `provision device` again after upgrading to apply a changed profile.
 

@@ -105,9 +105,12 @@ tables deal with it:
   folder. The shipped profile also lists EmuDeck's own files, which exist on
   every console and not on the hub: `bios/PPSSPP`, every `readme.txt` under `bios/`,
   the emulator-owned folders `bios/HdPacks`, `Mupen64plus`, `fbneo`, `kronos`,
-  `same_cdi`, `ryujinx`, `shadps4` and `yuzu`, and each
-  `roms/*/systeminfo.txt` and `metadata.txt`. `bios/mame` and `bios/neocd` are
-  deliberately not ignored: a hub may deliver BIOS files there. Without it a receive-only library
+  `same_cdi`, `ryujinx`, `shadps4` and `yuzu`, what RetroArch cores write into
+  their system folders (Flycast's `bios/dc/vulkan_pipeline.cache` and `bios/dc/data`,
+  mame2003-plus's `hiscore.dat` and `artwork`), and each
+  `roms/*/systeminfo.txt` and `metadata.txt`. `bios/mame`, `bios/neocd` and
+  `bios/mame2003-plus` are deliberately not ignored: a hub may deliver BIOS files
+  there, so the hub holds them (empty if need be) to keep them off the local changes. Without it a receive-only library
   reports them as local changes (hundreds of files), and a revert would delete
   them. Only those files are named: no folder that holds games is ignored.
 - `[bios.<emu>-<kind>]`: a **BIOS placement**. It maps a hub path below
