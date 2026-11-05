@@ -148,6 +148,20 @@ class ModelTests(unittest.TestCase):
         library = self.by_id(hub_specs(self.cfg, self.profiles))["wz-library"]
         self.assertNotIn("/bios/dc/dc_nvmem.bin", library.ignores)
 
+    def test_files_cores_write_into_the_system_folder_are_never_received_or_flagged(self) -> None:
+        # Seen on a Steam Machine: the Flycast core's pipeline cache and data folder, and
+        # mame2003-plus's high score list and artwork folder. They are not on the hub.
+        lines = self.by_id(device_specs(self.cfg, "deck", self.profile))["wz-library"].ignores
+        include = lines.index("#include patterns-deck.stignore")
+        for line in (
+            "/bios/dc/vulkan_pipeline.cache",
+            "/bios/dc/data",
+            "(?d)/bios/mame2003-plus/hiscore.dat",
+            "(?d)/bios/mame2003-plus/artwork",
+        ):
+            self.assertIn(line, lines)
+            self.assertLess(lines.index(line), include)
+
     def test_hub_library_ignores_what_placements_deliver(self) -> None:
         library = self.by_id(hub_specs(self.cfg, self.profiles))["wz-library"]
         self.assertEqual(

@@ -43,6 +43,9 @@ ignore = [
   # "Per-Game VMUs" on, the VMUs go to RetroArch's saves folder, which does sync.
   "/bios/dc/vmu_save_*.bin",
   "/bios/dc/dc_nvmem.bin",
+  # The same core also writes its Vulkan pipeline cache and a data folder there.
+  "/bios/dc/vulkan_pipeline.cache",
+  "/bios/dc/data",
   # Files and folders EmuDeck writes into the library on every console. They are not
   # on the hub, so a receive-only device would list them as local changes (and a
   # revert would delete them). `(?d)` lets Syncthing remove a ROM folder that the hub
@@ -59,6 +62,10 @@ ignore = [
   "(?d)/bios/ryujinx",
   "(?d)/bios/shadps4",
   "(?d)/bios/yuzu",
+  # RetroArch's mame2003-plus core writes its high score list and an artwork folder
+  # into its system folder (a hub may still deliver samples next to them).
+  "(?d)/bios/mame2003-plus/hiscore.dat",
+  "(?d)/bios/mame2003-plus/artwork",
   "(?d)/roms/*/systeminfo.txt",
   "(?d)/roms/*/metadata.txt",
 ]
