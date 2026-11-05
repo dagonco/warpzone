@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ## [Unreleased]
 
+## [0.3.0rc4] - 2026-11-05
+
+Fourth release candidate of 0.3.0: the Anbernic installs releases only from its Options menu, where "Warpzone Update Now" now works with the menu open, and Wii and GameCube `.rvz` images keep their own names.
+
 ### Added
 
 - `warpzone inbox` identifies `.rvz` and `.wia` images by reading their header, with no `dolphin-tool` and no DAT: it tells a Wii disc from a GameCube one, reads the game ID and the title, and files the image unchanged as `roms/wii/<name> [<GAME ID>].rvz` (or `roms/gc/`), where the name is the file's own (for example `Game (USA) (En,Fr,Es)`) and the header's title stands in when the file name is only the game ID. A truncated copy or a header that does not check out goes to review with the reason. `dolphin-tool` is now needed only for `.gcz`.
@@ -152,7 +156,8 @@ First public release. warpzone keeps one game library on a home server and deliv
 - `warpzone doctor` checks the tools, config, Syncthing, DATs and hub folder of a machine and prints the fix for each problem.
 - `warpzone status`, `check` and `render-ignores` to inspect folder state, validate the config and preview a device's ignore lines. `provision` supports `--dry-run`.
 
-[Unreleased]: https://github.com/dagonco/warpzone/compare/v0.3.0rc3...HEAD
+[Unreleased]: https://github.com/dagonco/warpzone/compare/v0.3.0rc4...HEAD
+[0.3.0rc4]: https://github.com/dagonco/warpzone/compare/v0.3.0rc3...v0.3.0rc4
 [0.3.0rc3]: https://github.com/dagonco/warpzone/compare/v0.3.0rc2...v0.3.0rc3
 [0.3.0rc2]: https://github.com/dagonco/warpzone/compare/v0.3.0rc1...v0.3.0rc2
 [0.3.0rc1]: https://github.com/dagonco/warpzone/compare/v0.2.0...v0.3.0rc1
