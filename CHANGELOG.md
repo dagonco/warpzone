@@ -8,11 +8,11 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ### Changed
 
-- The Warpzone menu of the Anbernic comes back after each item, with the status read again, until you choose Exit (or press Back). "Install vX now" shows a progress bar with the step the update is on (looking for releases, switching, each of the three checks) instead of a still box for the whole update. A new "Doctor" item runs `warpzone doctor` and shows its whole report in a box that scrolls; the menu no longer runs doctor to open, so it opens at once, and Status points at the Doctor item.
+- The Warpzone menu of the Anbernic comes back after each item, with the status read again, until you choose Exit (or press Back). "Install vX now" shows a progress bar with the step the update is on (looking for releases, switching, each of the three checks) instead of a still box for the whole update. When the timer's own run is in progress, Install says so and to try again in a few minutes. A new "Doctor" item runs `warpzone doctor` and shows its whole report in a box that scrolls; the menu no longer runs doctor to open, so it opens at once, and Status points at the Doctor item.
 
 ### Fixed
 
-- On a device with `install = "manual"` (the Anbernic), the timer no longer stops looking for releases after an update installed from the menu. The check after the next restart waited for EmulationStation to close, which never happens there, so the device stayed on probation and the timer deferred every 15 minutes without fetching. The timer now finishes an interrupted update and runs that check without waiting for the menu, goes back if the check fails, and then notes a newer release as it always does; it still never installs one on its own.
+- On a device with `install = "manual"` (the Anbernic), the timer no longer stops looking for releases after an update installed from the menu. The check after the next restart waited for EmulationStation to close, which does not happen there, so the device stayed on probation and the timer deferred every 15 minutes without fetching, for up to 72 hours. The timer now finishes an interrupted update and runs that check without waiting for the menu, goes back if the check fails, and then notes a newer release as it always does; it still never installs one on its own.
 
 ## [0.3.0rc5] - 2026-11-05
 

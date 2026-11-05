@@ -395,15 +395,18 @@ target as usual (signatures, retirements, the pin) and writes it to the state ke
 does not wait for the menu, verify or reconcile, not even on a dirty or development checkout; the
 next `--now` does all of that and clears `available`. A trial or a probation in progress is the
 exception: it was asked for by hand, and the timer finishes it, so a release that no longer
-starts is still put back without anybody asking. Such a tick does not wait for the menu either
-(it logs `install=manual: not waiting for the menu` when the menu is open): on a device whose
-menu is open whenever it is on, waiting would stop the probation check, and with it the watch,
-for good. It resumes an interrupted trial and runs the probation check after a restart (once
-per boot), with the rules of `--now`: a step held back by an open program (exit 3) counts as
-passed and leaves `pending` set, and a real failure gets the differential verdict and the
-rollback as usual. It never tries anything on its own (no new release, no second look at a
-suspect) and never reconciles, and every way it ends notes the best target in `available`
-(after a rollback too); when nothing ended it earlier it ends as the watch does
+starts is still put back without anybody asking. Such a tick does not wait for the menu either:
+on a device whose menu is open whenever it is on, waiting would stop the probation check, and
+with it the watch, for up to 72 hours. When the menu is open and there is something to finish
+(a trial, or the probation check of a new boot) it logs `install=manual: not waiting for the
+menu`, so not at every tick. It resumes an interrupted trial and runs the probation check after
+a restart (once per boot), with the rules of `--now`: a step held back by an open program (exit
+3) counts as passed and leaves `pending` set, and a real failure gets the differential verdict
+and the rollback as usual. It never tries anything on its own (no new release, no second look
+at a suspect) and never reconciles. `available` keeps its value until the watch looks again,
+also when the tick ends before that (no Python, a dirty or development checkout); from the
+trial or the probation check on, every way the tick ends notes the best target in `available`
+(after a rollback too), and when nothing ended it earlier it ends as the watch does
 (`last_result=available` or `ok`, `last_ok` when it fetched). An unknown value
 is logged and read as `auto`. `UPDATER_ABI` is 2 from the version that knows `--now`;
 `selfupdate.run_tick` sends `--now` to a live copy of that ABI or higher and `--fetch-now` to an

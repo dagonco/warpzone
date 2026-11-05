@@ -862,6 +862,32 @@ class ManualInstallTests(UpdaterCase):
         self.assertTick(rig.tick(now=NOW + 2 * HOUR), 0)
         self.assertEqual(len(rig.calls()), before + len(checks))
 
+    def test_not_waiting_for_the_menu_is_said_only_when_there_is_something_to_finish(self) -> None:
+        rig = self.rig
+        self.promoted_by_hand_with_the_menu_open()
+        rig.boot_id.write_text("boot-1\n")  # the boot of the update: probation, nothing to check
+        for minutes in (15, 30, 45):
+            self.assertTick(rig.tick(now=NOW + minutes * 60), 0)
+        self.assertEqual(rig.state()["probation"], "1")
+        self.assertNotIn("not waiting for the menu", rig.tick(now=NOW + HOUR).output)
+        rig.boot_id.write_text("boot-2\n")
+        for minutes in (75, 90):
+            proc = rig.tick(now=NOW + minutes * 60)
+            self.assertTick(proc, 0)
+        self.assertEqual(proc.output.count("not waiting for the menu"), 1)
+
+    def test_a_tick_that_ends_early_keeps_the_release_it_noted(self) -> None:
+        rig = self.rig
+        self.promoted_by_hand_with_the_menu_open()
+        rig.boot_id.write_text("boot-1\n")  # same boot: probation goes on, the watch notes v0.3.0
+        self.assertTick(rig.tick(now=NOW + HOUR), 0)
+        self.assertEqual(rig.state()["available"], "v0.3.0")
+        rig.write_conf(install="manual", python=str(rig.root / "nowhere" / "python"))
+        self.assertTick(rig.tick(now=NOW + 2 * HOUR, WZ_PYTHON_FALLBACKS=""), 1)
+        state = rig.state()
+        self.assertEqual(state["last_result"], "no-python")
+        self.assertEqual(state["available"], "v0.3.0")
+
     def test_a_probation_step_held_back_by_the_menu_counts_as_passed(self) -> None:
         rig = self.rig
         self.promoted_by_hand_with_the_menu_open()

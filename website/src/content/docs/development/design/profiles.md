@@ -358,9 +358,9 @@ installed), and only **Exit**, or cancelling the menu (Back), ends the script:
 
 - **Status**: the text above in a message box, with `Doctor: see the Doctor item` in place of
   the doctor's lines.
-- **Doctor**: an infobox (`Running doctor...`) while `warpzone doctor` runs (at most 60
-  seconds, as above; a run cut short says so), then its whole output, standard error
-  included, folded to the box, in a `dialog --textbox` that scrolls.
+- **Doctor**: an infobox (`Running doctor...`, with the terminal's echo off) while `warpzone
+  doctor` runs (at most 60 seconds, as above; a run cut short says so), then its whole output,
+  standard error included, folded to the box, in a `dialog --textbox` that scrolls.
 - **Install `<tag>` now**, only when the state has `available`: the live updater's `sh
   ~/.local/share/warpzone/updater/updater.sh tick --now` when its `UPDATER_ABI` is 2 or higher
   (it does not need the clone's Python, so it can still put back a release that no longer
@@ -371,7 +371,8 @@ installed), and only **Exit**, or cancelling the menu (Back), ends the script:
   file first, reads it every second and passes it in the gauge's `XXX` format until the update
   ends; while there is no file (an updater older than `UPDATER_ABI` 3 writes none) the bar is
   at 0 with `Working...`. Then the keys pressed meanwhile are dropped and a box shows the exit
-  code and the last lines.
+  code and the last lines, or, when the updater says another tick holds the lock (a tick of the
+  timer is running), that another update is running and to try again in a few minutes.
 - **Follow `<other>` releases**: after a yes/no question that says an update never goes down,
   `warpzone self-update --channel <other>`, and its message.
 - **Exit**.

@@ -414,6 +414,17 @@ done
         self.assertIn("TEXT\n" + report + "\n", shown)
         self.assertTrue((self.tmp / "doctor-ran").exists())
 
+    def test_keys_are_not_echoed_while_doctor_or_an_install_runs(self) -> None:
+        self.install_state(doctor="Base")
+        self.live('UPDATER_ABI=3\necho "live $*"\n')
+        self.fake(self.bin / "stty", f'printf "STTY %s\\n" "$*" >>"{self.tmp}/dialog.log"\n')
+        shown = self.menu("doctor", "install", "exit")
+        stty = [line.split()[-1] for line in shown.splitlines() if line.startswith("STTY")]
+        self.assertEqual(stty, ["-echo", "echo", "-echo", "echo"])
+        order = [line.split(" ")[0] for line in shown.splitlines()]
+        self.assertLess(order.index("STTY"), order.index("INFO"))
+        self.assertLess(order.index("INFO"), order.index("STTY", order.index("STTY") + 1))
+
     def test_doctor_without_warpzone_says_so(self) -> None:
         shown = self.menu("doctor", "exit")
         self.assertIn("TEXT\nwarpzone is not installed here (unknown)\n", shown)
@@ -431,6 +442,14 @@ done
         shown = self.menu("install")
         self.assertIn("GAUGE Installing v0.3.0rc5", shown)
         self.assertIn("BOX Update finished (exit 0)\nlive tick --now", shown)
+
+    def test_install_while_another_update_runs_says_so(self) -> None:
+        self.install_state(doctor="")
+        self.live('UPDATER_ABI=3\necho "updater: another tick holds the lock; nothing to do"\n')
+        shown = self.menu("install")
+        self.assertIn("BOX Another update is running", shown)
+        self.assertIn("Try again in a few minutes.", shown)
+        self.assertNotIn("Update finished", shown)
 
     def test_after_an_install_the_menu_shows_the_new_state(self) -> None:
         self.install_state(doctor="")

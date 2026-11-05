@@ -210,13 +210,21 @@ update_now() {
 	[ -n "$LAST" ] || LAST="(no output)"
 	DONE_TEXT="Update finished (exit $RC)
 $LAST"
+	# The updater says this and exits 0 when a tick of the timer is running.
+	if printf '%s\\n' "$OUT" | grep -q 'another tick holds the lock'; then
+		DONE_TEXT="Another update is running (the timer's).
+Try again in a few minutes."
+	fi
 }
 
 # doctor_box: `warpzone doctor` with a note on the screen meanwhile, then its whole output in
 # a box that scrolls.
 doctor_box() {
+	# no echo of the keys pressed meanwhile over the box
+	stty -F "$TTY" -echo >/dev/null 2>&1
 	dialog --title Warpzone --infobox "Running doctor... (up to a minute)" 5 50 >"$TTY" 2>&1
 	doctor_run
+	stty -F "$TTY" echo >/dev/null 2>&1
 	case $DOCTOR_RC in
 	127) DOCTOR="warpzone is not installed here (unknown)" ;;
 	124) DOCTOR="$DOCTOR

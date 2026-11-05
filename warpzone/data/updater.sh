@@ -2103,19 +2103,24 @@ tick_start() {
 # tick_menu: the menu: wait for it to close, at most 72 hours from the first deferral. A menu
 # that is seen closed ends the deferral: the 72 hours are of an unbroken wait.
 tick_menu() {
-	S_available=
 	menu_open
 	_menu=$?
 	if [ "$MANUAL_TIMER" = 1 ]; then
 		# install=manual: the timer only finishes what an update by hand left, which that
-		# update did not wait for either. Waiting would never end where the menu is open
+		# update did not wait for either. Waiting would last 72 hours where the menu is open
 		# whenever the device is on. A step held back by an open program counts as passed and
-		# leaves `pending` set, as by hand.
-		[ "$_menu" != 0 ] || log "install=manual: not waiting for the menu"
+		# leaves `pending` set, as by hand. It is said only when there is something to finish
+		# (a trial, or the probation check of a new boot), so not at every tick. `available`
+		# stays as it was until the watch looks again, also when the tick ends before that.
+		if [ "$_menu" = 0 ] && { [ -n "$S_trying_tag" ] ||
+			{ [ "$S_probation" = 1 ] && [ "$(boot_id)" != "$S_last_boot_id" ]; }; }; then
+			log "install=manual: not waiting for the menu"
+		fi
 		S_deferred_since=
 		OVER=1
 		return 0
 	fi
+	S_available=
 	if [ "$BY_HAND" = 1 ]; then
 		# Asked for from the menu itself (the Options entry) or from a shell: the person is
 		# there and no game is running. A step that the menu still holds back counts as
