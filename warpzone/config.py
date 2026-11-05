@@ -81,6 +81,8 @@ INBOX_KEYS = (
     "gamelist_ps3",
     "nsz",
     "orbis_pkg_util",
+    "vita3k",
+    "vita_zrif",
     "titledb_dir",
     "switch_keys",
 )
@@ -92,7 +94,8 @@ class InboxSettings:
     and the external tools `warpzone inbox` uses. A tool left unset is looked up on PATH
     (RAHasher only when set). `titledb_dir` (a clone of blawar/titledb) and `switch_keys`
     (the console keys file, default ~/.switch/prod.keys) are for Switch games. `orbis_pkg_util`
-    unpacks PS4 packages."""
+    unpacks PS4 packages. `vita3k` (Vita3K.app or its binary) installs PS Vita packages with the
+    zRIF keys of `vita_zrif`, a file the user keeps."""
 
     root: str | None = None
     dats_dir: str | None = None
@@ -108,6 +111,8 @@ class InboxSettings:
     gamelist_ps3: str | None = None
     nsz: str | None = None
     orbis_pkg_util: str | None = None
+    vita3k: str | None = None
+    vita_zrif: str | None = None
     titledb_dir: str | None = None
     switch_keys: str | None = None
 

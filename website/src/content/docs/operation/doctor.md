@@ -42,7 +42,7 @@ Inbox tools
 - Vita3K's game links (`~/Emulation/storage/Vita3K/ux0/app/<TITLEID>`) and licence links (`ux0/license/<TITLEID>`), the ES-DE startup script that keeps them, and dangling links, on a device whose profile declares `[links.*]` (`steamos-emudeck`). The fix is `warpzone links sync <name>` with Vita3K closed.
 - The updater, on a Linux device (see [Updating a device](/warpzone/operation/self-update/)): its timer (installed, running the updater, enabled), the live copy of the script, its settings against the config, and its state. A warning for a rollback in the last 14 days, a `dirty` or `dev` checkout, a retired `pin`, signatures not required, and more than 14 days without a successful run; a problem when it is `stuck`.
 - The frontend's system list override and RetroArch's paths, on a device whose profile sets them (`anbernic-rg351mp`).
-- The inbox tools (`chdman`, `bsdtar`, `RAHasher`, `dolphin-tool`, `nsz`, `orbis-pkg-util`), the Switch titledb folder and keys file (presence only).
+- The inbox tools (`chdman`, `bsdtar`, `RAHasher`, `dolphin-tool`, `nsz`, `orbis-pkg-util`, `Vita3K`; Vita3K is only found, never run, and on macOS `/Applications/Vita3K.app` counts; a Vita3K that inbox would refuse, such as an AppImage, is a warning), the Switch titledb folder and keys file (presence only).
 - The DAT folder and how old the newest DAT is, and the optional arcade DAT files.
 - The hub folder and its free space.
 - Whether `RA_API_KEY` is set (never printed).

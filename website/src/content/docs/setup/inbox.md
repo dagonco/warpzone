@@ -9,7 +9,7 @@ Drop new dumps (files, folders or archives) in `inbox/` on the hub's share and r
 ```
 $ warpzone inbox
 inbox: /Volumes/hub/inbox (report only), 2 item(s)
-tools: chdman yes, bsdtar yes, rahasher yes, dolphin-tool no, nsz no, orbis-pkg-util no; DATs: dreamcast, gb, ...
+tools: chdman yes, bsdtar yes, rahasher yes, dolphin-tool no, nsz no, orbis-pkg-util no, vita3k no; DATs: dreamcast, gb, ...
 [1/2] some random name.zip
   nes: Adventure Island (USA).zip: would place
     path: library/roms/nes/Adventure Island (USA).zip
@@ -40,9 +40,10 @@ rahasher = "~/tools/RAHasher"                 # optional: RetroAchievements hash
 mame_dat = "~/dats/mame0282lx.zip"            # optional: arcade (see "Arcade sets")
 fbneo_dat = "~/dats/fbneo-arcade.dat"
 mame2003plus_dat = "~/dats/mame2003-plus.xml"
+vita_zrif = "~/keys/PSV_GAMES.tsv"            # optional: zRIF keys for PS Vita .pkg files
 ```
 
-`bsdtar`, `dolphin_tool`, `nsz`, `orbis_pkg_util` and `switch_keys` work the same way, and `work_dir` moves the temporary files (they can take several GiB). Run `warpzone doctor` to see what is missing ([the doctor guide](/warpzone/operation/doctor/)). Details in [the design document](/warpzone/development/design/inbox/).
+`bsdtar`, `dolphin_tool`, `nsz`, `orbis_pkg_util`, `vita3k` and `switch_keys` work the same way, and `work_dir` moves the temporary files (they can take several GiB). Run `warpzone doctor` to see what is missing ([the doctor guide](/warpzone/operation/doctor/)). Details in [the design document](/warpzone/development/design/inbox/).
 
 ## What it does for each item
 
@@ -67,7 +68,7 @@ mame2003plus_dat = "~/dats/mame2003-plus.xml"
 
 Items modified in the last 30 seconds are left alone (they may still be copying), and `_*` folders, hidden files, `@eaDir` and `.DS_Store` are never items. warpzone does not edit whitelists: add the printed lines to the device whitelists yourself ([Whitelists and pruning](/warpzone/setup/whitelists/)). Exit code 1 when any item needs review.
 
-A PS Vita dump kept as a game folder is filed (see [PS Vita games](#ps-vita-games)). `.vpk` files, Vita `.pkg` files that need installing, PS3 or Xbox games kept as extracted folders and PS3 `.pkg` files are not supported yet and go to review ("not supported by inbox yet").
+A PS Vita dump kept as a game folder is filed (see [PS Vita games](#ps-vita-games)), and a Vita `.pkg` is installed with Vita3K first (see [PS Vita packages](#ps-vita-packages)). `.vpk` files, PS3 or Xbox games kept as extracted folders and PS3 `.pkg` files are not supported yet and go to review ("not supported by inbox yet").
 
 ## Switch games
 
@@ -136,7 +137,7 @@ The file keeps its name and nothing is overwritten (same size and SHA1 is "alrea
 
 A `.wua` is judged by its footer only, by reading its last 16 bytes: a truncated file, a file with a wrong footer or another kind of image renamed to `.wua` goes to review and is not placed, and a ZArchive named `.iso` is not recognised. It goes to `roms/wiiu/roms/` (not `roms/wiiu/`) because that is the game path Cemu is pointed at. It also works inside a `.zip`, `.7z` or `.rar` (7z and rar need `bsdtar`), like the other images here.
 
-A `.pkg` is judged by that header only. A PS3 `.pkg` (magic `\x7fPKG`) or any `.pkg` with another magic or content id is not placed and goes to review as "not supported by inbox yet". It also works inside a `.zip`, `.7z` or `.rar`.
+A `.pkg` is judged by that header only. A PS Vita `.pkg` (magic `\x7fPKG`) is installed with Vita3K, see [PS Vita packages](#ps-vita-packages). A PS3 `.pkg` or any `.pkg` with another magic or content id is not placed and goes to review as "not supported by inbox yet". It also works inside a `.zip`, `.7z` or `.rar`.
 
 A full Redump-style Xbox image (game partition at 0x18300000) is never placed, because xemu cannot boot it. It goes to review with the instruction to convert it to XISO with [extract-xiso](https://github.com/XboxDev/extract-xiso).
 
@@ -200,12 +201,48 @@ A game with a licence prints a `note: licence: ...` line and a third whitelist l
 The folder is copied file by file with a read-back to `<TITLEID>.part` and renamed, so the library never holds a half game. Add the printed whitelist lines to the device whitelists. Unlike PS4, nothing needs extracting, so a report without `--apply` already prints them.
 
 - A game already in the library is reported and never replaced or compared; its launcher is written if it is missing. A launcher that already holds this title id is kept ("already there"); one with the same name that holds another id (the same title in another region) is kept, and the new one gets the title id in its name.
-- An update (`gp`) or DLC (`ac`) goes to review with a message, as does any other category. A dump with a title id that is not a Vita one (a PS4 game folder, for example) goes to review, and so does one that holds an `sce_pfs` folder: Vita3K has to install those, so install them there by hand.
+- An update (`gp`) or DLC (`ac`) goes to review with a message, as does any other category. A dump with a title id that is not a Vita one (a PS4 game folder, for example) goes to review, and so does one that holds an `sce_pfs` folder: Vita3K has to install those, so install them there by hand, or drop the `.pkg` instead ([PS Vita packages](#ps-vita-packages)).
 - **Licence.** A game installed by Vita3K keeps its `eboot.bin` encrypted (it starts with `SCE\0` and its first segment is not plain), and Vita3K runs it only with the licence `ux0/license/<TITLEID>/<CONTENT_ID>.rif` (512 bytes); without it the log says `[decrypt_fself]: No klic provided for encrypted App` and `Failed to start game threads`. Along with the game, inbox accepts its licence as `sce_sys/package/work.bin` inside the game (NoNpDrm), or as a `<CONTENT_ID>.rif` in the item, in `license/<TITLEID>/` or loose next to the game folder (or inside it). The file is checked (512 bytes, a Vita content id at offset 0x10, the same title id as the game, and the content id in the game's `param.sfo`) and filed under the content id it holds, whatever its name, through a `.part` copy that is read back. A licence already in the library is kept when it is the same file and is never overwritten when it differs (the item goes to review before anything is placed). The licence of a game that is already in the library is added when it is missing.
 - A game that needs a licence and has none goes to review, saying so, and nothing is placed. Whether it needs one is read from `eboot.bin` as Vita3K does (the first 64 KiB, the SELF header only): a decrypted `eboot.bin` (as Vita3K's own "decrypt selfs" leaves it) keeps the `SCE\0` magic and needs none, and an `eboot.bin` with that magic and an unreadable header goes to review. A licence that comes along when the game does not need it is filed anyway. A file that is not a licence, one of another game or build, or several different ones go to review with the reason.
 - A Vitamin dump always goes to review, whether it is a loose folder or inside an archive. It is recognised by `sce_module/steroid.suprx` inside the game folder; Vita3K rejects that module, so the dump is never placed, even if the game might start, and the reason suggests a clean dump instead (a `.pkg` with its `work.bin`, or a NoNpDrm dump). What is already in the library is not touched.
 - An item with several games, a symbolic link inside the game, or an unreadable `param.sfo` goes to review. A PS3 game (`PS3_GAME/PARAM.SFO`) is not this layout and keeps its "not supported by inbox yet" outcome.
 - The consoles link the game folder and the licence folder into Vita3K's own storage, see [the EmuDeck guide](/warpzone/guides/emudeck/#vita3k-games).
+
+## PS Vita packages
+
+A Vita `.pkg` (a PlayStation Store package, as NoPayStation lists them) is encrypted, and its licence comes apart as a zRIF, a short text key. With [Vita3K](https://vita3k.org) on this machine and the game's zRIF in a key file you keep, `--apply` installs the package with Vita3K and files the result exactly like a [game dump](#ps-vita-games): the game folder, the licence and the launcher. warpzone never downloads packages or keys.
+
+1. Install Vita3K. On macOS put `Vita3K.app` in `/Applications` (the default), or set `vita3k` in `[inbox]` to the app (a link to the binary inside it works too). On Linux use a plain Vita3K binary, not the AppImage, set in `vita3k` or on PATH as `vita3k`; only the macOS app has been tried.
+2. Keep the zRIFs in a file and set `[inbox] vita_zrif` to it. Either one line per game, the content id and the zRIF separated by a tab (lines starting with `#` are comments):
+
+   ```
+   EP9000-PCSF00024_00-PDEUAP1648614960<TAB><zRIF>
+   ```
+
+   or a TSV with a header row, such as NoPayStation's `PSV_GAMES.tsv`: only the `Content ID` and `zRIF` columns are read, the rest (links included) is ignored. Fields may be in double quotes, and a zRIF may lack its trailing `=`.
+3. Drop the `.pkg` in `inbox/`, loose or in an archive, and run the report:
+
+```
+[1/1] UP4034-PCSE00567_00-LAMULANAEX000000_bg_1_....pkg
+  psvita: PCSE00567: would place
+    path: library/roms/psvita/app/PCSE00567
+    note: detected: Vita game: PCSE00567 LA-MULANA EX
+    note: would install it with Vita3K: Vita3K --pkg UP4034-PCSE00567_00-LAMULANAEX000000_bg_1_....pkg --zrif ***
+    note: licence: library/roms/psvita/license/PCSE00567/UP4034-PCSE00567_00-LAMULANAEX000000.rif (would be written)
+    note: launcher: library/roms/psvita/LA-MULANA EX.psvita (would be written)
+    whitelist: !/roms/psvita/app/PCSE00567
+    whitelist: !/roms/psvita/license/PCSE00567
+    whitelist: !/roms/psvita/LA-MULANA EX.psvita
+  note: detected: Vita package: UP4034-PCSE00567_00-LAMULANAEX000000
+```
+
+The report runs nothing: the title id, the title and the licence are read from the package header, its unencrypted `param.sfo` and the zRIF, so all three whitelist lines are known before installing. `--apply` then runs Vita3K in a folder of its own inside the local work folder (it needs about the package's size free) and never touches Vita3K's own data or a console's: it uses Vita3K's portable mode (on macOS a link to the app next to an empty `portable/` folder, on Linux `APPIMAGE` pointing into that folder), and runs `Vita3K --version` first, so that if Vita3K does not use that folder nothing is installed. A Vita3K that cannot be pointed at that folder is never run, and the package goes to review saying why: on macOS a binary that is not inside `Vita3K.app`, on Linux an AppImage (its runtime sets `APPIMAGE` itself) or a wrapper script. `warpzone doctor` warns about such a Vita3K too. Vita3K exits with success even when an install fails, so warpzone checks what it left: the game folder with `eboot.bin` and a `param.sfo` of the same title id, content id and a game category, no `sce_pfs`, and a licence equal to the zRIF. The work folder is deleted afterwards.
+
+- The zRIF is a key and is never printed or written to a reason file: the command line is shown with `***` in its place. While Vita3K runs (under a second for a 200 MiB package) it is on Vita3K's command line, the only way Vita3K takes it, so another user of the machine could see it in the process list.
+- A package whose content id has no zRIF in the file, or a zRIF that does not decode to that game's licence, goes to review saying so, without running Vita3K. So does a package whose `param.sfo` has no content id. So does an update, DLC, a theme or a PlayStation Mobile package, and a package smaller than its header says (an incomplete download). PS3 and PSP packages keep their "not supported by inbox yet" outcome.
+- A game already in the library is not installed again; its licence and launcher are added if they are missing.
+- If the work folder cannot be deleted afterwards, a warning names it: delete it by hand, it holds the game's licence.
+- If Vita3K fails, the reason quotes its last error line (`header signature is invalid` for a zRIF of another game, `Failed to load pkg file` for an unreadable package), with the zRIF redacted.
 
 ## Arcade sets
 

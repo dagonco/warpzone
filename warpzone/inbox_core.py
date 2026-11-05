@@ -2,13 +2,13 @@
 
 `inbox.py` runs the pipeline (DATs, conversion, filing) and registers the handlers
 (`inbox_mame.py`, `inbox_switch.py`, `inbox_console_iso.py`, `inbox_vita.py`,
-`inbox_n3ds.py`, `inbox_dolphin.py`, `inbox_ps4.py`). The handlers import this module and
-never `inbox.py`, so the imports between the inbox modules form no cycle. This module
-imports no other inbox module.
+`inbox_n3ds.py`, `inbox_dolphin.py`, `inbox_ps4.py`, `inbox_vita_pkg.py`). The handlers
+import this module and never `inbox.py`, so the imports between the inbox modules form no
+cycle. This module imports no other inbox module.
 
 The pure decisions here (`skip_name`, `unsafe_member`, `whitelist_line`,
-`unsupported_reason`, `destination_verdict`) have no I/O; the rest touches the disk or
-runs a tool. See development/design/inbox.md.
+`unsupported_reason`, `destination_verdict`, `vita3k_executable`) have no I/O; the rest
+touches the disk or runs a tool. See development/design/inbox.md.
 """
 
 from __future__ import annotations
@@ -18,6 +18,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import time
 import zipfile
 import zlib
@@ -111,18 +112,52 @@ class Tools:
     dolphin_tool: str | None = None
     nsz: str | None = None
     orbis_pkg_util: str | None = None
+    vita3k: str | None = None  # Vita3K.app (a folder) or the Vita3K binary
 
 
-def find_tools(settings: InboxSettings, which: Callable[[str], str | None] = shutil.which) -> Tools:
+# Where Vita3K's macOS release is installed; `inbox` uses it when `[inbox] vita3k` is unset.
+VITA3K_APP = "/Applications/Vita3K.app"
+VITA3K_BINARY = "Contents/MacOS/Vita3K"  # inside the app bundle
+DEFAULT_VITA3K = VITA3K_APP if sys.platform == "darwin" else None
+
+
+def vita3k_executable(path: str) -> str:
+    """The program to run for a Vita3K path: the binary inside an app bundle (`.app`), or the
+    path itself."""
+    trimmed = path.rstrip("/")
+    return f"{trimmed}/{VITA3K_BINARY}" if trimmed.endswith(".app") else path
+
+
+def _executable(path: str) -> bool:
+    return os.path.isfile(path) and os.access(path, os.X_OK)
+
+
+def find_tools(
+    settings: InboxSettings,
+    which: Callable[[str], str | None] = shutil.which,
+    vita3k_default: str | None = DEFAULT_VITA3K,
+) -> Tools:
     """Configured paths must exist; unset tools are looked up on PATH (RAHasher only
-    when configured)."""
+    when configured). Vita3K is looked for at `vita3k_default` (the app on macOS) first."""
 
     def pick(key: str, configured: str | None, command: str | None) -> str | None:
         if configured:
-            if not (os.path.isfile(configured) and os.access(configured, os.X_OK)):
+            if not _executable(configured):
                 raise InboxError(f"[inbox] {key}: {configured} is not an executable file")
             return configured
         return which(command) if command else None
+
+    def pick_vita3k() -> str | None:
+        if settings.vita3k:
+            if not _executable(vita3k_executable(settings.vita3k)):
+                raise InboxError(
+                    f"[inbox] vita3k: {settings.vita3k} is neither Vita3K.app nor an "
+                    "executable file"
+                )
+            return os.path.abspath(settings.vita3k)
+        if vita3k_default and _executable(vita3k_executable(vita3k_default)):
+            return vita3k_default
+        return which("vita3k") or which("Vita3K")
 
     return Tools(
         chdman=pick("chdman", settings.chdman, "chdman"),
@@ -131,6 +166,7 @@ def find_tools(settings: InboxSettings, which: Callable[[str], str | None] = shu
         dolphin_tool=pick("dolphin_tool", settings.dolphin_tool, "dolphin-tool"),
         nsz=pick("nsz", settings.nsz, "nsz"),
         orbis_pkg_util=pick("orbis_pkg_util", settings.orbis_pkg_util, "orbis-pkg-util"),
+        vita3k=pick_vita3k(),
     )
 
 

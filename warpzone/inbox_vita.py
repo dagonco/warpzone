@@ -20,8 +20,9 @@ A dump is recognised by `sce_sys/param.sfo` next to `eboot.bin` with a Vita titl
 review, and so does a dump that Vita3K would have to install (an `sce_pfs` folder). A Vitamin
 dump (it holds `sce_module/steroid.suprx`) always goes to review: Vita3K rejects that module,
 so it is never placed even if the game might start. A PS3 `PS3_GAME/PARAM.SFO` is not this
-layout. A game already in the library is reported and never overwritten. `.vpk` and `.pkg`
-files keep their outcome.
+layout. A game already in the library is reported and never overwritten. `.vpk` files keep
+their outcome; a Vita `.pkg` is installed with Vita3K by `inbox_vita_pkg`, which hands the
+result to `install`.
 
 The decisions (`is_title_id`, `category_kind`, `game_roots`, `is_vitamin`, `file_name`,
 `eboot_needs_license`, `parse_license`, `license_sources`, `choose_license`) are pure;
@@ -320,14 +321,16 @@ def _launcher(ctx: Context, title: str, title_id: str, res: UnitResult) -> None:
 
 def install(
     ctx: Context,
-    root: Path,
+    root: Path | None,
     rel: str,
     title_id: str,
     title: str,
     license: tuple[str, bytes] | None = None,
 ) -> UnitResult:
     """File one recognised dump (`root` holds its `eboot.bin`) as a game folder, its licence
-    (`(content id, bytes)`, when it has one) and a launcher."""
+    (`(content id, bytes)`, when it has one) and a launcher. `root` is None when there is no
+    folder yet (a Vita package before Vita3K installs it): a report, or a game already in the
+    library, needs none."""
     apply = ctx.opts.apply
     res = UnitResult(SYSTEM, title_id, "placed" if apply else "planned", folder=f"roms/{APP}")
     res.notes.append(f"detected: Vita game: {title_id} {title}".rstrip())
@@ -335,7 +338,10 @@ def install(
     dest = ctx.roms.joinpath(*APP.split("/")) / title_id
     lic_path = _license_path(ctx, title_id, license[0]) if license else None
     try:
-        inbox_ps4._check_tree(root, rel)
+        if root is not None:
+            inbox_ps4._check_tree(root, rel)
+        elif apply and not dest.exists():
+            raise ItemFailure(f"{rel}: there is no game folder to place")
         # Look at the licence before touching the library: a different one in the way stops it.
         write_license = bool(license and lic_path and _license_check(lic_path, license[1]))
         if dest.exists():
@@ -343,7 +349,7 @@ def install(
             res.notes.append("kept as it is: the dump is not compared with the library copy")
             kept = inbox_ps4.read_sfo(dest / SFO).get("TITLE")
             title = kept if isinstance(kept, str) and kept else title
-        elif apply:
+        elif apply and root is not None:
             _place_folder(root, dest)
         if license and lic_path:
             shown = f"library/roms/{LICENSE_DIR}/{title_id}/{lic_path.name}"

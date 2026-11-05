@@ -486,6 +486,57 @@ class ToolTests(TmpCase):
         bad = context(self.tmp, '[inbox]\norbis_pkg_util = "/nope/opu"\n')
         self.assertEqual(check_tool(bad, spec).status, FAIL)
 
+    VITA3K_BIN = "/Applications/Vita3K.app/Contents/MacOS/Vita3K"
+
+    def test_vita3k_is_listed_and_optional_and_never_run(self) -> None:
+        spec = next(t for t in doctor.TOOLS if t.key == "Vita3K")
+        r = check_tool(context(self.tmp, INBOX_ONLY), spec)
+        self.assertEqual(r.status, OPTIONAL)
+        self.assertIn("Vita3K.app", r.fix)
+        self.assertIn("Vita", spec.purpose)
+        self.assertIsNone(spec.version_args)
+
+    def test_vita3k_in_applications_is_what_inbox_uses_on_macos(self) -> None:
+        spec = next(t for t in doctor.TOOLS if t.key == "Vita3K")
+        r = check_tool(context(self.tmp, INBOX_ONLY, executables=[self.VITA3K_BIN]), spec)
+        self.assertEqual(r.status, OK)
+        self.assertIn("/Applications/Vita3K.app", r.detail)
+        linux = context(
+            self.tmp, INBOX_ONLY, executables=[self.VITA3K_BIN], system="Linux", os_release=DEBIAN
+        )
+        self.assertEqual(check_tool(linux, spec).status, OPTIONAL)
+
+    def test_vita3k_can_be_set_to_the_app_or_a_binary(self) -> None:
+        spec = next(t for t in doctor.TOOLS if t.key == "Vita3K")
+        app = context(
+            self.tmp,
+            '[inbox]\nvita3k = "/x/V.app"\n',
+            executables=["/x/V.app/Contents/MacOS/Vita3K"],
+        )
+        self.assertEqual(check_tool(app, spec).status, OK)
+        bad = context(self.tmp, '[inbox]\nvita3k = "/nope/V.app"\n')
+        self.assertEqual(check_tool(bad, spec).status, FAIL)
+
+    def test_vita3k_that_inbox_would_refuse_is_a_warning(self) -> None:
+        spec = next(t for t in doctor.TOOLS if t.key == "Vita3K")
+        elf = self.tmp / "vita3k"
+        elf.write_bytes(b"\x7fELF\x02\x01\x01" + bytes(9))
+        appimage = self.tmp / "Vita3K.AppImage"
+        appimage.write_bytes(b"\x7fELF\x02\x01\x01\x00AI\x02" + bytes(5))
+        linux = {"system": "Linux", "os_release": DEBIAN}
+
+        def check(path: Path, **kw) -> doctor.Result:  # type: ignore[no-untyped-def]
+            config = f'[inbox]\nvita3k = "{path}"\n'
+            return check_tool(context(self.tmp, config, executables=[str(path)], **kw), spec)
+
+        self.assertEqual(check(elf, **linux).status, OK)
+        r = check(appimage, **linux)
+        self.assertEqual(r.status, WARN)
+        self.assertIn("AppImage", r.detail)
+        r = check(elf)  # macOS: not inside an app bundle
+        self.assertEqual(r.status, WARN)
+        self.assertIn("app bundle", r.detail)
+
 
 class SwitchCheckTests(TmpCase):
     def titledb(self) -> Path:

@@ -293,7 +293,9 @@ class PureTests(unittest.TestCase):
             self.assertIsNone(tools.rahasher)  # only when configured
             with self.assertRaises(InboxError):
                 find_tools(InboxSettings(chdman=str(Path(tmp) / "nope")), which=lambda name: None)
-            self.assertEqual(find_tools(InboxSettings(), which=lambda name: None), Tools())
+            self.assertEqual(
+                find_tools(InboxSettings(), which=lambda name: None, vita3k_default=None), Tools()
+            )
 
 
 class ArchiveTests(unittest.TestCase):

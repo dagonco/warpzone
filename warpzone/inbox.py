@@ -744,6 +744,7 @@ def _describe_tools(tools: Tools) -> str:
         ("dolphin-tool", tools.dolphin_tool),
         ("nsz", tools.nsz),
         ("orbis-pkg-util", tools.orbis_pkg_util),
+        ("vita3k", tools.vita3k),
     )
     return ", ".join(f"{n} {'yes' if p else 'no'}" for n, p in items)
 

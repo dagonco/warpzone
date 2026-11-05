@@ -225,8 +225,12 @@ class InboxSettingsTests(unittest.TestCase):
             "orbis_pkg_util": "/opt/opu",
             "titledb_dir": "~/titledb",
             "switch_keys": "~/k/prod.keys",
+            "vita3k": "/Applications/Vita3K.app",
+            "vita_zrif": "~/keys/zrif.tsv",
         }
         inbox = parse_config(data).inbox
+        self.assertEqual(inbox.vita3k, "/Applications/Vita3K.app")
+        self.assertEqual(inbox.vita_zrif, str(Path("~/keys/zrif.tsv").expanduser()))
         self.assertEqual(inbox.nsz, "/opt/nsz")
         self.assertEqual(inbox.orbis_pkg_util, "/opt/opu")
         self.assertEqual(inbox.titledb_dir, str(Path("~/titledb").expanduser()))

@@ -42,6 +42,8 @@ from warpzone import (
     cemu,
     esde,
     frontend,
+    inbox_core,
+    inbox_vita_pkg,
     localst,
     model,
     ra,
@@ -166,6 +168,21 @@ ORBIS_PKG_UTIL_HINTS: HintTable = {
     "any": "cargo install orbis-pkg-util (the binary lands in ~/.cargo/bin; set orbis_pkg_util "
     "in [inbox] to it if that folder is not on PATH)"
 }
+VITA3K_HINTS: HintTable = {
+    "macos": "download Vita3K for macOS from https://vita3k.org and put Vita3K.app in "
+    "/Applications, or set vita3k in [inbox] to the app",
+    "any": "get a plain (not AppImage) Vita3K binary for Linux from https://vita3k.org and "
+    "set vita3k in [inbox] to it, or put it on PATH as `vita3k`",
+}
+
+
+def vita3k_usable(path: str, family: str) -> str | None:
+    """Why `inbox` would refuse to run Vita3K at `path` on this platform, or None."""
+    system = {"macos": "darwin", "other": "other"}.get(family, "linux")
+    tool = inbox_vita_pkg.resolve_tool(path)
+    return inbox_vita_pkg.vita3k_problem(tool, system, inbox_vita_pkg.tool_head(tool))
+
+
 TITLEDB_REPO = "https://github.com/blawar/titledb"
 TITLEDB_HINT = (
     f"git clone --depth 1 {TITLEDB_REPO}, then set titledb_dir in [inbox] to that clone "
@@ -237,6 +254,12 @@ class ToolSpec:
     # Where an installer puts it without adding it to PATH.
     known_paths: tuple[str, ...] = ()
     note: str = ""
+    # The path `inbox` uses when the setting is unset, by platform family, before PATH.
+    defaults: tuple[tuple[str, str], ...] = ()
+    # The program to run for a configured path (the binary inside an app bundle).
+    executable: Callable[[str], str] | None = None
+    # Why inbox would refuse the tool found (path, platform family), or None.
+    usable: Callable[[str, str], str | None] | None = None
 
 
 TOOLS: tuple[ToolSpec, ...] = (
@@ -290,6 +313,18 @@ TOOLS: tuple[ToolSpec, ...] = (
         setting="orbis_pkg_util",
         version_args=None,
         known_paths=("~/.cargo/bin/orbis-pkg-util",),
+    ),
+    ToolSpec(
+        "Vita3K",
+        ("vita3k", "Vita3K"),
+        "PS Vita: installs .pkg games with their zRIF (vita_zrif in [inbox]); Vita3K.app on "
+        "macOS, a plain binary (not an AppImage) on Linux",
+        VITA3K_HINTS,
+        setting="vita3k",
+        version_args=None,  # it would write its config in the user's data folder
+        defaults=(("macos", inbox_core.VITA3K_APP),),
+        executable=inbox_core.vita3k_executable,
+        usable=vita3k_usable,
     ),
 )
 
@@ -2207,11 +2242,12 @@ def check_tool(ctx: Context, spec: ToolSpec) -> Result:
     hint = hint_for(spec.hints, p.family)
     where = "required by inbox" if required else spec.purpose
     configured = _configured_path(spec, ctx.config.settings)
+    program = spec.executable or (lambda path: path)
 
     path: str | None = None
     note = ""
     if configured:
-        if not p.is_executable(configured):
+        if not p.is_executable(program(configured)):
             return Result(
                 spec.key,
                 G_TOOLS,
@@ -2222,7 +2258,10 @@ def check_tool(ctx: Context, spec: ToolSpec) -> Result:
             )
         path = configured
     else:
-        for command in spec.commands:
+        default = dict(spec.defaults).get(p.family)
+        if default and p.is_executable(program(default)):
+            path = default
+        for command in () if path else spec.commands:
             path = p.which(command)
             if path:
                 break
@@ -2243,6 +2282,9 @@ def check_tool(ctx: Context, spec: ToolSpec) -> Result:
                     )
     if not path:
         return Result(spec.key, G_TOOLS, missing, f"not found ({where})", hint)
+    refused = spec.usable(path, p.family) if spec.usable else None
+    if refused:
+        return Result(spec.key, G_TOOLS, WARN, f"{path}: inbox will not run it: {refused}", hint)
 
     if spec.version_args is None:
         return Result(spec.key, G_TOOLS, OK, f"{path} ({spec.purpose})")

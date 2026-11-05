@@ -112,7 +112,7 @@ If you remove the line first, the console keeps its copy, and `prune` will repor
 
 **Symptom.** An item goes to review with `needs bsdtar to unpack (not found)`, or `doctor` shows `[!!] bsdtar not found (required by inbox)`.
 
-**Fix.** Run `warpzone doctor`: it lists the inbox tools (`chdman`, `bsdtar`, `RAHasher`, `dolphin-tool`, `nsz`, `orbis-pkg-util`) and prints the install command for your platform. A tool that is not on `PATH` can be named in the `[inbox]` table of the config.
+**Fix.** Run `warpzone doctor`: it lists the inbox tools (`chdman`, `bsdtar`, `RAHasher`, `dolphin-tool`, `nsz`, `orbis-pkg-util`, `Vita3K`) and prints the install command for your platform. A tool that is not on `PATH` can be named in the `[inbox]` table of the config.
 
 ### Arcade zips go to review with "no DAT match"
 
