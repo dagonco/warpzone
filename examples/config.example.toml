@@ -108,7 +108,7 @@ dats_dir = "~/dats/libretro-database/metadat"
 # bsdtar       unpacks .7z and .rar
 # rahasher     RAHasher from RALibretro, built with CHD support: checks that a conversion
 #              keeps the RetroAchievements hash
-# dolphin_tool reads compressed GameCube images (.rvz) so they can be identified
+# dolphin_tool reads compressed GameCube images (.gcz) so they can be identified
 # nsz          reads the TitleID and version of Switch .nsp/.nsz files and decompresses
 #              .nsz (uv tool install nsz)
 # orbis_pkg_util unpacks PS4 .pkg games into a folder shadPS4 can run, with a shortcut
