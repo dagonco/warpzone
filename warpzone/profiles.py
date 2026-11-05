@@ -142,6 +142,27 @@ class RetroArchPins:
 
 
 @dataclass(frozen=True)
+class CemuPaths:
+    """Cemu's MLC folder and game path, which `provision device` sets in its `settings.xml`.
+
+    `mlc` is where Cemu keeps installs and saves (the profile syncs its `usr/save`), and
+    `default_mlc` the folder Cemu uses while `mlc_path` is empty. `game_path` is added to the
+    game paths, keeping the ones already there. `mlc` and `game_path` may contain `{library}`,
+    replaced by the profile's library path. `process` names Cemu: the file is edited only
+    while none of them runs. See development/design/profiles.md, "Cemu paths".
+    """
+
+    settings: str
+    process: tuple[str, ...]
+    mlc: str
+    default_mlc: str
+    game_path: str
+
+    def wants(self, library: str) -> tuple[str, str]:
+        return self.mlc.replace("{library}", library), self.game_path.replace("{library}", library)
+
+
+@dataclass(frozen=True)
 class ShadPS4Launch:
     """A launch script that starts shadPS4's emulator directly, and the rule that runs it.
 
@@ -268,6 +289,7 @@ class Profile:
     # `[updater] install`: "auto" (the timer installs a new release) or "manual" (the timer
     # only looks for one; it is installed by hand, with `warpzone self-update --now`).
     updater_install: str = "auto"
+    cemu: CemuPaths | None = None
 
     def placement_ignores(self) -> tuple[str, ...]:
         """The anchored library paths that placements deliver instead of the library."""
@@ -298,6 +320,7 @@ def parse_profile(data: dict[str, Any], source: str) -> Profile:
         "artwork",
         "play_state",
         "shadps4",
+        "cemu",
         "links",
         "options_menu",
         "updater",
@@ -371,6 +394,7 @@ def parse_profile(data: dict[str, Any], source: str) -> Profile:
     artwork = _parse_artwork(data.get("artwork"), paths, es_systems is not None, err)
     play_state = _parse_play_state(data.get("play_state"), paths, artwork, err)
     shadps4 = _parse_shadps4(data.get("shadps4"), "library" in paths, err)
+    cemu = _parse_cemu(data.get("cemu"), "library" in paths, err)
     links = _parse_links(data.get("links"), "library" in paths, err)
     options_menu = _parse_options_menu(data.get("options_menu"), err)
     updater_install = _parse_updater(data.get("updater"), err)
@@ -394,6 +418,7 @@ def parse_profile(data: dict[str, Any], source: str) -> Profile:
         links,
         options_menu,
         updater_install,
+        cemu,
     )
 
 
@@ -683,6 +708,47 @@ def _parse_shadps4_launch(raw: Any, err: Callable[[str], None]) -> ShadPS4Launch
     if problems:
         return None
     return ShadPS4Launch(*(raw[k] for k in _LAUNCH_KEYS))
+
+
+_CEMU_PATHS = ("settings", "mlc", "default_mlc", "game_path")
+
+
+def _parse_cemu(raw: Any, has_library: bool, err: Callable[[str], None]) -> CemuPaths | None:
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        err("`cemu` must be a table")
+        return None
+    extras = sorted(set(raw) - {*_CEMU_PATHS, "process"})
+    for extra in extras:
+        err(f"cemu.{extra}: unknown key")
+    problems = len(extras)
+    if not _names(raw.get("process")):
+        err("cemu.process: required, a non-empty list of non-empty strings")
+        problems += 1
+    for key in _CEMU_PATHS:
+        value = raw.get(key)
+        # only the two paths that follow the library may use it
+        library_ok = key in ("mlc", "game_path")
+        starts = ("/", "~/", "{library}/") if library_ok else ("/", "~/")
+        bare = value.replace("{library}", "") if isinstance(value, str) and library_ok else value
+        if (
+            not isinstance(value, str)
+            or not isinstance(bare, str)
+            or any(c in bare for c in '{}"\n')
+            or not value.startswith(starts)
+        ):
+            hint = "; {library} is the only placeholder" if library_ok else ""
+            err(f"cemu.{key}: required, an absolute path or one starting with ~/{hint}")
+            problems += 1
+        elif "{library}" in value and not has_library:
+            err(f"cemu.{key}: {value!r} uses {{library}} but there is no paths.library")
+            problems += 1
+    if problems:
+        return None
+    return CemuPaths(
+        raw["settings"], tuple(raw["process"]), raw["mlc"], raw["default_mlc"], raw["game_path"]
+    )
 
 
 _LINK_KEYS = {"source", "target", "process", "match", "require", "noun", "create_target"}

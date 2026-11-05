@@ -197,7 +197,7 @@ class ModelTests(unittest.TestCase):
         )
         self.assertEqual(specs["wz-bios-azahar-keys"].ignores[-2:], ("!/aes_keys.txt", "*"))
         self.assertEqual(specs["wz-bios-eden-keys"].create_when, "~/.local/share/eden")
-        self.assertIsNone(cemu.create_when)
+        self.assertEqual(cemu.create_when, "~/.config/Cemu")
 
     def test_bios_placements_on_the_hub(self) -> None:
         specs = self.by_id(hub_specs(self.bios_cfg(), self.profiles))
