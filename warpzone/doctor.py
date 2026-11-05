@@ -41,6 +41,7 @@ from warpzone import (
     artwork,
     esde,
     frontend,
+    inbox_core,
     localst,
     model,
     ra,
@@ -165,6 +166,12 @@ ORBIS_PKG_UTIL_HINTS: HintTable = {
     "any": "cargo install orbis-pkg-util (the binary lands in ~/.cargo/bin; set orbis_pkg_util "
     "in [inbox] to it if that folder is not on PATH)"
 }
+VITA3K_HINTS: HintTable = {
+    "macos": "download Vita3K for macOS from https://vita3k.org and put Vita3K.app in "
+    "/Applications, or set vita3k in [inbox] to the app",
+    "any": "install Vita3K (https://vita3k.org) and put `vita3k` on PATH, or set vita3k in "
+    "[inbox] to it",
+}
 TITLEDB_REPO = "https://github.com/blawar/titledb"
 TITLEDB_HINT = (
     f"git clone --depth 1 {TITLEDB_REPO}, then set titledb_dir in [inbox] to that clone "
@@ -236,6 +243,10 @@ class ToolSpec:
     # Where an installer puts it without adding it to PATH.
     known_paths: tuple[str, ...] = ()
     note: str = ""
+    # The path `inbox` uses when the setting is unset, by platform family, before PATH.
+    defaults: tuple[tuple[str, str], ...] = ()
+    # The program to run for a configured path (the binary inside an app bundle).
+    executable: Callable[[str], str] | None = None
 
 
 TOOLS: tuple[ToolSpec, ...] = (
@@ -289,6 +300,16 @@ TOOLS: tuple[ToolSpec, ...] = (
         setting="orbis_pkg_util",
         version_args=None,
         known_paths=("~/.cargo/bin/orbis-pkg-util",),
+    ),
+    ToolSpec(
+        "Vita3K",
+        ("vita3k", "Vita3K"),
+        "PS Vita: installs .pkg games with their zRIF (vita_zrif in [inbox])",
+        VITA3K_HINTS,
+        setting="vita3k",
+        version_args=None,  # it would write its config in the user's data folder
+        defaults=(("macos", inbox_core.VITA3K_APP),),
+        executable=inbox_core.vita3k_executable,
     ),
 )
 
@@ -2127,11 +2148,12 @@ def check_tool(ctx: Context, spec: ToolSpec) -> Result:
     hint = hint_for(spec.hints, p.family)
     where = "required by inbox" if required else spec.purpose
     configured = _configured_path(spec, ctx.config.settings)
+    program = spec.executable or (lambda path: path)
 
     path: str | None = None
     note = ""
     if configured:
-        if not p.is_executable(configured):
+        if not p.is_executable(program(configured)):
             return Result(
                 spec.key,
                 G_TOOLS,
@@ -2142,7 +2164,10 @@ def check_tool(ctx: Context, spec: ToolSpec) -> Result:
             )
         path = configured
     else:
-        for command in spec.commands:
+        default = dict(spec.defaults).get(p.family)
+        if default and p.is_executable(program(default)):
+            path = default
+        for command in () if path else spec.commands:
             path = p.which(command)
             if path:
                 break

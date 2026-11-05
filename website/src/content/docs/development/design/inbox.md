@@ -108,6 +108,8 @@ Syncthing state. The contract:
   identified by the disc header copy they carry, not by DAT and not with `dolphin-tool`.
 - **PS4 packages.** See [PS4 packages](#ps4-packages) below; with `orbis-pkg-util` they are
   extracted into a game folder with a shortcut.
+- **PS Vita packages.** See [PS Vita packages](#ps-vita-packages) below; Vita3K installs them
+  with the zRIF of a key file the user keeps, and the result is filed like a Vita dump.
 - **Out of scope.** Vita `.vpk` packages, and PS3 or Xbox content that is not a disc image
   (`.pkg`, `.rap`, an extracted `PS3_GAME` or `default.xbe` folder). Their files are recognised by
   extension or folder and go to review with "not supported by inbox yet". A disc image kept as a
@@ -352,7 +354,8 @@ lists only the `.desktop` files of `roms/ps4/shortcuts`, whose command on the co
 
 A decrypted Vita dump is recognised and filed by `warpzone/inbox_vita.py`, a kind handler
 registered after the console image handler (so a `.pkg` or anything that handler claims keeps
-its outcome). Vita3K runs games from `ux0/app/<TITLEID>`; ES-DE lists only `.psvita` files,
+its outcome; a Vita `.pkg` is installed and handed back here, see
+[PS Vita packages](#ps-vita-packages)). Vita3K runs games from `ux0/app/<TITLEID>`; ES-DE lists only `.psvita` files,
 whose system definition launches `%EMULATOR_VITA3K% -r %INJECT%=%BASENAME%.psvita`, and
 EmuDeck's `vita3k.sh` reads the file's content as the title id (`Vita3K -Fr <id>`).
 
@@ -364,7 +367,8 @@ EmuDeck's `vita3k.sh` reads the file's content as the title id (`Vita3K -Fr <id>
   fully match `PCS[A-I]\d{5}`, and `CATEGORY` decides (`gd`, `gdc` game; `gp` update; `ac`
   DLC; anything else is not a game). Anything but a game, a title id that is not a Vita one,
   several games in one item, a symbolic link inside the game, or a dump that holds
-  `sce_pfs` (Vita3K has to install it) goes to review with the reason. `.vpk` files and `.pkg` files keep their earlier outcome.
+  `sce_pfs` (Vita3K has to install it) goes to review with the reason. `.vpk` files keep their
+  earlier outcome.
 - **Vitamin.** A dump whose game folder holds `sce_module/steroid.suprx` (`is_vitamin`, pure,
   case-insensitive, relative to the game root) is a Vitamin dump. Vita3K rejects that module,
   so it ALWAYS goes to review, checked before anything else about the dump (also in report
@@ -422,6 +426,94 @@ EmuDeck's `vita3k.sh` reads the file's content as the title id (`Vita3K -Fr <id>
   them all.
 - **On the console.** The folders must be linked into Vita3K's own storage, see
   [Title links](/warpzone/development/design/title-links/).
+
+## PS Vita packages
+
+A Vita `.pkg` (as PlayStation Store packages and NoPayStation hand them out: both layers
+encrypted, the licence apart, as a zRIF) is claimed by `inbox_console_iso` like every `.pkg`
+and handled by `warpzone/inbox_vita_pkg.py`, which installs it with Vita3K and hands the
+decrypted game folder and its licence to `inbox_vita.install`. warpzone never downloads
+packages or keys.
+
+- **Header.** Read before anything runs, and in report mode too, from the parts of the file
+  that are not encrypted (big-endian, as `pkg2zip` and Vita3K's `PkgHeader` read them): magic
+  `\x7fPKG` at 0, type 2 (PSP/Vita; PS3 is 1) at 0x06, the extended header magic `\x7fext` at
+  0xC0, the metadata offset (u32 at 0x08) and entry count (u32 at 0x0C), the total size (u64 at
+  0x18) and the content id (0x30 bytes at 0x30, NUL padded). The metadata entries are `u32 id,
+  u32 size, data`; entry 2 is the content type, entry 14 the offset and size (two u32) of the
+  `param.sfo`, which is stored unencrypted in the package. Reads are bounded: 0x100 bytes of
+  header, up to 64 KiB of metadata (at most 64 entries) and a `param.sfo` up to 64 KiB.
+  `read_pkg`, `parse_header`, `parse_meta` are pure on bytes or a file object.
+- **Kind.** Content type 0x15 is a Vita app, 0x16 DLC, 0x1F a theme, 0x18 and 0x1D PlayStation
+  Mobile. Any other `\x7fPKG` (PS3, or the PSP and PS1 types 0x06, 0x07, 0x0E, 0x0F, 0x10) is
+  not this module's and keeps the "not supported by inbox yet" outcome. DLC, a theme or PSM goes
+  to review with the reason. For an app (`pkg_problem`, pure): the content id must be a Vita one
+  (`XXnnnn-PCS[A-I]nnnnn_nn-` and 16 characters), the total size must equal the file's size
+  (a truncated download goes to review), the `param.sfo` must be readable with the `TITLE_ID`
+  of the content id and, when it has one, the same `CONTENT_ID`, and its `CATEGORY` decides as
+  for dumps: `gd` or `gdc` go on, an update (`gp`) or anything else goes to review. Nothing is
+  run for a package that goes to review.
+- **zRIF.** `[inbox] vita_zrif` names a file the user keeps (a configured path that is not a
+  file is a configuration error). It holds either lines of `CONTENT_ID<TAB>zRIF` (blank lines
+  and `#` comments skipped; any other line makes the file unreadable, and the reason names the
+  line by its number only), or a TSV whose first line names the columns `Content ID` and `zRIF`
+  (NoPayStation's `PSV_GAMES.tsv`), of which only those two columns are read; the links and
+  everything else are ignored (`parse_zrif_table`, pure). A row whose zRIF is empty, `MISSING`
+  or `NOT REQUIRED` gives no key; a content id listed twice with different zRIFs is refused.
+  The file is read once per run. A package whose content id has no zRIF there, or with no file
+  configured, goes to review saying so. A zRIF is the base64 of a zlib stream compressed with
+  a preset 1024-byte dictionary (`zrif_dict` of `pkg2zip_zrif.c`, mmozeiko/pkg2zip; the
+  stream's DICTID is its adler32, 0x627d1d5d). `decode_zrif` (pure) checks the zlib header for
+  that dictionary, decompresses with a bound and requires exactly 512 bytes; `license_for`
+  then reads it with `inbox_vita.parse_license` and requires the package's content id. A PSM
+  licence (1024 bytes) or the licence of another game goes to review.
+- **Secrecy.** A zRIF is a key: it never appears in the report, a reason file or a log. The
+  command line shown has it replaced with `***` (`shown_command`), and so does any line of
+  Vita3K's output that is quoted (`failure_line`). Reasons about the key file never quote a
+  line of it. Vita3K takes the zRIF only on its command line (`--zrif`), so it is visible in
+  the process list of the machine while Vita3K runs (under a second for a 200 MiB package).
+- **Tool.** `[inbox] vita3k` is the app bundle (`Vita3K.app`) or a binary; unset, inbox uses
+  `/Applications/Vita3K.app` on macOS when its `Contents/MacOS/Vita3K` is executable, and
+  `vita3k` (or `Vita3K`) on PATH otherwise. Reported in the `tools:` line and by `doctor` as an
+  optional inbox tool; `doctor` does not run it (that would write Vita3K's config in the
+  user's data folder). Without it a package goes to review, in report mode too, unless the game
+  is already in the library.
+- **Isolation.** Vita3K has no option for where `--pkg` installs (`-c` is not read on that
+  path, and on macOS it ignores `HOME`), and it deletes `ux0/app/<TITLEID>` before
+  installing, so it must never run against its own data or a console's. Its portable mode is
+  used instead, in a new folder of the local work folder (`work_dir`, which must have 1.1 times
+  the package's size free): Vita3K takes a `portable/` folder, when there is one, for all its
+  data (`fs`, config, log, cache). On macOS it looks four levels above `Contents/Resources` of
+  the bundle it runs from, and does not resolve a link, so the folder gets a symbolic link
+  `Vita3K.app` to the configured bundle and an empty `portable/`, and the program run is
+  `<folder>/Vita3K.app/Contents/MacOS/Vita3K` (`launch_plan`, pure). For a plain binary
+  (Linux), Vita3K takes the folder next to `$APPIMAGE`, so it runs with `APPIMAGE` set to
+  `<folder>/Vita3K`; this is not tested with a real Linux build. Either way, `Vita3K --version`
+  runs first: in a new portable folder it writes `config.yml`, without which `--pkg` stops
+  with exit code 134. If `portable/config.yml` is not there afterwards, Vita3K is not using
+  the folder, and the package goes to review before `--pkg` ever runs. Then
+  `Vita3K --pkg <file> --zrif <zRIF>` runs in that folder with a one-hour limit; it opens no
+  window and needs no firmware. The work folder is deleted afterwards (the link is removed,
+  never followed).
+- **Result.** Vita3K exits 0 even when the install fails, so the result is judged on disk
+  (`judge_installed`, pure): `portable/fs/ux0/app/<TITLEID>/` must hold `eboot.bin` and a
+  `sce_sys/param.sfo` with the package's `TITLE_ID` and `CONTENT_ID` and a game `CATEGORY`, no
+  `sce_pfs`, and `portable/fs/ux0/license/<TITLEID>/<CONTENT_ID>.rif` must be the 512 bytes
+  the zRIF decodes to. A non-zero exit code or any of these missing goes to review with the
+  reason and the line of Vita3K's output that says why (`header signature is invalid`,
+  `Failed to decode zRIF string`, `Failed to load pkg file`), with the zRIF redacted. Both
+  layers are removed (no `sce_pfs`, no `sce_sys/package`), but `eboot.bin` stays an encrypted
+  SELF, so the licence is required to run the game.
+- **Filing.** `inbox_vita.install` with that game folder and the licence passed explicitly
+  (`license_sources` would not find it: it is in `ux0/license`, outside the game folder, and
+  there is no `work.bin`). Everything there holds: the `.part` copy and rename of the folder,
+  the licence check against the library before anything is placed, the launcher, and the
+  three whitelist lines. A game already in `library/roms/psvita/app/<TITLEID>/` is not
+  installed again: Vita3K is not run (nor needed), and the licence (from the zRIF) and the
+  launcher (from the package's `param.sfo`) are added when they are missing.
+- **Report mode.** Nothing runs. Everything the report needs is known from the header, the
+  `param.sfo` and the zRIF, so it prints the three whitelist lines and the command it would
+  run (`would install it with Vita3K: Vita3K --pkg <file> --zrif ***`).
 
 ## Arcade sets
 

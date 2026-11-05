@@ -486,6 +486,39 @@ class ToolTests(TmpCase):
         bad = context(self.tmp, '[inbox]\norbis_pkg_util = "/nope/opu"\n')
         self.assertEqual(check_tool(bad, spec).status, FAIL)
 
+    VITA3K_BIN = "/Applications/Vita3K.app/Contents/MacOS/Vita3K"
+
+    def test_vita3k_is_listed_and_optional_and_never_run(self) -> None:
+        spec = next(t for t in doctor.TOOLS if t.key == "Vita3K")
+        r = check_tool(context(self.tmp, INBOX_ONLY), spec)
+        self.assertEqual(r.status, OPTIONAL)
+        self.assertIn("Vita3K.app", r.fix)
+        self.assertIn("Vita", spec.purpose)
+        self.assertIsNone(spec.version_args)
+
+    def test_vita3k_in_applications_is_what_inbox_uses_on_macos(self) -> None:
+        spec = next(t for t in doctor.TOOLS if t.key == "Vita3K")
+        r = check_tool(context(self.tmp, INBOX_ONLY, executables=[self.VITA3K_BIN]), spec)
+        self.assertEqual(r.status, OK)
+        self.assertIn("/Applications/Vita3K.app", r.detail)
+        linux = context(
+            self.tmp, INBOX_ONLY, executables=[self.VITA3K_BIN], system="Linux", os_release=DEBIAN
+        )
+        self.assertEqual(check_tool(linux, spec).status, OPTIONAL)
+
+    def test_vita3k_can_be_set_to_the_app_or_a_binary(self) -> None:
+        spec = next(t for t in doctor.TOOLS if t.key == "Vita3K")
+        app = context(
+            self.tmp,
+            '[inbox]\nvita3k = "/x/V.app"\n',
+            executables=["/x/V.app/Contents/MacOS/Vita3K"],
+        )
+        self.assertEqual(check_tool(app, spec).status, OK)
+        binary = context(self.tmp, '[inbox]\nvita3k = "/x/vita3k"\n', executables=["/x/vita3k"])
+        self.assertEqual(check_tool(binary, spec).status, OK)
+        bad = context(self.tmp, '[inbox]\nvita3k = "/nope/V.app"\n')
+        self.assertEqual(check_tool(bad, spec).status, FAIL)
+
 
 class SwitchCheckTests(TmpCase):
     def titledb(self) -> Path:

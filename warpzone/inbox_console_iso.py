@@ -20,8 +20,10 @@ signature instead of by hash:
   as `EP9000-CUSA07934_00-SCES503610000001` at 0x40 (only the first 0x80 bytes are read).
   The title id (`CUSA07934`) is reported. With `orbis-pkg-util` configured the package is
   extracted into `roms/ps4/games/<title id>/` with a shortcut in `roms/ps4/shortcuts/`
-  (see `inbox_ps4`); without it the `.pkg` is filed as it is in `roms/ps4/`. A PS3 `.pkg`
-  (magic `\x7fPKG`) or any other `.pkg` keeps the "not supported by inbox yet" outcome.
+  (see `inbox_ps4`); without it the `.pkg` is filed as it is in `roms/ps4/`. A PS Vita `.pkg`
+  (magic `\x7fPKG`, a PSP/Vita header and a Vita content type) is installed with Vita3K (see
+  `inbox_vita_pkg`). A PS3 `.pkg` or any other `.pkg` keeps the "not supported by inbox yet"
+  outcome.
 
 A full Redump-style Xbox image (game partition at 0x18300000) is recognised but never
 placed: xemu cannot boot it, so it goes to review with the instruction to convert it with
@@ -55,7 +57,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import BinaryIO, TypeVar
 
-from warpzone import gamelist, inbox_core, inbox_mame, inbox_ps4
+from warpzone import gamelist, inbox_core, inbox_mame, inbox_ps4, inbox_vita_pkg
 from warpzone.dat import FileInfo
 from warpzone.inbox_core import Context, ItemFailure, ItemResult, Options, Staged, UnitResult
 from warpzone.sfo import MAX_SFO_BYTES, parse_sfo
@@ -478,7 +480,7 @@ class ConsoleIsoHandler:
     whole), and plain `.iso` files the DATs could not match (see `adopt`)."""
 
     def validate(self, opts: Options) -> None:
-        return None
+        inbox_vita_pkg.validate(opts)
 
     def claims(self, ctx: Context, item: Path) -> bool:
         if item.is_symlink():
@@ -508,6 +510,8 @@ class ConsoleIsoHandler:
             result.reasons.append(f"{s.rel}: {exc.strerror or exc}")
             return
         if found is None and is_pkg(s.path.name):
+            if inbox_vita_pkg.process(ctx, s.path, s.rel, result):
+                return
             # PS3 and any other .pkg keep today's outcome
             result.reasons.append(
                 inbox_core.unsupported_reason([s.rel]) or f"{s.rel}: not recognised as a PS4 .pkg"

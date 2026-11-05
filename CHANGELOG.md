@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ## [Unreleased]
 
+### Added
+
+- `warpzone inbox` installs PS Vita `.pkg` games with Vita3K. The zRIF (licence key) of each game comes from a file you keep, named by the new `[inbox] vita_zrif` key: `CONTENT_ID<TAB>zRIF` lines, or a NoPayStation-style TSV of which only the `Content ID` and `zRIF` columns are read. Before anything runs, also in report mode, the package header, its `param.sfo` and the zRIF are checked (the zRIF must decode to that game's licence), so the report already prints the three whitelist lines. With `--apply`, Vita3K (`[inbox] vita3k`, by default `/Applications/Vita3K.app` on macOS or `vita3k` on PATH) installs the package in its portable mode inside the local work folder, never in its own data; the result is checked on disk, because Vita3K reports success even when it fails, and filed like a Vita dump: the game folder, the licence and the `.psvita` launcher. Updates, DLC, themes, PlayStation Mobile packages, incomplete downloads and packages without their zRIF go to review with the reason. A zRIF is never printed or written to a reason file. `warpzone doctor` lists Vita3K among the inbox tools.
+
 ## [0.3.0rc4] - 2026-11-05
 
 Fourth release candidate of 0.3.0: the Anbernic installs releases only from its Options menu, where "Warpzone Update Now" now works with the menu open, and Wii and GameCube `.rvz` images keep their own names.

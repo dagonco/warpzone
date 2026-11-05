@@ -69,6 +69,7 @@ warpzone/
   inbox_console_iso.py  PS3, Xbox, Xbox 360 and Wii U images: identify by signature, place
   inbox_ps4.py       PS4 packages: extract with orbis-pkg-util, place the game folder, shortcut
   inbox_vita.py      PS Vita game dumps: identify by param.sfo, place the folder and the .psvita file
+  inbox_vita_pkg.py  PS Vita .pkg: header and zRIF checks, install with Vita3K in a work folder, judge the result
   shadps4.py         shadPS4's install directories and launch script edits (pure)
   titlelinks.py      symlinks from the library's game folders into an emulator's own (pure plan)
   inbox_n3ds.py      3DS images (`.3ds`, `.cci`): NCSD / NCCH header check, placed as `.cci`

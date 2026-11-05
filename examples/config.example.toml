@@ -113,12 +113,15 @@ dats_dir = "~/dats/libretro-database/metadat"
 #              .nsz (uv tool install nsz)
 # orbis_pkg_util unpacks PS4 .pkg games into a folder shadPS4 can run, with a shortcut
 #              (cargo install orbis-pkg-util). Without it the .pkg is filed as it is.
+# vita3k       installs PS Vita .pkg games: Vita3K.app or its binary. Default:
+#              /Applications/Vita3K.app on macOS, vita3k on PATH elsewhere.
 # chdman = "/opt/homebrew/bin/chdman"
 # bsdtar = "/usr/bin/bsdtar"
 # rahasher = "~/tools/RAHasher"
 # dolphin_tool = "/Applications/Dolphin.app/Contents/MacOS/dolphin-tool"
 # nsz = "~/.local/bin/nsz"
 # orbis_pkg_util = "~/.cargo/bin/orbis-pkg-util"
+# vita3k = "/Applications/Vita3K.app"
 
 # Optional Switch support. A local clone of blawar/titledb names the games
 # (git clone --depth 1 https://github.com/blawar/titledb; git pull updates it). nsz needs
@@ -126,6 +129,12 @@ dats_dir = "~/dats/libretro-database/metadat"
 # path to nsz and never reads or prints the file. Default: ~/.switch/prod.keys.
 # titledb_dir = "~/dats/titledb"
 # switch_keys = "~/.switch/prod.keys"
+
+# Optional PS Vita .pkg support. A file you keep with the zRIF (the licence key) of each
+# game: CONTENT_ID<TAB>zRIF lines, or a TSV with a header row such as NoPayStation's
+# PSV_GAMES.tsv (only its "Content ID" and "zRIF" columns are read). warpzone never prints a
+# zRIF and never downloads keys or games.
+# vita_zrif = "~/keys/PSV_GAMES.tsv"
 
 # Optional arcade (MAME) support. Each file is an XML set database; set the ones you have
 # and warpzone checks a dropped arcade zip against them in this order, and uses the first
