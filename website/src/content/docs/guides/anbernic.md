@@ -103,8 +103,10 @@ See [the design document](/warpzone/development/design/play-state/) for the rule
 
 `provision device` adds two entries to the ArkOS "Options" menu (the profile's `[options_menu]` table points at `/opt/system`, where ArkOS lists every executable `.sh`):
 
-- **Warpzone Status** shows, without the network: the warpzone version, the updater's channel and pin, the version it last settled on (`good tag`), the result of its last run, when it last looked for a release, and the problems `warpzone doctor` finds (at most 8 lines, cut to fit the screen). Anything it cannot read shows as `unknown`.
-- **Warpzone Update Now** runs `warpzone self-update --now`, so the console looks for a release right away, and shows how it ended.
+- **Warpzone Status** shows, without the network: the warpzone version, the updater's channel and pin, the version it last settled on (`good tag`), a new release the console found and has not installed (`New release`), the result of its last run, when it last looked for a release, and the problems `warpzone doctor` finds (at most 8 lines, cut to fit the screen). Anything it cannot read shows as `unknown`.
+- **Warpzone Update Now** runs `warpzone self-update --now`: the console looks for a release right away, installs and verifies it, and shows how it ended. It does not wait for the menu to close, since it is started from it.
+
+The console never installs a release on its own: EmulationStation is open whenever it is on, so its timer only looks for releases (the profile's `[updater] install = "manual"`) and Warpzone Status shows when there is one. Install it with Warpzone Update Now, from the menu, with no game running.
 
 Only these two files are written, they are overwritten at every `provision device` run, and nothing else in `/opt/system` is touched. If the folder does not exist, the step is skipped with a warning. The status entry only reads what the updater already keeps on the device, so it works without SSH and without a connection.
 

@@ -204,6 +204,7 @@ class ScriptRunTests(unittest.TestCase):
                 "Channel: rc",
                 "Pin: v0.3.0rc2",
                 "Good tag: v0.3.0rc2",
+                "New release: none",
                 "Last result: ok",
                 "Last fetch: 2026-11-04 10:40",
                 "Doctor: [!!] syncthing  not found, the folders c",
@@ -232,6 +233,14 @@ class ScriptRunTests(unittest.TestCase):
         for key in ("Version", "Channel", "Good tag", "Last result", "Last fetch", "Doctor"):
             self.assertIn(f"{key}: unknown", shown)
         self.assertIn("Pin: none", shown)
+
+    def test_a_release_the_timer_found_is_shown(self) -> None:
+        self.install_state(doctor="")
+        with (self.updater / "state").open("a") as f:
+            f.write("available=v0.3.0rc4\nlast_result=available\n")
+        shown = self.run_script(options_menu.render_status_script())
+        self.assertIn("New release: v0.3.0rc4 (Warpzone Update Now)", shown)
+        self.assertIn("Last result: available", shown)
 
     def test_a_bad_last_fetch_shows_unknown(self) -> None:
         self.install_state(doctor="")

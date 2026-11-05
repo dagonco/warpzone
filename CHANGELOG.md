@@ -9,10 +9,12 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 ### Added
 
 - `warpzone inbox` identifies `.rvz` and `.wia` images by reading their header, with no `dolphin-tool` and no DAT: it tells a Wii disc from a GameCube one, reads the game ID and the title, and files the image unchanged as `roms/wii/<name> [<GAME ID>].rvz` (or `roms/gc/`), where the name is the file's own (for example `Game (USA) (En,Fr,Es)`) and the header's title stands in when the file name is only the game ID. A truncated copy or a header that does not check out goes to review with the reason. `dolphin-tool` is now needed only for `.gcz`.
+- A profile can set `[updater] install = "manual"`: the device's timer then only looks for a release and notes it, and `warpzone self-update --now` installs it. The Anbernic profile does, because EmulationStation is open whenever that console is on: the timer waited up to 72 hours for the menu to close, so the console took days to update. "Warpzone Status" shows the release found (`New release`).
 - `warpzone inbox --apply` takes a lock file, `inbox/.warpzone.lock`, so two runs (for example from two desktops that mount the hub) cannot work on the same inbox at once. A second run stops with a message saying who holds the lock and since when. A lock left behind by a run that died (older than 12 hours, or its process gone from the same machine) is reported as stale and taken over only with the new `--force-lock` option. A report run needs no lock.
 
 ### Fixed
 
+- `warpzone self-update --now` (and the "Warpzone Update Now" entry of the Anbernic's Options menu, which is started from the menu) no longer waits for the menu to close, nor for the back-off after a failed check: it is an update asked for by hand. `updater.sh tick --now` is that update; `--fetch-now` still waits for the menu.
 - `provision hub` resumes a `wz-*` folder the hub has paused even when its ignores are already right, which is how a folder looks when an additive run stopped half-way. Devices still leave such a folder alone.
 
 ## [0.3.0rc3] - 2026-11-04

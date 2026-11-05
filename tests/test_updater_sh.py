@@ -571,7 +571,7 @@ class UpdateTests(UpdaterCase):
     def test_tick_refuses_an_unknown_option(self) -> None:
         proc = self.rig.tick("--bogus")
         self.assertEqual(proc.returncode, 2, proc.output)
-        self.assertIn("usage: updater.sh tick [--fetch-now]", proc.output)
+        self.assertIn("usage: updater.sh tick [--fetch-now] [--now]", proc.output)
 
     def test_a_disabled_device_is_left_alone(self) -> None:
         rig = self.rig
@@ -691,6 +691,108 @@ class VerdictTests(UpdaterCase):
         self.assertEqual(state["good_tag"], "v0.2.0")
         self.assertEqual(state["trying_tag"], "")
         self.assertEqual(state["pending"], "0")
+
+
+class ByHandTests(UpdaterCase):
+    """`tick --now` is an update asked for by hand (`warpzone self-update --now`, the
+    Options entry): the menu it is asked from does not hold it back."""
+
+    def test_now_updates_with_the_menu_open(self) -> None:
+        rig = self.rig
+        rig.release("0.2.0")
+        rig.proc.add(7000001, "es-de")
+        proc = rig.tick("--now")
+        self.assertTick(proc, 0)
+        self.assertEqual(rig.on_tag(), "v0.2.0")
+        self.assertEqual(rig.state()["good_tag"], "v0.2.0")
+        self.assertIn("asked for by hand", proc.output)
+
+    def test_now_counts_a_check_held_back_by_the_menu_as_passed(self) -> None:
+        rig = self.rig
+        rig.release("0.2.0")
+        rig.proc.add(7000001, "es-de")
+        rig.flag("defer")
+        self.assertTick(rig.tick("--now"), 0)
+        state = rig.state()
+        self.assertEqual(state["good_tag"], "v0.2.0")
+        self.assertEqual(state["trying_tag"], "")
+        self.assertEqual(state["pending"], "1", "the write held back is still to do")
+
+    def test_now_does_not_wait_for_retry_after(self) -> None:
+        rig = self.rig
+        self.assertTick(rig.tick(), 0)
+        rig.release("0.2.0")
+        state = rig.state()
+        state["retry_after"] = str(NOW + DAY)
+        rig.write_state(**state)
+        self.assertTick(rig.tick(now=NOW + 60), 0)
+        self.assertEqual(rig.on_tag(), "v0.1.0", "the timer still waits")
+        self.assertTick(rig.tick("--now", now=NOW + 120), 0)
+        self.assertEqual(rig.on_tag(), "v0.2.0")
+
+    def test_fetch_now_alone_still_waits_for_the_menu(self) -> None:
+        rig = self.rig
+        rig.release("0.2.0")
+        rig.proc.add(7000001, "es-de")
+        self.assertTick(rig.tick("--fetch-now"), 0)
+        self.assertEqual(rig.on_tag(), "v0.1.0")
+
+
+class ManualInstallTests(UpdaterCase):
+    """`install=manual`: the timer only looks for releases; installing is asked for by hand."""
+
+    def test_the_timer_fetches_and_notes_the_release_without_installing_it(self) -> None:
+        rig = self.rig
+        rig.write_conf(install="manual")
+        rig.release("0.2.0")
+        proc = rig.tick()
+        self.assertTick(proc, 0)
+        state = rig.state()
+        self.assertEqual(rig.on_tag(), "v0.1.0")
+        self.assertEqual(state["available"], "v0.2.0")
+        self.assertEqual(state["last_fetch"], str(NOW))
+        self.assertEqual(state["trying_tag"], "")
+        self.assertEqual(rig.calls(), [], "no provision, no health")
+        self.assertIn("v0.2.0 is available", proc.output)
+
+    def test_the_menu_does_not_stop_the_timer_from_looking(self) -> None:
+        rig = self.rig
+        rig.write_conf(install="manual")
+        rig.release("0.2.0")
+        rig.proc.add(7000001, "es-de")
+        self.assertTick(rig.tick(), 0)
+        state = rig.state()
+        self.assertEqual(state["available"], "v0.2.0")
+        self.assertEqual(state["deferred_since"], "")
+        self.assertEqual(state["last_result"], "available")
+
+    def test_nothing_new_leaves_available_empty(self) -> None:
+        rig = self.rig
+        rig.write_conf(install="manual")
+        self.assertTick(rig.tick(), 0)
+        self.assertEqual(rig.state().get("available", ""), "")
+        self.assertEqual(rig.calls(), [])
+
+    def test_now_installs_and_clears_available(self) -> None:
+        rig = self.rig
+        rig.write_conf(install="manual")
+        rig.release("0.2.0")
+        rig.proc.add(7000001, "es-de")
+        self.assertTick(rig.tick(), 0)
+        self.assertTick(rig.tick("--now", now=NOW + 60), 0)
+        state = rig.state()
+        self.assertEqual(rig.on_tag(), "v0.2.0")
+        self.assertEqual(state["good_tag"], "v0.2.0")
+        self.assertEqual(state["available"], "")
+
+    def test_an_unknown_install_value_is_auto(self) -> None:
+        rig = self.rig
+        rig.write_conf(install="sometimes")
+        rig.release("0.2.0")
+        proc = rig.tick()
+        self.assertTick(proc, 0)
+        self.assertEqual(rig.on_tag(), "v0.2.0")
+        self.assertIn("install=sometimes", proc.output)
 
 
 class EdgeTests(UpdaterCase):

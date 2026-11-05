@@ -154,6 +154,17 @@ class ProfileTests(unittest.TestCase):
         with self.assertRaises(ProfileError):
             load_profile("../config")
 
+    def test_updater_install(self) -> None:
+        base = {"name": "p", "paths": {"library": "~/x"}}
+        self.assertEqual(parse_profile(base, "t").updater_install, "auto")
+        manual = parse_profile({**base, "updater": {"install": "manual"}}, "t")
+        self.assertEqual(manual.updater_install, "manual")
+        self.assert_invalid({**base, "updater": {"install": "never"}}, "updater.install")
+        self.assert_invalid({**base, "updater": {"when": 1}}, "updater.when: unknown key")
+        self.assert_invalid({**base, "updater": 1}, "`updater` must be a table")
+        self.assertEqual(load_profile("anbernic-rg351mp").updater_install, "manual")
+        self.assertEqual(load_profile("steamos-emudeck").updater_install, "auto")
+
     def assert_invalid(self, data: dict, needle: str) -> None:
         with self.assertRaises(ProfileError) as ctx:
             parse_profile(data, "test")

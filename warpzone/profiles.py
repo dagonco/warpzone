@@ -265,6 +265,9 @@ class Profile:
     shadps4: ShadPS4Dirs | None = None
     links: dict[str, TitleLinks] = field(default_factory=dict)
     options_menu: OptionsMenu | None = None
+    # `[updater] install`: "auto" (the timer installs a new release) or "manual" (the timer
+    # only looks for one; it is installed by hand, with `warpzone self-update --now`).
+    updater_install: str = "auto"
 
     def placement_ignores(self) -> tuple[str, ...]:
         """The anchored library paths that placements deliver instead of the library."""
@@ -297,6 +300,7 @@ def parse_profile(data: dict[str, Any], source: str) -> Profile:
         "shadps4",
         "links",
         "options_menu",
+        "updater",
     }
     for key in sorted(set(data) - allowed):
         err(f"unknown key {key!r}")
@@ -369,6 +373,7 @@ def parse_profile(data: dict[str, Any], source: str) -> Profile:
     shadps4 = _parse_shadps4(data.get("shadps4"), "library" in paths, err)
     links = _parse_links(data.get("links"), "library" in paths, err)
     options_menu = _parse_options_menu(data.get("options_menu"), err)
+    updater_install = _parse_updater(data.get("updater"), err)
 
     if errors:
         raise ProfileError("\n".join(errors))
@@ -388,6 +393,7 @@ def parse_profile(data: dict[str, Any], source: str) -> Profile:
         shadps4,
         links,
         options_menu,
+        updater_install,
     )
 
 
@@ -436,6 +442,24 @@ def _nested(a: str, b: str) -> bool:
     """Whether folder `a` is `b` or sits inside it (literal paths, `~` unexpanded)."""
     a, b = a.rstrip("/") + "/", b.rstrip("/") + "/"
     return a.startswith(b)
+
+
+UPDATER_INSTALL = ("auto", "manual")
+
+
+def _parse_updater(raw: Any, err: Callable[[str], None]) -> str:
+    if raw is None:
+        return "auto"
+    if not isinstance(raw, dict):
+        err("`updater` must be a table")
+        return "auto"
+    for extra in sorted(set(raw) - {"install"}):
+        err(f"updater.{extra}: unknown key")
+    install = raw.get("install", "auto")
+    if install not in UPDATER_INSTALL:
+        err('updater.install: "auto" or "manual"')
+        return "auto"
+    return str(install)
 
 
 def _parse_options_menu(raw: Any, err: Callable[[str], None]) -> OptionsMenu | None:

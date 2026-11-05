@@ -59,6 +59,8 @@ fi
 CHANNEL=$(kv "$UPDATER_DIR/conf" channel)
 PIN=$(kv "$UPDATER_DIR/conf" pin)
 GOOD=$(kv "$UPDATER_DIR/state" good_tag)
+AVAILABLE=$(kv "$UPDATER_DIR/state" available)
+[ -z "$AVAILABLE" ] || AVAILABLE="$AVAILABLE (Warpzone Update Now)"
 RESULT=$(kv "$UPDATER_DIR/state" last_result)
 FETCH=$(kv "$UPDATER_DIR/state" last_fetch)
 FMT='+%Y-%m-%d %H:%M'
@@ -92,6 +94,7 @@ TEXT="Version: $(or_unknown "$VERSION")
 Channel: $(or_unknown "$CHANNEL")
 Pin: $(or_unknown "$PIN" none)
 Good tag: $(or_unknown "$GOOD")
+New release: $(or_unknown "$AVAILABLE" none)
 Last result: $(or_unknown "$RESULT")
 Last fetch: $(or_unknown "$FETCH")
 Doctor: $DOCTOR_TEXT"

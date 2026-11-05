@@ -249,6 +249,7 @@ def ensure_self_update(
             pin=device.pin,
             enabled=enabled,
             frontend=selfupdate.frontend_names(profile),
+            install=selfupdate.install_mode(profile),
         )
 
     try:

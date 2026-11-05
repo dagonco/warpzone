@@ -39,8 +39,9 @@ own, separate from `updater.sh tick`: the script does not know what started it, 
 without systemd can start the same `tick` from another launcher. Each tick, in this order:
 
 1. Take a lock; a tick that finds it held exits at once.
-2. Read the configuration; if the device is not `enabled` (`self_update = false`), stop.
-3. If the menu is open, defer (see below).
+2. Read the configuration; if the device is not `enabled` (`self_update = false`), stop. With
+   `install=manual` and no `--now`, only look for a release (see "Installing by hand" below).
+3. If the menu is open, defer (see below); a tick with `--now` does not.
 4. Look for an interpreter that can run warpzone (`no-python` when none).
 5. Fetch the remote at most once per interval: one hour on the `rc` channel, 12 hours on
    `stable` or with a pin (a pin only needs new tags to find its target);
@@ -376,6 +377,21 @@ by `KILL` or a power cut leaves no status at all.
   backs off like any environment failure. If the second look at the new release cannot be
   made (no time, or the checkout fails), the device stays on the previous version, which is
   the reference again, and the release is under suspicion as described above.
+
+**Installing by hand.** `tick --now` is an update asked for by hand (`warpzone self-update
+--now`, or the "Warpzone Update Now" entry of the Options menu, which runs from the menu
+itself): it fetches at once, the open menu does not defer it, `retry_after` does not hold it
+back, and a step the menu still holds back (exit 3) counts as passed and leaves `pending` set,
+as past the 72 hours. A game cannot be running when it is asked for, and every write is still
+guarded by `_busy`. `tick --fetch-now` keeps its meaning: fetch at once, and wait for the menu.
+A device whose profile sets `[updater] install = "manual"` (the settings key `install`) never
+installs from the timer: a tick without `--now` takes the lock, fetches when due, finds the best
+target as usual (signatures, retirements, the pin) and writes it to the state key `available`
+(`last_result=available`), then ends. It does not wait for the menu, verify, reconcile, resume a
+trial or roll back; the next `--now` does all of that and clears `available`. An unknown value
+is logged and read as `auto`. `UPDATER_ABI` is 2 from the version that knows `--now`;
+`selfupdate.run_tick` sends `--now` to a live copy of that ABI or higher and `--fetch-now` to an
+older one.
 
 **Deferring while the menu is open.** The script scans `/proc/*/comm` and `argv[0]` the way
 `procs.running` does (`WZ_PROC` points it at a fake tree in tests, and a test checks
