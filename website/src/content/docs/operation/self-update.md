@@ -115,6 +115,7 @@ Each run of `provision device` also renews the live copy of the script and its s
 ```bash
 sh warpzone/data/updater.sh tick       # one run of the timer
 sh warpzone/data/updater.sh tick --fetch-now   # the same, fetching even when not due
+sh warpzone/data/updater.sh tick --now   # asked for by hand: no wait for the menu
 sh warpzone/data/updater.sh install DEVICE   # the install above
 sh warpzone/data/updater.sh menu       # open (exit 0), closed (1) or unknown (2)
 sh warpzone/data/updater.sh selftest   # its tools and helpers; prints "selftest: ok abi=N"

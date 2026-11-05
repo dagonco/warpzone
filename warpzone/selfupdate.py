@@ -29,7 +29,19 @@ UPDATER_SOURCE = Path(__file__).resolve().parent / "data" / "updater.sh"
 UPDATER_DIR = "updater"
 LIVE_REL = Path(".local/share/warpzone") / UPDATER_DIR / "updater.sh"
 # What `provision device` writes for the script, in this order.
-CONF_KEYS = ("device", "config", "clone", "python", "channel", "pin", "enabled", "frontend")
+CONF_KEYS = (
+    "device",
+    "config",
+    "clone",
+    "python",
+    "channel",
+    "pin",
+    "enabled",
+    "frontend",
+    "install",
+)
+# The first UPDATER_ABI whose `tick` knows `--now` (an update asked for by hand).
+NOW_ABI = 2
 
 _ABI = re.compile(r"^UPDATER_ABI=(\d+)[ \t]*$", re.MULTILINE)
 _BAD_DATE = "%Y-%m-%dT%H:%M:%SZ"
@@ -76,6 +88,7 @@ def render_conf(
     pin: str | None,
     enabled: bool,
     frontend: Sequence[str],
+    install: str = "auto",
 ) -> str:
     """The settings the script reads: `key=value` per line, nothing it could run (it reads
     the file line by line and never sources it). A value that could end its line raises
@@ -89,6 +102,7 @@ def render_conf(
         "pin": pin or "",
         "enabled": "true" if enabled else "false",
         "frontend": " ".join(frontend),
+        "install": install,
     }
     for key, value in values.items():
         if any(c in value for c in "\r\n\0"):
@@ -103,6 +117,11 @@ def frontend_names(profile: Profile) -> tuple[str, ...]:
     has one (EmulationStation on dArkOS), ES-DE's otherwise."""
     rule = profile.es_systems
     return tuple(rule.process) if rule is not None else tuple(esde.ESDE_PROCESSES)
+
+
+def install_mode(profile: Profile) -> str:
+    """`auto` or `manual`: whether the timer installs a new release or only notes it."""
+    return profile.updater_install
 
 
 def parse_kv(text: str) -> dict[str, str]:
@@ -180,8 +199,9 @@ def run_tick(
     run: Callable[[Sequence[str]], int] = _run,
 ) -> int:
     """`warpzone self-update`: run one tick of the live copy of the script, as the timer does,
-    and return its exit code; `fetch_now` asks it to fetch even when the interval has not
-    passed. Without a live copy, say what to do and return 1."""
+    and return its exit code. `fetch_now` is an update asked for by hand: a script that knows
+    `--now` (UPDATER_ABI >= NOW_ABI) gets it, so the open menu does not hold it back; an older
+    one gets `--fetch-now`. Without a live copy, say what to do and return 1."""
     if not live.is_file():
         out(
             f"self-update: there is no updater at {live}. `warpzone provision device <name>` "
@@ -189,8 +209,15 @@ def run_tick(
             "`sh <clone>/warpzone/data/updater.sh install <name>` (see https://dagonco.github.io/warpzone/operation/self-update/)"
         )
         return 1
+    flags: list[str] = []
+    if fetch_now:
+        try:
+            abi = updater_abi(live.read_text(encoding="utf-8", errors="replace"))
+        except OSError:
+            abi = None
+        flags = ["--now" if (abi or 0) >= NOW_ABI else "--fetch-now"]
     try:
-        return run(["sh", str(live), "tick", *(["--fetch-now"] if fetch_now else [])])
+        return run(["sh", str(live), "tick", *flags])
     except OSError as exc:
         out(f"self-update: cannot run sh {live} tick ({exc})")
         return 1

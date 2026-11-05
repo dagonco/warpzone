@@ -1870,7 +1870,7 @@ def check_update_timer(ctx: Context) -> list[Result]:
 
 
 UPDATER_STALE_DAYS = 14
-_EXPECTED_KEYS = ("device", "config", "channel", "pin", "enabled", "frontend")
+_EXPECTED_KEYS = ("device", "config", "channel", "pin", "enabled", "frontend", "install")
 
 
 def judge_updater_script(
@@ -2070,6 +2070,7 @@ def check_updater(ctx: Context) -> list[Result]:
             pin=device.pin,
             enabled=True,
             frontend=selfupdate.frontend_names(device.profile),
+            install=selfupdate.install_mode(device.profile),
         )
     )
     clone = Path(actual.get("clone", "")) if actual else Path("")

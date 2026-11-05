@@ -5,9 +5,11 @@
 # (a broken release must not be able to stop the tool that puts the good one back) and its
 # rules are written in development/design/autonomous-updates.md, "Autonomous updates (contract)".
 #
-#   updater.sh tick [--fetch-now]
+#   updater.sh tick [--fetch-now] [--now]
 #                        one run of the timer: update, verify, roll back, reconcile;
-#                        --fetch-now fetches even when the interval has not passed
+#                        --fetch-now fetches even when the interval has not passed;
+#                        --now is an update asked for by hand: it fetches at once and
+#                        neither the open menu nor retry_after holds it back
 #   updater.sh install DEVICE [--config FILE] [--venv DIR] [--channel stable|rc] [-- ARGS...]
 #                        the human install, from a git clone: check out the best release,
 #                        make the venv, run `provision device`
@@ -39,7 +41,7 @@
 # Every S_* variable is the state; state_save writes them to the file through eval, which
 # the linter cannot follow, so it takes them for unused.
 # shellcheck disable=SC2034
-UPDATER_ABI=1
+UPDATER_ABI=2
 
 set -u
 
@@ -47,7 +49,7 @@ DAY=86400
 DEFER_MAX=$((72 * 3600))
 MAX_ATTEMPTS=2
 IMPORT_CODE='import os, sys, warpzone.cli, warpzone.provision, warpzone.health; root = os.path.realpath(sys.argv[1]); here = os.path.realpath(warpzone.__file__); sys.exit(0 if here.startswith(root + os.sep) else 7)'
-STATE_KEYS="schema good_tag good_sha good_branch trying_tag trying_sha from_tag from_sha from_branch attempts probation pending deferred_since last_fetch last_boot_id last_result last_ok retry_after env_failures suspect_tag suspect_sha pin_retired signing signers_version"
+STATE_KEYS="schema available good_tag good_sha good_branch trying_tag trying_sha from_tag from_sha from_branch attempts probation pending deferred_since last_fetch last_boot_id last_result last_ok retry_after env_failures suspect_tag suspect_sha pin_retired signing signers_version"
 
 STATE_DIR=${WZ_STATE_DIR:-${XDG_STATE_HOME:-${HOME:-/nonexistent}/.local/state}/warpzone/updater}
 CONF=${WZ_CONF:-$STATE_DIR/conf}
@@ -56,6 +58,8 @@ PROC=${WZ_PROC:-/proc}
 BOOT_ID_FILE=${WZ_BOOT_ID_FILE:-/proc/sys/kernel/random/boot_id}
 FETCH_INTERVAL=${WZ_FETCH_INTERVAL:-}
 FETCH_NOW=0
+BY_HAND=0
+WATCH=0
 PY_FALLBACKS=${WZ_PYTHON_FALLBACKS-/usr/bin/python3 python3}
 SIGNERS_FILE=
 SIGNERS_SRC=
@@ -349,6 +353,8 @@ C_clone=
 C_config=
 C_channel=stable
 C_pin=
+C_install=auto
+INSTALL_BAD=
 
 conf_load() {
 	[ -f "$CONF" ] || return 1
@@ -369,6 +375,7 @@ conf_load() {
 		config) C_config=$_v ;;
 		channel) C_channel=$_v ;;
 		pin) C_pin=$_v ;;
+		install) C_install=$_v ;;
 		enabled)
 			case $_v in
 			false | 0 | no | off) C_enabled=0 ;;
@@ -378,6 +385,13 @@ conf_load() {
 		esac
 	done <"$CONF"
 	[ -n "$C_frontend" ] || C_frontend="es-de ES-DE.AppImage"
+	case $C_install in
+	auto | manual) ;;
+	*)
+		INSTALL_BAD=$C_install
+		C_install=auto
+		;;
+	esac
 	return 0
 }
 
@@ -1976,20 +1990,29 @@ conf_check() {
 		log "the pin '$C_pin' is not a tag such as v0.3.0 or v0.3.0rc1; ignoring it"
 		C_pin=
 	fi
+	if [ -n "$INSTALL_BAD" ]; then
+		log "install=$INSTALL_BAD is not auto or manual; using auto"
+		INSTALL_BAD=
+	fi
 	return 0
 }
 
 # tick_start: the arguments, the state folder, the lock, the settings and the clone. Ends the
 # tick (exit 0, or 1 where something is wrong) when there is nothing to do or no way to go on.
 tick_start() {
-	case ${1-} in
-	'') ;;
-	--fetch-now) FETCH_NOW=1 ;;
-	*)
-		echo "usage: updater.sh tick [--fetch-now]" >&2
-		exit 2
-		;;
-	esac
+	for _arg in "$@"; do
+		case $_arg in
+		--fetch-now) FETCH_NOW=1 ;;
+		--now)
+			FETCH_NOW=1
+			BY_HAND=1
+			;;
+		*)
+			echo "usage: updater.sh tick [--fetch-now] [--now]" >&2
+			exit 2
+			;;
+		esac
+	done
 	mkdir -p "$STATE_DIR" || {
 		echo "updater: cannot create $STATE_DIR" >&2
 		exit 1
@@ -2038,8 +2061,20 @@ tick_start() {
 # tick_menu: the menu: wait for it to close, at most 72 hours from the first deferral. A menu
 # that is seen closed ends the deferral: the 72 hours are of an unbroken wait.
 tick_menu() {
+	S_available=
 	menu_open
 	_menu=$?
+	if [ "$BY_HAND" = 1 ]; then
+		# Asked for from the menu itself (the Options entry) or from a shell: the person is
+		# there and no game is running. A step that the menu still holds back counts as
+		# passed, as past the 72 hours, and leaves `pending` set.
+		if [ "$_menu" = 0 ]; then
+			log "the update was asked for by hand: going on with the menu open"
+		fi
+		S_deferred_since=
+		OVER=1
+		return 0
+	fi
 	if [ "$_menu" = 1 ]; then
 		S_deferred_since=
 	fi
@@ -2102,7 +2137,7 @@ tick_checkout() {
 		;;
 	dirty | dev)
 		log "the checkout is $KIND: not moved (no reset, stash or clean)"
-		reconcile_if_needed
+		[ "$WATCH" = 1 ] || reconcile_if_needed
 		S_last_result=$KIND
 		finish 0
 		;;
@@ -2181,9 +2216,41 @@ tick_finish() {
 	finish 0
 }
 
+# tick_watch: install=manual and not asked for by hand: look for a release and note it in
+# `available`, nothing else. No menu wait, no verification and no reconcile: the person
+# installs from the menu (`updater.sh tick --now`), which does all of that. A trial or a
+# probation in progress is not watched: it was asked for by hand and the timer finishes it, so
+# a release that no longer starts is still put back.
+tick_watch() {
+	WATCH=1
+	tick_checkout
+	tick_trust
+	watch_note
+}
+
+# watch_note: the end of a tick that only watches: the best target goes to `available`.
+watch_note() {
+	pick_target || true
+	S_available=$PICK
+	if [ -n "$PICK" ]; then
+		log "$PICK is available (running $(version_at HEAD)); install it with warpzone self-update --now"
+		S_last_result=available
+	else
+		S_last_result=ok
+	fi
+	if [ "$FETCHED" = 1 ]; then
+		S_last_ok=$NOW
+	fi
+	finish 0
+}
+
 cmd_tick() {
 	tick_start "$@"
 	clear_stale_index_lock
+	if [ "$C_install" = manual ] && [ "$BY_HAND" != 1 ] && [ -z "$S_trying_tag" ] &&
+		[ "$S_probation" != 1 ]; then
+		tick_watch
+	fi
 	tick_menu
 	tick_python
 	tick_checkout
@@ -2191,12 +2258,21 @@ cmd_tick() {
 	if [ -n "$S_trying_tag" ]; then
 		resume
 	fi
+	if [ "$C_install" = manual ] && [ "$BY_HAND" != 1 ]; then
+		# A trial was finished above, or the probation is checked here; nothing new is tried.
+		probation_check
+		watch_note
+	fi
 	tick_suspect
 	probation_check
 
 	if [ -n "$S_retry_after" ] && [ "$S_retry_after" -gt "$NOW" ]; then
-		log "waiting until $S_retry_after before trying a new release"
-		finish 0
+		if [ "$BY_HAND" = 1 ]; then
+			log "asked for by hand: not waiting until $S_retry_after"
+		else
+			log "waiting until $S_retry_after before trying a new release"
+			finish 0
+		fi
 	fi
 
 	tick_new_release

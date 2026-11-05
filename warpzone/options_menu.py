@@ -59,6 +59,8 @@ fi
 CHANNEL=$(kv "$UPDATER_DIR/conf" channel)
 PIN=$(kv "$UPDATER_DIR/conf" pin)
 GOOD=$(kv "$UPDATER_DIR/state" good_tag)
+AVAILABLE=$(kv "$UPDATER_DIR/state" available)
+[ -z "$AVAILABLE" ] || AVAILABLE="$AVAILABLE (Warpzone Update Now)"
 RESULT=$(kv "$UPDATER_DIR/state" last_result)
 FETCH=$(kv "$UPDATER_DIR/state" last_fetch)
 FMT='+%Y-%m-%d %H:%M'
@@ -92,6 +94,7 @@ TEXT="Version: $(or_unknown "$VERSION")
 Channel: $(or_unknown "$CHANNEL")
 Pin: $(or_unknown "$PIN" none)
 Good tag: $(or_unknown "$GOOD")
+New release: $(or_unknown "$AVAILABLE" none)
 Last result: $(or_unknown "$RESULT")
 Last fetch: $(or_unknown "$FETCH")
 Doctor: $DOCTOR_TEXT"
@@ -100,12 +103,19 @@ exit 0
 """
 
 _UPDATE = f"""
-if [ ! -x "$WZ" ]; then
+# The live updater runs the update itself when it knows `tick --now`: it does not need the
+# clone's Python, so it can still put back a release that no longer starts.
+LIVE="$WZ_HOME/.local/share/warpzone/updater/updater.sh"
+if [ -f "$LIVE" ] && grep -Eq '^UPDATER_ABI=([2-9]|[1-9][0-9]+)[[:space:]]*$' "$LIVE"; then
+	OUT=$(sh "$LIVE" tick --now 2>&1)
+	RC=$?
+elif [ -x "$WZ" ]; then
+	OUT=$("$WZ" self-update --now 2>&1)
+	RC=$?
+else
 	show "warpzone is not installed here (unknown)"
 	exit 0
 fi
-OUT=$("$WZ" self-update --now 2>&1)
-RC=$?
 LAST=$(printf '%s\\n' "$OUT" | grep -v '^$' | tail -n 6 | cut -c1-{LINE_WIDTH})
 [ -n "$LAST" ] || LAST="(no output)"
 show "Update check finished (exit $RC)

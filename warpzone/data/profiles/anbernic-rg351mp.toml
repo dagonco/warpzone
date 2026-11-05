@@ -96,3 +96,9 @@ ignore = ["(?d)/roms/*/gamelist.xml"]
 # else in the folder.
 [options_menu]
 dir = "/opt/system"
+
+# EmulationStation is open whenever the console is on, so a timer that waits for the menu to
+# close would wait for days, and one that does not would update in the middle of a session.
+# The timer only looks for a release; "Warpzone Update Now" in Options installs it.
+[updater]
+install = "manual"

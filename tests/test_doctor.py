@@ -1798,6 +1798,7 @@ class UpdaterFilesJudgeTests(unittest.TestCase):
         "pin": "",
         "enabled": "true",
         "frontend": "es-de ES-DE.AppImage",
+        "install": "auto",
     }
 
     def conf(self, **change):
@@ -1831,6 +1832,11 @@ class UpdaterFilesJudgeTests(unittest.TestCase):
             status, detail, _ = self.judge_conf(**kw)
             self.assertEqual(status, WARN)
             self.assertIn(word, detail)
+
+    def test_an_install_mode_that_differs_is_a_difference(self) -> None:
+        status, detail, _ = self.judge_conf(self.conf(install="manual"))
+        self.assertEqual(status, WARN)
+        self.assertIn("install", detail)
 
     def test_a_missing_key_is_a_difference(self) -> None:
         actual = self.conf()

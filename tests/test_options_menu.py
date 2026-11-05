@@ -204,6 +204,7 @@ class ScriptRunTests(unittest.TestCase):
                 "Channel: rc",
                 "Pin: v0.3.0rc2",
                 "Good tag: v0.3.0rc2",
+                "New release: none",
                 "Last result: ok",
                 "Last fetch: 2026-11-04 10:40",
                 "Doctor: [!!] syncthing  not found, the folders c",
@@ -233,6 +234,14 @@ class ScriptRunTests(unittest.TestCase):
             self.assertIn(f"{key}: unknown", shown)
         self.assertIn("Pin: none", shown)
 
+    def test_a_release_the_timer_found_is_shown(self) -> None:
+        self.install_state(doctor="")
+        with (self.updater / "state").open("a") as f:
+            f.write("available=v0.3.0rc4\nlast_result=available\n")
+        shown = self.run_script(options_menu.render_status_script())
+        self.assertIn("New release: v0.3.0rc4 (Warpzone Update Now)", shown)
+        self.assertIn("Last result: available", shown)
+
     def test_a_bad_last_fetch_shows_unknown(self) -> None:
         self.install_state(doctor="")
         (self.updater / "state").write_text("last_fetch=soon\n")
@@ -246,6 +255,21 @@ class ScriptRunTests(unittest.TestCase):
 
     def test_update_now_shows_the_last_lines_and_the_exit_code(self) -> None:
         self.install_state(doctor="")
+        shown = self.run_script(options_menu.render_update_script())
+        self.assertEqual(shown, "Update check finished (exit 3)\none\ntwo")
+
+    def test_update_now_runs_the_live_updater_when_it_knows_now(self) -> None:
+        live = self.home / ".local/share/warpzone/updater/updater.sh"
+        live.parent.mkdir(parents=True)
+        live.write_text('UPDATER_ABI=2\necho "live $*"\nexit 0\n')
+        shown = self.run_script(options_menu.render_update_script())
+        self.assertEqual(shown, "Update check finished (exit 0)\nlive tick --now")
+
+    def test_update_now_with_an_old_live_updater_uses_warpzone(self) -> None:
+        self.install_state(doctor="")
+        live = self.home / ".local/share/warpzone/updater/updater.sh"
+        live.parent.mkdir(parents=True, exist_ok=True)
+        live.write_text('UPDATER_ABI=1\necho "old $*"\n')
         shown = self.run_script(options_menu.render_update_script())
         self.assertEqual(shown, "Update check finished (exit 3)\none\ntwo")
 

@@ -393,7 +393,7 @@ warpzone settings audit --emulator eden retroarch
 warpzone self-update [--now]
 ```
 
-On a device: runs one tick of the live copy of the updater (`sh ~/.local/share/warpzone/updater/updater.sh tick`), exactly as its timer does, and exits with the script's code. `--now` makes the tick fetch the remote even when the fetch interval has not passed (`updater.sh tick --fetch-now`); it still waits while the menu is open. It needs no config. Without a live copy it says so and exits `1`. See [Updating a device](/warpzone/operation/self-update/#warpzone-self-update).
+On a device: runs one tick of the live copy of the updater (`sh ~/.local/share/warpzone/updater/updater.sh tick`), exactly as its timer does, and exits with the script's code. `--now` is an update asked for by hand (`updater.sh tick --now`): it fetches the remote even when the fetch interval has not passed, does not wait while the menu is open or for a back-off, and on a device whose profile installs by hand (`[updater] install = "manual"`) it is what installs a new release. With an older live copy of the script it runs `tick --fetch-now`, which still waits for the menu. It needs no config. Without a live copy it says so and exits `1`. See [Updating a device](/warpzone/operation/self-update/#warpzone-self-update).
 
 ```bash
 warpzone self-update --now
@@ -438,7 +438,7 @@ warpzone doctor
 `warpzone/data/updater.sh` is POSIX `sh` and needs only `git` and the usual tools. It lives outside the warpzone package on purpose, so that a broken release cannot stop the tool that puts the good one back. A device runs its live copy, `~/.local/share/warpzone/updater/updater.sh`; the first install runs the copy inside the clone. The rules it follows are in [Updating a device](/warpzone/operation/self-update/#the-updater-script).
 
 ```
-updater.sh tick [--fetch-now]
+updater.sh tick [--fetch-now] [--now]
 updater.sh install DEVICE [--config FILE] [--venv DIR] [--channel stable|rc] [-- ARGS...]
 updater.sh menu
 updater.sh selftest
@@ -449,7 +449,7 @@ Any other first word prints `usage: updater.sh tick|install|menu|selftest|order`
 
 ### `updater.sh tick`
 
-One run of the timer: take the lock, defer while the frontend is open (up to 72 hours), fetch at most once an hour on `rc` and once every 12 hours on `stable` or with a pin (`WZ_FETCH_INTERVAL` overrides; `--fetch-now` fetches at once), choose the best tag of the channel (or the pin), check it out, verify it in three steps (warpzone imports and `--version` is the tag; `provision device DEVICE --unattended`; `warpzone health DEVICE`), roll back if a step fails, and reconcile. Its only option is `--fetch-now`; any other prints `usage: updater.sh tick [--fetch-now]` and exits `2`. Exit `0` when the tick ended without a failure (nothing to do, up to date, switched and verified, deferred, a dirty or development checkout left alone, another tick holding the lock, self-update turned off); `1` when it ended in a rollback, a missing Python, too little free space, an environment failure or an unusable checkout; `143` when stopped by `HUP`, `INT` or `TERM`.
+One run of the timer: take the lock, defer while the frontend is open (up to 72 hours), fetch at most once an hour on `rc` and once every 12 hours on `stable` or with a pin (`WZ_FETCH_INTERVAL` overrides; `--fetch-now` fetches at once), choose the best tag of the channel (or the pin), check it out, verify it in three steps (warpzone imports and `--version` is the tag; `provision device DEVICE --unattended`; `warpzone health DEVICE`), roll back if a step fails, and reconcile. Its options are `--fetch-now` (fetch at once) and `--now` (an update asked for by hand: fetch at once, and neither the open menu nor a back-off holds it back); any other prints `usage: updater.sh tick [--fetch-now] [--now]` and exits `2`. With `install=manual` in its settings, a tick without `--now` only fetches and notes the best release in the state key `available`. Exit `0` when the tick ended without a failure (nothing to do, up to date, switched and verified, deferred, a dirty or development checkout left alone, another tick holding the lock, self-update turned off); `1` when it ended in a rollback, a missing Python, too little free space, an environment failure or an unusable checkout; `143` when stopped by `HUP`, `INT` or `TERM`.
 
 ```bash
 sh ~/.local/share/warpzone/updater/updater.sh tick

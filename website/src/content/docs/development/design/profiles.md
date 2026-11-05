@@ -15,8 +15,8 @@ refused with the list of the ones that are. Paths use `~` and are expanded on th
 
 Besides `name` and `description`, a profile has the top-level flag `ignore_perms` and these
 tables: `[paths]`, `[library]`, `[saves.*]`, `[bios.*]`, `[settings.*]`, `[es_systems]`,
-`[retroarch]`, `[artwork]`, `[play_state]`, `[shadps4]`, `[links.*]` and `[options_menu]`
-(`profiles.parse_profile` refuses any other key). The shipped files are the reference; this is
+`[retroarch]`, `[artwork]`, `[play_state]`, `[shadps4]`, `[links.*]`, `[options_menu]` and
+`[updater]` (`profiles.parse_profile` refuses any other key). The shipped files are the reference; this is
 the shape of the first four, and the others are described where their feature is
 ([Frontend and RetroArch overrides](#frontend-and-retroarch-overrides),
 [shadPS4 install directories](#shadps4-install-directories), [Options menu](#options-menu), [Title links](/warpzone/development/design/title-links/),
@@ -294,12 +294,22 @@ functions of `options_menu.py` and installed by `provision_scripts.ensure_option
   helper, or prints them when `msgbox` is missing: the version
   (`~/.local/share/warpzone/venv/bin/warpzone --version`), `channel` and `pin` from
   `~/.local/state/warpzone/updater/conf`, `good_tag`, `last_result` and `last_fetch` (as a local
-  date) from `~/.local/state/warpzone/updater/state`, and the `[!!]` and `[! ]` lines of
+  date) from `~/.local/state/warpzone/updater/state`, `available` as `New release: <tag>
+  (Warpzone Update Now)` (or `none`), and the `[!!]` and `[! ]` lines of
   `warpzone doctor` (at most 8, each cut to 40 characters, then `+N more`). The files are
   read line by line, never sourced. Whatever is missing or unreadable shows as `unknown`, and the
   script always exits 0.
-- `Warpzone Update Now.sh` runs `warpzone self-update --now` and shows its exit code and last
-  lines.
+- `Warpzone Update Now.sh` runs the live updater, `sh ~/.local/share/warpzone/updater/updater.sh
+  tick --now`, when its `UPDATER_ABI` is 2 or higher (it does not need the clone's Python, so it
+  can still put back a release that no longer starts), and `warpzone self-update --now`
+  otherwise; it shows the exit code and the last lines. Being asked for by hand, that update does not wait for the menu it is started from
+  (see "Installing by hand" in `development/design/autonomous-updates.md`).
+
+`[updater]` has one key, `install`: `"auto"` (the default; the timer installs a new release) or
+`"manual"` (the timer only looks for one and notes it; `warpzone self-update --now` installs it).
+`provision device` writes it to the updater's settings as `install=`. Only `anbernic-rg351mp`
+sets `"manual"`: EmulationStation is open whenever that console is on, so waiting for the menu
+to close would wait for days, and not waiting would update in the middle of a session.
 
 Writing follows the rules of every device write: each file is replaced atomically and only when
 its content differs (`unchanged` otherwise; a lost executable bit is restored), nothing else in

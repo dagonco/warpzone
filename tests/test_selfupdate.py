@@ -35,6 +35,7 @@ class ConfTests(unittest.TestCase):
         "pin": None,
         "enabled": True,
         "frontend": ("es-de", "ES-DE.AppImage"),
+        "install": "auto",
     }
 
     def render(self, **change) -> str:
@@ -51,7 +52,19 @@ class ConfTests(unittest.TestCase):
             "channel=stable\n"
             "pin=\n"
             "enabled=true\n"
-            "frontend=es-de ES-DE.AppImage\n",
+            "frontend=es-de ES-DE.AppImage\n"
+            "install=auto\n",
+        )
+
+    def test_install_manual_is_written(self) -> None:
+        self.assertEqual(selfupdate.parse_kv(self.render(install="manual"))["install"], "manual")
+
+    def test_install_follows_the_profile(self) -> None:
+        from warpzone.profiles import Profile
+
+        self.assertEqual(selfupdate.install_mode(Profile("p", "")), "auto")
+        self.assertEqual(
+            selfupdate.install_mode(Profile("p", "", updater_install="manual")), "manual"
         )
 
     def test_a_pin_a_channel_and_a_disabled_device(self) -> None:
@@ -70,7 +83,17 @@ class ConfTests(unittest.TestCase):
         self.assertEqual(parsed["python"], "/opt/$(touch x)/`id`/py")
         self.assertEqual(
             set(parsed),
-            {"device", "config", "clone", "python", "channel", "pin", "enabled", "frontend"},
+            {
+                "device",
+                "config",
+                "clone",
+                "python",
+                "channel",
+                "pin",
+                "enabled",
+                "frontend",
+                "install",
+            },
         )
 
     def test_a_value_with_a_line_break_is_refused(self) -> None:
@@ -161,10 +184,19 @@ class WrapperTests(unittest.TestCase):
 
         return selfupdate.run_tick(self.live, self.lines.append, fetch_now=fetch_now, run=run)
 
-    def test_fetch_now_asks_the_tick_to_fetch(self) -> None:
+    def test_fetch_now_asks_an_old_script_to_fetch(self) -> None:
         self.live.write_text("UPDATER_ABI=1\n")
         self.assertEqual(self.run_tick(0, fetch_now=True), 0)
         self.assertEqual(self.commands, [["sh", str(self.live), "tick", "--fetch-now"]])
+
+    def test_fetch_now_is_an_update_by_hand_for_a_script_that_knows_it(self) -> None:
+        self.live.write_text("#!/bin/sh\nUPDATER_ABI=2\n")
+        self.assertEqual(self.run_tick(0, fetch_now=True), 0)
+        self.assertEqual(self.commands, [["sh", str(self.live), "tick", "--now"]])
+
+    def test_the_shipped_script_knows_now(self) -> None:
+        text = selfupdate.UPDATER_SOURCE.read_text()
+        self.assertGreaterEqual(selfupdate.updater_abi(text) or 0, selfupdate.NOW_ABI)
 
     def test_it_runs_the_live_copy_with_sh_and_returns_its_exit_code(self) -> None:
         self.live.write_text("UPDATER_ABI=1\n")
