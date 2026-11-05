@@ -288,7 +288,7 @@ def ensure_cemu_paths(
     if rule is None or "library" not in profile.paths:
         return
     library = expand_home(profile.paths["library"], home).rstrip("/")
-    mlc, game_path = rule.wants(library)
+    mlc, game_path = (expand_home(x, home) for x in rule.wants(library))
     path = Path(expand_home(rule.settings, home))
     again = f"run `warpzone provision device {name}` again"
     try:
@@ -313,13 +313,14 @@ def ensure_cemu_paths(
         return
     want_mlc: str | None = mlc if cemu.MLC in gaps else None
     if want_mlc is not None:
-        old = Path(expand_home(cemu.in_use(current, rule.default_mlc), home)) / "usr" / "save"
-        if _holds_anything(old):
+        old = cemu_saves_elsewhere(current, rule.default_mlc, mlc, home)
+        if old is not None:
             want_mlc = None
             rep.warn(
-                f"Cemu keeps saves in {old}, which warpzone does not sync, so its mlc_path in "
-                f"{path} was left as it is: move what is in that folder to {mlc}/usr/save "
-                f"with Cemu closed, then {again}"
+                f"Cemu keeps game saves in {old}, which warpzone does not sync, so its mlc_path "
+                f"in {path} was left as it is: move the saves in that folder to {mlc}/usr/save "
+                f"with Cemu closed, then {again}. After the switch Cemu no longer sees the "
+                f"titles, updates and DLC installed in {old.parent.parent}/usr/title either"
             )
     keys = [k for k in gaps if k != cemu.MLC or want_mlc is not None]
     if not keys:
@@ -350,11 +351,25 @@ def ensure_cemu_paths(
     rep.out(f"cemu: set {shown} in {path} (old file backed up)")
 
 
-def _holds_anything(folder: Path) -> bool:
-    try:
-        return any(folder.iterdir())
-    except OSError:
-        return False
+def cemu_saves_elsewhere(current: cemu.Paths, default: str, mlc: str, home: Path) -> Path | None:
+    """The `usr/save` of the MLC folder Cemu uses now, when that is not `mlc` and holds the save
+    of a game or a demo (`cemu.is_title_save`); None otherwise.
+
+    A folder that cannot be read counts as holding saves, so `mlc_path` is not switched away
+    from saves nobody has seen.
+    """
+    old = Path(expand_home(cemu.in_use(current, default), home))
+    if os.path.realpath(old) == os.path.realpath(mlc):
+        return None
+    save = old / "usr" / "save"
+    for top in cemu.TITLE_SAVES:
+        errors: list[OSError] = []
+        for _base, _dirs, files in os.walk(save / top, onerror=errors.append):
+            if files:
+                return save
+        if any(not isinstance(e, FileNotFoundError) for e in errors):
+            return save
+    return None
 
 
 def ensure_title_links(

@@ -308,17 +308,28 @@ to `library`, after the shadPS4 steps. The profile `steamos-emudeck` declares
 - **No file.** A missing `settings.xml` is never created: Cemu shows its first-start dialog only
   while there is none, and that dialog is where it offers the community graphic packs. The run
   warns to start Cemu once, finish the dialog, close it and run `provision` again.
+- **Paths.** `mlc` and `game_path` get `{library}` replaced and then a leading `~/` expanded,
+  so `settings.xml` always holds absolute paths (Cemu does not expand `~`).
 - **Saves in the old folder.** When `mlc_path` would change and the folder Cemu uses now
-  (`mlc_path`, or `default_mlc` when empty) holds anything in `usr/save`, `mlc_path` is left as
-  it is, with a warning naming that folder and the synced one: changing it would hide those
-  saves from Cemu. The game path is still added. Moving the saves is left to the user, because a
-  title may already have a save from the hub there.
+  (`mlc_path`, or `default_mlc` when empty) holds a game's or a demo's save, a file anywhere
+  under `usr/save/00050000/` or `usr/save/00050002/` (`cemu.is_title_save`), `mlc_path` is left
+  as it is, with a warning naming that folder and the synced one: changing it would hide those
+  saves from Cemu. What Cemu creates on every start does not count: the Mii Maker folders
+  `usr/save/00050010/1004a000`, `1004a100` and `1004a200` (`CreateDefaultMLCFiles` in
+  `CemuApp.cpp`) and `usr/save/system/act/80000001/account.dat` (`Account.cpp`). A folder below
+  those two that cannot be read counts as holding saves. A folder that resolves
+  (`os.path.realpath`) to `mlc` is not another folder: nothing is held back and nothing is
+  reported. The game path is still added. Moving the saves is left to the user, because a title
+  may already have a save from the hub there. After the switch Cemu also stops seeing the titles,
+  updates and DLC installed in the old folder's `usr/title`; the warning says so.
 - **Safety.** As for shadPS4: written only while none of `process` runs (`Cemu`, and
   `Cemu.AppImage`), the old file backed up first to the settings state folder (`backups/cemu`),
   and an atomic write that is refused if the file changed meanwhile. A second run changes nothing;
   `--dry-run` prints what it would set.
 - **Doctor.** `doctor` reports `Cemu paths`: a warning when the file is missing, does not read,
   has an `mlc_path` that is not `mlc` (naming the folder Cemu uses instead) or lacks the game path.
+  When the folder Cemu uses holds game saves, as above, the fix it gives is to move them to
+  `mlc`'s `usr/save` first, since `provision` alone would keep `mlc_path`.
 - **Why not the settings layer.** It has no XML format, and both values follow each console's
   own library path, so they are declared in the profile like the shadPS4 list.
 

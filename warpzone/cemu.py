@@ -73,6 +73,18 @@ def in_use(paths: Paths, default: str) -> str:
     return paths.mlc or default
 
 
+# The folders of `usr/save` that hold the saves of games (00050000) and demos (00050002). Cemu
+# itself creates others on every start (the Mii Maker's 00050010/1004a*, system/act), so their
+# presence says nothing about a played game.
+TITLE_SAVES = ("00050000", "00050002")
+
+
+def is_title_save(rel: str) -> bool:
+    """Whether a file at `rel`, relative to an MLC's `usr/save`, is a game's or a demo's save."""
+    top, sep, rest = rel.partition("/")
+    return top in TITLE_SAVES and bool(sep and rest)
+
+
 def missing(text: str, mlc: str, game_path: str) -> tuple[str, ...]:
     """Which of `mlc_path` and `GamePaths` do not hold the wanted value yet."""
     paths = read(text)

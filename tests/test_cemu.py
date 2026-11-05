@@ -3,6 +3,7 @@
 import dataclasses
 import os
 import shutil
+import sys
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -61,6 +62,19 @@ class ReadTests(unittest.TestCase):
         ):
             with self.assertRaises(cemu.CemuConfigError, msg=text):
                 cemu.read(text)
+
+
+class TitleSaveTests(unittest.TestCase):
+    def test_only_files_of_games_and_demos_count(self) -> None:
+        for rel in ("00050000/10142400/user/common/rp_savedata.dat", "00050002/1/user/x"):
+            self.assertTrue(cemu.is_title_save(rel), rel)
+        for rel in (
+            "00050010/1004a000/user/common/db",
+            "system/act/80000001/account.dat",
+            "00050000",
+            "x/00050000/a",
+        ):
+            self.assertFalse(cemu.is_title_save(rel), rel)
 
 
 class ApplyTests(unittest.TestCase):
@@ -263,14 +277,70 @@ class ProvisionTests(Device, unittest.TestCase):
         self.assertEqual(self.settings.read_text(), "not xml")
         self.assertTrue(any("settings.xml" in w and "left alone" in w for w in rep.warnings))
 
+    def title_save(self, mlc: Path, top: str = "00050000") -> Path:
+        save = mlc / f"usr/save/{top}/10142400/user/common/rp_savedata.dat"
+        save.parent.mkdir(parents=True)
+        save.write_bytes(b"save")
+        return save
+
+    def skeleton(self, mlc: Path) -> None:
+        """What Cemu creates in its MLC folder on every start, before any game runs."""
+        for title in ("1004a000", "1004a100", "1004a200"):
+            (mlc / f"usr/save/00050010/{title}/user/common/db").mkdir(parents=True)
+        account = mlc / "usr/save/system/act/80000001/account.dat"
+        account.parent.mkdir(parents=True)
+        account.write_text("AccountInstance_20120705\n")
+
     def test_saves_in_the_folder_cemu_uses_now_keep_its_mlc_path(self) -> None:
-        (self.default / "usr/save/00050000/10142400").mkdir(parents=True)
+        for top in ("00050000", "00050002"):
+            with self.subTest(top=top):
+                self.settings.write_text(SETTINGS)
+                save = self.title_save(self.default, top)
+                rep, _ = self.provision()
+                paths = cemu.read(self.settings.read_text())
+                self.assertEqual(paths, cemu.Paths("", (SD, self.games)))
+                (warning,) = [w for w in self.mine(rep) if "mlc_path" in w]
+                self.assertIn(str(self.default / "usr/save"), warning)
+                self.assertIn(f"{self.mlc}/usr/save", warning)
+                self.assertIn("usr/title", warning)
+                shutil.rmtree(self.default)
+                del save
+
+    def test_the_folders_cemu_creates_on_every_start_do_not_hold_it_back(self) -> None:
+        self.skeleton(self.default)
         rep, _ = self.provision()
+        self.assertEqual(cemu.read(self.settings.read_text()).mlc, self.mlc)
+        self.assertEqual([w for w in self.mine(rep) if "mlc_path" in w], [])
+
+    @unittest.skipIf(
+        sys.platform == "win32" or os.geteuid() == 0, "root reads a folder without permissions"
+    )
+    def test_a_save_folder_it_cannot_read_holds_it_back(self) -> None:
+        self.skeleton(self.default)
+        games = self.default / "usr/save/00050000"
+        games.mkdir()
+        games.chmod(0)
+        self.addCleanup(games.chmod, 0o755)
+        rep, _ = self.provision()
+        self.assertEqual(cemu.read(self.settings.read_text()).mlc, "")
+        self.assertEqual(len([w for w in self.mine(rep) if "mlc_path" in w]), 1)
+
+    def test_an_old_folder_that_is_the_synced_one_is_not_another(self) -> None:
+        self.title_save(Path(self.mlc))
+        self.default.parent.mkdir(parents=True)
+        self.default.symlink_to(self.mlc)
+        rep, _ = self.provision()
+        self.assertEqual(cemu.read(self.settings.read_text()).mlc, self.mlc)
+        self.assertEqual([w for w in self.mine(rep) if "mlc_path" in w], [])
+
+    def test_home_relative_paths_are_expanded(self) -> None:
+        rule = dataclasses.replace(self.profile.cemu, mlc="~/wiiu/mlc01", game_path="~/wiiu/roms")
+        self.profile = dataclasses.replace(self.profile, cemu=rule)
+        self.provision()
         paths = cemu.read(self.settings.read_text())
-        self.assertEqual(paths, cemu.Paths("", (SD, self.games)))
-        (warning,) = [w for w in self.mine(rep) if "mlc_path" in w]
-        self.assertIn(str(self.default / "usr/save"), warning)
-        self.assertIn(f"{self.mlc}/usr/save", warning)
+        self.assertEqual(
+            paths, cemu.Paths(f"{self.home}/wiiu/mlc01", (SD, f"{self.home}/wiiu/roms"))
+        )
 
     def test_an_empty_save_folder_does_not_hold_it_back(self) -> None:
         (self.default / "usr/save").mkdir(parents=True)
@@ -356,6 +426,22 @@ folders = ["library", "saves"]
         result = by_name(self.check(), "Cemu paths")
         self.assertEqual(result.status, WARN)
         self.assertIn("settings.xml", result.detail)
+
+    def test_saves_in_the_old_folder_say_to_move_them(self) -> None:
+        save = self.default / "usr/save/00050000/10142400/user/common/rp_savedata.dat"
+        save.parent.mkdir(parents=True)
+        save.write_bytes(b"save")
+        result = by_name(self.check(), "Cemu paths")
+        self.assertEqual(result.status, WARN)
+        self.assertIn(f"move the saves in {self.default / 'usr/save'}", result.fix)
+        self.assertIn(f"{self.mlc}/usr/save", result.fix)
+        self.assertNotIn("with Cemu closed;", result.fix)
+
+    def test_the_folders_cemu_creates_on_every_start_keep_the_usual_fix(self) -> None:
+        for title in ("1004a000", "1004a100", "1004a200"):
+            (self.default / f"usr/save/00050010/{title}/user/common/db").mkdir(parents=True)
+        result = by_name(self.check(), "Cemu paths")
+        self.assertEqual(result.fix, "run `warpzone provision device deck` with Cemu closed")
 
 
 if __name__ == "__main__":

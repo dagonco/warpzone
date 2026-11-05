@@ -288,10 +288,10 @@ Sets Cemu's MLC path and adds a game path in its `settings.xml`.
 | `settings` | string | none (required) | Cemu's `settings.xml`, an absolute path or one starting with `~/`; edited only if it exists. |
 | `process` | array of strings | none (required) | Cemu's process names; the file is edited only while none runs. |
 | `mlc` | string | none (required) | The MLC folder `mlc_path` is set to (an absolute path, or starting with `~/` or `{library}/`). Its `usr/save` should be the profile's Cemu save folder. |
-| `default_mlc` | string | none (required) | The folder Cemu uses while `mlc_path` is empty (absolute or `~/`). `mlc_path` is not changed while its `usr/save` holds anything. |
+| `default_mlc` | string | none (required) | The folder Cemu uses while `mlc_path` is empty (absolute or `~/`). `mlc_path` is not changed while its `usr/save/00050000/` or `usr/save/00050002/` holds a file (a game's or a demo's save). |
 | `game_path` | string | none (required) | Added to `GamePaths` (as `mlc`); existing entries are kept. |
 
-`{library}` is the only placeholder, needs `paths.library`, and is allowed only in `mlc` and `game_path`.
+`{library}` is the only placeholder, needs `paths.library`, and is allowed only in `mlc` and `game_path`. A leading `~/` is expanded, so `settings.xml` gets absolute paths.
 
 ### `[links.<key>]`
 

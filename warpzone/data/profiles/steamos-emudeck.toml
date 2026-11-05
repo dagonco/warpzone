@@ -194,8 +194,7 @@ hub = "bios/cemu"
 # Cemu reads keys.txt only from its user data folder (KeyCache.cpp), and writes a template
 # there on its first start when none is found. EmuDeck writes ~/.config/Cemu, not this
 # folder, so the folder is created once that one exists and the keys arrive before Cemu
-# first runs. The keys are
-# needed for encrypted disc images (WUD/WUX), not for .wua archives.
+# first runs. The keys are needed for encrypted disc images (WUD/WUX), not for .wua archives.
 path = "~/.local/share/Cemu"
 ignore = ["!/keys.txt", "*"]
 create_when = "~/.config/Cemu"
@@ -219,8 +218,8 @@ install_dirs = ["{library}/roms/ps4/games"]
 # `GamePaths` on a missing SD card. `provision device` sets `mlc_path` to the folder whose
 # `usr/save` is `saves.cemu-saves` and adds the library's Wii U folder to `GamePaths`, keeping
 # the rest of the file. It edits only an existing file, only while Cemu is closed, and keeps
-# `mlc_path` as it is while the folder Cemu uses now holds saves. Like the shadPS4 list, the
-# values follow each console's library path, so they are declared here and not layered.
+# `mlc_path` as it is while the folder Cemu uses now holds game saves. Like the shadPS4 list,
+# the values follow each console's library path, so they are declared here and not layered.
 [cemu]
 settings = "~/.config/Cemu/settings.xml"
 process = ["Cemu", "Cemu.AppImage"]
