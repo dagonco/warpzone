@@ -345,24 +345,40 @@ built by the pure function `options_menu.render_script` and installed by
 The script reads local files only (no network), line by line and never sourced: the version
 (`~/.local/share/warpzone/venv/bin/warpzone --version`), `channel` and `pin` from
 `~/.local/state/warpzone/updater/conf`, and `good_tag`, `available`, `last_result` and
-`last_fetch` (as a local date) from `~/.local/state/warpzone/updater/state`, and the `[!!]` and
-`[! ]` lines of `warpzone doctor` (at most 8, each cut to 40 characters, then `+N more`).
+`last_fetch` (as a local date) from `~/.local/state/warpzone/updater/state`, and, only in the
+status shown without a menu (below), the `[!!]` and `[! ]` lines of `warpzone doctor` (at most
+8, each cut to 40 characters, then `+N more`).
 Whatever is missing or unreadable shows as `unknown`, and the script always exits 0. With
 `dialog` and a writable terminal (`/dev/tty1`, made writable with `sudo -n chmod` as ArkOS's
 `msgbox` does; `WZ_TTY` moves it for tests) it shows a menu, driven by the controller through
-ArkOS's `gptokeyb` (started only when none runs, stopped on exit):
+ArkOS's `gptokeyb` (started only when none runs, stopped on exit). The menu does not run
+`warpzone doctor` to open, so it opens at once; it comes back after every item, with the
+version, the settings and the state read again (so **Install** is gone once the release is
+installed), and only **Exit**, or cancelling the menu (Back), ends the script:
 
-- **Status**: the text above in a message box.
+- **Status**: the text above in a message box, with `Doctor: see the Doctor item` in place of
+  the doctor's lines.
+- **Doctor**: an infobox (`Running doctor...`, with the terminal's echo off) while `warpzone
+  doctor` runs (at most 60 seconds, as above; a run cut short says so), then its whole output,
+  standard error included, folded to the box, in a `dialog --textbox` that scrolls.
 - **Install `<tag>` now**, only when the state has `available`: the live updater's `sh
   ~/.local/share/warpzone/updater/updater.sh tick --now` when its `UPDATER_ABI` is 2 or higher
   (it does not need the clone's Python, so it can still put back a release that no longer
-  starts), `warpzone self-update --now` otherwise; then the exit code and the last lines.
+  starts), `warpzone self-update --now` otherwise. The update runs in the background, with
+  `gptokeyb` stopped and the terminal's echo off, while a `dialog --gauge` shows the updater's
+  `progress` file (`PERCENT TEXT`, see "Progress" in
+  [Autonomous updates](/warpzone/development/design/autonomous-updates/)): the menu removes the
+  file first, reads it every second and passes it in the gauge's `XXX` format until the update
+  ends; while there is no file (an updater older than `UPDATER_ABI` 3 writes none) the bar is
+  at 0 with `Working...`. Then the keys pressed meanwhile are dropped and a box shows the exit
+  code and the last lines, or, when the updater says another tick holds the lock (a tick of the
+  timer is running), that another update is running and to try again in a few minutes.
 - **Follow `<other>` releases**: after a yes/no question that says an update never goes down,
   `warpzone self-update --channel <other>`, and its message.
 - **Exit**.
 
-Without `dialog` or the terminal it shows the status with `msgbox` (or prints it) and does
-nothing else.
+Without `dialog` or the terminal it shows the status with `msgbox` (or prints it), with the
+doctor's lines as above, and does nothing else.
 
 `[updater]` has one key, `install`: `"auto"` (the default; the timer installs a new release) or
 `"manual"` (the timer only looks for one and notes it; `warpzone self-update --now` installs it).

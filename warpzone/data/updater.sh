@@ -37,11 +37,16 @@
 #                        signed against, for tests (default: the one in the version known to
 #                        work, warpzone/data/allowed_signers; empty or without keys, no
 #                        signature is required)
+#   WZ_PROGRESS_LOG      a file that gets a copy of every line written to `progress`, for tests
+#
+# A tick that holds the lock writes what it is doing to $WZ_STATE_DIR/progress, one line
+# `PERCENT TEXT`, replaced atomically and set to `100 Done` when the tick ends: the Options
+# menu of the Anbernic shows it as a progress bar while "Install <tag> now" runs.
 
 # Every S_* variable is the state; state_save writes them to the file through eval, which
 # the linter cannot follow, so it takes them for unused.
 # shellcheck disable=SC2034
-UPDATER_ABI=2
+UPDATER_ABI=3
 
 set -u
 
@@ -60,6 +65,8 @@ FETCH_INTERVAL=${WZ_FETCH_INTERVAL:-}
 FETCH_NOW=0
 BY_HAND=0
 WATCH=0
+MANUAL_TIMER=0
+WATCH_END=0
 PY_FALLBACKS=${WZ_PYTHON_FALLBACKS-/usr/bin/python3 python3}
 SIGNERS_FILE=
 SIGNERS_SRC=
@@ -71,6 +78,8 @@ TICK_BUDGET=${WZ_TICK_BUDGET:-1500}
 MIN_FREE_KB=${WZ_MIN_FREE_KB:-51200}
 DEADLINE=
 SETSID=$(command -v setsid 2>/dev/null || true)
+PROGRESS=$STATE_DIR/progress
+PROGRESS_HOLD=0
 
 export GIT_TERMINAL_PROMPT=0
 
@@ -113,6 +122,23 @@ log() {
 	fi
 	printf '%s updater: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$LOG_LINE" >>"$LOG" 2>/dev/null
 	return 0
+}
+
+# progress PERCENT TEXT: what the tick is doing now, for the Options menu's progress bar (see
+# the top of this file). Tags and fixed words only, never a secret. It cannot fail: a progress
+# that cannot be written changes nothing in the tick.
+progress() {
+	{
+		printf '%s %s\n' "$1" "$2" >"$PROGRESS.tmp" && mv -f "$PROGRESS.tmp" "$PROGRESS"
+	} 2>/dev/null
+	[ -z "${WZ_PROGRESS_LOG:-}" ] || printf '%s %s\n' "$1" "$2" >>"$WZ_PROGRESS_LOG" 2>/dev/null
+	return 0
+}
+
+# verify_progress PERCENT TEXT: a phase of a verification, unless the tick is going back
+# (then the bar stays where it is).
+verify_progress() {
+	[ "$PROGRESS_HOLD" = 1 ] || progress "$1" "$2"
 }
 
 # log_daily MESSAGE: a message about the state of the world (not about something this tick
@@ -568,7 +594,14 @@ acquire_lock() {
 	return $?
 }
 
+# tick_exit: the end of a tick that holds the lock: the progress says so, the lock goes.
 # shellcheck disable=SC2329 # it is run by the trap of cmd_tick
+tick_exit() {
+	[ "$LOCK_HELD" != 1 ] || progress 100 Done
+	release_lock
+}
+
+# shellcheck disable=SC2329 # it is run by the traps of cmd_tick and cmd_install
 release_lock() {
 	if [ "$LOCK_HELD" = 1 ]; then
 		rm -f "$SIGNERS_TMP"
@@ -1104,6 +1137,7 @@ fetch_if_due() {
 		[ $((NOW - S_last_fetch)) -ge $((FETCH_INTERVAL + _jitter)) ] || return 0
 	fi
 	_ff="$STATE_DIR/.fetch.$$"
+	progress 5 "Looking for releases"
 	if run_limited "$FETCH_TIMEOUT" git -C "$CLONE" fetch --tags origin >"$_ff" 2>&1; then
 		S_last_fetch=$NOW
 		FETCHED=1
@@ -1437,6 +1471,7 @@ verify_version() {
 	: >"$VERIFY_LOG" 2>/dev/null
 	clear_pyc
 
+	verify_progress 50 "Checking 1/3: imports and version"
 	run_limited "$_t_import" "$PY" -I -c "$IMPORT_CODE" "$CLONE" >>"$VERIFY_LOG" 2>&1
 	_r=$?
 	if [ "$_r" -ne 0 ]; then
@@ -1460,6 +1495,7 @@ verify_version() {
 		return 1
 	fi
 
+	verify_progress 70 "Checking 2/3: provision device"
 	wz_step "$_t_provision" provision device "$C_device" --unattended >>"$VERIFY_LOG" 2>&1
 	_r=$?
 	case $_r in
@@ -1479,6 +1515,7 @@ verify_version() {
 		;;
 	esac
 
+	verify_progress 90 "Checking 3/3: health"
 	wz_step "$_t_health" health "$C_device" >>"$VERIFY_LOG" 2>&1
 	_r=$?
 	case $_r in
@@ -1503,6 +1540,7 @@ verify_version() {
 # ---- state transitions ----------------------------------------------------------------
 
 finish() {
+	[ "$WATCH_END" = 1 ] && watch_available
 	state_save || log "the state could not be saved"
 	exit "$1"
 }
@@ -1637,6 +1675,8 @@ DV=
 SECOND_LOOK=0
 differential() {
 	log "$1 failed its check ($VERIFY_WHY); checking the previous version to tell a bad release from a broken environment"
+	progress 95 "Going back to ${3:-the previous version}"
+	PROGRESS_HOLD=1
 	if ! checkout_ref "$4" "$5"; then
 		DV=stuck
 		return 0
@@ -1665,6 +1705,7 @@ keep_suspect() {
 # failed.
 retry_suspect() {
 	log "$1 failed once and the previous version passes; checking $1 once more before blaming it"
+	progress 95 "Checking $1 once more"
 	_cur=$(head_sha)
 	if ! g checkout --quiet --no-overwrite-ignore --detach "$2" >/dev/null 2>&1; then
 		heal_half_checkout "$_cur" "$2" "$_cur" || log "the tree is left as it is"
@@ -1714,6 +1755,7 @@ attempt_prepare() {
 
 # attempt_switch TAG SHA: HEAD on SHA. A checkout that fails is no verdict on the release.
 attempt_switch() {
+	progress 35 "Switching to $1"
 	[ "$(head_sha)" != "$2" ] || return 0
 	log "switching to $1"
 	if ! g checkout --quiet --no-overwrite-ignore --detach "$2" >/dev/null 2>&1; then
@@ -2021,7 +2063,7 @@ tick_start() {
 		log "another tick holds the lock; nothing to do"
 		exit 0
 	fi
-	trap release_lock EXIT
+	trap tick_exit EXIT
 	trap 'rl_abort; exit 143' HUP INT TERM
 	DEADLINE=$(($(real_now) + TICK_BUDGET))
 	if ! conf_load; then
@@ -2061,9 +2103,24 @@ tick_start() {
 # tick_menu: the menu: wait for it to close, at most 72 hours from the first deferral. A menu
 # that is seen closed ends the deferral: the 72 hours are of an unbroken wait.
 tick_menu() {
-	S_available=
 	menu_open
 	_menu=$?
+	if [ "$MANUAL_TIMER" = 1 ]; then
+		# install=manual: the timer only finishes what an update by hand left, which that
+		# update did not wait for either. Waiting would last 72 hours where the menu is open
+		# whenever the device is on. A step held back by an open program counts as passed and
+		# leaves `pending` set, as by hand. It is said only when there is something to finish
+		# (a trial, or the probation check of a new boot), so not at every tick. `available`
+		# stays as it was until the watch looks again, also when the tick ends before that.
+		if [ "$_menu" = 0 ] && { [ -n "$S_trying_tag" ] ||
+			{ [ "$S_probation" = 1 ] && [ "$(boot_id)" != "$S_last_boot_id" ]; }; }; then
+			log "install=manual: not waiting for the menu"
+		fi
+		S_deferred_since=
+		OVER=1
+		return 0
+	fi
+	S_available=
 	if [ "$BY_HAND" = 1 ]; then
 		# Asked for from the menu itself (the Options entry) or from a shell: the person is
 		# there and no game is running. A step that the menu still holds back counts as
@@ -2146,6 +2203,7 @@ tick_checkout() {
 
 # tick_trust: the version known to work, the keys of that version and the retirements.
 tick_trust() {
+	progress 20 "Checking signatures and releases"
 	# Only a checkout on a release is looked after: a developer's clone is not touched, and
 	# neither is the venv that belongs to it.
 	repair_python || true
@@ -2219,8 +2277,8 @@ tick_finish() {
 # tick_watch: install=manual and not asked for by hand: look for a release and note it in
 # `available`, nothing else. No menu wait, no verification and no reconcile: the person
 # installs from the menu (`updater.sh tick --now`), which does all of that. A trial or a
-# probation in progress is not watched: it was asked for by hand and the timer finishes it, so
-# a release that no longer starts is still put back.
+# probation in progress is not only watched: it was asked for by hand and the timer finishes
+# it (see cmd_tick), so a release that no longer starts is still put back.
 tick_watch() {
 	WATCH=1
 	tick_checkout
@@ -2228,12 +2286,20 @@ tick_watch() {
 	watch_note
 }
 
-# watch_note: the end of a tick that only watches: the best target goes to `available`.
-watch_note() {
+# watch_available: the best target goes to `available`. With WATCH_END=1, finish calls it,
+# so a manual tick that ended in a verdict notes it too.
+watch_available() {
+	WATCH_END=0
 	pick_target || true
 	S_available=$PICK
-	if [ -n "$PICK" ]; then
+	[ -z "$PICK" ] ||
 		log "$PICK is available (running $(version_at HEAD)); install it with warpzone self-update --now"
+}
+
+# watch_note: the end of a tick that only watches: the best target goes to `available`.
+watch_note() {
+	watch_available
+	if [ -n "$S_available" ]; then
 		S_last_result=available
 	else
 		S_last_result=ok
@@ -2247,18 +2313,27 @@ watch_note() {
 cmd_tick() {
 	tick_start "$@"
 	clear_stale_index_lock
-	if [ "$C_install" = manual ] && [ "$BY_HAND" != 1 ] && [ -z "$S_trying_tag" ] &&
-		[ "$S_probation" != 1 ]; then
-		tick_watch
+	if [ "$C_install" = manual ] && [ "$BY_HAND" != 1 ]; then
+		if [ -z "$S_trying_tag" ] && [ "$S_probation" != 1 ]; then
+			tick_watch
+		fi
+		# A trial or a probation that an update by hand left: the timer finishes it without
+		# waiting for the menu, never reconciles and never tries anything new.
+		MANUAL_TIMER=1
+		WATCH=1
 	fi
 	tick_menu
 	tick_python
 	tick_checkout
 	tick_trust
+	if [ "$MANUAL_TIMER" = 1 ]; then
+		# Whatever ends the tick from here (a verdict, a rollback) notes the best target.
+		WATCH_END=1
+	fi
 	if [ -n "$S_trying_tag" ]; then
 		resume
 	fi
-	if [ "$C_install" = manual ] && [ "$BY_HAND" != 1 ]; then
+	if [ "$MANUAL_TIMER" = 1 ]; then
 		# A trial was finished above, or the probation is checked here; nothing new is tried.
 		probation_check
 		watch_note

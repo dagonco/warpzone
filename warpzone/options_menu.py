@@ -2,17 +2,21 @@
 
 ArkOS lists every executable `.sh` in `/opt/system` in its Options menu. The entry is a bash
 script that reads warpzone's local files (never the network) and offers, with `dialog` and
-ArkOS's controller-to-keyboard helper `gptokeyb` (what ArkOS's own `msgbox` uses):
+ArkOS's controller-to-keyboard helper `gptokeyb` (what ArkOS's own `msgbox` uses), a menu that
+comes back after every item until "Exit":
 
 - the status: version, channel, pin, the version known to work, a new release the timer found
-  (`available`), the last result, the last fetch and the problems `warpzone doctor` reports;
+  (`available`), the last result and the last fetch;
+- the doctor: `warpzone doctor`, in a box that scrolls;
 - "Install <tag>", only when there is a new release: the live updater's `tick --now` (or
-  `warpzone self-update --now` with an older updater), an update asked for by hand;
+  `warpzone self-update --now` with an older updater), an update asked for by hand, with a
+  progress bar fed from the updater's `progress` file;
 - the channel: `warpzone self-update --channel stable|rc`, after a yes/no question.
 
 Without `dialog` or a writable terminal it shows the status the old way (`msgbox`, or standard
-output) and does nothing else. It never fails hard: whatever is missing shows as `unknown`. See
-development/design/profiles.md, "Options menu".
+output), with the problems `warpzone doctor` reports, and does nothing else. It never fails
+hard: whatever is missing shows as `unknown`. See development/design/profiles.md, "Options
+menu".
 """
 
 from __future__ import annotations
@@ -29,6 +33,8 @@ LINE_WIDTH = 40
 MAX_DOCTOR_LINES = 8
 # How long `warpzone doctor` may take before the status shows what it has.
 DOCTOR_SECONDS = 60
+# The status line that stands for the doctor in the menu, which has an item of its own.
+DOCTOR_HINT = "see the Doctor item"
 
 _COMMON = f"""#!/bin/bash
 {MARKER}
@@ -49,8 +55,6 @@ show() {{
 """
 
 _STATUS = f"""
-# `warpzone doctor` may take a while: say so on the screen meanwhile.
-printf 'Warpzone: reading the status...\\n'
 # The status reads local files only (never the network).
 UPDATER_DIR="$WZ_HOME/.local/state/warpzone/updater"
 # kv FILE KEY: the value of the last `KEY=value` line of FILE, empty when there is none.
@@ -64,74 +68,73 @@ or_unknown() {{
 	if [ -n "$1" ]; then printf '%s' "$1"; else printf '%s' "${{2:-unknown}}"; fi
 }}
 
-VERSION=
-if [ -x "$WZ" ]; then
-	VERSION=$("$WZ" --version 2>/dev/null | head -n 1)
-fi
-CHANNEL=$(kv "$UPDATER_DIR/conf" channel)
-PIN=$(kv "$UPDATER_DIR/conf" pin)
-GOOD=$(kv "$UPDATER_DIR/state" good_tag)
-AVAILABLE=$(kv "$UPDATER_DIR/state" available)
-RESULT=$(kv "$UPDATER_DIR/state" last_result)
-FETCH=$(kv "$UPDATER_DIR/state" last_fetch)
-FMT='+%Y-%m-%d %H:%M'
-case $FETCH in
-'' | *[!0-9]*) FETCH= ;;
-*) FETCH=$(date -d "@$FETCH" "$FMT" 2>/dev/null || date -r "$FETCH" "$FMT" 2>/dev/null) ;;
-esac
+# read_state: what the version, the updater's settings and its state say now.
+read_state() {{
+	VERSION=
+	if [ -x "$WZ" ]; then
+		VERSION=$("$WZ" --version 2>/dev/null | head -n 1)
+	fi
+	CHANNEL=$(kv "$UPDATER_DIR/conf" channel)
+	PIN=$(kv "$UPDATER_DIR/conf" pin)
+	GOOD=$(kv "$UPDATER_DIR/state" good_tag)
+	AVAILABLE=$(kv "$UPDATER_DIR/state" available)
+	RESULT=$(kv "$UPDATER_DIR/state" last_result)
+	FETCH=$(kv "$UPDATER_DIR/state" last_fetch)
+	FMT='+%Y-%m-%d %H:%M'
+	case $FETCH in
+	'' | *[!0-9]*) FETCH= ;;
+	*) FETCH=$(date -d "@$FETCH" "$FMT" 2>/dev/null || date -r "$FETCH" "$FMT" 2>/dev/null) ;;
+	esac
+}}
 
-PROBLEMS=
-if [ -x "$WZ" ]; then
+# doctor_run: the output of `warpzone doctor` in DOCTOR (at most {DOCTOR_SECONDS} seconds), with
+# its exit code in DOCTOR_RC (127 when warpzone is not installed).
+doctor_run() {{
+	DOCTOR=
+	DOCTOR_RC=127
+	[ -x "$WZ" ] || return 0
 	if command -v timeout >/dev/null 2>&1; then
-		DOCTOR=$(timeout {DOCTOR_SECONDS} "$WZ" doctor 2>/dev/null)
+		DOCTOR=$(timeout {DOCTOR_SECONDS} "$WZ" doctor 2>&1)
 	else
-		DOCTOR=$("$WZ" doctor 2>/dev/null)
+		DOCTOR=$("$WZ" doctor 2>&1)
+	fi
+	DOCTOR_RC=$?
+}}
+
+# doctor_lines: the `[!!]` and `[! ]` lines of DOCTOR for the status, at most
+# {MAX_DOCTOR_LINES}, each cut to {LINE_WIDTH} characters.
+doctor_lines() {{
+	if [ "$DOCTOR_RC" = 127 ]; then
+		printf '%s' unknown
+		return 0
 	fi
 	ISSUE='^ *\\[(!!|! )\\]'
 	PROBLEMS=$(printf '%s\\n' "$DOCTOR" | grep -E "$ISSUE" | sed 's/^ *//' | cut -c1-{LINE_WIDTH})
-fi
-COUNT=$(printf '%s\\n' "$PROBLEMS" | grep -c .)
-if [ ! -x "$WZ" ]; then
-	DOCTOR_TEXT=unknown
-elif [ "$COUNT" -eq 0 ]; then
-	DOCTOR_TEXT="no problems"
-else
-	DOCTOR_TEXT=$(printf '%s\\n' "$PROBLEMS" | head -n {MAX_DOCTOR_LINES})
-	[ "$COUNT" -le {MAX_DOCTOR_LINES} ] || DOCTOR_TEXT="$DOCTOR_TEXT
-+$((COUNT - {MAX_DOCTOR_LINES})) more"
-fi
+	COUNT=$(printf '%s\\n' "$PROBLEMS" | grep -c .)
+	if [ "$COUNT" -eq 0 ]; then
+		printf '%s' "no problems"
+		return 0
+	fi
+	printf '%s' "$(printf '%s\\n' "$PROBLEMS" | head -n {MAX_DOCTOR_LINES})"
+	[ "$COUNT" -le {MAX_DOCTOR_LINES} ] || printf '\\n+%s more' "$((COUNT - {MAX_DOCTOR_LINES}))"
+}}
 
-TEXT="Version: $(or_unknown "$VERSION")
+# status_text DOCTOR_TEXT: the status, with DOCTOR_TEXT on its last line.
+status_text() {{
+	printf '%s' "Version: $(or_unknown "$VERSION")
 Channel: $(or_unknown "$CHANNEL")
 Pin: $(or_unknown "$PIN" none)
 Good tag: $(or_unknown "$GOOD")
 New release: $(or_unknown "$AVAILABLE" none)
 Last result: $(or_unknown "$RESULT")
 Last fetch: $(or_unknown "$FETCH")
-Doctor: $DOCTOR_TEXT"
+Doctor: $1"
+}}
+
+read_state
 """
 
 _MENU = """
-# The live updater runs the update itself when it knows `tick --now`: it does not need the
-# clone's Python, so it can still put back a release that no longer starts.
-LIVE="$WZ_HOME/.local/share/warpzone/updater/updater.sh"
-update_now() {
-	if [ -f "$LIVE" ] && grep -Eq '^UPDATER_ABI=([2-9]|[1-9][0-9]+)[[:space:]]*$' "$LIVE"; then
-		OUT=$(sh "$LIVE" tick --now 2>&1)
-		RC=$?
-	elif [ -x "$WZ" ]; then
-		OUT=$("$WZ" self-update --now 2>&1)
-		RC=$?
-	else
-		OUT="warpzone is not installed here (unknown)"
-		RC=1
-	fi
-	LAST=$(printf '%s\\n' "$OUT" | grep -v '^$' | tail -n 6 | fold -s -w WIDTH)
-	[ -n "$LAST" ] || LAST="(no output)"
-	RESULT="Update finished (exit $RC)
-$LAST"
-}
-
 TTY=${WZ_TTY:-/dev/tty1}
 # WZ_TTY is for tests: a plain file as the terminal, no controller helper and no font.
 GPTK=/opt/inttools/gptokeyb
@@ -140,15 +143,100 @@ if [ -z "${WZ_TTY:-}" ] && [ -e "$TTY" ] && [ ! -w "$TTY" ]; then
 	sudo -n chmod 666 "$TTY" >/dev/null 2>&1
 fi
 # Without dialog, the terminal or the controller helper, a box would wait for keys that never
-# come: show the status the old way instead.
+# come: show the whole status the old way instead, the doctor's problems included.
 CAN=1
 command -v dialog >/dev/null 2>&1 || CAN=
 [ -w "$TTY" ] || CAN=
 [ -z "$GPTK" ] || [ -x "$GPTK" ] || CAN=
 if [ -z "$CAN" ]; then
-	show "$TEXT"
+	# `warpzone doctor` may take a while: say so on the screen meanwhile.
+	printf 'Warpzone: reading the status...\\n'
+	doctor_run
+	show "$(status_text "$(doctor_lines)")"
 	exit 0
 fi
+"""
+
+_DIALOG = (
+    """
+# The live updater runs the update itself when it knows `tick --now`: it does not need the
+# clone's Python, so it can still put back a release that no longer starts.
+LIVE="$WZ_HOME/.local/share/warpzone/updater/updater.sh"
+# What the updater's tick is doing, one line `PERCENT TEXT` (an updater older than ABI 3
+# writes none).
+PROGRESS="$UPDATER_DIR/progress"
+run_update() {
+	if [ -f "$LIVE" ] && grep -Eq '^UPDATER_ABI=([2-9]|[1-9][0-9]+)[[:space:]]*$' "$LIVE"; then
+		sh "$LIVE" tick --now
+	elif [ -x "$WZ" ]; then
+		"$WZ" self-update --now
+	else
+		echo "warpzone is not installed here (unknown)"
+		return 1
+	fi
+}
+
+# gauge_feed PID: what `dialog --gauge` reads, every second until PID ends: the percentage
+# and the text of the progress file, or 0 and "Working..." while there is none.
+gauge_feed() {
+	while :; do
+		LINE=$(head -n 1 "$PROGRESS" 2>/dev/null)
+		PCT=${LINE%% *}
+		STEP=${LINE#* }
+		case $PCT in
+		'' | *[!0-9]*) PCT=0 ;;
+		esac
+		[ "$STEP" != "$LINE" ] && [ -n "$STEP" ] || STEP="Working..."
+		[ "$PCT" -le 100 ] || PCT=100
+		printf 'XXX\\n%s\\n%s\\nXXX\\n' "$PCT" "$STEP"
+		kill -0 "$1" 2>/dev/null || break
+		sleep 1
+	done
+}
+
+# update_now: the update in the background, the progress bar meanwhile, then DONE_TEXT.
+update_now() {
+	OUTF=$(mktemp 2>/dev/null) || OUTF=/tmp/warpzone-update.$$
+	rm -f "$PROGRESS"
+	run_update >"$OUTF" 2>&1 </dev/null &
+	PID=$!
+	gauge_feed "$PID" |
+		dialog --title Warpzone --gauge "Installing $AVAILABLE..." 8 50 0 >"$TTY" 2>&1
+	wait "$PID"
+	RC=$?
+	OUT=$(cat "$OUTF" 2>/dev/null)
+	rm -f "$OUTF"
+	LAST=$(printf '%s\\n' "$OUT" | grep -v '^$' | tail -n 6 | fold -s -w WIDTH)
+	[ -n "$LAST" ] || LAST="(no output)"
+	DONE_TEXT="Update finished (exit $RC)
+$LAST"
+	# The updater says this and exits 0 when a tick of the timer is running.
+	if printf '%s\\n' "$OUT" | grep -q 'another tick holds the lock'; then
+		DONE_TEXT="Another update is running (the timer's).
+Try again in a few minutes."
+	fi
+}
+
+# doctor_box: `warpzone doctor` with a note on the screen meanwhile, then its whole output in
+# a box that scrolls.
+doctor_box() {
+	# no echo of the keys pressed meanwhile over the box
+	stty -F "$TTY" -echo >/dev/null 2>&1
+	dialog --title Warpzone --infobox "Running doctor... (up to a minute)" 5 50 >"$TTY" 2>&1
+	doctor_run
+	stty -F "$TTY" echo >/dev/null 2>&1
+	case $DOCTOR_RC in
+	127) DOCTOR="warpzone is not installed here (unknown)" ;;
+	124) DOCTOR="$DOCTOR
+(stopped after DOCTOR_SECONDS seconds)" ;;
+	esac
+	[ -n "$DOCTOR" ] || DOCTOR="(no output)"
+	DOCF=$(mktemp 2>/dev/null) || DOCF=/tmp/warpzone-doctor.$$
+	printf '%s\\n' "$DOCTOR" | fold -s -w 46 >"$DOCF"
+	drain
+	dialog --clear --title Doctor --textbox "$DOCF" 20 50 >"$TTY" 2>&1
+	rm -f "$DOCF"
+}
 
 # The font ArkOS's own Wifi entry uses, so the boxes fit; put back on exit as ArkOS does.
 FONT_SET=
@@ -196,50 +284,61 @@ box() {
 	dialog --clear --title Warpzone --msgbox "$1" 20 50 >"$TTY" 2>&1
 }
 
-case $CHANNEL in
-rc) OTHER=stable ;;
-*) OTHER=rc ;;
-esac
-SUMMARY="$(or_unknown "$VERSION")
+# The menu comes back after every item, with what the state says by then; only "Exit" (or
+# Back, which cancels the menu) ends it.
+while :; do
+	case $CHANNEL in
+	rc) OTHER=stable ;;
+	*) OTHER=rc ;;
+	esac
+	SUMMARY="$(or_unknown "$VERSION")
 Channel: $(or_unknown "$CHANNEL")"
-[ -z "$AVAILABLE" ] || SUMMARY="$SUMMARY
+	[ -z "$AVAILABLE" ] || SUMMARY="$SUMMARY
 New release: $AVAILABLE"
-set -- status "Status"
-[ -z "$AVAILABLE" ] || set -- "$@" install "Install $AVAILABLE now"
-set -- "$@" channel "Follow $OTHER releases" exit "Exit"
-CHOICE=$(dialog --clear --no-tags --title Warpzone --menu "$SUMMARY" 15 50 4 "$@" 2>&1 >"$TTY")
-case $CHOICE in
-status) box "$TEXT" ;;
-install)
-	gptk_down
-	stty -F "$TTY" -echo >/dev/null 2>&1
-	dialog --title Warpzone --infobox "Installing $AVAILABLE... (a few minutes)" 5 50 >"$TTY" 2>&1
-	update_now
-	stty -F "$TTY" echo >/dev/null 2>&1
-	drain
-	gptk_up
-	box "$RESULT"
-	;;
-channel)
-	ASK="Follow $OTHER releases from now on?
+	set -- status "Status" doctor "Doctor"
+	[ -z "$AVAILABLE" ] || set -- "$@" install "Install $AVAILABLE now"
+	set -- "$@" channel "Follow $OTHER releases" exit "Exit"
+	CHOICE=$(dialog --clear --no-tags --title Warpzone --menu "$SUMMARY" 15 50 5 "$@" \\
+		2>&1 >"$TTY") || break
+	case $CHOICE in
+	status) box "$(status_text "DOCTOR_HINT")" ;;
+	doctor) doctor_box ;;
+	install)
+		gptk_down
+		stty -F "$TTY" -echo >/dev/null 2>&1
+		update_now
+		stty -F "$TTY" echo >/dev/null 2>&1
+		drain
+		gptk_up
+		box "$DONE_TEXT"
+		;;
+	channel)
+		ASK="Follow $OTHER releases from now on?
 (An update never goes down: the version installed now stays until a newer one comes.)"
-	if dialog --clear --title Warpzone --yesno "$ASK" 10 50 >"$TTY" 2>&1; then
-		if [ -x "$WZ" ]; then
-			OUT=$("$WZ" self-update --channel "$OTHER" 2>&1)
-		else
-			OUT="warpzone is not installed here (unknown)"
+		if dialog --clear --title Warpzone --yesno "$ASK" 10 50 >"$TTY" 2>&1; then
+			if [ -x "$WZ" ]; then
+				OUT=$("$WZ" self-update --channel "$OTHER" 2>&1)
+			else
+				OUT="warpzone is not installed here (unknown)"
+			fi
+			OUT=$(printf '%s\\n' "$OUT" | sed 's/^self-update: //' | fold -s -w WIDTH | tail -n 10)
+			box "$OUT"
 		fi
-		box "$(printf '%s\\n' "$OUT" | sed 's/^self-update: //' | fold -s -w WIDTH | tail -n 10)"
-	fi
-	;;
-esac
+		;;
+	*) break ;;
+	esac
+	read_state
+done
 exit 0
 """.replace("WIDTH", str(LINE_WIDTH))
+    .replace("DOCTOR_SECONDS", str(DOCTOR_SECONDS))
+    .replace("DOCTOR_HINT", DOCTOR_HINT)
+)
 
 
 def render_script() -> str:
     """The bash script of the "Warpzone" entry."""
-    return _COMMON + _STATUS + _MENU
+    return _COMMON + _STATUS + _MENU + _DIALOG
 
 
 def entries() -> dict[str, str]:
