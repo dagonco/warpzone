@@ -140,6 +140,7 @@ class Options:
     dats_dir: Path
     tools: Tools
     apply: bool = False
+    force_lock: bool = False  # take over a stale inbox lock (see inbox_lock)
     work_dir: Path | None = None
     cache_dir: Path | None = None
     ra_key: str | None = None

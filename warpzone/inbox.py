@@ -32,6 +32,7 @@ from warpzone import dat as datmod
 from warpzone import (
     inbox_console_iso,
     inbox_dolphin,
+    inbox_lock,
     inbox_mame,
     inbox_n3ds,
     inbox_switch,
@@ -761,6 +762,13 @@ def run_inbox(opts: Options, rep: Reporter) -> int:
     library = DatLibrary(opts.dats_dir, opts.cache_dir)
     if not library.systems():
         raise InboxError(f"no Redump or No-Intro DATs warpzone knows in {opts.dats_dir}")
+    if not opts.apply:  # a report reads only, so it needs no lock
+        return _run(opts, rep, inbox, library)
+    with inbox_lock.hold(inbox, force=opts.force_lock, now=opts.now, out=rep.out):
+        return _run(opts, rep, inbox, library)
+
+
+def _run(opts: Options, rep: Reporter, inbox: Path, library: DatLibrary) -> int:
     items = scan(inbox)
     mode = "apply" if opts.apply else "report only"
     rep.out(f"inbox: {inbox} ({mode}), {len(items)} item(s)")
