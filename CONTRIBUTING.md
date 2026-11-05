@@ -28,7 +28,7 @@ The e2e test starts two real Syncthing instances on 127.0.0.1 in temporary direc
 WARPZONE_E2E_SYNCTHING=/path/to/syncthing python3 -m unittest discover -s tests -k EndToEnd -v
 ```
 
-It takes about a minute. Set `WARPZONE_E2E_VERBOSE=1` to print the Syncthing logs and every `warpzone` command it ran; on failure they are printed anyway.
+It takes about two minutes and needs git (the updater part runs `updater.sh` against a throwaway repository). Set `WARPZONE_E2E_VERBOSE=1` to print the Syncthing logs and every command it ran; on failure they are printed anyway.
 
 ## Documentation
 

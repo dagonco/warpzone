@@ -215,6 +215,19 @@ logic is unit-tested without a network.
   hub` runs while the whitelists and a game are copied in, so the bootstrap waits for them;
   the test then checks the created `wz-*` folders, the final ignores, `check`, and that
   `provision device` makes a device receive the whitelisted game and not the other one.
+- The updater end to end (`test_e2e_updater.py`, same two instances): `updater.sh install`
+  sets a device up from a clone of a throwaway repository whose releases are this checkout's
+  `warpzone` package, and `updater.sh tick` then runs the real three-step verification, which
+  is what the differential verdict reads. A release whose REST client sends the API key under
+  the wrong header (refused by a real Syncthing, not by a fake one) is marked bad because the
+  version known to work passes the same check; with the device's Syncthing stopped, a good
+  release and the version known to work both fail, so nothing is marked bad and the device
+  backs off, and it installs that release once Syncthing is back and the day has passed. A
+  release whose device whitelist starts with `*` passes its verification and hides the
+  library; once it is retired the device goes down to the older release, whose `provision`
+  puts its own ignores back on the device's Syncthing, and a new game arrives. The releases
+  are built from the working tree, so the test needs neither the history nor the tags of the
+  real repository.
 - Updater script tests (`test_updater_sh.py`): `updater.sh` runs against real git
   repositories in temporary folders (an upstream with tagged releases, a clone, a fake
   `python` that behaves like warpzone according to the checked-out version, a fake `/proc`
