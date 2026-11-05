@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ## [Unreleased]
 
+## [0.3.0rc5] - 2026-11-05
+
+Fifth release candidate of 0.3.0: the inbox installs PS Vita `.pkg` games, the Anbernic gets one Warpzone menu that installs updates and switches channel, and Cemu saves on SteamOS land in the synced folder.
+
 ### Added
 
 - `warpzone self-update --channel stable|rc` makes a device follow stable releases or release candidates: it changes the channel in the device's config, keeping a backup next to it, and in the updater's settings.
@@ -170,7 +174,8 @@ First public release. warpzone keeps one game library on a home server and deliv
 - `warpzone doctor` checks the tools, config, Syncthing, DATs and hub folder of a machine and prints the fix for each problem.
 - `warpzone status`, `check` and `render-ignores` to inspect folder state, validate the config and preview a device's ignore lines. `provision` supports `--dry-run`.
 
-[Unreleased]: https://github.com/dagonco/warpzone/compare/v0.3.0rc4...HEAD
+[Unreleased]: https://github.com/dagonco/warpzone/compare/v0.3.0rc5...HEAD
+[0.3.0rc5]: https://github.com/dagonco/warpzone/compare/v0.3.0rc4...v0.3.0rc5
 [0.3.0rc4]: https://github.com/dagonco/warpzone/compare/v0.3.0rc3...v0.3.0rc4
 [0.3.0rc3]: https://github.com/dagonco/warpzone/compare/v0.3.0rc2...v0.3.0rc3
 [0.3.0rc2]: https://github.com/dagonco/warpzone/compare/v0.3.0rc1...v0.3.0rc2
