@@ -6,6 +6,7 @@ import json
 import shutil
 import socketserver
 import threading
+import time
 from collections.abc import Sequence
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -140,6 +141,8 @@ class FakeSyncthing:
         self.after_sub_scan: dict[tuple[str, str], dict[str, Any]] = {}
         self.ignores_error: str | None = None  # what db/ignores reports for a bad include
         self.scans = 0  # shows up as db/status stateChanged, like a finished scan
+        # Seconds a full scan takes to answer: Syncthing holds it while the folder pulls.
+        self.scan_delay = 0.0
         self.requests: list[tuple[str, str, Any]] = []
         self._server = _Server(("127.0.0.1", 0), self._handler())
         self._thread = threading.Thread(
@@ -249,6 +252,7 @@ class FakeSyncthing:
             info = {"version": ["X:1"], "deleted": False, "invalid": False}
             return 200, {"global": info, "local": info}
         if (method, path) == ("POST", "/rest/db/scan"):
+            time.sleep(self.scan_delay)
             self.scans += 1
             key = (folder, query.get("sub", ""))
             if key in self.after_sub_scan:

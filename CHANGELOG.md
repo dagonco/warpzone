@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ## [Unreleased]
 
+### Fixed
+
+- `provision device` and `provision hub` no longer fail with "cannot reach ... (timed out)" when a folder is downloading while they run. Syncthing answers a scan only once it has run, and it runs it only after the download ends, which on a slow device takes more than the 30-second timeout. They now report "rescan queued" and go on; Syncthing runs the scan when the download ends. `prune` stops with a "folder is busy" message instead of deleting anything, and can run again when the folder is idle.
+
 ## [0.3.0rc6] - 2026-11-05
 
 Sixth release candidate of 0.3.0: on the Anbernic the Warpzone menu shows a progress bar while it installs, stays open until Exit and has a Doctor item, and the console keeps looking for releases after an update.

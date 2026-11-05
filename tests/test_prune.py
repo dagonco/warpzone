@@ -415,6 +415,14 @@ class RescanTests(unittest.TestCase):
             probes=DeviceProbes(sleep=lambda _s: None, clock=lambda: next(ticks)),
         )
 
+    def test_a_scan_queued_behind_a_pull_stops_prune(self) -> None:
+        # The index is not refreshed until the pull ends; prune must not act on it.
+        client = mock.Mock()
+        client.db_status.return_value = {"state": "syncing", "stateChanged": "t"}
+        client.scan.return_value = False
+        with self.assertRaisesRegex(PruneError, "busy"):
+            rescan(client, "f", timeout=60, poll=0, grace=0)
+
     def test_error_state_and_timeout(self) -> None:
         client = mock.Mock()
         client.db_status.return_value = {"state": "error", "error": "folder path missing"}
