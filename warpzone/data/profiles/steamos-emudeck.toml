@@ -191,9 +191,14 @@ ignore = ["!/aes_keys.txt", "*"]
 create_when = "~/.local/share/azahar-emu"
 [bios.cemu-keys]
 hub = "bios/cemu"
-# Cemu reads keys.txt only from its user data folder.
+# Cemu reads keys.txt only from its user data folder (KeyCache.cpp), and writes a template
+# there on its first start when none is found. EmuDeck writes ~/.config/Cemu, not this
+# folder, so the folder is created once that one exists and the keys arrive before Cemu
+# first runs. The keys are
+# needed for encrypted disc images (WUD/WUX), not for .wua archives.
 path = "~/.local/share/Cemu"
 ignore = ["!/keys.txt", "*"]
+create_when = "~/.config/Cemu"
 
 # shadPS4 has no package installer: it runs the extracted games it finds in its install
 # directories. `warpzone inbox` extracts PS4 packages into library/roms/ps4/games, so
