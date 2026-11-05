@@ -35,6 +35,7 @@ import xml.etree.ElementTree as ET
 from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from warpzone import (
     __version__,
@@ -47,6 +48,7 @@ from warpzone import (
     localst,
     model,
     ra,
+    saveconvert_device,
     selfupdate,
     settings_state,
     shadps4,
@@ -1278,8 +1280,15 @@ def judge_systems_override(
     prefix: str,
     renames: Mapping[str, str] | None = None,
     target: str,
+    convert_systems: Collection[str] = (),
+    convert_wanted: bool = False,
 ) -> tuple[str, str, str]:
-    """Verdict on the frontend's system list copy (`None`: the file is absent)."""
+    """Verdict on the frontend's system list copy (`None`: the file is absent).
+
+    `convert_systems` are the systems a `[save_convert.*]` rule wraps: their commands are
+    compared without the wrapper, and with `convert_wanted` (the device syncs saves) each
+    must have it.
+    """
     fix = f"quit EmulationStation, then run `warpzone provision device {device}`"
     if source is None:
         return (
@@ -1295,14 +1304,78 @@ def judge_systems_override(
             "not the library",
             fix,
         )
-    if not frontend.systems_current(source, override, prefix, target, renames):
+    if not frontend.systems_current(source, override, prefix, target, renames, convert_systems):
         return (
             WARN,
             f"{override_path} is out of date: it no longer matches {source_path} with the "
             f"ROM folders moved below {target}",
             fix,
         )
+    if convert_wanted:
+        lacking = sorted(set(convert_systems) - frontend.wrapped_systems(override, convert_systems))
+        if lacking:
+            return (
+                WARN,
+                f"{override_path} does not run the save conversion around "
+                f"{', '.join(lacking)}, so those saves are only converted by the timer",
+                fix,
+            )
     return OK, f"{override_path} moves the ROM folders from {prefix} to {target}", ""
+
+
+def judge_save_convert(
+    *, device: str, state: Mapping[str, Any], backups: str
+) -> tuple[str, str, str]:
+    """Verdict on the save conversion: the last run, games skipped, latest-wins events."""
+    last = state.get("last")
+    if not isinstance(last, Mapping):
+        return (
+            WARN,
+            "the save conversion has not run yet",
+            f"run `warpzone saves convert {device}` (the timer and the emulator launch do it)",
+        )
+    when = str(last.get("when", "?"))
+    skipped = [item for item in last.get("skipped") or [] if isinstance(item, list)]
+    errors = [str(e) for e in last.get("errors") or []]
+    events = [e for e in state.get("conflicts") or [] if isinstance(e, Mapping)]
+    news = ""
+    if events:
+        recent = events[-1]
+        kept = f"{backups}/{recent.get('rule', '?')}{saveconvert_device.CONFLICT_SUFFIX}/"
+        news = (
+            f"; {len(events)} latest-wins event(s), the last on {recent.get('when', '?')}: "
+            f"{recent.get('game', '?')} ({recent.get('winner', '?')} file newer; the other copy "
+            f"is in {kept}{recent.get('game', '?')})"
+        )
+    copies = [str(c) for c in last.get("conflict_files") or []]
+    if copies:
+        shown = ", ".join(copies[:3])
+        news += (
+            f"; {len(copies)} Syncthing conflict file(s) left alone ({shown}): keep the one you "
+            "want and delete the others"
+        )
+    if errors:
+        return (
+            WARN,
+            f"last run {when} failed for {len(errors)} game(s): {'; '.join(errors[:3])}{news}",
+            f"run `warpzone saves convert {device}` and read what it says",
+        )
+    if skipped:
+        names = ", ".join(f"{item[0]} ({item[1]})" for item in skipped[:3] if len(item) >= 2)
+        return (
+            WARN,
+            f"last run {when} skipped {len(skipped)} game(s) it could not read as a save: "
+            f"{names}{news}",
+            "fix or remove those files; a file that is not a valid save is never converted",
+        )
+    if copies:
+        return (
+            WARN,
+            f"last run {when}: {last.get('written', 0)} file(s) written{news}",
+            "open each conflict file next to its save, keep the better one under the save's name "
+            "and delete the other (warpzone never touches them)",
+        )
+    return OK, f"last run {when}: {last.get('written', 0)} file(s) written{news}", ""
 
 
 def judge_artwork(
@@ -1733,10 +1806,21 @@ def check_frontend(ctx: Context) -> list[Result]:
             prefix=rule.prefix,
             renames=rule.renames,
             target=f"{library}/roms/",
+            convert_systems=[r.es_system for r in profile.save_convert.values() if r.es_system],
+            convert_wanted="saves" in device.folders,
         )
         results.append(Result("ES systems override", G_FRONTEND, *verdict))
     if profile.artwork is not None and "frontend" in device.folders:
         results += _check_artwork(ctx, device, library)
+    if profile.save_convert and "saves" in device.folders:
+        state = saveconvert_device.state_root(p.home, settings_state.state_dir(p.env, p.home))
+        path = state / saveconvert_device.STATE_FILE
+        verdict = judge_save_convert(
+            device=device.name,
+            state=saveconvert_device.parse_state(p.read_text(path) if p.is_file(path) else None),
+            backups=str(state / "backups"),
+        )
+        results.append(Result("Save conversion", G_FRONTEND, *verdict))
     if (pins := profile.retroarch) is not None:
         paths = [Path(expand_home(raw, p.home)) for raw in pins.cfg]
         verdict = judge_retroarch_paths(

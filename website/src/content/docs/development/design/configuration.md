@@ -63,6 +63,7 @@ error messages; the RetroAchievements key is read from `RA_API_KEY`, never from 
 | `warpzone frontend refresh [device]` | on the device | For a device whose profile has `[artwork]` and that lists `frontend`: widens the artwork folders' ignores to the systems that have games now (when the local Syncthing is found) and rewrites the frontend's gamelists from the synced ES-DE data, only while the frontend is closed. `--dry-run` prints what it would do. See [Frontend artwork](/warpzone/development/design/frontend-artwork/). |
 | `warpzone play-state sync <device>` | on the device | For a device with ES-DE that lists `play-state`: publishes what its gamelists say and merges the other devices' ledgers into them, only while ES-DE is closed or starting (`--frontend-starting`, which its startup script passes). `--dry-run`, `--quiet`. Needs no network. See [Play state](/warpzone/development/design/play-state/). |
 | `warpzone links sync <device>` | on the device | For a profile with `[links.*]` and a device that lists `library`: makes each rule's `target` hold a symlink per library title, never while the emulator runs (see [Title links](/warpzone/development/design/title-links/)). `--dry-run` only says what it would do, `--quiet` prints nothing. ES-DE runs it at startup. |
+| `warpzone saves convert <device>` | on the device | For a profile with `[save_convert.*]` and a device that lists `saves`: reconciles the hub's raw saves with the emulator's own files (DraStic's `.dsv`), never while the emulator runs, with a backup before any overwrite (see [Save conversion](/warpzone/development/design/save-conversion/)). `--dry-run` only says what it would do, `--quiet` prints nothing. EmulationStation runs it around the emulator and `frontend refresh` runs it on the timer. |
 | `warpzone prune [device]` | on the device | Reports, and with `--apply` deletes, the files of the whitelisted folders that the device no longer whitelists (see [Pruning](/warpzone/development/design/prune/)). Report only by default. |
 | `warpzone bios` | on a device or the hub | Reports which BIOS and firmware files a library has, lacks or has wrong (see [BIOS check](/warpzone/development/design/bios/)). Read-only. Exit 1 if a required item is missing or wrong. |
 | `warpzone inbox` | a desktop that mounts the hub's share | Identifies, converts and files new games dropped in `inbox/` (see [Inbox](/warpzone/development/design/inbox/)). Report only by default, `--apply` acts. Exit 1 if any item needs review. |
@@ -77,8 +78,8 @@ error messages; the RetroAchievements key is read from `RA_API_KEY`, never from 
 | `warpzone render-ignores <device>` | anywhere | Prints the ignore lines a device folder would get. For debugging. |
 
 `--dry-run` belongs to the commands that write by default: `provision hub`, `provision
-device`, `frontend refresh`, `play-state sync`, `links sync`, `settings apply` and
-`settings capture`. For `provision` it prints the REST calls the command would make (method,
+device`, `frontend refresh`, `play-state sync`, `links sync`, `saves convert`, `settings apply`
+and `settings capture`. For `provision` it prints the REST calls the command would make (method,
 path, JSON body with secrets redacted) and sends no write, though it still sends the GET
 requests it needs to compute the diff; the others say what they would write. Commands that act
 only with `--apply` (`prune`, `inbox`) have no `--dry-run`: the report is the dry run, see
@@ -121,7 +122,7 @@ they change is either warpzone's own (Syncthing folders it prefixes with `wz-`, 
 scripts and state files, symlinks it made) or a file that an emulator or the frontend owns,
 which they edit on one key or one line, with a backup first and never while that program runs.
 They are `provision hub`, `provision device`, `frontend refresh`, `play-state sync`,
-`links sync`, `settings apply` and `settings capture` (which writes only the keys the user
+`links sync`, `saves convert`, `settings apply` and `settings capture` (which writes only the keys the user
 chooses). `--dry-run` says what they would do and writes nothing. `self-update` is the
 timer's own convergent step and takes no `--dry-run`: it moves the clone to a release that
 passes the checks, and goes back to the last good one when it fails (see

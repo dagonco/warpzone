@@ -1,4 +1,5 @@
 import unittest
+from pathlib import Path
 from typing import ClassVar
 
 from warpzone import frontend
@@ -70,6 +71,86 @@ class CurrentTests(unittest.TestCase):
         self.assertFalse(frontend.systems_current(SOURCE, SOURCE, PREFIX, TARGET))
         self.assertFalse(frontend.systems_current(SOURCE, out + " ", PREFIX, TARGET))
         self.assertFalse(frontend.systems_current(SOURCE, None, PREFIX, TARGET))
+
+
+NDS_LIST = (
+    "<systemList>\r\n"
+    "\t<system>\r\n\t\t<name>nds</name>\r\n"
+    "\t\t<command>sudo perfmax %GOVERNOR% %ROM%; /usr/local/bin/drastic.sh %ROM%; "
+    "sudo perfnorm</command>\r\n\t</system>\r\n"
+    "\t<system>\r\n\t\t<name>gba</name>\r\n\t\t<command>run %ROM% &amp; wait</command>\r\n"
+    "\t</system>\r\n"
+    "</systemList>\r\n"
+)
+CONVERT = frontend.convert_command("/venv/bin/python", "ark")
+
+
+class WrapTests(unittest.TestCase):
+    def test_the_command_is_quiet_and_never_fails(self) -> None:
+        self.assertEqual(CONVERT, "/venv/bin/python -m warpzone saves convert ark --quiet || true")
+        self.assertEqual(
+            frontend.convert_command("/a b/python", "ark", Path("/c d/config.toml")),
+            "'/a b/python' -m warpzone saves convert ark --quiet --config '/c d/config.toml' "
+            "|| true",
+        )
+
+    def test_the_named_system_runs_the_conversion_before_and_after(self) -> None:
+        out = frontend.wrap_systems(NDS_LIST, {"nds"}, CONVERT)
+        self.assertIn(
+            f"<command>{CONVERT}; sudo perfmax %GOVERNOR% %ROM%; /usr/local/bin/drastic.sh "
+            f"%ROM%; sudo perfnorm; {CONVERT}</command>",
+            out,
+        )
+
+    def test_every_other_byte_is_kept(self) -> None:
+        out = frontend.wrap_systems(NDS_LIST, {"nds"}, CONVERT)
+        self.assertEqual(out.replace(f"{CONVERT}; ", "").replace(f"; {CONVERT}", ""), NDS_LIST)
+        self.assertIn("run %ROM% &amp; wait", out)
+
+    def test_wrapping_twice_changes_nothing(self) -> None:
+        once = frontend.wrap_systems(NDS_LIST, {"nds"}, CONVERT)
+        self.assertEqual(frontend.wrap_systems(once, {"nds"}, CONVERT), once)
+        other = frontend.convert_command("/other/python", "ark")
+        again = frontend.wrap_systems(once, {"nds"}, other)
+        self.assertEqual(again.count("saves convert"), 2)
+        self.assertEqual(frontend.unwrap_systems(again, {"nds"}), NDS_LIST)
+
+    def test_unwrap_gives_the_original_back(self) -> None:
+        once = frontend.wrap_systems(NDS_LIST, {"nds"}, CONVERT)
+        self.assertEqual(frontend.unwrap_systems(once, {"nds"}), NDS_LIST)
+        self.assertEqual(frontend.unwrap_systems(once, set()), once)
+        self.assertEqual(frontend.unwrap_systems(once, {"gba"}), once)
+
+    def test_a_command_with_surrounding_whitespace_keeps_it(self) -> None:
+        text = "<system><name>nds</name><command>\n  run %ROM%\n</command></system>"
+        out = frontend.wrap_systems(text, {"nds"}, CONVERT)
+        self.assertEqual(frontend.unwrap_systems(out, {"nds"}), text)
+        self.assertTrue(out.startswith(f"<system><name>nds</name><command>\n  {CONVERT}; run"))
+
+    def test_the_command_is_escaped_for_xml(self) -> None:
+        command = frontend.convert_command("/a&b/python", "ark")
+        out = frontend.wrap_systems(NDS_LIST, {"nds"}, command)
+        self.assertIn("/a&amp;b/python", out)
+        self.assertEqual(frontend.unwrap_systems(out, {"nds"}), NDS_LIST)
+        self.assertEqual(frontend.wrapped_systems(out, {"nds"}), {"nds"})
+
+    def test_wrapped_systems_names_those_that_have_it(self) -> None:
+        out = frontend.wrap_systems(NDS_LIST, {"nds"}, CONVERT)
+        self.assertEqual(frontend.wrapped_systems(out, {"nds", "gba", "missing"}), {"nds"})
+        self.assertEqual(frontend.wrapped_systems(NDS_LIST, {"nds"}), set())
+
+    def test_a_wrapped_copy_is_current_when_the_system_is_unwrapped_for_the_comparison(
+        self,
+    ) -> None:
+        source = NDS_LIST.replace("<command>", "<path>/roms/nds/</path><command>", 1)
+        plain = frontend.rewrite_system_paths(source, PREFIX, TARGET)
+        wrapped = frontend.wrap_systems(plain, {"nds"}, CONVERT)
+        self.assertFalse(frontend.systems_current(source, wrapped, PREFIX, TARGET))
+        self.assertTrue(frontend.systems_current(source, wrapped, PREFIX, TARGET, None, {"nds"}))
+        self.assertTrue(frontend.systems_current(source, plain, PREFIX, TARGET, None, {"nds"}))
+        self.assertFalse(
+            frontend.systems_current(source, wrapped + " ", PREFIX, TARGET, None, {"nds"})
+        )
 
 
 class RetroArchGapTests(unittest.TestCase):

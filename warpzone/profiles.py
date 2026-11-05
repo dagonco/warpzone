@@ -4,13 +4,15 @@ from __future__ import annotations
 
 import re
 import tomllib
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass, field
 from importlib import resources
 from pathlib import Path
 from typing import Any, TypeGuard
 
 from warpzone.errors import UsageError
+from warpzone.safefile import TMP_SUFFIX
+from warpzone.saveconvert import FORMATS as SAVE_CONVERT_FORMATS
 from warpzone.shadps4 import kind_of
 
 PATH_KEYS = ("library", "songs", "tools", "media", "esde", "settings", "play_state")
@@ -266,6 +268,26 @@ class OptionsMenu:
 
 
 @dataclass(frozen=True)
+class SaveConvert:
+    """`[save_convert.<key>]`: an emulator whose save files are not the hub's raw ones.
+
+    `saves` is the key of the `[saves.*]` entry whose folder holds the raw `.sav` files the
+    hub syncs, `path` the emulator's own folder and `format` how it stores a save
+    (`warpzone.saveconvert.FORMATS`). Nothing is converted while a program of `process` runs.
+    With `es_system`, `provision device` wraps that system's `<command>` in the system list
+    copy so the saves are reconciled right before the emulator starts and right after it exits.
+    See development/design/save-conversion.md.
+    """
+
+    key: str
+    format: str
+    saves: str
+    path: str
+    process: tuple[str, ...]
+    es_system: str | None = None
+
+
+@dataclass(frozen=True)
 class Profile:
     name: str
     description: str
@@ -290,6 +312,11 @@ class Profile:
     # only looks for one; it is installed by hand, with `warpzone self-update --now`).
     updater_install: str = "auto"
     cemu: CemuPaths | None = None
+    save_convert: dict[str, SaveConvert] = field(default_factory=dict)
+
+    def converts_saves(self, folders: Collection[str]) -> bool:
+        """Whether a device with these folder groups reconciles an emulator's saves."""
+        return bool(self.save_convert) and "saves" in folders
 
     def placement_ignores(self) -> tuple[str, ...]:
         """The anchored library paths that placements deliver instead of the library."""
@@ -324,6 +351,7 @@ def parse_profile(data: dict[str, Any], source: str) -> Profile:
         "links",
         "options_menu",
         "updater",
+        "save_convert",
     }
     for key in sorted(set(data) - allowed):
         err(f"unknown key {key!r}")
@@ -398,6 +426,7 @@ def parse_profile(data: dict[str, Any], source: str) -> Profile:
     links = _parse_links(data.get("links"), "library" in paths, err)
     options_menu = _parse_options_menu(data.get("options_menu"), err)
     updater_install = _parse_updater(data.get("updater"), err)
+    save_convert = _parse_save_convert(data.get("save_convert"), saves, es_systems, err)
 
     if errors:
         raise ProfileError("\n".join(errors))
@@ -419,6 +448,7 @@ def parse_profile(data: dict[str, Any], source: str) -> Profile:
         options_menu,
         updater_install,
         cemu,
+        save_convert,
     )
 
 
@@ -461,6 +491,73 @@ def _parse_es_systems(raw: Any, has_library: bool, err: Callable[[str], None]) -
     return EsSystems(
         raw["source"], raw["override"], raw["prefix"], tuple(raw["process"]), dict(renames)
     )
+
+
+def _parse_save_convert(
+    raw: Any,
+    saves: dict[str, SaveFolder],
+    es_systems: EsSystems | None,
+    err: Callable[[str], None],
+) -> dict[str, SaveConvert]:
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        err("`save_convert` must be a table of tables")
+        return {}
+    rules: dict[str, SaveConvert] = {}
+    for key, entry in raw.items():
+        where = f"save_convert.{key}"
+        if not _ID_RE.match(key):
+            err(f"{where}: key must be lowercase letters, digits and hyphens")
+            continue
+        if not isinstance(entry, dict):
+            err(f"{where}: must be a table")
+            continue
+        problems = 0
+        for extra in sorted(set(entry) - {"format", "saves", "path", "process", "es_system"}):
+            err(f"{where}: unknown key {extra!r}")
+            problems += 1
+        fmt = entry.get("format")
+        if fmt not in SAVE_CONVERT_FORMATS:
+            err(f"{where}.format: must be one of {', '.join(SAVE_CONVERT_FORMATS)}")
+            problems += 1
+        target = entry.get("saves")
+        folder = saves.get(target) if isinstance(target, str) else None
+        if folder is None:
+            err(f"{where}.saves: must name a [saves.*] entry of this profile")
+            problems += 1
+        elif f"*{TMP_SUFFIX}" not in folder.ignore:
+            err(
+                f'{where}.saves: saves.{target}.ignore must list "*{TMP_SUFFIX}" (the temporary '
+                "file of an atomic write must not sync)"
+            )
+            problems += 1
+        path = entry.get("path")
+        if not isinstance(path, str) or not (path.startswith("/") or path.startswith("~/")):
+            err(f"{where}.path: required, an absolute folder (or one starting with `~/`)")
+            problems += 1
+        elif folder is not None and (_nested(path, folder.path) or _nested(folder.path, path)):
+            err(f"{where}.path: must not be the saves folder or sit inside it, or the reverse")
+            problems += 1
+        if not _names(entry.get("process")):
+            err(f"{where}.process: required, a non-empty list of non-empty strings")
+            problems += 1
+        system = entry.get("es_system")
+        if system is not None and (not isinstance(system, str) or not system):
+            err(f"{where}.es_system: must be a non-empty string")
+            problems += 1
+        elif system is not None and es_systems is None:
+            err(f"{where}.es_system needs [es_systems] (its system list is the one wrapped)")
+            problems += 1
+        if problems:
+            continue
+        rules[key] = SaveConvert(
+            key, str(fmt), str(target), str(path), tuple(entry["process"]), system
+        )
+    names = [r.es_system for r in rules.values() if r.es_system]
+    if len(names) != len(set(names)):
+        err("save_convert: two rules wrap the same es_system")
+    return rules
 
 
 def _nested(a: str, b: str) -> bool:

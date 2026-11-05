@@ -45,6 +45,7 @@ The pages after this one cover one subject each.
   - [Title links](/warpzone/development/design/title-links/): symlinks from the library's games into an emulator's own folder.
   - [Frontend artwork](/warpzone/development/design/frontend-artwork/): the artwork folders and the generated gamelists.
   - [Play state](/warpzone/development/design/play-state/): favourites and play statistics across devices.
+  - [Save conversion](/warpzone/development/design/save-conversion/): saves an emulator keeps in its own format (DraStic's `.dsv`), reconciled with the hub's raw ones.
 - [Configuration and command line](/warpzone/development/design/configuration/): the private config, every command, the two rules for writing commands, exit codes.
 - [Pruning](/warpzone/development/design/prune/): detecting and deleting what a device no longer whitelists.
 - [BIOS check](/warpzone/development/design/bios/): the manifest and the judgements.

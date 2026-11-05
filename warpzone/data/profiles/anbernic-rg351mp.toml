@@ -102,3 +102,21 @@ dir = "/opt/system"
 # The timer only looks for a release; "Install <tag> now" in the Warpzone entry installs it.
 [updater]
 install = "manual"
+
+# Nintendo DS saves. The hub keeps them as raw cartridge dumps (`<game>.sav`, the melonDS
+# format) in its `saves/melonds/saves` folder, which lands here in a real folder on the
+# card. DraStic keeps its own `<game>.dsv` (the same dump plus a 122-byte footer) in
+# /roms/nds/backup and cannot read anything else, so `warpzone saves convert` reconciles the
+# two: before DraStic starts and after it exits (the `nds` system's command is wrapped in the
+# system list copy) and on the `[artwork]` timer, never while DraStic runs. `*.wz-tmp` is
+# the temporary file of its atomic writes and must not sync.
+[saves.melonds-saves]
+path = "/roms/warpzone/saves/melonds"
+ignore = ["*.wz-tmp"]
+create_when = "/roms"
+[save_convert.drastic]
+format = "desmume-dsv"
+saves = "melonds-saves"
+path = "/roms/nds/backup"
+process = ["drastic"]
+es_system = "nds"
