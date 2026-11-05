@@ -104,8 +104,11 @@ class Instance:
         for extra in listens[1:]:
             options.remove(extra)
         tree.write(self.config_xml, encoding="utf-8", xml_declaration=True)
+        self.serve()
 
-        self._log_file = self.log.open("wb")
+    def serve(self) -> None:
+        """Run Syncthing on the home `start` made (again, after `stop`), same ports and keys."""
+        self._log_file = self.log.open("ab")
         self.proc = subprocess.Popen(
             [BINARY, "serve", "--no-browser", f"--home={self.home}"],
             stdout=self._log_file,
