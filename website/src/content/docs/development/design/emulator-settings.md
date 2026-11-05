@@ -134,7 +134,7 @@ create_when = "~/Emulation/storage/xemu"
 - Patterns match the canonical key. `*` matches any run of characters and `?` one
   character; nothing else is special, so `[` is literal. Ids are `[a-z0-9-]+`.
 
-The shipped `steamos-emudeck` profile declares eleven emulators:
+The shipped `steamos-emudeck` profile declares twelve emulators:
 
 | Emulator | File ids | Path | Format |
 |---|---|---|---|
@@ -149,6 +149,7 @@ The shipped `steamos-emudeck` profile declares eleven emulators:
 | `vita3k` | `config` | `~/.config/Vita3K/config.yml` | `yaml-flat` |
 | `xemu` | `config` | `~/.var/app/app.xemu.xemu/data/xemu/xemu/xemu.toml` | `toml` |
 | `ryujinx` | `config` | `~/.config/Ryujinx/Config.json` | `json` |
+| `xenia` | `config` | `~/Emulation/roms/xbox360/xenia-canary.config.toml` | `toml` |
 
 Files that hold only a login (Dolphin's `RetroAchievements.ini`, PPSSPP's achievements
 token) are not declared at all.
@@ -470,8 +471,10 @@ Some settings live outside the config files: the Xbox EEPROM
 (`~/Emulation/storage/xemu/eeprom.bin`: language and video mode, but also the serial number,
 MAC address and hard disk key), Azahar's system configuration
 (`~/Emulation/storage/azahar/nand/data/00000000000000000000000000000000/sysdata/00010017/00000000/config`:
-language, region, user name, birthday) and Vita3K's user
-(`~/Emulation/storage/Vita3K/ux0/user/00/user.xml`). They are profile `data` entries, kept on
+language, region, user name, birthday), Vita3K's user
+(`~/Emulation/storage/Vita3K/ux0/user/00/user.xml`) and Xenia Canary's console settings
+(`~/Emulation/roms/xbox360/xconfig.settings`: language and country, which Canary no longer
+keeps in its TOML, but also the console's MAC address). They are profile `data` entries, kept on
 the hub as whole files in `settings/files/<emulator>/<id>`, common to every device (there is
 no device layer for them), at most 1 MiB each. `apply` delivers them with the same rules as
 keys (held, backup, atomic write), comparing hashes; `capture` proposes the whole file when

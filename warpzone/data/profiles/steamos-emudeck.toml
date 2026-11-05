@@ -762,6 +762,30 @@ known = ['sys.mem_limit']
 path = "~/Emulation/storage/xemu/eeprom.bin"
 create_when = "~/Emulation/storage/xemu"
 
+# Xenia Canary, the Windows build EmuDeck runs under Proton in portable mode (portable.txt
+# next to the exe). Canary reads only xenia-canary.config.toml; the xenia.config.toml and
+# xenia-edge.config.toml EmuDeck copies there are never read. The kernel cuts the process
+# name to "xenia_canary.ex", which matches. Logging to the profile in slot 0 is a shared key.
+# The console language and country are not in the TOML: they live in the binary
+# xconfig.settings (Console > Open console settings), which also holds the console's MAC.
+[settings.xenia]
+process = ["xenia_canary.exe"]
+[settings.xenia.files.config]
+path = "~/Emulation/roms/xbox360/xenia-canary.config.toml"
+format = "toml"
+noise = ['UI.window_size_*', 'Logging.*']
+device = [
+  'Display.fullscreen',
+  'GPU.draw_resolution_scale_*',
+  'D3D12.d3d12_adapter',
+  'Vulkan.vulkan_device',
+  'Storage.*_root',
+]
+known = ['Profiles.logged_profile_slot_0_xuid']
+[settings.xenia.data.xconfig]
+path = "~/Emulation/roms/xbox360/xconfig.settings"
+create_when = "~/Emulation/roms/xbox360"
+
 # Ryujinx. A JSON file; hotkeys and window state are noise, and a key with an array
 # value is not writable.
 [settings.ryujinx]

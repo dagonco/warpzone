@@ -47,6 +47,7 @@ EXPECTED_FILES = {
     ("vita3k", "config"): ("~/.config/Vita3K/config.yml", "yaml-flat"),
     ("xemu", "config"): ("~/.var/app/app.xemu.xemu/data/xemu/xemu/xemu.toml", "toml"),
     ("ryujinx", "config"): ("~/.config/Ryujinx/Config.json", "json"),
+    ("xenia", "config"): ("~/Emulation/roms/xbox360/xenia-canary.config.toml", "toml"),
 }
 
 # Canonical key -> the lists it must fall in ("plain" for none of them).
@@ -534,6 +535,34 @@ FIXTURES: dict[tuple[str, str], tuple[str, dict[str, str | set[str]]]] = {
             "input.bindings.port1": "noise",
         },
     ),
+    ("xenia", "config"): (
+        # Canary writes a comment after every value.
+        "[Display]\n"
+        "fullscreen = false                \t# Whether to launch in fullscreen.\n"
+        "[GPU]\n"
+        "draw_resolution_scale_x = 1       \t# Integer pixel width scale.\n"
+        'gpu = "any"                       \t# Graphics system.\n'
+        "[Logging]\n"
+        "log_level = 2                     \t# Maximum level to be logged.\n"
+        "[Profiles]\n"
+        'logged_profile_slot_0_xuid = "B13EBABEBABEBABE"\t# XUID of the profile to load.\n'
+        "[Storage]\n"
+        'content_root = ""                 \t# Root path for guest content storage.\n'
+        "[UI]\n"
+        "window_size_x = 1280              \t# Xenia window width\n"
+        "[Vulkan]\n"
+        "vulkan_device = -1                \t# Index of the preferred Vulkan device.\n",
+        {
+            "Display.fullscreen": "device",
+            "GPU.draw_resolution_scale_x": "device",
+            "GPU.gpu": "plain",
+            "Logging.log_level": "noise",
+            "Profiles.logged_profile_slot_0_xuid": "known",
+            "Storage.content_root": "device",
+            "UI.window_size_x": "noise",
+            "Vulkan.vulkan_device": "device",
+        },
+    ),
     ("ryujinx", "config"): (
         "{\n"
         '  "version": 70,\n'
@@ -588,7 +617,7 @@ class ShippedSettingsTests(unittest.TestCase):
         cls.profile = load_profile("steamos-emudeck")
         cls.settings = cls.profile.settings
 
-    def test_eleven_emulators(self) -> None:
+    def test_twelve_emulators(self) -> None:
         self.assertEqual(
             sorted(self.settings),
             sorted(
@@ -604,6 +633,7 @@ class ShippedSettingsTests(unittest.TestCase):
                     "vita3k",
                     "xemu",
                     "ryujinx",
+                    "xenia",
                 ]
             ),
         )
@@ -632,6 +662,8 @@ class ShippedSettingsTests(unittest.TestCase):
             self.settings["azahar"].process, ("azahar", "azahar-qt", "azahar.AppImage")
         )
         self.assertEqual(self.settings["ppsspp"].process, ("PPSSPPSDL", "PPSSPPQt"))
+        # The Proton build: the kernel cuts the name to "xenia_canary.ex", which matches.
+        self.assertEqual(self.settings["xenia"].process, ("xenia_canary.exe",))
 
     def test_retroarch_core_options_are_a_template(self) -> None:
         opt = self.settings["retroarch"].files["opt"]
@@ -651,9 +683,19 @@ class ShippedSettingsTests(unittest.TestCase):
         xemu = self.settings["xemu"].data["eeprom"]
         self.assertEqual(xemu.path, "~/Emulation/storage/xemu/eeprom.bin")
         self.assertEqual(xemu.create_when, "~/Emulation/storage/xemu")
+        # Canary keeps the console language and country here, not in its TOML.
+        xenia = self.settings["xenia"].data["xconfig"]
+        self.assertEqual(xenia.path, "~/Emulation/roms/xbox360/xconfig.settings")
+        self.assertEqual(xenia.create_when, "~/Emulation/roms/xbox360")
         data = {(emu, did) for emu, entry in self.settings.items() for did in entry.data}
         self.assertEqual(
-            data, {("azahar", "sysdata-config"), ("vita3k", "user-00"), ("xemu", "eeprom")}
+            data,
+            {
+                ("azahar", "sysdata-config"),
+                ("vita3k", "user-00"),
+                ("xemu", "eeprom"),
+                ("xenia", "xconfig"),
+            },
         )
 
     def test_login_only_files_are_not_declared(self) -> None:
