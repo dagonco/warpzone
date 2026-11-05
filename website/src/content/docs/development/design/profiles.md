@@ -326,23 +326,32 @@ to `library`, after the shadPS4 steps. The profile `steamos-emudeck` declares
 
 `[options_menu]` (`dir`, an absolute folder or one starting with `~/`) names the folder whose
 executable `.sh` files the device's Options menu lists. Only the `anbernic-rg351mp` profile sets
-it, to ArkOS's `/opt/system`. `provision device` writes two bash scripts there, built by the pure
-functions of `options_menu.py` and installed by `provision_scripts.ensure_options_menu`:
+it, to ArkOS's `/opt/system`. `provision device` writes one bash script there, `Warpzone.sh`,
+built by the pure function `options_menu.render_script` and installed by
+`provision_scripts.ensure_options_menu`, which also removes the entries of earlier versions
+(`Warpzone Status.sh`, `Warpzone Update Now.sh`) when they carry the marker line.
 
-- `Warpzone Status.sh` reads local files only (no network) and shows them with ArkOS's `msgbox`
-  helper, or prints them when `msgbox` is missing: the version
-  (`~/.local/share/warpzone/venv/bin/warpzone --version`), `channel` and `pin` from
-  `~/.local/state/warpzone/updater/conf`, `good_tag`, `last_result` and `last_fetch` (as a local
-  date) from `~/.local/state/warpzone/updater/state`, `available` as `New release: <tag>
-  (Warpzone Update Now)` (or `none`), and the `[!!]` and `[! ]` lines of
-  `warpzone doctor` (at most 8, each cut to 40 characters, then `+N more`). The files are
-  read line by line, never sourced. Whatever is missing or unreadable shows as `unknown`, and the
-  script always exits 0.
-- `Warpzone Update Now.sh` runs the live updater, `sh ~/.local/share/warpzone/updater/updater.sh
-  tick --now`, when its `UPDATER_ABI` is 2 or higher (it does not need the clone's Python, so it
-  can still put back a release that no longer starts), and `warpzone self-update --now`
-  otherwise; it shows the exit code and the last lines. Being asked for by hand, that update does not wait for the menu it is started from
-  (see "Installing by hand" in `development/design/autonomous-updates.md`).
+The script reads local files only (no network), line by line and never sourced: the version
+(`~/.local/share/warpzone/venv/bin/warpzone --version`), `channel` and `pin` from
+`~/.local/state/warpzone/updater/conf`, and `good_tag`, `available`, `last_result` and
+`last_fetch` (as a local date) from `~/.local/state/warpzone/updater/state`, and the `[!!]` and
+`[! ]` lines of `warpzone doctor` (at most 8, each cut to 40 characters, then `+N more`).
+Whatever is missing or unreadable shows as `unknown`, and the script always exits 0. With
+`dialog` and a writable terminal (`/dev/tty1`, made writable with `sudo -n chmod` as ArkOS's
+`msgbox` does; `WZ_TTY` moves it for tests) it shows a menu, driven by the controller through
+ArkOS's `gptokeyb` (started only when none runs, stopped on exit):
+
+- **Status**: the text above in a message box.
+- **Install `<tag>` now**, only when the state has `available`: the live updater's `sh
+  ~/.local/share/warpzone/updater/updater.sh tick --now` when its `UPDATER_ABI` is 2 or higher
+  (it does not need the clone's Python, so it can still put back a release that no longer
+  starts), `warpzone self-update --now` otherwise; then the exit code and the last lines.
+- **Follow `<other>` releases**: after a yes/no question that says an update never goes down,
+  `warpzone self-update --channel <other>`, and its message.
+- **Exit**.
+
+Without `dialog` or the terminal it shows the status with `msgbox` (or prints it) and does
+nothing else.
 
 `[updater]` has one key, `install`: `"auto"` (the default; the timer installs a new release) or
 `"manual"` (the timer only looks for one and notes it; `warpzone self-update --now` installs it).

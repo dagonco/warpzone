@@ -67,7 +67,7 @@ error messages; the RetroAchievements key is read from `RA_API_KEY`, never from 
 | `warpzone bios` | on a device or the hub | Reports which BIOS and firmware files a library has, lacks or has wrong (see [BIOS check](/warpzone/development/design/bios/)). Read-only. Exit 1 if a required item is missing or wrong. |
 | `warpzone inbox` | a desktop that mounts the hub's share | Identifies, converts and files new games dropped in `inbox/` (see [Inbox](/warpzone/development/design/inbox/)). Report only by default, `--apply` acts. Exit 1 if any item needs review. |
 | `sh <clone>/warpzone/data/updater.sh install <device>` | on the device, from a fresh `git clone` | The one way to install a device: checks out the best release of the channel, makes the venv next to the clone, and runs `provision device` (see [Self-update](/warpzone/development/design/self-update/)). |
-| `warpzone self-update` | on the device | Runs one tick of the updater script's live copy (`sh ~/.local/share/warpzone/updater/updater.sh tick`), as the timer does, and exits with its code (see [Self-update](/warpzone/development/design/self-update/)); `--now` passes `--fetch-now`. Needs no config. Without a live copy it says so and exits 1. |
+| `warpzone self-update` | on the device | Runs one tick of the updater script's live copy (`sh ~/.local/share/warpzone/updater/updater.sh tick`), as the timer does, and exits with its code (see [Self-update](/warpzone/development/design/self-update/)); `--now` passes `--now` (`--fetch-now` to an older live copy). Needs no config. Without a live copy it says so and exits 1. `--channel stable\|rc [--dry-run]` runs no tick: it sets the device's channel in its config and in the updater's settings. |
 | `warpzone health [device]` | on the device | Checks that this version works here: loads the config and the profiles, runs `settings apply`, `play-state sync`, `links sync` and `frontend refresh` as dry runs within the 15 seconds ES-DE gives its startup scripts, and checks that the startup scripts and the units exist with an interpreter that imports warpzone (see [`warpzone health`](/warpzone/development/design/autonomous-updates/#warpzone-health)). Writes no user data, needs no DATs or tools. Exit 0 when it works, 1 when a check failed. |
 | `warpzone doctor` | any machine | Checklist of this machine: tools, config, local Syncthing, DATs, hub folder (see [Doctor](/warpzone/development/design/doctor/)). Offline, never changes anything. Exit 1 if a required check fails. |
 | `warpzone settings apply` | on the device | Writes the layered emulator settings into each emulator's config file: only the layered keys, with a backup, never while the emulator runs (see [Emulator settings](/warpzone/development/design/emulator-settings/)). Run by ES-DE at startup and by hand. |
@@ -83,11 +83,11 @@ path, JSON body with secrets redacted) and sends no write, though it still sends
 requests it needs to compute the diff; the others say what they would write. Commands that act
 only with `--apply` (`prune`, `inbox`) have no `--dry-run`: the report is the dry run, see
 [Writing commands](#writing-commands). `check`, `bios`, `doctor`, `status`, `render-ignores`,
-`settings audit`, `health` and `self-update` do not write user data and take none.
+`settings audit`, `health` and a `self-update` tick do not write user data and take none.
 
 Every command takes `--config PATH` (default `$WARPZONE_CONFIG`, then the XDG path) except
-`self-update`, whose only option is `--now`: it needs no config and runs the installed updater
-with the settings `provision device` wrote.
+`self-update`: it needs no config and runs the installed updater with the settings `provision
+device` wrote (`--now`), or, with `--channel stable|rc`, edits the config those settings name.
 
 Exit codes: `0` ok, `1` runtime error (for `health`, a failed check, a config error included),
 `2` usage or config error, `3` only for `provision device --unattended` (deferred), `130` when
@@ -125,7 +125,10 @@ They are `provision hub`, `provision device`, `frontend refresh`, `play-state sy
 chooses). `--dry-run` says what they would do and writes nothing. `self-update` is the
 timer's own convergent step and takes no `--dry-run`: it moves the clone to a release that
 passes the checks, and goes back to the last good one when it fails (see
-[Self-update](/warpzone/development/design/self-update/)).
+[Self-update](/warpzone/development/design/self-update/)). `self-update --channel stable|rc` is
+convergent like the others: it edits one line of the device's config (with a backup
+`config.toml.bak-<date>`) and `channel=` in the updater's settings, and takes `--dry-run`, which
+it accepts only with `--channel`.
 
 **Read-only commands** never write user data: `check`, `bios`, `doctor`, `health`, `status`,
 `render-ignores` and `settings audit`.

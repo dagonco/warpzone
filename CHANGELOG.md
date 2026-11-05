@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ## [Unreleased]
 
+### Added
+
+- `warpzone self-update --channel stable|rc` makes a device follow stable releases or release candidates: it changes the channel in the device's config, keeping a backup next to it, and in the updater's settings.
+
+### Changed
+
+- On the Anbernic, the Options menu has one entry, "Warpzone", instead of two: a small menu, driven by the controller, with the status, "Install vX now" when the console found a new release, and the channel. The old "Warpzone Status" and "Warpzone Update Now" entries are removed.
+
 ### Fixed
 
 - On SteamOS with EmuDeck, `provision device` sets Cemu's MLC path to `~/Emulation/roms/wiiu/mlc01` and adds `~/Emulation/roms/wiiu/roms` to its game paths in `~/.config/Cemu/settings.xml` (a new `[cemu]` profile table), which EmuDeck leaves unset on SteamOS 3.9. Until now Cemu saved in `~/.local/share/Cemu/mlc01`, where warpzone does not sync, and its game list was empty. Only those two values change; the file is backed up first, skipped while Cemu runs, never created, and `mlc_path` stays as it is while the folder Cemu used holds saves. `warpzone doctor` reports `Cemu paths`.
