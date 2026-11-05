@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ## [Unreleased]
 
+### Added
+
+- `warpzone settings` covers Xenia Canary (the Proton build EmuDeck installs): its `xenia-canary.config.toml`, and `xconfig.settings` as a system data file, which is where Canary keeps the console language and country. Set the language once in Xenia (Console > Open console settings), capture with `--key 'xenia/data/*'`, and the other consoles get it at the next apply.
+
 ### Fixed
 
 - `provision device` and `provision hub` no longer fail with "cannot reach ... (timed out)" when a folder is downloading while they run. Syncthing answers a scan only once it has run, and it runs it only after the download ends, which on a slow device takes more than the 30-second timeout. They now report "rescan queued" and go on; Syncthing runs the scan when the download ends. `prune` stops with a "folder is busy" message instead of deleting anything, and can run again when the folder is idle.

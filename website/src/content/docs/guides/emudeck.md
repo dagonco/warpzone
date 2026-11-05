@@ -146,7 +146,7 @@ xemu's disk image (`xbox_hdd.qcow2`, which holds that console's Xbox saves) is d
 
 ## Emulator settings
 
-The profile also declares the settings files of eleven emulators (language, region, graphics options), so a choice made on one console can reach the others. See [Emulator settings](/warpzone/setup/settings/).
+The profile also declares the settings files of twelve emulators (language, region, graphics options), so a choice made on one console can reach the others. See [Emulator settings](/warpzone/setup/settings/).
 
 One caveat belongs here. The xemu EEPROM is shared as a whole file, which gives every console the same Xbox serial number and signing key. A console that already had its own EEPROM may reject saves signed with the old key that sit inside its own xemu HDD image (which stays per device, as above). Leave the EEPROM out at capture if that matters ([Emulator settings](/warpzone/setup/settings/#the-xbox-eeprom-caveat)).
 

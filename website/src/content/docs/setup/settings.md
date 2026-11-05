@@ -32,7 +32,7 @@ Each table is `[<emulator>.<file>]`, and each entry is a key of that file with i
 
 The folder is two-way (unlike `tools`, which is receive-only on devices), because captures are written on a console. The hub keeps 30 days of versions of every layer, which is the history of each change.
 
-Eleven emulators are covered by the `steamos-emudeck` profile: Eden, RetroArch (and its core options), DuckStation, PCSX2, Dolphin, Azahar, melonDS, PPSSPP, Vita3K, xemu and Ryujinx.
+Twelve emulators are covered by the `steamos-emudeck` profile: Eden, RetroArch (and its core options), DuckStation, PCSX2, Dolphin, Azahar, melonDS, PPSSPP, Vita3K, xemu, Ryujinx and Xenia (the Proton build of Canary). Xenia's console language is not in its config file: set it in Xenia (Console > Open console settings) and capture its `xconfig.settings`, a system data file (below).
 
 ## Set up
 
@@ -61,10 +61,10 @@ warpzone settings capture --seed              # the real run
 warpzone settings capture --seed --key 'eden/qt-config/*'
 ```
 
-System data files (the xemu EEPROM, Azahar's `sysdata` config, the Vita3K user file) are not `known` keys, so `--seed` alone never proposes them; name them with `--key`. The first capture on the reference console, for the settings and all three data files, is:
+System data files (the xemu EEPROM, Azahar's `sysdata` config, the Vita3K user file, Xenia's `xconfig.settings`) are not `known` keys, so `--seed` alone never proposes them; name them with `--key`. The first capture on the reference console, for the settings and all four data files, is:
 
 ```bash
-warpzone settings capture --seed --key 'xemu/data/*' 'azahar/data/*' 'vita3k/data/*'
+warpzone settings capture --seed --key 'xemu/data/*' 'azahar/data/*' 'vita3k/data/*' 'xenia/data/*'
 ```
 
 Run it before ES-DE has started and applied on that console: a first `settings apply` takes a data file that has no hub copy as its baseline, and a plain `capture` then proposes it only after it changes. If that already happened, the same `--seed --key` command still proposes it.
@@ -152,7 +152,7 @@ To undo a bad apply, copy the file back from `backups/`, with the emulator close
 
 ## The Xbox EEPROM caveat
 
-Some settings live outside the config files, so the profile keeps a few whole files on the hub, in `settings/files/<emulator>/<id>`, and `apply` delivers them like keys. The xemu EEPROM is one of them: it holds the language and video mode, but also the serial number, MAC address and hard disk key. Sharing it gives every console the same Xbox identity, with the same serial and signing key.
+Some settings live outside the config files, so the profile keeps a few whole files on the hub, in `settings/files/<emulator>/<id>`, and `apply` delivers them like keys. The xemu EEPROM is one of them: it holds the language and video mode, but also the serial number, MAC address and hard disk key. Sharing it gives every console the same Xbox identity, with the same serial and signing key. Xenia's `xconfig.settings` is the same kind of file: it also holds a MAC address, so every console that receives it shares it.
 
 xemu's hard disk image stays per console and is not synced. A console that already had its own EEPROM may therefore refuse saves signed with the old key that sit inside its own xemu HDD image, after the first apply. If you care about those saves, leave the EEPROM out: do not choose it at capture, or discard it. See also [the EmuDeck guide](/warpzone/guides/emudeck/).
 
