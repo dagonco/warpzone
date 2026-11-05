@@ -113,10 +113,10 @@ The image is filed with the bytes unchanged, because Dolphin (the emulator ES-DE
 
 | Disc | Placed in | Name |
 |---|---|---|
-| Wii | `library/roms/wii/` | `<Title> [<GAME ID>].rvz` (or `.wia`) |
-| GameCube | `library/roms/gc/` | `<Title> [<GAME ID>].rvz` (or `.wia`) |
+| Wii | `library/roms/wii/` | `<name> [<GAME ID>].rvz` (or `.wia`) |
+| GameCube | `library/roms/gc/` | `<name> [<GAME ID>].rvz` (or `.wia`) |
 
-The title is the one in the disc header with unsafe characters dropped and `:` written as ` -`, for example `MarioKartWii [RMCE01].rvz`. A compressed image cannot be matched to a Redump entry without expanding it, so the name comes from the header and not from a DAT. Nothing is overwritten: same size and SHA1 is "already in the library", anything else under that name goes to review. A file that is not an image, a truncated copy or a header whose disc type and magic disagree goes to review with the reason. The report shows the detection, the path and the whitelist line (`!/roms/wii/<name>`). A plain Wii `.iso` is not handled yet and goes to review as "no DAT match".
+The name is the file's own, with unsafe characters dropped and `:` written as ` -`, and the game ID added: `Mario Kart Wii (USA) (En,Fr,Es).rvz` is filed as `Mario Kart Wii (USA) (En,Fr,Es) [RMCE01].rvz`. A file name that already ends in that `[<GAME ID>]` keeps it once. When the file name is empty or only the game ID (`RMCE01.rvz`), the title in the disc header stands in, for example `MarioKartWii [RMCE01].rvz`. A compressed image cannot be matched to a Redump entry without expanding it, so the name does not come from a DAT, and the same game dropped under two file names is filed twice. Nothing is overwritten: same size and SHA1 is "already in the library", anything else under that name goes to review. A file that is not an image, a truncated copy or a header whose disc type and magic disagree goes to review with the reason. The report shows the detection, the path and the whitelist line (`!/roms/wii/<name>`). A plain Wii `.iso` is not handled yet and goes to review as "no DAT match".
 
 ## PS3, PS4, Xbox, Xbox 360 and Wii U images
 
