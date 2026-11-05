@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ## [Unreleased]
 
+### Added
+
+- `warpzone self-update --channel stable|rc` makes a device follow stable releases or release candidates: it changes the channel in the device's config, keeping a backup next to it, and in the updater's settings.
+
+### Changed
+
+- On the Anbernic, the Options menu has one entry, "Warpzone", instead of two: a small menu, driven by the controller, with the status, "Install vX now" when the console found a new release, and the channel. The old "Warpzone Status" and "Warpzone Update Now" entries are removed.
+
 ## [0.3.0rc4] - 2026-11-05
 
 Fourth release candidate of 0.3.0: the Anbernic installs releases only from its Options menu, where "Warpzone Update Now" now works with the menu open, and Wii and GameCube `.rvz` images keep their own names.

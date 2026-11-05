@@ -223,5 +223,130 @@ class WrapperTests(unittest.TestCase):
         self.assertIn("not found", self.lines[0])
 
 
+CONFIG = """# my consoles
+[hub]
+url = "https://hub.example:8384"
+
+[devices.ark]  # the handheld
+profile = "anbernic-rg351mp"
+folders = ["library", "saves"]
+channel = "stable"  # follow stable
+
+[devices.deck]
+profile = "steamos-emudeck"
+folders = ["library"]
+"""
+
+
+class ChannelEditTests(unittest.TestCase):
+    def test_the_channel_line_of_the_device_is_replaced_and_nothing_else(self) -> None:
+        out = selfupdate.set_channel_text(CONFIG, "ark", "rc")
+        self.assertEqual(
+            out, CONFIG.replace('channel = "stable"  # follow', 'channel = "rc"  # follow')
+        )
+
+    def test_a_device_without_a_channel_gets_one_under_its_header(self) -> None:
+        out = selfupdate.set_channel_text(CONFIG, "deck", "rc")
+        self.assertIn('[devices.deck]\nchannel = "rc"\nprofile = "steamos-emudeck"', out)
+        self.assertIn('channel = "stable"  # follow stable', out, "the other device is untouched")
+
+    def test_a_quoted_table_name_and_single_quotes(self) -> None:
+        text = "[devices.\"my deck\"]\nchannel = 'rc'\n"
+        self.assertEqual(
+            selfupdate.set_channel_text(text, "my deck", "stable"),
+            '[devices."my deck"]\nchannel = "stable"\n',
+        )
+
+    def test_the_same_channel_changes_nothing(self) -> None:
+        self.assertEqual(selfupdate.set_channel_text(CONFIG, "ark", "stable"), CONFIG)
+
+    def test_what_it_cannot_edit_safely_is_refused(self) -> None:
+        cases = {
+            "no such device": (CONFIG, "nope"),
+            "inline table": ('[devices]\nark = { profile = "x", channel = "stable" }\n', "ark"),
+            "two tables": ("[devices.ark]\nchannel = 'rc'\n[devices.ark]\n", "ark"),
+            "not toml": ("[devices.ark\n", "ark"),
+        }
+        for label, (text, device) in cases.items():
+            with self.subTest(label), self.assertRaises(ValueError):
+                selfupdate.set_channel_text(text, device, "rc")
+
+    def test_an_unknown_channel_is_refused(self) -> None:
+        with self.assertRaises(ValueError):
+            selfupdate.set_channel_text(CONFIG, "ark", "beta")
+
+    def test_conf_channel_line(self) -> None:
+        conf = "# Written by warpzone\ndevice=ark\nchannel=stable\npin=\n"
+        self.assertEqual(
+            selfupdate.set_conf_channel(conf, "rc"),
+            "# Written by warpzone\ndevice=ark\nchannel=rc\npin=\n",
+        )
+        self.assertEqual(
+            selfupdate.set_conf_channel("device=ark\n", "rc"), "device=ark\nchannel=rc\n"
+        )
+
+
+class ChannelCommandTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.root = Path(self._tmp.name)
+        self.config = self.root / "config.toml"
+        self.config.write_text(CONFIG)
+        self.conf = self.root / "state" / "updater" / "conf"
+        self.conf.parent.mkdir(parents=True)
+        self.conf.write_text(f"device=ark\nconfig={self.config}\nchannel=stable\npin=\n")
+        self.lines: list[str] = []
+
+    def change(self, channel: str, version: str = "0.3.0rc4") -> int:
+        return selfupdate.change_channel(
+            self.conf, channel, self.lines.append, version=version, now=1793800000
+        )
+
+    def test_it_edits_the_config_with_a_backup_and_the_updater_settings(self) -> None:
+        self.assertEqual(self.change("rc"), 0)
+        self.assertIn('channel = "rc"  # follow stable', self.config.read_text())
+        self.assertIn("channel=rc\n", self.conf.read_text())
+        backups = sorted(p.name for p in self.root.glob("config.toml.bak-*"))
+        self.assertEqual(len(backups), 1)
+        self.assertEqual((self.root / backups[0]).read_text(), CONFIG)
+        self.assertIn("rc", self.lines[-1])
+
+    def test_going_to_stable_from_a_candidate_says_it_stays_until_a_newer_stable(self) -> None:
+        self.config.write_text(CONFIG.replace('channel = "stable"', 'channel = "rc"'))
+        self.assertEqual(self.change("stable", version="0.3.0rc4"), 0)
+        self.assertTrue(any("0.3.0rc4" in line and "stable" in line for line in self.lines))
+
+    def test_a_dry_run_writes_nothing(self) -> None:
+        before = (self.config.read_text(), self.conf.read_text())
+        self.assertEqual(
+            selfupdate.change_channel(
+                self.conf, "rc", self.lines.append, version="0.3.0", dry_run=True
+            ),
+            0,
+        )
+        self.assertEqual((self.config.read_text(), self.conf.read_text()), before)
+        self.assertEqual(list(self.root.glob("config.toml.bak-*")), [])
+        self.assertTrue(all("dry-run" in line for line in self.lines))
+
+    def test_the_same_channel_writes_nothing(self) -> None:
+        before = self.conf.read_text()
+        self.assertEqual(self.change("stable"), 0)
+        self.assertEqual(list(self.root.glob("config.toml.bak-*")), [])
+        self.assertEqual(self.conf.read_text(), before)
+        self.assertIn("already", self.lines[-1])
+
+    def test_without_updater_settings_or_a_config_it_fails_with_a_message(self) -> None:
+        self.conf.unlink()
+        self.assertEqual(self.change("rc"), 1)
+        self.assertIn("provision device", self.lines[-1])
+
+    def test_a_config_it_cannot_edit_is_left_alone(self) -> None:
+        self.config.write_text('[devices]\nark = { profile = "x" }\n')
+        self.assertEqual(self.change("rc"), 1)
+        self.assertEqual(self.config.read_text(), '[devices]\nark = { profile = "x" }\n')
+        self.assertEqual(list(self.root.glob("config.toml.bak-*")), [])
+
+
 if __name__ == "__main__":
     unittest.main()
