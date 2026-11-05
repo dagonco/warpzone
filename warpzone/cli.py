@@ -338,10 +338,23 @@ def _build_parser() -> argparse.ArgumentParser:
         help="on a device: run one tick of the updater, as its timer does (look for a "
         "release, switch to it, verify it, go back if it fails)",
     )
-    su.add_argument(
+    su_mode = su.add_mutually_exclusive_group()
+    su_mode.add_argument(
         "--now",
         action="store_true",
-        help="look for a new release now, even if the last look was recent",
+        help="update now, as asked for by hand: look for a new release even if the last look "
+        "was recent, and do not wait for the menu to close",
+    )
+    su_mode.add_argument(
+        "--channel",
+        choices=("stable", "rc"),
+        help="instead of a tick: make this device follow stable releases or release candidates "
+        "(edits the device's channel in its config, keeping a backup, and the updater's settings)",
+    )
+    su.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="with --channel: say what would be written and write nothing",
     )
 
     hl = sub.add_parser(
@@ -609,10 +622,23 @@ def _links(args: argparse.Namespace, cfg: Config, profiles: dict[str, Profile]) 
     return EXIT_OK
 
 
-def _self_update(rep: Reporter, *, now: bool) -> int:
+def _self_update(rep: Reporter, args: argparse.Namespace) -> int:
     from warpzone import selfupdate
 
-    return selfupdate.run_tick(selfupdate.live_path(Path.home()), rep.out, fetch_now=now)
+    if args.dry_run and args.channel is None:
+        _eprint("warpzone self-update: --dry-run goes only with --channel (a tick has no dry run)")
+        return EXIT_USAGE
+    if args.channel is not None:
+        conf = selfupdate.conf_path(settings_state.state_dir().parent)
+        return selfupdate.change_channel(
+            conf,
+            args.channel,
+            rep.out,
+            version=__version__,
+            default_config=Path(os.environ.get("WARPZONE_CONFIG") or default_config_path()),
+            dry_run=args.dry_run,
+        )
+    return selfupdate.run_tick(selfupdate.live_path(Path.home()), rep.out, fetch_now=args.now)
 
 
 def _health(args: argparse.Namespace, rep: Reporter) -> int:
@@ -642,7 +668,7 @@ def _run(args: argparse.Namespace) -> int:
 
     rep = Reporter(print, warn_sink=_eprint)
     if args.command == "self-update":  # needs no config
-        return _self_update(rep, now=args.now)
+        return _self_update(rep, args)
     if args.command == "health":  # a failed check is a result, not a usage error
         return _health(args, rep)
     if args.command == "doctor":  # offline, read-only, needs no valid config
