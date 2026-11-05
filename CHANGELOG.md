@@ -11,6 +11,10 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 - `warpzone inbox` identifies `.rvz` and `.wia` images by reading their header, with no `dolphin-tool` and no DAT: it tells a Wii disc from a GameCube one, reads the game ID and the title, and files the image unchanged as `roms/wii/<Title> [<GAME ID>].rvz` (or `roms/gc/`). A truncated copy or a header that does not check out goes to review with the reason. `dolphin-tool` is now needed only for `.gcz`.
 - `warpzone inbox --apply` takes a lock file, `inbox/.warpzone.lock`, so two runs (for example from two desktops that mount the hub) cannot work on the same inbox at once. A second run stops with a message saying who holds the lock and since when. A lock left behind by a run that died (older than 12 hours, or its process gone from the same machine) is reported as stale and taken over only with the new `--force-lock` option. A report run needs no lock.
 
+### Fixed
+
+- `provision hub` resumes a `wz-*` folder the hub has paused even when its ignores are already right, which is how a folder looks when an additive run stopped half-way. Devices still leave such a folder alone.
+
 ## [0.3.0rc3] - 2026-11-04
 
 Third release candidate of 0.3.0: release candidates now reach devices within the hour, hubs can get their folders from the consoles (`auto_hub`), the Anbernic shows warpzone's state in its Options menu, and this release carries the key that signs every later release.
