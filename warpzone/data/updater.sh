@@ -59,6 +59,7 @@ BOOT_ID_FILE=${WZ_BOOT_ID_FILE:-/proc/sys/kernel/random/boot_id}
 FETCH_INTERVAL=${WZ_FETCH_INTERVAL:-}
 FETCH_NOW=0
 BY_HAND=0
+WATCH=0
 PY_FALLBACKS=${WZ_PYTHON_FALLBACKS-/usr/bin/python3 python3}
 SIGNERS_FILE=
 SIGNERS_SRC=
@@ -2136,7 +2137,7 @@ tick_checkout() {
 		;;
 	dirty | dev)
 		log "the checkout is $KIND: not moved (no reset, stash or clean)"
-		reconcile_if_needed
+		[ "$WATCH" = 1 ] || reconcile_if_needed
 		S_last_result=$KIND
 		finish 0
 		;;
@@ -2216,9 +2217,12 @@ tick_finish() {
 }
 
 # tick_watch: install=manual and not asked for by hand: look for a release and note it in
-# `available`, nothing else. No menu wait, no verification, no reconcile and no rollback: the
-# person installs from the menu (`warpzone self-update --now`), which does all of that.
+# `available`, nothing else. No menu wait, no verification and no reconcile: the person
+# installs from the menu (`updater.sh tick --now`), which does all of that. A trial or a
+# probation in progress is not watched: it was asked for by hand and the timer finishes it, so
+# a release that no longer starts is still put back.
 tick_watch() {
+	WATCH=1
 	tick_checkout
 	tick_trust
 	pick_target || true
@@ -2226,6 +2230,11 @@ tick_watch() {
 	if [ -n "$PICK" ]; then
 		log "$PICK is available (running $(version_at HEAD)); install it with warpzone self-update --now"
 		S_last_result=available
+	else
+		S_last_result=ok
+	fi
+	if [ "$FETCHED" = 1 ]; then
+		S_last_ok=$NOW
 	fi
 	finish 0
 }
@@ -2233,7 +2242,8 @@ tick_watch() {
 cmd_tick() {
 	tick_start "$@"
 	clear_stale_index_lock
-	if [ "$C_install" = manual ] && [ "$BY_HAND" != 1 ]; then
+	if [ "$C_install" = manual ] && [ "$BY_HAND" != 1 ] && [ -z "$S_trying_tag" ] &&
+		[ "$S_probation" != 1 ]; then
 		tick_watch
 	fi
 	tick_menu

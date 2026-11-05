@@ -785,6 +785,49 @@ class ManualInstallTests(UpdaterCase):
         self.assertEqual(state["good_tag"], "v0.2.0")
         self.assertEqual(state["available"], "")
 
+    def test_a_dev_checkout_is_not_reconciled_by_the_timer(self) -> None:
+        rig = self.rig
+        rig.write_conf(install="manual")
+        rig.release("0.2.0")
+        git(rig.clone, "checkout", "-q", "-b", "mine", "v0.1.0")
+        (rig.clone / "mine.txt").write_text("mine\n")
+        git(rig.clone, "add", "mine.txt")
+        git(rig.clone, "commit", "-q", "-m", "My change")
+        rig.write_state(pending="1", last_boot_id="old-boot")
+        proc = rig.tick()
+        self.assertTick(proc, 0)
+        state = rig.state()
+        self.assertEqual(rig.calls(), [])
+        self.assertEqual((state["pending"], state["last_boot_id"]), ("1", "old-boot"))
+        self.assertEqual(state["last_result"], "dev")
+        self.assertNotIn("failed", proc.output)
+
+    def test_the_timer_finishes_a_trial_that_was_cut_short(self) -> None:
+        rig = self.rig
+        rig.write_conf(install="manual")
+        rig.release("0.2.0", "die")
+        self.assertNotEqual(rig.tick("--now").returncode, 0)
+        self.assertEqual(rig.state()["trying_tag"], "v0.2.0")
+        self.assertNotEqual(rig.tick(now=NOW + 900).returncode, 0)
+        self.assertEqual(rig.state()["attempts"], "2", "resumed by the timer")
+        self.assertTick(rig.tick(now=NOW + 1800), 1)
+        state = rig.state()
+        self.assertEqual(rig.on_tag(), "v0.1.0", "back on the version known to work")
+        self.assertEqual((state["trying_tag"], state["last_result"]), ("", "rolled-back"))
+
+    def test_a_watch_that_fetched_is_a_success(self) -> None:
+        rig = self.rig
+        rig.write_conf(install="manual")
+        self.assertTick(rig.tick(), 0)
+        state = rig.state()
+        self.assertEqual((state["last_ok"], state["last_result"]), (str(NOW), "ok"))
+        rig.release("0.2.0")
+        self.assertTick(rig.tick(now=NOW + 2 * HOUR), 0)
+        state = rig.state()
+        self.assertEqual(
+            (state["last_ok"], state["last_result"]), (str(NOW + 2 * HOUR), "available")
+        )
+
     def test_an_unknown_install_value_is_auto(self) -> None:
         rig = self.rig
         rig.write_conf(install="sometimes")

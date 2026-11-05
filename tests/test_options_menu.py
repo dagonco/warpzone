@@ -258,6 +258,21 @@ class ScriptRunTests(unittest.TestCase):
         shown = self.run_script(options_menu.render_update_script())
         self.assertEqual(shown, "Update check finished (exit 3)\none\ntwo")
 
+    def test_update_now_runs_the_live_updater_when_it_knows_now(self) -> None:
+        live = self.home / ".local/share/warpzone/updater/updater.sh"
+        live.parent.mkdir(parents=True)
+        live.write_text('UPDATER_ABI=2\necho "live $*"\nexit 0\n')
+        shown = self.run_script(options_menu.render_update_script())
+        self.assertEqual(shown, "Update check finished (exit 0)\nlive tick --now")
+
+    def test_update_now_with_an_old_live_updater_uses_warpzone(self) -> None:
+        self.install_state(doctor="")
+        live = self.home / ".local/share/warpzone/updater/updater.sh"
+        live.parent.mkdir(parents=True, exist_ok=True)
+        live.write_text('UPDATER_ABI=1\necho "old $*"\n')
+        shown = self.run_script(options_menu.render_update_script())
+        self.assertEqual(shown, "Update check finished (exit 3)\none\ntwo")
+
     def test_update_now_without_warpzone_says_so(self) -> None:
         shown = self.run_script(options_menu.render_update_script())
         self.assertIn("not installed", shown)

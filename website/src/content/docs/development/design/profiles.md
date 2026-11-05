@@ -299,8 +299,10 @@ functions of `options_menu.py` and installed by `provision_scripts.ensure_option
   `warpzone doctor` (at most 8, each cut to 40 characters, then `+N more`). The files are
   read line by line, never sourced. Whatever is missing or unreadable shows as `unknown`, and the
   script always exits 0.
-- `Warpzone Update Now.sh` runs `warpzone self-update --now` and shows its exit code and last
-  lines. Being asked for by hand, that update does not wait for the menu it is started from
+- `Warpzone Update Now.sh` runs the live updater, `sh ~/.local/share/warpzone/updater/updater.sh
+  tick --now`, when its `UPDATER_ABI` is 2 or higher (it does not need the clone's Python, so it
+  can still put back a release that no longer starts), and `warpzone self-update --now`
+  otherwise; it shows the exit code and the last lines. Being asked for by hand, that update does not wait for the menu it is started from
   (see "Installing by hand" in `development/design/autonomous-updates.md`).
 
 `[updater]` has one key, `install`: `"auto"` (the default; the timer installs a new release) or

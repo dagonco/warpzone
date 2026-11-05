@@ -387,8 +387,11 @@ guarded by `_busy`. `tick --fetch-now` keeps its meaning: fetch at once, and wai
 A device whose profile sets `[updater] install = "manual"` (the settings key `install`) never
 installs from the timer: a tick without `--now` takes the lock, fetches when due, finds the best
 target as usual (signatures, retirements, the pin) and writes it to the state key `available`
-(`last_result=available`), then ends. It does not wait for the menu, verify, reconcile, resume a
-trial or roll back; the next `--now` does all of that and clears `available`. An unknown value
+(`last_result=available`, or `ok` when there is none; `last_ok` when it fetched), then ends. It
+does not wait for the menu, verify or reconcile, not even on a dirty or development checkout; the
+next `--now` does all of that and clears `available`. A trial or a probation in progress is the
+exception: it was asked for by hand, and the timer finishes it the usual way (menu wait
+included), so a release that no longer starts is still put back without anybody asking. An unknown value
 is logged and read as `auto`. `UPDATER_ABI` is 2 from the version that knows `--now`;
 `selfupdate.run_tick` sends `--now` to a live copy of that ABI or higher and `--fetch-now` to an
 older one.

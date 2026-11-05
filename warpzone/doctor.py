@@ -1870,7 +1870,7 @@ def check_update_timer(ctx: Context) -> list[Result]:
 
 
 UPDATER_STALE_DAYS = 14
-_EXPECTED_KEYS = ("device", "config", "channel", "pin", "enabled", "frontend")
+_EXPECTED_KEYS = ("device", "config", "channel", "pin", "enabled", "frontend", "install")
 
 
 def judge_updater_script(
