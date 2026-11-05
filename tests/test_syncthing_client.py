@@ -96,6 +96,27 @@ class ClientTests(unittest.TestCase):
             client.my_id()
         self.assertIn("IncompleteRead", str(ctx.exception))
 
+    def test_a_full_scan_that_answers_is_done(self) -> None:
+        with FakeSyncthing(HUB_ID) as fake:
+            self.assertTrue(Client(fake.url, API_KEY).scan("wz-library"))
+            self.assertEqual(fake.scans, 1)
+
+    def test_a_full_scan_held_by_a_busy_folder_is_queued_not_an_error(self) -> None:
+        # Syncthing answers a scan only when it ran, and a folder that is pulling runs it
+        # after the pull: minutes on a slow device. The scan still happens then.
+        with FakeSyncthing(HUB_ID) as fake:
+            fake.scan_delay = 1.0
+            client = Client(fake.url, API_KEY, timeout=0.2)
+            self.assertFalse(client.scan("wz-library"))
+            with self.assertRaises(SyncthingError) as ctx:
+                client.scan("wz-library", sub="roms/n64")
+            self.assertTrue(ctx.exception.timed_out)
+
+    def test_an_unreachable_syncthing_is_still_an_error_for_a_full_scan(self) -> None:
+        with self.assertRaises(SyncthingError) as ctx:
+            Client("http://127.0.0.1:1", API_KEY, timeout=1).scan("wz-library")
+        self.assertFalse(ctx.exception.timed_out)
+
     def test_db_file_404_is_none(self) -> None:
         with FakeSyncthing(HUB_ID) as fake:
             self.assertIsNone(Client(fake.url, API_KEY).db_file("wz-library", "nope"))

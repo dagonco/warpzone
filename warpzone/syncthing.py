@@ -20,9 +20,11 @@ _SECRET_KEYS = {"apikey", "api_key", "x-api-key", "password", "encryptionpasswor
 
 
 class SyncthingError(WarpzoneError):
-    def __init__(self, message: str, status: int | None = None) -> None:
+    def __init__(self, message: str, status: int | None = None, timed_out: bool = False) -> None:
         super().__init__(message)
         self.status = status
+        # Syncthing took the request but did not answer in time (not: could not connect).
+        self.timed_out = timed_out
 
 
 def redact(value: Any, secrets: tuple[str, ...] = ()) -> Any:
@@ -119,7 +121,14 @@ class Client:
             raise SyncthingError(
                 f"{self.label}: {method} {path}: HTTP {exc.code} {detail}".rstrip(), exc.code
             ) from None
-        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        except TimeoutError:
+            # Raised bare only while waiting for the reply; a connect timeout is a URLError.
+            raise SyncthingError(
+                f"{self.label}: {method} {path}: no answer from {self.base_url} "
+                f"within {self.timeout:.0f}s",
+                timed_out=True,
+            ) from None
+        except (urllib.error.URLError, OSError) as exc:
             reason = scrub(str(getattr(exc, "reason", exc)), secrets)
             raise SyncthingError(f"{self.label}: cannot reach {self.base_url} ({reason})") from None
         except http.client.HTTPException as exc:
@@ -186,7 +195,19 @@ class Client:
         entries = self.get("/rest/db/browse", folder=folder_id, levels="0") or []
         return [e["name"] for e in entries]
 
-    def scan(self, folder_id: str, sub: str | None = None) -> None:
-        """Scan the folder, or only `sub` inside it. With `sub`, Syncthing answers when done."""
+    def scan(self, folder_id: str, sub: str | None = None) -> bool:
+        """Scan the folder, or only `sub` inside it. True once the scan ran.
+
+        Syncthing answers when the scan is done, and a folder that is pulling runs it only
+        after the pull, which can take longer than the client's timeout. A full scan that
+        does not answer in time stays queued in Syncthing and runs then: it returns False.
+        A scan of `sub` raises instead, since its caller reads the result right after.
+        """
         params = {"folder": folder_id} if sub is None else {"folder": folder_id, "sub": sub}
-        self.request("POST", "/rest/db/scan", None, **params)
+        try:
+            self.request("POST", "/rest/db/scan", None, **params)
+        except SyncthingError as exc:
+            if sub is None and exc.timed_out:
+                return False
+            raise
+        return True

@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ### Fixed
 
+- `provision device` and `provision hub` no longer fail with "cannot reach ... (timed out)" when a folder is downloading while they run. Syncthing answers a scan only once it has run, and it runs it only after the download ends, which on a slow device takes more than the 30-second timeout. They now report "rescan queued" and go on; Syncthing runs the scan when the download ends. `prune` stops with a "folder is busy" message instead of deleting anything, and can run again when the folder is idle.
 - On SteamOS, the files RetroArch's Flycast and mame2003-plus cores write into the BIOS folder (`bios/dc/vulkan_pipeline.cache`, `bios/dc/data`, `bios/mame2003-plus/hiscore.dat` and `artwork`) are ignored, so they no longer show up as local changes of the library. Run `provision device` to apply it.
 
 ## [0.3.0rc6] - 2026-11-05

@@ -17,6 +17,13 @@ only for loopback addresses).
   `GET /rest/db/browse?folder=&levels=0`
 - `POST /rest/db/scan?folder=`
 
+`POST /rest/db/scan` answers only when the scan is done, and a folder that is pulling runs a
+scan only after the pull, which on a slow device can take longer than the client's timeout
+(30 s). A full scan that gets no answer in time is not an error: Syncthing keeps it queued and
+runs it when the pull ends, so `provision` reports "rescan queued" and goes on, and `prune`
+stops without deleting anything (its index would not be refreshed yet). A scan of a single
+path (`&sub=`), whose result the caller reads right after, still fails on a timeout.
+
 Only `prune` also reads `GET /rest/db/ignores`'s `error` field and
 `GET /rest/db/status`'s `state`/`stateChanged` (see [Pruning](/warpzone/development/design/prune/)).
 `settings capture` reads `GET /rest/db/status`'s `state` and `needTotalItems` and compares

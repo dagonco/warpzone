@@ -102,6 +102,13 @@ def unpause(client: Client, spec: FolderSpec, rep: Reporter) -> None:
     rep.note(spec.id, "resumed")
 
 
+def rescan(client: Client, folder_id: str) -> str:
+    """Full scan of a folder; says whether it ran or waits in Syncthing for a pull to end."""
+    if client.scan(folder_id):
+        return "rescanned"
+    return "rescan queued (the folder is pulling; Syncthing scans it when the pull ends)"
+
+
 def apply_ignores(
     client: Client,
     spec: FolderSpec,

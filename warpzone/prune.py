@@ -174,7 +174,11 @@ def rescan(
 ) -> None:
     """Full rescan, then wait for it. Ignore flags are only refreshed by a full scan."""
     before = client.db_status(folder_id).get("stateChanged")
-    client.scan(folder_id)
+    if not client.scan(folder_id):
+        raise PruneError(
+            "the folder is busy: Syncthing runs the scan only once it finishes pulling; "
+            "run prune again when the folder is idle"
+        )
     start = probes.clock()
     seen = False
     while True:
