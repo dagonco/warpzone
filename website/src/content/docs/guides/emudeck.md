@@ -142,7 +142,7 @@ A placement whose emulator is not installed is skipped with a warning, like a sa
 
 Because the keys now live in the emulators' folders, `warpzone bios` on a device no longer sees them in `~/Emulation/bios`. Run it against the hub's `library/` ([Checking BIOS files](/warpzone/setup/bios/)).
 
-xemu's disk image (`xbox_hdd.qcow2`, which holds that console's Xbox saves) is deliberately not synced: it is per device.
+xemu's disk image (`xbox_hdd.qcow2`, which holds that console's Xbox saves) is deliberately not synced: it is per device, so an Xbox save stays on the console where it was made. A memory unit in xemu does not help: the games tried save to the disk image without offering it ([Profiles](/warpzone/development/design/profiles/)).
 
 ## Emulator settings
 
