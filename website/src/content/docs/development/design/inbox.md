@@ -287,15 +287,19 @@ bytes of the disc, so an image is identified without expanding it. The code is i
   reason (no magic, header cut short, size mismatch, unknown disc type, magic mismatch, bad
   game ID).
 - **Placement.** `library/roms/wii/` or `library/roms/gc/` (the ES-DE systems Dolphin serves),
-  named `<Title> [<GAME ID>]` with the original extension in lower case. The title keeps only
-  ASCII, drops control characters and `/ \ * ? " < > |`, writes `:` as ` -` and collapses
-  blanks; an empty title leaves `[<GAME ID>]`. The file is copied unchanged with
-  `inbox_console_iso.place_file` and `destination_verdict`, as for 3DS images: an existing
-  name with the same size and SHA1 is "already in the library", a different one is a review,
-  and report mode writes nothing.
+  named `<name> [<GAME ID>]` with the original extension in lower case (`target_name`). The
+  name is the file's stem without a trailing `[<GAME ID>]` of that game (any case), with
+  control characters and `/ \ * ? " < > |` dropped, `:` written as ` -` and blanks collapsed.
+  When that leaves nothing, or only the game ID, the disc header's title stands in: it keeps
+  only ASCII and is cleaned the same way; an empty title leaves `[<GAME ID>]`. Set names
+  (`Game (USA) (En,Fr,Es)`) read better than header titles, which often have no spaces. The
+  file is copied unchanged with `inbox_console_iso.place_file` and `destination_verdict`, as
+  for 3DS images: an existing name with the same size and SHA1 is "already in the library", a
+  different one is a review, and report mode writes nothing.
 - **No DAT.** The Redump DAT of a compressed image cannot be matched without hashing the
-  expanded disc, which needs `dolphin-tool`. The name therefore comes from the header, and a
-  GameCube `.rvz` is no longer named after the DAT. Two files of one item filed under the same
+  expanded disc, which needs `dolphin-tool`. The name therefore comes from the file and the
+  header, and a GameCube `.rvz` is no longer named after the DAT; the same game dropped under
+  two file names is filed twice. Two files of one item filed under the same
   name: the second goes to review.
 
 ## PS4 packages

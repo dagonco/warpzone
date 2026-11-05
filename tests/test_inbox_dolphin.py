@@ -135,12 +135,27 @@ class PureTests(unittest.TestCase):
         self.assertEqual(dl.clean_title(b"\x00" * 64), "")
         self.assertEqual(dl.clean_title(b"..."), "")
 
-    def test_target_name(self) -> None:
+    def test_the_file_name_names_the_image(self) -> None:
         v = judge(image())
-        self.assertEqual(dl.target_name(v, ".RVZ"), "Test Quest Wii [RTSE01].rvz")
-        self.assertEqual(dl.target_name(v, ".wia"), "Test Quest Wii [RTSE01].wia")
+        self.assertEqual(
+            dl.target_name(v, "Test Quest (USA) (En,Fr,Es).rvz"),
+            "Test Quest (USA) (En,Fr,Es) [RTSE01].rvz",
+        )
+        self.assertEqual(dl.target_name(v, "Test Quest.WIA"), "Test Quest [RTSE01].wia")
+        self.assertEqual(dl.target_name(v, "Café: Wii.rvz"), "Café - Wii [RTSE01].rvz")
+        self.assertEqual(dl.target_name(v, 'a*b?c"d<e>f|g.rvz'), "abcdefg [RTSE01].rvz")
+
+    def test_a_name_that_already_carries_the_game_id_keeps_it_once(self) -> None:
+        v = judge(image())
+        self.assertEqual(dl.target_name(v, "Test Quest [RTSE01].rvz"), "Test Quest [RTSE01].rvz")
+        self.assertEqual(dl.target_name(v, "Test Quest [rtse01].rvz"), "Test Quest [RTSE01].rvz")
+
+    def test_the_header_title_names_an_image_whose_file_name_says_nothing(self) -> None:
+        v = judge(image())
+        for name in ("RTSE01.rvz", "rtse01.RVZ", "[RTSE01].rvz", " ..rvz", ".rvz"):
+            self.assertEqual(dl.target_name(v, name), "Test Quest Wii [RTSE01].rvz", name)
         untitled = judge(image(title=b""))
-        self.assertEqual(dl.target_name(untitled, ".rvz"), "[RTSE01].rvz")
+        self.assertEqual(dl.target_name(untitled, "RTSE01.rvz"), "[RTSE01].rvz")
 
 
 class DetectTests(unittest.TestCase):
@@ -171,52 +186,59 @@ CUBE = "Test Cube [GTSE01].rvz"
 
 
 class PlacementTests(FlowBase):
-    def test_a_wii_rvz_is_filed_in_wii_under_its_header_name(self) -> None:
+    def test_a_wii_rvz_is_filed_in_wii_under_its_file_name(self) -> None:
         data = image()
-        self.drop("whatever it was called.rvz", data)
+        self.drop("Test Quest (USA) (En,Fr,Es).rvz", data)
+        self.assertEqual(self.go(), 0, self.out)
+        named = "Test Quest (USA) (En,Fr,Es) [RTSE01].rvz"
+        self.assertEqual(self.library(), [f"wii/{named}"])
+        self.assertEqual((self.roms / "wii" / named).read_bytes(), data)
+        self.assertIn("detected: Wii disc image (RVZ), game ID RTSE01 Test Quest Wii", self.out)
+        self.assertIn(f"path: library/roms/wii/{named}", self.out)
+        self.assertIn(whitelist_line("wii", named), self.out)
+        self.assertNotIn("no DAT match", self.out)
+        self.assertEqual(self.done(), ["Test Quest (USA) (En,Fr,Es).rvz"])
+
+    def test_a_file_named_by_its_game_id_takes_the_header_title(self) -> None:
+        self.drop("RTSE01.rvz", image())
         self.assertEqual(self.go(), 0, self.out)
         self.assertEqual(self.library(), [f"wii/{WII}"])
-        self.assertEqual((self.roms / "wii" / WII).read_bytes(), data)
-        self.assertIn("detected: Wii disc image (RVZ), game ID RTSE01 Test Quest Wii", self.out)
-        self.assertIn(f"path: library/roms/wii/{WII}", self.out)
-        self.assertIn(whitelist_line("wii", WII), self.out)
-        self.assertNotIn("no DAT match", self.out)
-        self.assertEqual(self.done(), ["whatever it was called.rvz"])
+        self.assertIn(f"RTSE01.rvz is filed as {WII}", self.out)
 
     def test_a_gamecube_rvz_is_filed_in_gc(self) -> None:
         data = image(disc_type=1, game_id=b"GTSE01", title=b"Test Cube")
-        self.drop("cube.rvz", data)
+        self.drop("Test Cube.rvz", data)
         self.assertEqual(self.go(), 0, self.out)
         self.assertEqual(self.library(), [f"gc/{CUBE}"])
         self.assertEqual((self.roms / "gc" / CUBE).read_bytes(), data)
 
     def test_a_wia_keeps_its_extension(self) -> None:
-        self.drop("x.WIA", image(magic=b"WIA\x01"))
+        self.drop("Test Quest Wii.WIA", image(magic=b"WIA\x01"))
         self.assertEqual(self.go(), 0, self.out)
         self.assertEqual(self.library(), ["wii/Test Quest Wii [RTSE01].wia"])
 
     def test_inside_a_folder_and_a_zip(self) -> None:
-        self.drop("pack", {"sub/a.rvz": image(), "cover.jpg": b"j", "info.txt": b"t"})
+        self.drop("pack", {"sub/Test Quest Wii.rvz": image(), "cover.jpg": b"j", "info.txt": b"t"})
         self.assertEqual(self.go(), 0, self.out)
-        self.zip_of("dump.zip", {"x/b.rvz": image(game_id=b"RTSP01", title=b"Other")})
+        self.zip_of("dump.zip", {"x/Other.rvz": image(game_id=b"RTSP01", title=b"Other")})
         self.assertEqual(self.go(), 0, self.out)
         self.assertEqual(self.library(), ["wii/Other [RTSP01].rvz", f"wii/{WII}"])
 
     def test_report_only_changes_nothing(self) -> None:
-        self.drop("a.rvz", image())
+        self.drop("Test Quest Wii.rvz", image())
         self.assertEqual(self.go(apply=False), 0, self.out)
         self.assertIn("would place", self.out)
         self.assertIn(whitelist_line("wii", WII), self.out)
         self.assertFalse((self.roms / "wii").exists())
-        self.assertEqual([p.name for p in self.inbox.iterdir()], ["a.rvz"])
+        self.assertEqual([p.name for p in self.inbox.iterdir()], ["Test Quest Wii.rvz"])
 
     def test_no_part_file_is_left_behind(self) -> None:
-        self.drop("a.rvz", image())
+        self.drop("Test Quest Wii.rvz", image())
         self.assertEqual(self.go(), 0, self.out)
         self.assertEqual(sorted(p.name for p in (self.roms / "wii").iterdir()), [WII])
 
     def test_no_tool_is_needed(self) -> None:
-        self.drop("a.rvz", image())
+        self.drop("Test Quest Wii.rvz", image())
         self.assertEqual(self.go(tools=Tools()), 0, self.out)
         self.assertEqual(self.library(), [f"wii/{WII}"])
 
@@ -224,36 +246,38 @@ class PlacementTests(FlowBase):
 class AlreadyThereTests(FlowBase):
     def test_identical_file_is_already_in_the_library(self) -> None:
         data = image(body=50)
-        self.drop("a.rvz", data)
+        self.drop("Test Quest Wii.rvz", data)
         self.assertEqual(self.go(), 0, self.out)
-        self.drop("again.rvz", data)
+        self.drop("Test Quest Wii [RTSE01].rvz", data)
         self.assertEqual(self.go(), 0, self.out)
         self.assertIn("already in the library", self.out)
         self.assertEqual(self.library(), [f"wii/{WII}"])
         self.assertEqual(len(self.done()), 2)
 
     def test_a_different_file_with_the_same_name_is_never_replaced(self) -> None:
-        self.drop("a.rvz", image(body=50))
+        self.drop("Test Quest Wii.rvz", image(body=50))
         self.assertEqual(self.go(), 0)
         kept = (self.roms / "wii" / WII).read_bytes()
-        self.drop("b.rvz", image(body=80))
+        self.drop("RTSE01.rvz", image(body=80))
         self.assertEqual(self.go(), 1, self.out)
         self.assertEqual((self.roms / "wii" / WII).read_bytes(), kept)
-        self.assertIn("different file", self.reason("b.rvz"))
+        self.assertIn("different file", self.reason("RTSE01.rvz"))
 
     def test_report_only_says_it_exists_and_touches_nothing(self) -> None:
         (self.roms / "wii").mkdir()
         (self.roms / "wii" / WII).write_bytes(image(body=50))
-        self.drop("a.rvz", image(body=80))
+        self.drop("Test Quest Wii.rvz", image(body=80))
         self.assertEqual(self.go(apply=False), 0, self.out)
         self.assertIn("already exists", self.out)
-        self.assertEqual([p.name for p in self.inbox.iterdir()], ["a.rvz"])
+        self.assertEqual([p.name for p in self.inbox.iterdir()], ["Test Quest Wii.rvz"])
 
     def test_two_files_of_one_item_with_the_same_target_go_to_review(self) -> None:
-        self.drop("pack", {"one.rvz": image(body=5), "two.rvz": image(body=9)})
+        self.drop(
+            "pack", {"one/Test Quest Wii.rvz": image(body=5), "two/RTSE01.rvz": image(body=9)}
+        )
         self.assertEqual(self.go(), 1, self.out)
         self.assertEqual(len(self.library()), 1)
-        self.assertIn("two.rvz", self.reason("pack"))
+        self.assertIn("RTSE01.rvz", self.reason("pack"))
 
 
 class ReviewTests(FlowBase):
@@ -277,7 +301,7 @@ class ReviewTests(FlowBase):
         self.assertIn("cut short", self.reason("cut.rvz"))
 
     def test_one_good_and_one_bad_image_in_a_folder(self) -> None:
-        self.drop("pack", {"good.rvz": image(), "bad.rvz": image(magic=b"XXXX")})
+        self.drop("pack", {"Test Quest Wii.rvz": image(), "bad.rvz": image(magic=b"XXXX")})
         self.assertEqual(self.go(), 1, self.out)
         self.assertEqual(self.library(), [f"wii/{WII}"])
         self.assertIn("bad.rvz", self.reason("pack"))

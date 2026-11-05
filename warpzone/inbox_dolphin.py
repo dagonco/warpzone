@@ -14,8 +14,9 @@ expanding it, so the name comes from the header instead.
   disc type and the magic must agree.
 
 A recognised image is filed in `roms/wii/` or `roms/gc/` (the ES-DE systems, which Dolphin
-opens as they are, compressed) as `<Title> [<GAME ID>].rvz` (or `.wia`); the bytes are not
-changed. Nothing is ever replaced: the same content already in the library is reported,
+opens as they are, compressed) as `<name> [<GAME ID>].rvz` (or `.wia`), where the name is
+the file's own and the header's title stands in when the file name says nothing; the bytes
+are not changed. Nothing is ever replaced: the same content already in the library is reported,
 different content under that name goes to review. `.gcz` is another format with no copy of
 the disc header and is not handled here.
 
@@ -129,10 +130,27 @@ def judge(head: bytes, file_size: int) -> Verdict:
     return Verdict(OK, system=system, game_id=game_id, title=title, container=container)
 
 
-def target_name(verdict: Verdict, extension: str) -> str:
-    """The name in the library: `<Title> [<GAME ID>]` and the extension (`.rvz` or `.wia`)."""
-    stem = f"{verdict.title} [{verdict.game_id}]" if verdict.title else f"[{verdict.game_id}]"
-    return stem + extension.lower()
+def clean_file_stem(stem: str) -> str:
+    """A file name stem made safe the way `clean_title` makes a title safe, keeping
+    non-ASCII letters (a file name is already text)."""
+    text = _UNSAFE.sub("", stem.replace(":", " -"))
+    return re.sub(r"\s+", " ", text).strip(" .")
+
+
+def target_name(verdict: Verdict, file_name: str) -> str:
+    """The name in the library: `<name> [<GAME ID>]` and the extension of `file_name` in
+    lower case (`.rvz` or `.wia`). The name is the file's own (a set name like
+    `Game (USA) (En,Fr,Es)`), without a trailing `[<GAME ID>]` it may carry already; the
+    disc header's title stands in when the file name is empty or only the game ID."""
+    dot = file_name.rfind(".")
+    stem, extension = (file_name[:dot], file_name[dot:]) if dot >= 0 else (file_name, "")
+    tag = f"[{verdict.game_id}]"
+    if stem.upper().rstrip().endswith(tag):
+        stem = stem.rstrip()[: -len(tag)]
+    name = clean_file_stem(stem)
+    if not name or name.upper() == verdict.game_id:
+        name = verdict.title
+    return (f"{name} {tag}" if name else tag) + extension.lower()
 
 
 # ------------------------------------------------------------------ disk
@@ -153,11 +171,11 @@ def detect_path(path: Path) -> Verdict:
 def place_image(ctx: Context, path: Path, rel: str, verdict: Verdict) -> UnitResult:
     """File one recognised image under its header name; never replaces a file. The outcome
     is `review` (with a reason) when it cannot be placed."""
-    entry = target_name(verdict, path.suffix)
+    entry = target_name(verdict, path.name)
     res = UnitResult(verdict.system, entry, "placed" if ctx.opts.apply else "planned")
     res.notes.append(f"detected: {verdict.describe()}")
     if entry != path.name:
-        res.notes.append(f"{path.name} is filed as {entry} (named from its disc header)")
+        res.notes.append(f"{path.name} is filed as {entry} (with its game ID)")
     dest = ctx.roms / verdict.system / entry
     try:
         if dest.exists():
@@ -223,11 +241,11 @@ class DolphinHandler:
         if not verdict.ok:
             result.reasons.append(f"{s.rel}: {verdict.reason}")
             return
-        key = (verdict.system, target_name(verdict, s.path.suffix))
+        key = (verdict.system, target_name(verdict, s.path.name))
         if key in targets:
             result.reasons.append(
                 f"{s.rel}: would be filed as {key[1]} like {targets[key]} "
-                "(the same game ID and title): drop them as separate items"
+                "(the same name and game ID): drop them as separate items"
             )
             return
         targets[key] = s.rel
