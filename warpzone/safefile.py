@@ -73,7 +73,9 @@ def stamp(path: Path) -> FileStamp:
     return FileStamp(st.st_size, st.st_mtime_ns, digest.hexdigest())
 
 
-def atomic_write(path: Path, data: bytes, *, expect: FileStamp | None) -> bool:
+def atomic_write(
+    path: Path, data: bytes, *, expect: FileStamp | None, mtime_ns: int | None = None
+) -> bool:
     """Replace `path` with `data` unless it changed since `expect` was taken.
 
     `expect=None` means the file must not exist (it is created, with its directories).
@@ -81,6 +83,7 @@ def atomic_write(path: Path, data: bytes, *, expect: FileStamp | None) -> bool:
     appeared. A symlink is written through to its target and stays a link. The
     replacement keeps the original mode; a temporary `.<name>.wz-tmp` beside it is
     synced, compared against `expect` one last time, then moved over the target.
+    With `mtime_ns` the new file carries that modification time instead of now.
     """
     target = Path(os.path.realpath(path))
     if expect is None:
@@ -102,6 +105,8 @@ def atomic_write(path: Path, data: bytes, *, expect: FileStamp | None) -> bool:
             fh.write(data)
             fh.flush()
             os.fsync(fh.fileno())
+        if mtime_ns is not None:
+            os.utime(tmp, ns=(mtime_ns, mtime_ns))
         if expect is None:
             if os.path.lexists(target):
                 tmp.unlink(missing_ok=True)
@@ -137,6 +142,7 @@ def guarded_edit(
     expect: FileStamp | None,
     busy: Callable[[], bool],
     backup: Callable[[], object] | None = None,
+    mtime_ns: int | None = None,
 ) -> Edit:
     """Edit a file another program may also touch, re-checking right before writing.
 
@@ -152,7 +158,8 @@ def guarded_edit(
     if busy():
         return Edit.BUSY
     payload = data() if callable(data) else data
-    return Edit.WRITTEN if atomic_write(path, payload, expect=expect) else Edit.CHANGED
+    written = atomic_write(path, payload, expect=expect, mtime_ns=mtime_ns)
+    return Edit.WRITTEN if written else Edit.CHANGED
 
 
 def read_json_cache(path: Path) -> Any | None:

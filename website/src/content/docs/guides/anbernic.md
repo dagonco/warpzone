@@ -7,7 +7,7 @@ The `anbernic-rg351mp` profile is for an Anbernic RG351MP that runs dArkOS: Emul
 ## What it does differently
 
 - **The library has its own folder, `/roms/library`.** Games land in `/roms/library/roms/<system>` and BIOS files in `/roms/library/bios`, the same layout as on the hub, and dArkOS's own `/roms/<system>` folders are left alone.
-- **No symlinks, no permissions.** exFAT has neither. Every folder of the device is created with Syncthing's `ignorePerms` on (the profile sets `ignore_perms = true`), so the hub's file modes do not show up as local changes. Nothing in the profile relies on a symlink: the save folders are real directories on the root filesystem, outside the card.
+- **No symlinks, no permissions.** exFAT has neither. Every folder of the device is created with Syncthing's `ignorePerms` on (the profile sets `ignore_perms = true`), so the hub's file modes do not show up as local changes. Nothing in the profile relies on a symlink: the RetroArch save folders are real directories on the root filesystem, outside the card, and the Nintendo DS saves are in a real folder on the card (see [Nintendo DS saves](#nintendo-ds-saves)).
 - **No ES-DE, EmuDeck, flatpak, songs or emulator settings layer.** The profile has no path for `tools`, `songs` or `settings`, so a device that lists one of them is refused with a clear message. `frontend` is accepted, but it is not ES-DE's folders: it delivers the scraped artwork, see [Artwork](#artwork).
 
 ## Config
@@ -82,6 +82,17 @@ It first brings the ignore lines up to date with the systems on the device (if i
 
 To set this up on an existing device: add `"frontend"` to its `folders`, run `warpzone provision hub` (it adds the device to `wz-media` and `wz-esde` and changes nothing else), then `warpzone provision device rg351mp` on the device. Covers alone are a few hundred MB for fifteen classic systems; more `kinds` mean more space.
 
+## Nintendo DS saves
+
+The Anbernic plays Nintendo DS games with DraStic, which keeps `/roms/nds/backup/<game>.dsv`, while the Steam Deck and Steam Machine play them with melonDS, which keeps `<game>.sav`. A `.dsv` is the same save plus a 122-byte footer, so warpzone converts between them: with `saves` in `folders`, the hub's `saves/melonds/saves` folder arrives at `/roms/warpzone/saves/melonds` (a real folder on the card), and `warpzone saves convert` keeps it and DraStic's folder in step, in both directions.
+
+- **When.** Right before DraStic starts and right after it exits (`provision device` wraps the `nds` system's command in the system list override), and every 15 minutes with the `[artwork]` timer, which also picks up what arrived from the hub while you were not playing. Nothing is converted while DraStic runs, and a failed conversion never stops a game from starting.
+- **Which side wins.** If only one side changed since the last time, it is copied to the other. If both did, the most recently modified file wins, the other one is kept under `~/.local/state/warpzone/save-convert/backups/<rule>.conflicts/<game>/` (the last 10 per game, apart from the routine backups, the last 3 per game, in `backups/<rule>/`) and `warpzone doctor` reports the event. A save that exists on one side only is copied to the other. warpzone never deletes a save.
+- **What is skipped.** A file that is not a valid save (a size that is not a power of two from 512 bytes to 8 MiB, a broken footer) is never converted: it is named in the output and by `doctor`. The same goes for the two sides of a game having different sizes.
+- **Save states.** They are not converted: DraStic's and melonDS's are different formats. DraStic's own configuration is not changed, and with its default `backup_in_savestates = 1` loading an old DraStic state rolls the game's save back, and that rollback then travels to the Steam devices like any other change (the previous content is in the backups). Set `backup_in_savestates = 0` in `drastic.cfg` if you do not want that.
+
+Run `warpzone provision hub` and `warpzone provision device <name>` once (with EmulationStation closed, so the override can be written). See [Save conversion](/warpzone/development/design/save-conversion/) for the rules.
+
 ## Favourites and play statistics
 
 With `play-state` in `folders`, favourites, play counts and last played times travel between this device and the others, in both directions. The profile already says where: `paths.play_state` is `/roms/warpzone/play-state`, and the `[artwork]` timer does the work, so this device needs no table of its own and no SSH.
@@ -114,4 +125,4 @@ Only that file is written, it is overwritten at every `provision device` run, an
 
 ## Doctor
 
-On the device, `warpzone doctor` adds two lines under "Frontend": `ES systems override` and `RetroArch paths`; with `frontend` in the folders it adds `Frontend artwork` (gamelists missing or stale) and `Artwork timer`, and with `play-state` it adds `Play state`. See [the doctor guide](/warpzone/operation/doctor/#frontend).
+On the device, `warpzone doctor` adds two lines under "Frontend": `ES systems override` and `RetroArch paths`; with `saves` it adds `Save conversion` (the last run, games skipped, latest-wins events); with `frontend` in the folders it adds `Frontend artwork` (gamelists missing or stale) and `Artwork timer`, and with `play-state` it adds `Play state`. See [the doctor guide](/warpzone/operation/doctor/#frontend).

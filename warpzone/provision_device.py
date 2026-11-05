@@ -415,8 +415,19 @@ def provision_device(
 
     if "library" in device.folders:
         root = state_root if state_root is not None else settings_state.state_dir(home=home)
+        ensure_systems_override(
+            name,
+            profile,
+            home,
+            rep,
+            dry_run=local.dry_run,
+            probes=probes,
+            state_root=root,
+            python=python,
+            config_path=config_path,
+            saves="saves" in device.folders,
+        )
         for ensure in (
-            ensure_systems_override,
             ensure_retroarch_pins,
             ensure_shadps4_dirs,
             ensure_shadps4_launch,
@@ -438,6 +449,10 @@ def provision_device(
             probes=probes,
             play_state="play-state" in device.folders,
         )
+
+    # The refresh timer also converts saves, so a device that only syncs saves (no `frontend`)
+    # gets it too, when the profile has an `[artwork] refresh` interval to run it at.
+    if with_artwork or profile.converts_saves(device.folders):
         ensure_artwork_timer(
             name,
             profile,

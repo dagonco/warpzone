@@ -13,7 +13,7 @@ warpzone --version                # prints "warpzone X.Y.Z" and exits 0
 
 ## Reading this page
 
-**Where a command runs.** `check`, `provision hub`, `status`, `render-ignores`, `bios` and `inbox` run on any machine that can reach what they need (the hub's Syncthing API, or the library on a disk). `provision device`, `prune`, `frontend refresh`, `play-state sync`, `links sync`, `settings`, `self-update` and `health` run on a console, because they read its local Syncthing and write its files. `doctor` runs anywhere and only queries the local Syncthing on `127.0.0.1`.
+**Where a command runs.** `check`, `provision hub`, `status`, `render-ignores`, `bios` and `inbox` run on any machine that can reach what they need (the hub's Syncthing API, or the library on a disk). `provision device`, `prune`, `frontend refresh`, `play-state sync`, `links sync`, `saves convert`, `settings`, `self-update` and `health` run on a console, because they read its local Syncthing and write its files. `doctor` runs anywhere and only queries the local Syncthing on `127.0.0.1`.
 
 **What changes files.** Commands report first and act only when you ask:
 
@@ -21,12 +21,12 @@ warpzone --version                # prints "warpzone X.Y.Z" and exits 0
 |---|---|
 | `check`, `status`, `render-ignores`, `bios`, `doctor`, `health`, `settings audit` | No. Read only. |
 | `prune`, `inbox` | Report only. They delete or move files only with `--apply`. |
-| `provision hub`, `provision device`, `frontend refresh`, `play-state sync`, `links sync`, `settings apply`, `settings capture` | Yes, and each accepts `--dry-run` to show what it would do and change nothing. |
+| `provision hub`, `provision device`, `frontend refresh`, `play-state sync`, `links sync`, `saves convert`, `settings apply`, `settings capture` | Yes, and each accepts `--dry-run` to show what it would do and change nothing. |
 | `self-update` | Yes: it runs one tick of the updater, which can switch the checkout to a newer release. It has no `--dry-run`. |
 
 **`--config PATH`.** Almost every leaf command takes `--config PATH`: the private config file. Without it warpzone uses `$WARPZONE_CONFIG`, then `$XDG_CONFIG_HOME/warpzone/config.toml`, then `~/.config/warpzone/config.toml`. The option goes after the full command (`warpzone provision hub --config FILE`, not before `provision`). `self-update` is the exception: it needs no config and takes only `--now`.
 
-**`--dry-run`.** For commands that talk to Syncthing (`provision`, `frontend refresh`) it prints the REST calls it would make (method, path and JSON body, with API keys redacted) and sends no write; it still sends the `GET` requests it needs to work out the difference. For `play-state sync`, `links sync` and `settings`, it says what it would do and writes nothing.
+**`--dry-run`.** For commands that talk to Syncthing (`provision`, `frontend refresh`) it prints the REST calls it would make (method, path and JSON body, with API keys redacted) and sends no write; it still sends the `GET` requests it needs to work out the difference. For `play-state sync`, `links sync`, `saves convert` and `settings`, it says what it would do and writes nothing.
 
 **Safety rule.** Never delete or overwrite user data without checking again right before acting. See [Safety](/warpzone/operation/safety/) and [Pruning what a device no longer whitelists](/warpzone/setup/whitelists/#pruning-what-a-device-no-longer-whitelists).
 
@@ -57,6 +57,7 @@ Every error warpzone raises on purpose derives from one base class and carries i
 | [`frontend refresh`](#warpzone-frontend-refresh) | Update artwork scope and rewrite a frontend's gamelists. |
 | [`play-state sync`](#warpzone-play-state-sync) | Share favourites and play statistics. |
 | [`links sync`](#warpzone-links-sync) | Link library games into an emulator's own folder. |
+| [`saves convert`](#warpzone-saves-convert) | Reconcile an emulator's own save files with the hub's raw ones. |
 | [`settings apply`](#warpzone-settings-apply) | Write the layered emulator settings into the emulators' files. |
 | [`settings capture`](#warpzone-settings-capture) | Take changed emulator settings to the layers on the hub. |
 | [`settings audit`](#warpzone-settings-audit) | Report drift between the layers and the files. |
@@ -252,6 +253,8 @@ warpzone frontend refresh [NAME] [--config PATH] [--dry-run] [--syncthing-config
 
 On a console whose profile has an `[artwork]` table and whose device lists the `frontend` folder group: widens the artwork folders' ignores to the systems that have games on the device (when the local Syncthing is found) and rewrites the frontend's own gamelists from the synced ES-DE data. It writes the gamelists only while the frontend is closed; never run it while the frontend is open.
 
+On a console whose profile also has `[save_convert.*]` and whose device lists `saves`, it first runs [`saves convert`](#warpzone-saves-convert); such a device does not need the `frontend` folder group, and then only the conversion runs.
+
 | Option | Default | Meaning |
 |---|---|---|
 | `NAME` | the device matching the local Syncthing | Device name from the config. |
@@ -306,6 +309,27 @@ Exit `0` when it finished; `2` when the device does not list `library` or the pr
 
 ```bash
 warpzone links sync deck --dry-run
+```
+
+## `warpzone saves convert`
+
+```
+warpzone saves convert NAME [--config PATH] [--dry-run] [--quiet]
+```
+
+On a console that lists the `saves` folder group and whose profile has `[save_convert.*]` rules (the Anbernic RG351MP: Nintendo DS saves between DraStic's `.dsv` files and the hub's raw `.sav` files): makes both sides hold the newest save of each game, as described in [Save conversion](/warpzone/development/design/save-conversion/). Nothing changes while the emulator runs, a file is backed up before it is replaced, and a file that is not a valid save is skipped with a warning. `provision device` makes EmulationStation run it before and after the emulator, and `frontend refresh` runs it on the timer.
+
+| Option | Default | Meaning |
+|---|---|---|
+| `NAME` | required | Device name from the config. |
+| `--config PATH` | see above | The private config file. |
+| `--dry-run` | off | Say what it would do; change nothing. |
+| `--quiet` | off | Print nothing. |
+
+Exit `0` when it finished (also when the emulator was running and nothing was done); `1` when a file could not be written; `2` when the device does not list `saves` or the profile has no `[save_convert.*]` table.
+
+```bash
+warpzone saves convert rg351mp --dry-run
 ```
 
 ## `warpzone settings apply`

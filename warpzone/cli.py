@@ -186,6 +186,20 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     ln_sync.add_argument("--quiet", action="store_true", help="print nothing")
 
+    sv = sub.add_parser("saves", help="save files an emulator keeps in its own format")
+    sv_sub = sv.add_subparsers(dest="saves_command", required=True, metavar="action")
+    sv_convert = sv_sub.add_parser(
+        "convert",
+        parents=[common],
+        help="reconcile the profile's [save_convert.*] emulators with the hub's raw saves "
+        "(run on the device; nothing changes while the emulator runs)",
+    )
+    sv_convert.add_argument("name", help="device name")
+    sv_convert.add_argument(
+        "--dry-run", action="store_true", help="say what it would do and change nothing"
+    )
+    sv_convert.add_argument("--quiet", action="store_true", help="print nothing")
+
     chk = sub.add_parser(
         "bios",
         parents=[common],
@@ -552,7 +566,7 @@ def _frontend(args: argparse.Namespace, cfg: Config, profiles: dict[str, Profile
     device, profile = cfg.devices[name], profiles[cfg.devices[name].profile]
     if profile.artwork is None:
         raise ConfigError(f"profile {profile.name!r} has no [artwork] table: nothing to refresh")
-    if "frontend" not in device.folders:
+    if "frontend" not in device.folders and not profile.converts_saves(device.folders):
         raise ConfigError(
             f"device {name!r} does not list the 'frontend' folder group, so it receives no artwork"
         )
@@ -622,6 +636,33 @@ def _links(args: argparse.Namespace, cfg: Config, profiles: dict[str, Profile]) 
     return EXIT_OK
 
 
+def _saves(args: argparse.Namespace, cfg: Config, profiles: dict[str, Profile]) -> int:
+    from warpzone import saveconvert_device
+
+    name = _device(cfg, args.name)
+    device, profile = cfg.devices[name], profiles[cfg.devices[name].profile]
+    if "saves" not in device.folders:
+        raise ConfigError(f"device {name!r} does not list the 'saves' folder group")
+    if not profile.save_convert:
+        raise ConfigError(
+            f"profile {profile.name!r} has no [save_convert.*] table: nothing to convert"
+        )
+    quiet = args.quiet
+
+    def say(text: str) -> None:
+        if not quiet:
+            print(text)
+
+    def warn(text: str) -> None:
+        if not quiet:
+            _eprint(f"warning: {text}")
+
+    outcome = saveconvert_device.convert(
+        name, profile, Path.home(), say=say, warn=warn, dry_run=args.dry_run
+    )
+    return EXIT_RUNTIME if outcome.errors else EXIT_OK
+
+
 def _self_update(rep: Reporter, args: argparse.Namespace) -> int:
     from warpzone import selfupdate
 
@@ -663,6 +704,8 @@ def _run(args: argparse.Namespace) -> int:
         return _play_state(args, *_load(args))
     if args.command == "links":  # and so does this one
         return _links(args, *_load(args))
+    if args.command == "saves":  # ES runs it around the emulator: no network code either
+        return _saves(args, *_load(args))
     from warpzone import doctor, provision, prune
     from warpzone.report import Reporter
 

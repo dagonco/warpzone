@@ -5,7 +5,7 @@ from __future__ import annotations
 import dataclasses
 from pathlib import Path
 
-from warpzone import artwork, playstate_device, safefile
+from warpzone import artwork, playstate_device, safefile, saveconvert_device
 from warpzone.config import Config
 from warpzone.model import ESDE_ID, MEDIA_ID, device_specs
 from warpzone.paths import expand_home
@@ -212,7 +212,31 @@ def refresh_artwork(
     dry_run: bool,
     probes: DeviceProbes = REAL_PROBES,
 ) -> None:
-    """`frontend refresh`: bring the artwork scope up to date, then the gamelists."""
+    """`frontend refresh`: reconcile the saves, update the artwork scope, then the gamelists.
+
+    A device whose profile has `[save_convert.*]` and that syncs saves reconciles them
+    (`saveconvert_device.convert`), which is how the timer reaches them. That comes first, so a
+    failure of the Syncthing API in the artwork steps never skips it, and it needs no `frontend`
+    folder group: a device without one only converts. The artwork steps are for a device that
+    lists `frontend`.
+    """
+    folders = cfg.devices[name].folders
+    if profile.converts_saves(folders):
+        try:
+            saveconvert_device.convert(
+                name,
+                profile,
+                home,
+                say=rep.out,
+                warn=rep.warn,
+                dry_run=dry_run,
+                proc=probes.proc,
+                on_busy=rep.defer,
+            )
+        except OSError as exc:  # the games after a failed one are still tried by the next run
+            rep.warn(f"saves: {exc}, so the saves were left as they are")
+    if "frontend" not in folders:
+        return
     layout = artwork_layout(profile, home)
     if layout is not None and not artwork_scope(profile, home):
         rep.warn(no_scope_warning(name, layout))
@@ -227,5 +251,5 @@ def refresh_artwork(
         rep,
         dry_run=dry_run,
         probes=probes,
-        play_state="play-state" in cfg.devices[name].folders,
+        play_state="play-state" in folders,
     )

@@ -78,7 +78,7 @@ def plan_steps(device: Device, profile: Profile) -> tuple[str, ...]:
         steps.append(PLAY_STATE)
     if "library" in folders and profile.links:
         steps.append(LINKS)
-    if profile.artwork is not None and "frontend" in folders:
+    if profile.artwork is not None and ("frontend" in folders or profile.converts_saves(folders)):
         steps.append(REFRESH)
     return tuple(steps)
 
@@ -104,7 +104,11 @@ def expected_files(device: Device, profile: Profile, home: Path) -> list[Expecte
         found.append(Expected(SERVICE, "service unit", units / f"{name}.service"))
         found.append(Expected(TIMER, "timer unit", units / f"{name}.timer"))
 
-    if profile.artwork is not None and "frontend" in folders and profile.artwork.refresh:
+    if (
+        profile.artwork is not None
+        and profile.artwork.refresh
+        and ("frontend" in folders or profile.converts_saves(folders))
+    ):
         unit(artwork.UNIT_NAME)
     if (
         "play-state" in folders

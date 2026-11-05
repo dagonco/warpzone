@@ -22,6 +22,13 @@ class AtomicWriteTests(TmpCase):
         self.path.write_bytes(b"old\n")
         self.path.chmod(0o640)
 
+    def test_the_written_file_can_carry_a_given_date(self) -> None:
+        self.assertTrue(
+            sf.atomic_write(self.path, b"new\n", expect=sf.stamp(self.path), mtime_ns=5 * 10**9)
+        )
+        self.assertEqual(self.path.stat().st_mtime_ns, 5 * 10**9)
+        self.assertEqual(self.path.read_bytes(), b"new\n")
+
     def test_stamp(self) -> None:
         s = sf.stamp(self.path)
         self.assertEqual(s.size, 4)

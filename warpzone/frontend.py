@@ -8,9 +8,12 @@ folders are moved to the library; a profile with `[retroarch]` gets a few keys o
 
 from __future__ import annotations
 
+import html
 import re
-from collections.abc import Mapping
+import shlex
+from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass
+from pathlib import Path
 
 from warpzone import settings_formats
 from warpzone.settings_formats import Value
@@ -48,11 +51,87 @@ def systems_current(
     prefix: str,
     target: str,
     renames: Mapping[str, str] | None = None,
+    unwrap: Collection[str] = (),
 ) -> bool:
-    """Whether `override` is exactly what the rule makes of `source`."""
-    return override is not None and override == rewrite_system_paths(
+    """Whether `override` is exactly what the rule makes of `source`.
+
+    The commands of the systems in `unwrap` are compared without the save conversion wrapper
+    (`wrap_systems`), so a copy that has one is still current.
+    """
+    return override is not None and unwrap_systems(override, unwrap) == rewrite_system_paths(
         source, prefix, target, renames
     )
+
+
+# ------------------------------------------------------------------ save conversion wrapper
+
+# A run of shell words with no `;`, except inside an XML entity.
+_WORDS = r"(?:[^;&]|&(?:amp|lt|gt|quot|apos);)*?"
+_CONVERT = rf"{_WORDS} -m warpzone saves convert [A-Za-z0-9_-]+ --quiet{_WORDS}\|\| true"
+_WRAPPED = re.compile(rf"\A(\s*){_CONVERT}; (.*); {_CONVERT}(\s*)\Z", re.DOTALL)
+_SYSTEM = re.compile(r"<system>.*?</system>", re.DOTALL)
+_NAME = re.compile(r"<name>\s*([^<]*?)\s*</name>")
+_COMMAND = re.compile(r"(<command(?:\s[^>]*)?>)(.*?)(</command>)", re.DOTALL)
+
+
+def convert_command(python: str, device: str, config: Path | None = None) -> str:
+    """The shell command that reconciles a device's saves quietly and never fails its caller."""
+    words = [shlex.quote(python), "-m", "warpzone", "saves", "convert", shlex.quote(device)]
+    words.append("--quiet")
+    if config is not None:
+        words += ["--config", shlex.quote(str(config))]
+    return " ".join(words) + " || true"
+
+
+def _unwrap_one(inner: str) -> str:
+    match = _WRAPPED.match(inner)
+    return f"{match.group(1)}{match.group(2)}{match.group(3)}" if match else inner
+
+
+def _wrap_one(inner: str, command: str) -> str:
+    inner = _unwrap_one(inner)
+    lead = inner[: len(inner) - len(inner.lstrip())]
+    trail = inner[len(inner.rstrip()) :]
+    text = html.escape(command, quote=False)
+    return f"{lead}{text}; {inner.strip()}; {text}{trail}"
+
+
+def _map_commands(text: str, systems: Collection[str], change: Callable[[str], str]) -> str:
+    def block(match: re.Match[str]) -> str:
+        name = _NAME.search(match.group(0))
+        if name is None or name.group(1) not in systems:
+            return match.group(0)
+        return _COMMAND.sub(lambda c: c.group(1) + change(c.group(2)) + c.group(3), match.group(0))
+
+    return _SYSTEM.sub(block, text)
+
+
+def wrap_systems(text: str, systems: Collection[str], command: str) -> str:
+    """`text` with the `<command>` of each system in `systems` run between two `command`s.
+
+    The system's own command keeps its bytes. Applying it again changes nothing.
+    """
+    return _map_commands(text, systems, lambda inner: _wrap_one(inner, command))
+
+
+def unwrap_systems(text: str, systems: Collection[str]) -> str:
+    """`text` without the wrapper `wrap_systems` puts around the commands of `systems`."""
+    return _map_commands(text, systems, _unwrap_one) if systems else text
+
+
+def wrapped_systems(text: str, systems: Collection[str]) -> set[str]:
+    """The systems of `systems` in `text` whose every `<command>` has the wrapper."""
+    found: dict[str, bool] = {}
+
+    def block(match: re.Match[str]) -> str:
+        name = _NAME.search(match.group(0))
+        if name is not None and name.group(1) in systems:
+            commands = _COMMAND.findall(match.group(0))
+            found[name.group(1)] = bool(commands) and all(_WRAPPED.match(c[1]) for c in commands)
+        return match.group(0)
+
+    _SYSTEM.sub(block, text)
+    return {name for name, ok in found.items() if ok}
 
 
 @dataclass(frozen=True)

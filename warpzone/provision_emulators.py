@@ -6,6 +6,7 @@ ES-DE's system list, RetroArch, shadPS4, Cemu and the title links.
 from __future__ import annotations
 
 import os
+import sys
 from collections.abc import Sequence
 from functools import partial
 from pathlib import Path
@@ -14,6 +15,7 @@ from warpzone import cemu, esde, frontend, procs, safefile, settings_state, shad
 from warpzone.paths import expand_home
 from warpzone.probes import REAL_PROBES, DeviceProbes
 from warpzone.profiles import Profile
+from warpzone.provision_scripts import script_config
 from warpzone.report import Reporter
 
 
@@ -48,13 +50,18 @@ def ensure_systems_override(
     dry_run: bool,
     probes: DeviceProbes = REAL_PROBES,
     state_root: Path,
+    python: str | None = None,
+    config_path: Path | None = None,
+    saves: bool = False,
 ) -> None:
     """Write the frontend's system list with the ROM folders moved into the library.
 
     The copy is `profile.es_systems.source` with `<path>` elements below `prefix` moved to
     `<library>/roms/`, every other byte kept. It is written only while the frontend is not
     running, replacing a different copy only after backing that one up. A second run
-    changes nothing.
+    changes nothing. With `saves` (the device syncs saves), the `<command>` of each system
+    that a `[save_convert.*]` rule names `es_system` runs `warpzone saves convert` before and
+    after the original command; see development/design/save-conversion.md.
     """
     rule = profile.es_systems
     if rule is None or "library" not in profile.paths:
@@ -79,6 +86,7 @@ def ensure_systems_override(
     except OSError as exc:
         rep.warn(f"cannot read {override} ({exc}), so it was left alone")
         return
+    new = _wrapped(name, profile, home, new, rep, python, config_path, saves, probes)
     wanted = new.encode("utf-8")
     if current == wanted:
         rep.out(f"es_systems.cfg: already current ({override})")
@@ -108,6 +116,42 @@ def ensure_systems_override(
         rep.warn(f"{override} changed while it was being written, so it was left alone: {again}")
         return
     rep.out(f"es_systems.cfg: wrote {override}" + (" (old file backed up)" if before else ""))
+
+
+def wrapped_systems(profile: Profile) -> tuple[str, ...]:
+    """The frontend systems whose command is wrapped in the save conversion."""
+    return tuple(r.es_system for r in profile.save_convert.values() if r.es_system)
+
+
+def _wrapped(
+    name: str,
+    profile: Profile,
+    home: Path,
+    text: str,
+    rep: Reporter,
+    python: str | None,
+    config_path: Path | None,
+    saves: bool,
+    probes: DeviceProbes,
+) -> str:
+    """`text` with the commands of the save-converting systems wrapped (or `text` itself)."""
+    systems = wrapped_systems(profile)
+    if not systems or not saves:
+        return text
+    python = python or sys.executable
+    if not probes.import_check(python):
+        rep.warn(
+            f"the save conversion was not added to the system list: {python} cannot import "
+            "warpzone from outside the current folder (run from a clone?). Set the device up "
+            f"with `updater.sh install {name}`, which provisions from a venv"
+        )
+        return text
+    command = frontend.convert_command(python, name, script_config(config_path, home))
+    wrapped = frontend.wrap_systems(text, systems, command)
+    missing = set(systems) - frontend.wrapped_systems(wrapped, systems)
+    for system in sorted(missing):
+        rep.warn(f"the system list has no {system!r} system with a command, so it is not wrapped")
+    return wrapped
 
 
 def ensure_retroarch_pins(
