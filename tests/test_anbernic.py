@@ -81,7 +81,9 @@ class ProfileTests(unittest.TestCase):
         # exFAT has none: saves are real directories on the root filesystem, outside the
         # library, and no library exclusion names an EmuDeck link.
         for save in PROFILE.saves.values():
-            self.assertTrue(save.path.startswith("~/.config/retroarch/"), save.path)
+            self.assertTrue(
+                save.path.startswith(("~/.config/retroarch/", "/roms/warpzone/saves/")), save.path
+            )
         self.assertEqual(PROFILE.library_ignore, ("(?d)/roms/*/gamelist.xml",))
 
     def test_retroarch_saves_are_the_directories_retroarch_writes_to(self) -> None:
@@ -148,7 +150,12 @@ class ModelTests(unittest.TestCase):
         specs = device_specs(ark_config(), "ark", PROFILE)
         self.assertEqual(
             [s.id for s in specs],
-            ["wz-library", "wz-save-retroarch-saves", "wz-save-retroarch-states"],
+            [
+                "wz-library",
+                "wz-save-retroarch-saves",
+                "wz-save-retroarch-states",
+                "wz-save-melonds-saves",
+            ],
         )
         for spec in specs:
             self.assertTrue(spec.ignore_perms, spec.id)
@@ -193,6 +200,10 @@ class Device:
             PROFILE,
             es_systems=dataclasses.replace(PROFILE.es_systems, source=str(self.system_list)),
             options_menu=OptionsMenu(str(self.options_dir)),
+            # The DS saves live in /roms, outside the temporary home: tests/test_saveconvert*
+            # cover them, so the device here is the one without them.
+            saves={k: v for k, v in PROFILE.saves.items() if k != "melonds-saves"},
+            save_convert={},
         )
 
     def start(self, comm: str) -> None:
@@ -492,6 +503,142 @@ folders = ["library", "saves"]
 
     def test_the_frontend_check_is_part_of_the_run(self) -> None:
         self.assertIn(check_frontend, CHECKS)
+
+
+NDS = (
+    "\t<system>\n\t\t<name>nds</name>\n\t\t<path>/roms/nds/</path>\n"
+    "\t\t<command>sudo perfmax %GOVERNOR% %ROM%; nice -n -19 /usr/local/bin/drastic.sh %ROM%; "
+    "sudo perfnorm</command>\n\t</system>\n"
+)
+SOURCE_NDS = SOURCE.replace("</systemList>", NDS + "</systemList>")
+PYTHON = "/home/ark/.venv/bin/python"
+
+
+class SaveConversionDevice(Device):
+    """The device with the DS save conversion: the `nds` command is wrapped."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.system_list.write_text(SOURCE_NDS)
+        self.profile = dataclasses.replace(self.profile, save_convert=PROFILE.save_convert)
+        self.command = frontend.convert_command(PYTHON, "ark")
+
+    def provision(self, **kw):
+        kw.setdefault("python", PYTHON)
+        kw.setdefault("probes", device_probes(self.proc.path, import_check=lambda py: True))
+        return super().provision(**kw)
+
+    def plain(self) -> str:
+        return (
+            SOURCE_NDS.replace("<path>/roms/nes/", "<path>/roms/library/roms/nes/")
+            .replace("<path>/roms/amiga<", "<path>/roms/library/roms/amiga<")
+            .replace("<path>/roms/nds/", "<path>/roms/library/roms/nds/")
+        )
+
+
+class SaveConversionProvisionTests(SaveConversionDevice, unittest.TestCase):
+    def test_only_the_nds_command_is_wrapped(self) -> None:
+        self.provision()
+        text = self.override.read_text()
+        original = (
+            "sudo perfmax %GOVERNOR% %ROM%; nice -n -19 /usr/local/bin/drastic.sh %ROM%; "
+            "sudo perfnorm"
+        )
+        self.assertEqual(
+            text,
+            self.plain().replace(
+                f"<command>{original}</command>",
+                f"<command>{self.command}; {original}; {self.command}</command>",
+            ),
+        )
+        self.assertEqual(text.count("saves convert"), 2)
+
+    def test_the_command_never_fails_the_launch_and_is_quiet(self) -> None:
+        self.provision()
+        self.assertIn(
+            f"{PYTHON} -m warpzone saves convert ark --quiet || true;", self.override.read_text()
+        )
+
+    def test_a_second_run_changes_and_backs_up_nothing(self) -> None:
+        self.provision()
+        before = self.override.stat().st_mtime_ns
+        text = self.override.read_text()
+        _, lines = self.provision()
+        self.assertEqual(self.override.read_text(), text)
+        self.assertEqual(self.override.stat().st_mtime_ns, before)
+        self.assertEqual(self.backups("emulationstation"), [])
+        self.assertTrue(any("already current" in line for line in lines))
+
+    def test_an_unwrapped_copy_is_backed_up_and_wrapped(self) -> None:
+        self.provision(folders=("library",))
+        self.assertNotIn("saves convert", self.override.read_text())
+        self.provision()
+        self.assertEqual(self.override.read_text().count("saves convert"), 2)
+        (backup,) = [p for p in self.backups("emulationstation") if p.is_file()]
+        self.assertEqual(backup.read_text(), self.plain())
+
+    def test_a_device_that_does_not_sync_saves_is_not_wrapped(self) -> None:
+        self.provision(folders=("library",))
+        self.assertEqual(self.override.read_text(), self.plain())
+
+    def test_a_dry_run_writes_nothing(self) -> None:
+        _, lines = self.provision(dry_run=True)
+        self.assertFalse(self.override.exists())
+        self.assertTrue(any("dry-run: would write" in line for line in lines))
+
+    def test_the_wrapped_command_is_not_added_when_python_cannot_import_warpzone(self) -> None:
+        probes = device_probes(self.proc.path, import_check=lambda py: False)
+        rep, _ = self.provision(probes=probes)
+        self.assertEqual(self.override.read_text(), self.plain())
+        self.assertTrue(any("save conversion was not added" in w for w in rep.warnings))
+
+    def test_a_system_list_without_the_system_warns(self) -> None:
+        self.system_list.write_text(SOURCE)
+        rep, _ = self.provision()
+        self.assertTrue(any("no 'nds' system" in w for w in rep.warnings))
+
+    def test_the_config_path_is_passed_to_the_command(self) -> None:
+        self.provision(config_path=self.home / "elsewhere.toml")
+        self.assertIn(
+            f"--quiet --config {self.home / 'elsewhere.toml'} || true", self.override.read_text()
+        )
+
+    def test_emulationstation_running_leaves_the_copy_alone(self) -> None:
+        self.start("emulationstatio")
+        self.provision()
+        self.assertFalse(self.override.exists())
+
+
+class SaveConversionDoctorTests(SaveConversionDevice, DoctorTests):
+    # DoctorTests' own tests run again here with the conversion on, except the one that
+    # lists every result.
+    test_a_provisioned_device_is_all_ok = None
+
+    def test_the_wrapped_copy_is_current(self) -> None:
+        self.provision()
+        result = by_name(self.check(), "ES systems override")
+        self.assertEqual((result.status, result.fix), (OK, ""))
+
+    def test_an_unwrapped_copy_is_a_warning_naming_the_system(self) -> None:
+        self.provision(folders=("library",))
+        result = by_name(self.check(), "ES systems override")
+        self.assertEqual(result.status, WARN)
+        self.assertIn("nds", result.detail)
+        self.assertIn("save conversion", result.detail)
+        self.assertIn("warpzone provision device ark", result.fix)
+
+    def test_a_change_to_the_original_command_is_still_out_of_date(self) -> None:
+        self.provision()
+        self.system_list.write_text(SOURCE_NDS.replace("perfnorm", "perfnorm2"))
+        result = by_name(self.check(), "ES systems override")
+        self.assertEqual(result.status, WARN)
+        self.assertIn("out of date", result.detail)
+
+    def test_the_conversion_has_its_own_line(self) -> None:
+        self.provision()
+        result = by_name(self.check(), "Save conversion")
+        self.assertEqual(result.status, WARN)
+        self.assertIn("has not run yet", result.detail)
 
 
 class PureIsUsed(unittest.TestCase):

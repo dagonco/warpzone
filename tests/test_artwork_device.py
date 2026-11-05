@@ -14,6 +14,7 @@ from test_anbernic import ARK_ID, PROFILE, Device, ark_config
 from test_artwork import source_xml
 from test_doctor import by_name, context
 from test_provision import reporter
+from test_saveconvert_device import make_profile
 from warpzone import artwork, provision_artwork, safefile
 from warpzone.cli import main
 from warpzone.doctor import OK, WARN, Context, check_frontend
@@ -441,6 +442,105 @@ class ScopeTests(Art, unittest.TestCase):
         self.assertTrue(any("Syncthing" in w for w in rep.warnings))  # no client: scope unchecked
 
 
+class RefreshSavesTests(Art, unittest.TestCase):
+    """`frontend refresh` also reconciles the saves of a profile with `[save_convert.*]`."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        env = mock.patch.dict(os.environ)
+        env.start()
+        self.addCleanup(env.stop)
+        os.environ.pop("XDG_STATE_HOME", None)
+        self.raw, self.emu = self.home / "card/melonds", self.home / "card/backup"
+        self.raw.mkdir(parents=True)
+        self.emu.mkdir(parents=True)
+        rules = make_profile(self.raw, self.emu)
+        self.profile = dataclasses.replace(
+            self.profile, saves=rules.saves, save_convert=rules.save_convert
+        )
+
+    def refresh(self, folders=("library", "frontend", "saves"), dry_run=False):
+        rep, lines = reporter()
+        refresh_artwork(
+            ark_config(folders),
+            "ark",
+            self.profile,
+            self.home,
+            rep,
+            local=None,
+            dry_run=dry_run,
+            probes=device_probes(self.proc.path),
+        )
+        return rep, lines
+
+    def test_refresh_converts_the_saves(self) -> None:
+        (self.raw / "Game.sav").write_bytes(b"\x01" * 8192)
+        _, lines = self.refresh()
+        self.assertEqual((self.emu / "Game.dsv").read_bytes(), b"\x01" * 8192)
+        self.assertTrue(any("saves drastic: Game: wrote" in line for line in lines))
+
+    def test_a_device_with_saves_and_no_frontend_converts_and_nothing_else(self) -> None:
+        (self.raw / "Game.sav").write_bytes(b"\x01" * 8192)
+        rep, lines = self.refresh(folders=("library", "saves"))
+        self.assertEqual((self.emu / "Game.dsv").read_bytes(), b"\x01" * 8192)
+        self.assertFalse(any("gamelists" in line for line in lines))
+        self.assertEqual(rep.warnings, [])
+
+    def test_the_conversion_runs_even_when_the_artwork_steps_fail(self) -> None:
+        (self.raw / "Game.sav").write_bytes(b"\x01" * 8192)
+        rep, _ = reporter()
+        with (
+            mock.patch.object(provision_artwork, "sync_artwork_scope", side_effect=OSError("api")),
+            self.assertRaises(OSError),
+        ):
+            refresh_artwork(
+                ark_config(("library", "frontend", "saves")),
+                "ark",
+                self.profile,
+                self.home,
+                rep,
+                local=mock.Mock(),
+                dry_run=False,
+                probes=device_probes(self.proc.path),
+            )
+        self.assertEqual((self.emu / "Game.dsv").read_bytes(), b"\x01" * 8192)
+
+    def test_the_timer_is_installed_for_a_device_with_saves_and_no_frontend(self) -> None:
+        calls: list[tuple[str, ...]] = []
+        probes = device_probes(
+            self.proc.path,
+            import_check=lambda python: True,
+            user_systemctl=lambda args: calls.append(tuple(args)) or True,
+        )
+        self.provision(folders=("library", "saves"), probes=probes)
+        self.assertTrue((self.home / ".config/systemd/user/warpzone-artwork.timer").is_file())
+        self.assertIn(("enable", "--now", "warpzone-artwork.timer"), calls)
+
+    def test_no_timer_without_frontend_or_converted_saves(self) -> None:
+        probes = device_probes(
+            self.proc.path, import_check=lambda python: True, user_systemctl=lambda args: True
+        )
+        self.provision(folders=("library",), probes=probes)
+        self.assertFalse((self.home / ".config/systemd").exists())
+
+    def test_a_dry_run_refresh_converts_nothing(self) -> None:
+        (self.raw / "Game.sav").write_bytes(b"\x01" * 8192)
+        self.refresh(dry_run=True)
+        self.assertEqual(list(self.emu.iterdir()), [])
+
+    def test_a_device_that_does_not_sync_saves_converts_nothing(self) -> None:
+        (self.raw / "Game.sav").write_bytes(b"\x01" * 8192)
+        self.refresh(folders=("library", "frontend"))
+        self.assertEqual(list(self.emu.iterdir()), [])
+
+    def test_the_emulator_running_defers_the_conversion(self) -> None:
+        (self.raw / "Game.sav").write_bytes(b"\x01" * 8192)
+        self.proc.add(4242, "drastic")
+        rep, _ = self.refresh()
+        self.assertEqual(list(self.emu.iterdir()), [])
+        self.assertTrue(rep.deferred)
+
+
 class DoctorArtTests(Art, unittest.TestCase):
     CONFIG = f"""
 [hub]
@@ -574,6 +674,12 @@ class CliTests(unittest.TestCase):
         code, _, err = self.run_cli("frontend", "refresh", "ark")
         self.assertEqual(code, 2)
         self.assertIn("frontend", err)
+
+    def test_a_device_with_converted_saves_and_no_frontend_is_accepted(self) -> None:
+        self.write(DoctorArtTests.CONFIG.replace('"library", "frontend"', '"library", "saves"'))
+        code, out, err = self.run_cli("frontend", "refresh", "ark", "--dry-run")
+        self.assertEqual(code, 0, err)
+        self.assertIn("saves drastic", out)
 
     def test_a_profile_without_artwork_is_refused_by_name(self) -> None:
         self.write(DoctorArtTests.CONFIG.replace("anbernic-rg351mp", "steamos-emudeck"))

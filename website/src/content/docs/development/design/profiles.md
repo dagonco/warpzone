@@ -196,11 +196,19 @@ profile data, not code that tests the profile name.
 - **`ignore_perms = true`** (top level). exFAT has no POSIX permissions (and no symlinks),
   so a receive-only library would list every file as a local change and the puller would
   try to `chmod`. Every folder of such a device is created with `ignorePerms: true`. The
-  profile depends on no symlink: its save folders are real directories on the root
-  filesystem, and its library exclusions name no EmuDeck link. exFAT also compares file names
+  profile depends on no symlink: its RetroArch save folders are real directories on the root
+  filesystem, its Nintendo DS saves are in a real folder on the card, and its library
+  exclusions name no EmuDeck link. exFAT also compares file names
   without regard to case and forbids a few characters (`: * ? " < > |`); Syncthing reports
   a hub file that does not fit as an error on that file, so such names stay a matter for
   the hub's library.
+- **`[save_convert.<key>]`** (`format`, `saves`, `path`, `process`, optional `es_system`):
+  an emulator that keeps its saves in a shape the hub does not store. `saves` names the
+  `[saves.*]` entry with the raw files, `path` is the emulator's own folder. With `es_system`,
+  the `<command>` of that system in the override below runs `warpzone saves convert` before
+  and after the original command, which keeps its bytes (`frontend.wrap_systems`, pure,
+  idempotent; `doctor` compares the file without the wrapper). The rules are in
+  [Save conversion](/warpzone/development/design/save-conversion/).
 - **`create_when`** on a `[saves.*]` entry, with the meaning it has for `[bios.*]`: create
   the folder when that directory exists. RetroArch writes `saves/` and `states/` only on
   the first save, so without it the two folders would stay skipped until then.

@@ -102,6 +102,8 @@ warpzone/
                      system names, timer units (pure; the reads are passed in)
   playstate.py       play state: ledgers, merge rules, times, its tags in a gamelist (pure)
   playstate_device.py  play state on a device: files, ES-DE gamelists, generated gamelists
+  saveconvert.py     save conversion: the `.dsv` footer, size rules, the three-way decision (pure)
+  saveconvert_device.py  save conversion on a device: files, state, backups, the running emulator
   tomlw.py           TOML scalar and key writer (tomllib only reads)
   doctor.py          machine checklist (`warpzone doctor`): checks, install hints, renderer
   health.py          `warpzone health`: the dry runs and file checks that say a version works (decisions pure)
@@ -162,6 +164,11 @@ logic is unit-tested without a network.
   in a temporary home (idempotence, frontend running, no `/proc`, dry-run, a changed file), the
   timer units and their systemctl calls, scope sync against the fake Syncthing, `frontend
   refresh` and the doctor lines.
+- Save conversion tests (`test_saveconvert.py`, `test_saveconvert_device.py`): the footer
+  (parse, strip, build, malformed input), every branch of the decision, the files in a temporary
+  home (both directions, kept footer, conflicts and backups, invalid and temporary files, the
+  emulator running or starting, `--dry-run`, the state), the profile table, the doctor line and the
+  command; the system list wrapper is covered by `test_frontend.py` and `test_anbernic.py`.
 - `anbernic-rg351mp` tests: the shipped profile and its parsing, `ignorePerms` in the folder
   specs, the pure rewrite and key gap, `provision device` in a temporary home (backups,
   second run, frontend or RetroArch running, no `/proc`, dry-run) and the doctor lines.

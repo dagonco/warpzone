@@ -66,6 +66,14 @@ class PureTests(unittest.TestCase):
         device = ark_config(("library", "frontend", "play-state")).devices["ark"]
         self.assertEqual(health.plan_steps(device, ANBERNIC), (health.REFRESH,))
 
+    def test_a_device_with_converted_saves_refreshes_without_frontend(self) -> None:
+        device = ark_config(("library", "saves")).devices["ark"]
+        self.assertEqual(health.plan_steps(device, ANBERNIC), (health.REFRESH,))
+        names = {e.path.name for e in health.expected_files(device, ANBERNIC, Path("/h"))}
+        self.assertIn("warpzone-artwork.timer", names)
+        plain = ark_config(("library",)).devices["ark"]
+        self.assertEqual(health.plan_steps(plain, ANBERNIC), ())
+
     def test_the_files_a_steam_device_needs(self) -> None:
         home = Path("/h")
         wanted = {
