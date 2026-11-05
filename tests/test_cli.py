@@ -577,6 +577,25 @@ class SelfUpdateCommandTests(unittest.TestCase):
         live = tick.call_args.args[0]
         self.assertEqual(live, Path(tmp) / ".local/share/warpzone/updater/updater.sh")
 
+    def test_channel_changes_the_channel_and_runs_no_tick(self) -> None:
+        with (
+            mock.patch("warpzone.selfupdate.run_tick", return_value=0) as tick,
+            mock.patch("warpzone.selfupdate.change_channel", return_value=0) as change,
+        ):
+            code, _, err = run("self-update", "--channel", "rc")
+        self.assertEqual(code, 0, err)
+        tick.assert_not_called()
+        self.assertEqual(change.call_args.args[1], "rc")
+        self.assertEqual(change.call_args.args[0].name, "conf")
+
+    def test_now_and_channel_do_not_go_together(self) -> None:
+        code, _, _ = run("self-update", "--now", "--channel", "rc")
+        self.assertEqual(code, 2)
+
+    def test_channel_takes_only_stable_or_rc(self) -> None:
+        code, _, _ = run("self-update", "--channel", "beta")
+        self.assertEqual(code, 2)
+
     def test_the_exit_code_of_the_tick_is_the_exit_code(self) -> None:
         with mock.patch("warpzone.selfupdate.run_tick", return_value=3):
             code, _, _ = run("self-update")

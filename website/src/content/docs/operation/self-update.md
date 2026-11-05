@@ -34,7 +34,7 @@ sh src/warpzone/data/updater.sh install deck
 
 Run `~/.local/share/warpzone/venv/bin/warpzone doctor` afterwards; put `~/.local/share/warpzone/venv/bin` on your `PATH` to type `warpzone`.
 
-To change `channel`, `pin` or anything else in the device's table, edit the config and run `warpzone provision device <name>` again: it rewrites the settings file.
+To change `channel`, `pin` or anything else in the device's table, edit the config and run `warpzone provision device <name>` again: it rewrites the settings file. For the channel alone, `warpzone self-update --channel stable` (or `rc`) on the device does both: it changes that one line of its config, keeping a copy as `config.toml.bak-<date>`, and the updater's settings, so it holds from the next tick. An update never goes down, so a device on `v0.3.0rc4` that switches to `stable` stays there until a stable release newer than it comes out.
 
 ## Python repair
 
@@ -102,7 +102,7 @@ The timer is a piece of its own, apart from the script: the script does not know
 Each run of `provision device` also renews the live copy of the script and its settings:
 
 - **The live copy.** The script that ships with the running version is written beside `~/.local/share/warpzone/updater/updater.sh`, checked with `sh -n` and with `sh <copy> selftest`, and only then replaces the live one with a rename (a tick that is running keeps the file it started with). The old one is kept as `updater.sh.prev`. A script with a lower `UPDATER_ABI` than the live one is never installed, so a rollback to an older release does not downgrade the script; a check that fails leaves the live one as it was and warns. While a release is on trial, the updater keeps the live copy as `~/.local/state/warpzone/updater/updater.sh.good` and puts it back when the device goes back to the previous version, so a rejected release cannot leave its own updater in charge. The kept copy is flushed to disk, and one that is empty or damaged (a power cut can leave a file of no bytes) is not put back.
-- **The settings** (`~/.local/state/warpzone/updater/conf`), written from the device's table in `config.toml`: `device`, `config`, `clone`, `python`, `channel`, `pin`, `enabled` (from `self_update`) and `frontend` (the frontend's process names, from the profile). One `key=value` per line; the script reads it line by line and never runs it.
+- **The settings** (`~/.local/state/warpzone/updater/conf`), written from the device's table in `config.toml`: `device`, `config`, `clone`, `python`, `channel`, `pin`, `enabled` (from `self_update`), `frontend` (the frontend's process names, from the profile) and `install` (`auto`, or `manual` when the profile's `[updater] install` says so). One `key=value` per line; the script reads it line by line and never runs it.
 
 `provision device` installs nothing, and warns, when the folder warpzone runs from is not a git checkout, or when its Python cannot import warpzone from outside the current folder: set the device up with `updater.sh install`.
 
