@@ -99,16 +99,17 @@ Add it to every device that takes part, run `warpzone provision hub`, then `warp
 
 See [the design document](/warpzone/development/design/play-state/) for the rules.
 
-## Options menu entries
+## The Warpzone entry of the Options menu
 
-`provision device` adds two entries to the ArkOS "Options" menu (the profile's `[options_menu]` table points at `/opt/system`, where ArkOS lists every executable `.sh`):
+`provision device` adds one entry, **Warpzone**, to the ArkOS "Options" menu (the profile's `[options_menu]` table points at `/opt/system`, where ArkOS lists every executable `.sh`). It opens a small menu you move through with the controller:
 
-- **Warpzone Status** shows, without the network: the warpzone version, the updater's channel and pin, the version it last settled on (`good tag`), a new release the console found and has not installed (`New release`), the result of its last run, when it last looked for a release, and the problems `warpzone doctor` finds (at most 8 lines, cut to fit the screen). Anything it cannot read shows as `unknown`.
-- **Warpzone Update Now** runs the updater by hand (`updater.sh tick --now`, or `warpzone self-update --now` with an older updater): the console looks for a release right away, installs and verifies it, and shows how it ended. It does not wait for the menu to close, since it is started from it.
+- **Status** shows, without the network: the warpzone version, the updater's channel and pin, the version it last settled on (`good tag`), a new release the console found and has not installed (`New release`), the result of its last run, when it last looked for a release, and the problems `warpzone doctor` finds (at most 8 lines, cut to fit the screen). Anything it cannot read shows as `unknown`.
+- **Install vX now** appears only when there is a new release. It installs and verifies it (going back by itself if the check fails) and shows how it ended. Use it with no game running; it takes a few minutes.
+- **Follow stable releases** (or **Follow rc releases**) changes the console's channel after a yes/no question (`warpzone self-update --channel`). An update never goes down: on a release candidate, switching to stable keeps it there until a newer stable release comes out.
 
-The console never installs a release on its own: EmulationStation is open whenever it is on, so its timer only looks for releases (the profile's `[updater] install = "manual"`) and Warpzone Status shows when there is one. Install it with Warpzone Update Now, from the menu, with no game running.
+The console never installs a release on its own: EmulationStation is open whenever it is on, so its timer only looks for releases (the profile's `[updater] install = "manual"`) and the menu shows when there is one.
 
-Only these two files are written, they are overwritten at every `provision device` run, and nothing else in `/opt/system` is touched. If the folder does not exist, the step is skipped with a warning. The status entry only reads what the updater already keeps on the device, so it works without SSH and without a connection.
+Only that file is written, it is overwritten at every `provision device` run, and nothing else in `/opt/system` is touched, except the two entries of earlier versions (Warpzone Status and Warpzone Update Now), which are removed. If the folder does not exist, the step is skipped with a warning.
 
 ## Doctor
 

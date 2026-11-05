@@ -390,10 +390,10 @@ warpzone settings audit --emulator eden retroarch
 ## `warpzone self-update`
 
 ```
-warpzone self-update [--now]
+warpzone self-update [--now] [--channel stable|rc]
 ```
 
-On a device: runs one tick of the live copy of the updater (`sh ~/.local/share/warpzone/updater/updater.sh tick`), exactly as its timer does, and exits with the script's code. `--now` is an update asked for by hand (`updater.sh tick --now`): it fetches the remote even when the fetch interval has not passed, does not wait while the menu is open or for a back-off, and on a device whose profile installs by hand (`[updater] install = "manual"`) it is what installs a new release. With an older live copy of the script it runs `tick --fetch-now`, which still waits for the menu. It needs no config. Without a live copy it says so and exits `1`. See [Updating a device](/warpzone/operation/self-update/#warpzone-self-update).
+On a device: runs one tick of the live copy of the updater (`sh ~/.local/share/warpzone/updater/updater.sh tick`), exactly as its timer does, and exits with the script's code. `--now` is an update asked for by hand (`updater.sh tick --now`): it fetches the remote even when the fetch interval has not passed, does not wait while the menu is open or for a back-off, and on a device whose profile installs by hand (`[updater] install = "manual"`) it is what installs a new release. With an older live copy of the script it runs `tick --fetch-now`, which still waits for the menu. `--channel stable|rc` runs no tick: it sets the channel of this device (the `device` and `config` of the updater's settings) in its config, with a backup `config.toml.bak-<date>` next to it, and in the updater's settings; it exits `1` with a message when the config cannot be edited safely (no `[devices.<name>]` table of its own, an inline table), and then the config is to be edited by hand. It needs no config. Without a live copy it says so and exits `1`. See [Updating a device](/warpzone/operation/self-update/#warpzone-self-update).
 
 ```bash
 warpzone self-update --now

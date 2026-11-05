@@ -247,9 +247,10 @@ def _install_startup_script(
 def ensure_options_menu(
     profile: Profile, home: Path, rep: Reporter, *, dry_run: bool, tag: str = "options menu"
 ) -> None:
-    """Install the "Warpzone" entries of the device's Options menu (ArkOS: `/opt/system`).
+    """Install the "Warpzone" entry of the device's Options menu (ArkOS: `/opt/system`), and
+    remove the entries of earlier versions (`options_menu.OLD_NAMES`) that carry the marker.
 
-    Only those files are written, each atomically and only when its content differs. A folder
+    Only that file is written, atomically and only when its content differs. A folder
     that does not exist is not created (it is not an ArkOS menu then): a warning says so. A
     file of the same name that did not come from warpzone is left alone. Does nothing when the
     profile has no `[options_menu]`.
@@ -286,3 +287,21 @@ def ensure_options_menu(
                 rep.out(f"{tag}: wrote {path}")
         except OSError as exc:
             rep.warn(f"{tag}: cannot write {path} ({exc})")
+    for name in options_menu.OLD_NAMES:
+        path = folder / name
+        try:
+            current = path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            continue
+        except (OSError, UnicodeDecodeError):
+            continue  # not readable: not ours to remove
+        if options_menu.MARKER not in current:
+            continue  # a file of that name that warpzone did not write
+        if dry_run:
+            rep.out(f"{tag}: dry-run: would remove {path} (replaced by {options_menu.ENTRY_NAME})")
+            continue
+        try:
+            path.unlink()
+            rep.out(f"{tag}: removed {path} (replaced by {options_menu.ENTRY_NAME})")
+        except OSError as exc:
+            rep.warn(f"{tag}: cannot remove {path} ({exc})")

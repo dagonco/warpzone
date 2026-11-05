@@ -379,7 +379,7 @@ by `KILL` or a power cut leaves no status at all.
   the reference again, and the release is under suspicion as described above.
 
 **Installing by hand.** `tick --now` is an update asked for by hand (`warpzone self-update
---now`, or the "Warpzone Update Now" entry of the Options menu, which runs from the menu
+--now`, or "Install <tag> now" in the Warpzone entry of the Options menu, which runs from the menu
 itself): it fetches at once, the open menu does not defer it, `retry_after` does not hold it
 back, and a step the menu still holds back (exit 3) counts as passed and leaves `pending` set,
 as past the 72 hours. A game cannot be running when it is asked for, and every write is still
