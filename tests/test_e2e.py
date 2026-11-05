@@ -402,7 +402,20 @@ rescan_seconds = 10
             self.hub.client().get_ignores("wz-library")[-1], "#include patterns-common.stignore"
         )
         self.assertTrue(self.wz_ok("check", *cfg))
-        self.wz("provision", "hub", *cfg)  # idempotent
+
+        # A second run finds everything as the first one left it, in the shape a real
+        # Syncthing stores it (defaults filled in, paths as it keeps them): it reports each
+        # device and folder unchanged, warns about nothing, and changes nothing.
+        hub = self.hub.client()
+        before = (hub.devices(), hub.folders(), [hub.get_ignores(s.id) for s in specs])
+        out = self.wz("provision", "hub", *cfg)
+        self.assertEqual(
+            out.splitlines(),
+            ["device deck: already known", *(f"{spec.id}: unchanged" for spec in specs)],
+        )
+        self.assertNotIn("warning:", self.output[-1])
+        after = (hub.devices(), hub.folders(), [hub.get_ignores(s.id) for s in specs])
+        self.assertEqual(after, before)
 
         # A device now receives what its whitelist allows, and nothing else.
         device_args = [*cfg, "--syncthing-config", str(self.deck.config_xml), "--timeout", "150"]
