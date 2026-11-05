@@ -829,6 +829,90 @@ class ManualInstallTests(UpdaterCase):
         self.assertEqual(state["available"], "v0.3.0")
         self.assertEqual(state["last_result"], "available")
 
+    def promoted_by_hand_with_the_menu_open(self, *, install: str = "manual") -> None:
+        """v0.2.0 installed from the menu (`--now`), then a restart and a newer v0.3.0."""
+        rig = self.rig
+        rig.write_conf(install=install)
+        rig.release("0.2.0")
+        rig.proc.add(7000001, "es-de")
+        self.assertTick(rig.tick("--now"), 0)
+        self.assertEqual(rig.state()["probation"], "1")
+        rig.release("0.3.0")
+        rig.boot_id.write_text("boot-2\n")
+
+    def test_the_timer_checks_the_probation_with_the_menu_open_and_keeps_watching(self) -> None:
+        rig = self.rig
+        self.promoted_by_hand_with_the_menu_open()
+        before = len(rig.calls())
+        proc = rig.tick(now=NOW + HOUR)
+        self.assertTick(proc, 0)
+        state = rig.state()
+        self.assertEqual(rig.on_tag(), "v0.2.0", "the newer release is not installed")
+        self.assertEqual((state["good_tag"], state["probation"]), ("v0.2.0", "0"))
+        self.assertEqual(state["available"], "v0.3.0")
+        self.assertEqual(state["last_fetch"], str(NOW + HOUR))
+        self.assertEqual(state["last_ok"], str(NOW + HOUR))
+        self.assertEqual(state["deferred_since"], "")
+        self.assertNotIn("the menu is open; deferred", proc.output)
+        self.assertEqual(proc.output.count("install=manual: not waiting for the menu"), 1)
+        checks = rig.calls()[before:]
+        self.assertTrue(any("health deck" in c for c in checks), checks)
+        self.assertTrue(all(c.endswith("@ 0.2.0") for c in checks), checks)
+        # once per boot: the next tick does not check again
+        self.assertTick(rig.tick(now=NOW + 2 * HOUR), 0)
+        self.assertEqual(len(rig.calls()), before + len(checks))
+
+    def test_a_probation_step_held_back_by_the_menu_counts_as_passed(self) -> None:
+        rig = self.rig
+        self.promoted_by_hand_with_the_menu_open()
+        rig.flag("defer")
+        self.assertTick(rig.tick(now=NOW + HOUR), 0)
+        state = rig.state()
+        self.assertEqual((state["probation"], state["pending"]), ("0", "1"))
+        self.assertEqual(state["available"], "v0.3.0")
+
+    def test_a_probation_that_fails_with_the_menu_open_rolls_back(self) -> None:
+        rig = self.rig
+        self.promoted_by_hand_with_the_menu_open()
+        rig.break_version("0.2.0", "provision_fails")
+        proc = rig.tick(now=NOW + HOUR)
+        self.assertTick(proc, 1)
+        state = rig.state()
+        self.assertEqual(rig.bad(), ["v0.2.0"])
+        self.assertEqual(rig.on_tag(), "v0.1.0")
+        self.assertEqual((state["good_tag"], state["probation"]), ("v0.1.0", "0"))
+        self.assertEqual(state["last_result"], "rolled-back")
+        self.assertEqual(state["available"], "v0.3.0", "noted, not tried")
+        self.assertNotIn("the menu is open; deferred", proc.output)
+
+    def test_the_timer_resumes_a_trial_cut_short_with_the_menu_open(self) -> None:
+        rig = self.rig
+        rig.write_conf(install="manual")
+        rig.release("0.2.0", "die_once")
+        rig.proc.add(7000001, "es-de")
+        self.assertNotEqual(rig.tick("--now").returncode, 0)
+        self.assertEqual(rig.state()["trying_tag"], "v0.2.0")
+        proc = rig.tick(now=NOW + 900)
+        self.assertTick(proc, 0)
+        state = rig.state()
+        self.assertNotIn("the menu is open; deferred", proc.output)
+        self.assertIn("resuming the check of v0.2.0", proc.output)
+        self.assertEqual(rig.on_tag(), "v0.2.0")
+        self.assertEqual((state["good_tag"], state["trying_tag"]), ("v0.2.0", ""))
+        self.assertEqual(state["available"], "")
+
+    def test_an_auto_device_in_probation_still_waits_for_the_menu(self) -> None:
+        rig = self.rig
+        self.promoted_by_hand_with_the_menu_open(install="auto")
+        before = len(rig.calls())
+        proc = rig.tick(now=NOW + HOUR)
+        self.assertTick(proc, 0)
+        state = rig.state()
+        self.assertIn("the menu is open; deferred", proc.output)
+        self.assertEqual((state["probation"], state["last_result"]), ("1", "deferred"))
+        self.assertEqual(rig.on_tag(), "v0.2.0")
+        self.assertEqual(len(rig.calls()), before)
+
     def test_a_watch_that_fetched_is_a_success(self) -> None:
         rig = self.rig
         rig.write_conf(install="manual")
@@ -850,6 +934,65 @@ class ManualInstallTests(UpdaterCase):
         self.assertTick(proc, 0)
         self.assertEqual(rig.on_tag(), "v0.2.0")
         self.assertIn("install=sometimes", proc.output)
+
+
+class ProgressTests(UpdaterCase):
+    """`$WZ_STATE_DIR/progress`, the phase of the tick that the Options menu shows as a bar."""
+
+    def phases(self, *args: str, code: int = 0, **extra: str) -> list[str]:
+        log = self.rig.root / "progress.log"
+        log.unlink(missing_ok=True)
+        self.assertTick(self.rig.tick(*args, WZ_PROGRESS_LOG=str(log), **extra), code)
+        return log.read_text().splitlines() if log.exists() else []
+
+    def test_an_update_writes_its_phases_in_order_and_ends_at_100(self) -> None:
+        rig = self.rig
+        rig.release("0.2.0")
+        self.assertEqual(
+            self.phases("--now"),
+            [
+                "5 Looking for releases",
+                "20 Checking signatures and releases",
+                "35 Switching to v0.2.0",
+                "50 Checking 1/3: imports and version",
+                "70 Checking 2/3: provision device",
+                "90 Checking 3/3: health",
+                "100 Done",
+            ],
+        )
+        self.assertEqual((rig.state_dir / "progress").read_text(), "100 Done\n")
+        self.assertEqual(rig.on_tag(), "v0.2.0")
+
+    def test_a_check_that_fails_says_it_goes_back_and_the_bar_stays_there(self) -> None:
+        self.rig.release("0.2.0", "health_fails")
+        phases = self.phases("--now", code=1)
+        at = phases.index("95 Going back to v0.1.0")
+        self.assertEqual(phases[at - 1], "90 Checking 3/3: health")
+        self.assertEqual(
+            phases[at + 1 :], ["95 Checking v0.2.0 once more", "100 Done"], "never back to 50"
+        )
+        self.assertEqual(self.rig.on_tag(), "v0.1.0")
+
+    def test_a_tick_that_finds_the_lock_held_leaves_the_progress_alone(self) -> None:
+        rig = self.rig
+        (rig.state_dir / "lock").mkdir()
+        (rig.state_dir / "lock" / "pid").write_text(f"{os.getpid()}\n")
+        (rig.state_dir / "lock" / "boot").write_text("boot-1\n")
+        (rig.state_dir / "progress").write_text("70 Checking 2/3: provision device\n")
+        self.assertEqual(self.phases(), [])
+        self.assertEqual(
+            (rig.state_dir / "progress").read_text(), "70 Checking 2/3: provision device\n"
+        )
+
+    def test_a_progress_that_cannot_be_written_changes_nothing(self) -> None:
+        rig = self.rig
+        rig.release("0.2.0")
+        (rig.state_dir / "progress.tmp").mkdir()  # the file cannot be written
+        proc = rig.tick("--now")
+        self.assertTick(proc, 0)
+        self.assertEqual(rig.on_tag(), "v0.2.0")
+        self.assertFalse((rig.state_dir / "progress").exists())
+        self.assertNotIn("progress", proc.output)
 
 
 class EdgeTests(UpdaterCase):

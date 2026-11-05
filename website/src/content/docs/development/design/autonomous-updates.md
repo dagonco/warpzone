@@ -40,8 +40,10 @@ without systemd can start the same `tick` from another launcher. Each tick, in t
 
 1. Take a lock; a tick that finds it held exits at once.
 2. Read the configuration; if the device is not `enabled` (`self_update = false`), stop. With
-   `install=manual` and no `--now`, only look for a release (see "Installing by hand" below).
-3. If the menu is open, defer (see below); a tick with `--now` does not.
+   `install=manual` and no `--now`, only look for a release, or finish a trial or a probation
+   that an update by hand left (see "Installing by hand" below).
+3. If the menu is open, defer (see below); a tick with `--now` does not, and neither does a
+   tick of an `install=manual` device.
 4. Look for an interpreter that can run warpzone (`no-python` when none).
 5. Fetch the remote at most once per interval: one hour on the `rc` channel, 12 hours on
    `stable` or with a pin (a pin only needs new tags to find its target);
@@ -305,7 +307,9 @@ go together in `trying` and in `suspect`:
 one without the other is dropped, and `attempts` with it.
 `last_result` is one of `ok`, `deferred`, `env`, `rolled-back`, `dirty`,
 `dev`, `no-python`, `stuck`. `bad/<tag>` is a file holding `sha=`, `date=` and `reason=`
-lines. The log stays in `self-update.log` (cut to its last 200 lines past 64 KiB). Values are
+lines. Next to the state, `progress` holds one line, `PERCENT TEXT`, with what the tick that
+holds the lock is doing (see "Progress" below). The log stays in `self-update.log` (cut to its
+last 200 lines past 64 KiB). Values are
 read as data: a key that is not on the list or not made of lowercase letters and underscores
 is ignored, a number that is not a number is reset, and nothing is ever evaluated. `doctor`
 reads the state and warns about a rollback, `stuck`, `dirty`, or more than
@@ -390,13 +394,33 @@ target as usual (signatures, retirements, the pin) and writes it to the state ke
 (`last_result=available`, or `ok` when there is none; `last_ok` when it fetched), then ends. It
 does not wait for the menu, verify or reconcile, not even on a dirty or development checkout; the
 next `--now` does all of that and clears `available`. A trial or a probation in progress is the
-exception: it was asked for by hand, and the timer finishes it the usual way (menu wait
-included), so a release that no longer starts is still put back without anybody asking; such a
-tick tries nothing new (no second look at a suspect, no new release) and ends by noting the best
-target in `available`. An unknown value
+exception: it was asked for by hand, and the timer finishes it, so a release that no longer
+starts is still put back without anybody asking. Such a tick does not wait for the menu either
+(it logs `install=manual: not waiting for the menu` when the menu is open): on a device whose
+menu is open whenever it is on, waiting would stop the probation check, and with it the watch,
+for good. It resumes an interrupted trial and runs the probation check after a restart (once
+per boot), with the rules of `--now`: a step held back by an open program (exit 3) counts as
+passed and leaves `pending` set, and a real failure gets the differential verdict and the
+rollback as usual. It never tries anything on its own (no new release, no second look at a
+suspect) and never reconciles, and every way it ends notes the best target in `available`
+(after a rollback too); when nothing ended it earlier it ends as the watch does
+(`last_result=available` or `ok`, `last_ok` when it fetched). An unknown value
 is logged and read as `auto`. `UPDATER_ABI` is 2 from the version that knows `--now`;
 `selfupdate.run_tick` sends `--now` to a live copy of that ABI or higher and `--fetch-now` to an
-older one.
+older one. It is 3 from the version that writes `progress`.
+
+**Progress.** A tick that holds the lock writes what it is doing to `progress` in the state
+folder, one line `PERCENT TEXT` replaced atomically (a temporary file that is renamed): `5
+Looking for releases` when it fetches, `20 Checking signatures and releases`, `35 Switching to
+<tag>`, then for each verification `50 Checking 1/3: imports and version`, `70 Checking 2/3:
+provision device` and `90 Checking 3/3: health`. When a check fails, `95 Going back to <tag>`
+(and `95 Checking <tag> once more` for the second look) and the bar stays there: the
+verification of the previous version writes no phases. When the tick ends, whatever the
+outcome, `100 Done`. A tick that does not get the lock leaves the file alone. The text holds
+tags and fixed words only, never a secret, and a file that cannot be written changes nothing
+in the tick. "Install `<tag>` now" in the Anbernic's Options menu shows it as a progress bar
+(see "Options menu" in [Profiles](/warpzone/development/design/profiles/#options-menu));
+`WZ_PROGRESS_LOG` names a file that gets a copy of every line, for the tests.
 
 **Deferring while the menu is open.** The script scans `/proc/*/comm` and `argv[0]` the way
 `procs.running` does (`WZ_PROC` points it at a fake tree in tests, and a test checks

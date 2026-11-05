@@ -2,6 +2,7 @@
 
 import dataclasses
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -11,12 +12,13 @@ from pathlib import Path
 
 from support import stub_self_update
 from test_anbernic import PROFILE, Device
-from warpzone import options_menu
+from warpzone import options_menu, selfupdate
 from warpzone.profiles import ProfileError, load_profile, parse_profile
 from warpzone.provision_scripts import ensure_options_menu
 from warpzone.report import Reporter
 
 BASH = shutil.which("bash")
+UPDATER = Path(__file__).resolve().parent.parent / "warpzone" / "data" / "updater.sh"
 setUpModule = stub_self_update
 
 
@@ -42,6 +44,38 @@ class RenderTests(unittest.TestCase):
 
     def test_rendering_is_deterministic(self) -> None:
         self.assertEqual(options_menu.entries(), options_menu.entries())
+
+    def test_the_live_updater_runs_from_the_abi_that_knows_now(self) -> None:
+        (pattern,) = re.findall(r"grep -Eq '([^']*)' \"\$LIVE\"", options_menu.render_script())
+        shipped = selfupdate.updater_abi(UPDATER.read_text())
+        self.assertIsNotNone(shipped)
+        with tempfile.TemporaryDirectory() as tmp:
+            for abi, taken in (
+                (selfupdate.NOW_ABI - 1, False),
+                (selfupdate.NOW_ABI, True),
+                (shipped, True),
+                (12, True),
+            ):
+                with self.subTest(abi=abi):
+                    live = Path(tmp) / "updater.sh"
+                    live.write_text(f"#!/bin/sh\nUPDATER_ABI={abi}\n")
+                    found = subprocess.run(["grep", "-Eq", pattern, str(live)], check=False)
+                    self.assertEqual(found.returncode == 0, taken)
+
+    def test_shellcheck_is_happy_when_it_is_installed(self) -> None:
+        shellcheck = shutil.which("shellcheck")
+        if shellcheck is None:
+            self.skipTest("shellcheck is not installed")
+        with tempfile.TemporaryDirectory() as tmp:
+            script = Path(tmp) / options_menu.ENTRY_NAME
+            script.write_text(options_menu.render_script())
+            proc = subprocess.run(
+                [shellcheck, "-s", "bash", str(script)],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
 
 
 class ProfileTests(unittest.TestCase):
@@ -208,7 +242,7 @@ class ScriptRunTests(unittest.TestCase):
         self.fake(
             self.venv_bin / "warpzone",
             'case "$1" in\n--version) echo "warpzone 0.3.0rc2" ;;\n'
-            f"doctor) cat <<'EOF'\n{doctor}\nEOF\n;;\n"
+            f"doctor) : >>\"{self.tmp}/doctor-ran\"; cat <<'EOF'\n{doctor}\nEOF\n;;\n"
             'self-update) [ "$2" = --channel ] && { echo "self-update: channel $3"; exit 0; }\n'
             "echo one; echo two; exit 3 ;;\n"
             "esac\n",
@@ -280,9 +314,11 @@ class ScriptRunTests(unittest.TestCase):
     # --- the menu, with a fake `dialog` --------------------------------------------------
 
     def fake_dialog(self, *answers: str, yes: bool = True) -> Path:
-        """A `dialog` that answers --menu with the next of `answers`, --yesno with `yes`, and
-        logs every box it shows."""
+        """A `dialog` that answers --menu with the next of `answers` (`CANCEL` cancels it, and
+        no answer left is an empty choice), --yesno with `yes`, and logs every box it shows
+        (what --gauge reads on its standard input, and the file of --textbox)."""
         log = self.tmp / "dialog.log"
+        log.unlink(missing_ok=True)
         queue = self.tmp / "answers"
         queue.write_text("".join(f"{a}\n" for a in answers))
         self.fake(
@@ -293,13 +329,17 @@ while [ $# -gt 0 ]; do
 	case $1 in
 	--menu)
 		printf 'MENU %s\\n' "$*" >>"$log"
-		head -n 1 "$queue" >&2
+		answer=$(head -n 1 "$queue")
 		sed -i.x 1d "$queue"
+		[ "$answer" != CANCEL ] || exit 1
+		printf '%s\\n' "$answer" >&2
 		exit 0
 		;;
 	--yesno) printf 'YESNO %s\\n' "$2" >>"$log"; exit {0 if yes else 1} ;;
 	--msgbox) printf 'BOX %s\\n' "$2" >>"$log"; exit 0 ;;
 	--infobox) printf 'INFO %s\\n' "$2" >>"$log"; exit 0 ;;
+	--gauge) printf 'GAUGE %s\\n' "$2" >>"$log"; cat >>"$log"; exit 0 ;;
+	--textbox) printf 'TEXT\\n' >>"$log"; cat "$2" >>"$log"; exit 0 ;;
 	esac
 	shift
 done
@@ -326,42 +366,138 @@ done
         self.assertIn("install Install v0.3.0rc5 now", shown)
         self.assertIn("New release: v0.3.0rc5", shown)
 
-    def test_status_shows_the_status_box(self) -> None:
-        self.install_state(doctor="")
-        shown = self.menu("status")
-        self.assertIn("BOX Version: warpzone 0.3.0rc2", shown)
+    def boxes(self, shown: str) -> list[str]:
+        """The kind of each box the menu showed, in order."""
+        kinds = ("MENU", "BOX", "YESNO", "INFO", "GAUGE", "TEXT")
+        return [line.split(" ")[0] for line in shown.splitlines() if line.split(" ")[0] in kinds]
 
-    def test_install_runs_the_live_updater_by_hand(self) -> None:
+    def menus(self, shown: str) -> list[str]:
+        """The text of each menu shown (its summary spans lines), in order."""
+        return [m.split("\nBOX ")[0] for m in shown.split("MENU ")[1:]]
+
+    def test_status_shows_the_status_box_and_comes_back_to_the_menu(self) -> None:
+        self.install_state(doctor="  [!!] syncthing  not found")
+        shown = self.menu("status", "exit")
+        self.assertIn("BOX Version: warpzone 0.3.0rc2", shown)
+        self.assertIn("Doctor: see the Doctor item", shown)
+        self.assertNotIn("syncthing", shown)
+        self.assertEqual(self.boxes(shown), ["MENU", "BOX", "MENU"])
+        self.assertFalse((self.tmp / "doctor-ran").exists(), "the menu opens without doctor")
+
+    def test_only_exit_or_cancel_ends_the_menu(self) -> None:
         self.install_state(doctor="")
+        self.assertEqual(
+            self.boxes(self.menu("status", "status", "exit", "status")),
+            [
+                "MENU",
+                "BOX",
+                "MENU",
+                "BOX",
+                "MENU",
+            ],
+        )
+        self.assertEqual(
+            self.boxes(self.menu("status", "CANCEL", "status")),
+            [
+                "MENU",
+                "BOX",
+                "MENU",
+            ],
+        )
+
+    def test_doctor_runs_and_shows_its_whole_output_in_a_box_that_scrolls(self) -> None:
+        report = "warpzone doctor\n\nBase\n  [ok] python 3.11\n  [!!] syncthing  not found"
+        self.install_state(doctor=report)
+        shown = self.menu("doctor", "exit")
+        self.assertEqual(self.boxes(shown), ["MENU", "INFO", "TEXT", "MENU"])
+        self.assertIn("INFO Running doctor...", shown)
+        self.assertIn("TEXT\n" + report + "\n", shown)
+        self.assertTrue((self.tmp / "doctor-ran").exists())
+
+    def test_doctor_without_warpzone_says_so(self) -> None:
+        shown = self.menu("doctor", "exit")
+        self.assertIn("TEXT\nwarpzone is not installed here (unknown)\n", shown)
+
+    def live(self, body: str) -> None:
         with (self.updater / "state").open("a") as f:
             f.write("available=v0.3.0rc5\n")
         live = self.home / ".local/share/warpzone/updater/updater.sh"
         live.parent.mkdir(parents=True)
-        live.write_text('UPDATER_ABI=2\necho "live $*"\nexit 0\n')
+        live.write_text(body)
+
+    def test_install_runs_the_live_updater_by_hand(self) -> None:
+        self.install_state(doctor="")
+        self.live('UPDATER_ABI=2\necho "live $*"\nexit 0\n')
         shown = self.menu("install")
-        self.assertIn("INFO Installing v0.3.0rc5", shown)
+        self.assertIn("GAUGE Installing v0.3.0rc5", shown)
+        self.assertIn("BOX Update finished (exit 0)\nlive tick --now", shown)
+
+    def test_after_an_install_the_menu_shows_the_new_state(self) -> None:
+        self.install_state(doctor="")
+        state = self.updater / "state"
+        # what a tick that installed the release leaves: no `available` any more
+        self.live(f'UPDATER_ABI=3\nsed -i.x "/^available=/d" "{state}"\necho "live $*"\n')
+        shown = self.menu("install", "exit")
+        self.assertEqual(self.boxes(shown), ["MENU", "GAUGE", "BOX", "MENU"])
+        first, second = self.menus(shown)
+        self.assertIn("install Install v0.3.0rc5 now", first)
+        self.assertNotIn("install", second)
+
+    def test_install_shows_the_phases_of_the_update_on_a_gauge(self) -> None:
+        self.install_state(doctor="")
+        progress = self.updater / "progress"
+        self.live(
+            "UPDATER_ABI=3\n"
+            f'echo "50 Checking 1/3: imports and version" >"{progress}"; sleep 2\n'
+            f'echo "90 Checking 3/3: health" >"{progress}"; sleep 2\n'
+            'echo "live $*"\nexit 1\n'
+        )
+        shown = self.menu("install")
+        gauge = shown[shown.index("GAUGE") : shown.index("BOX")]
+        self.assertIn("XXX\n50\nChecking 1/3: imports and version\nXXX\n", gauge)
+        self.assertIn("XXX\n90\nChecking 3/3: health\nXXX\n", gauge)
+        self.assertLess(gauge.index("\n50\n"), gauge.index("\n90\n"))
+        self.assertIn("BOX Update finished (exit 1)\nlive tick --now", shown)
+
+    def test_without_a_progress_file_the_gauge_says_working(self) -> None:
+        self.install_state(doctor="")
+        # what the last tick left is not this update's progress
+        (self.updater / "progress").write_text("100 Done\n")
+        self.live('UPDATER_ABI=2\nsleep 1\necho "live $*"\n')
+        shown = self.menu("install")
+        gauge = shown[shown.index("GAUGE") : shown.index("BOX")]
+        self.assertIn("XXX\n0\nWorking...\nXXX\n", gauge)
+        self.assertNotIn("Done", gauge)
         self.assertIn("BOX Update finished (exit 0)\nlive tick --now", shown)
 
     def test_install_with_an_old_updater_uses_warpzone(self) -> None:
         self.install_state(doctor="")
-        with (self.updater / "state").open("a") as f:
-            f.write("available=v0.3.0rc5\n")
-        live = self.home / ".local/share/warpzone/updater/updater.sh"
-        live.parent.mkdir(parents=True)
-        live.write_text('UPDATER_ABI=1\necho "old $*"\n')
+        self.live('UPDATER_ABI=1\necho "old $*"\n')
         shown = self.menu("install")
+        self.assertIn("XXX\n0\nWorking...\nXXX\n", shown)
         self.assertIn("BOX Update finished (exit 3)\none\ntwo", shown)
 
     def test_the_channel_changes_after_a_yes(self) -> None:
         self.install_state(doctor="")
-        shown = self.menu("channel")
+        conf = self.updater / "conf"
+        self.fake(
+            self.venv_bin / "warpzone",
+            'case "$1" in\n--version) echo "warpzone 0.3.0rc2" ;;\n'
+            f'self-update) sed -i.x "s/^channel=.*/channel=$3/" "{conf}"\n'
+            'echo "self-update: channel $3" ;;\nesac\n',
+        )
+        shown = self.menu("channel", "exit")
         self.assertIn("YESNO Follow stable releases from now on?", shown)
         self.assertIn("BOX channel stable", shown)
+        self.assertEqual(self.boxes(shown), ["MENU", "YESNO", "BOX", "MENU"])
+        second = self.menus(shown)[1]
+        self.assertIn("channel Follow rc releases", second, "the state is read again")
 
     def test_no_keeps_the_channel(self) -> None:
         self.install_state(doctor="")
-        shown = self.menu("channel", yes=False)
+        shown = self.menu("channel", "exit", yes=False)
         self.assertNotIn("BOX", shown)
+        self.assertEqual(self.boxes(shown), ["MENU", "YESNO", "MENU"])
 
     def test_without_a_terminal_it_shows_the_status_and_does_nothing_else(self) -> None:
         self.install_state(doctor="")
