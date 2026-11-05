@@ -80,7 +80,7 @@ Optional. Only `warpzone inbox` and `warpzone doctor` read it. `inbox` works wit
 | `chdman` | `chdman` on `PATH` | Converts discs to CHD. |
 | `bsdtar` | `bsdtar` on `PATH` | Unpacks `.7z` and `.rar`. |
 | `rahasher` | none (used only when set) | RAHasher from RALibretro, built with CHD support: checks that a conversion keeps the RetroAchievements hash. |
-| `dolphin_tool` | `dolphin-tool` on `PATH` | Reads compressed GameCube images (`.rvz`). |
+| `dolphin_tool` | `dolphin-tool` on `PATH` | Reads compressed GameCube `.gcz` images. `.rvz` and `.wia` need no tool. |
 | `nsz` | `nsz` on `PATH` | Reads the title ID and version of Switch `.nsp` and `.nsz` files, and decompresses `.nsz`. |
 | `orbis_pkg_util` | `orbis-pkg-util` on `PATH` | Unpacks PS4 `.pkg` games. Without it the package is filed as it is. |
 | `titledb_dir` | none | A local clone of `blawar/titledb`, which names Switch games. |

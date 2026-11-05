@@ -55,9 +55,10 @@ Syncthing state. The contract:
   for cue/bin. A lone `.bin` without a cue gets a generated one (PlayStation only).
   `psp`: the plain `.iso`, copied and its CRC32 checked against the DAT. `gc`: an
   `.iso` stays an `.iso` (the report prints the `dolphin-tool convert -f rvz -c zstd
-  -l 5 -b 131072` command; warpzone never converts it); an `.rvz`, `.gcz` or `.wia` is
-  identified by expanding it with `dolphin-tool convert -f iso` into the work folder and
-  the compressed file itself is what gets placed, as `<game>.rvz`. Cartridge systems: a
+  -l 5 -b 131072` command; warpzone never converts it); a `.gcz` is identified by
+  expanding it with `dolphin-tool convert -f iso` into the work folder and the compressed
+  file itself is what gets placed, as `<game>.gcz`. An `.rvz` or `.wia` never gets here:
+  it is read by its header (see [Compressed Wii and GameCube images](#compressed-wii-and-gamecube-images)). Cartridge systems: a
   `<game>.zip` with the rom under its DAT name, always the same bytes for the same game.
   Names are the DAT's game names. A multi-disc game (`(Disc N)` in the DAT name) of a
   CHD system goes in `<game without disc tag>.m3u/` with every disc and a
@@ -102,6 +103,9 @@ Syncthing state. The contract:
   below; they are identified by signature, not by DAT.
 - **3DS images.** See [3DS images](#3ds-images) below; `.3ds` and `.cci` files are
   identified by their NCSD and NCCH headers, not by DAT.
+- **Wii and GameCube `.rvz` and `.wia`.** See
+  [Compressed Wii and GameCube images](#compressed-wii-and-gamecube-images) below; they are
+  identified by the disc header copy they carry, not by DAT and not with `dolphin-tool`.
 - **PS4 packages.** See [PS4 packages](#ps4-packages) below; with `orbis-pkg-util` they are
   extracted into a game folder with a shortcut.
 - **Out of scope.** Vita `.vpk` packages, and PS3 or Xbox content that is not a disc image
@@ -261,6 +265,38 @@ A `.3ds` or `.cci` file has no DAT here, so it is identified by its headers. The
   (`!/roms/n3ds/<name>.cci`).
 - **One target name.** Two files of one item that would be filed under the same name (`X.3ds`
   and `X.cci`) are not placed together: the second goes to review.
+
+## Compressed Wii and GameCube images
+
+The WIA and RVZ containers of Dolphin start with a fixed header followed by the first 0x80
+bytes of the disc, so an image is identified without expanding it. The code is in
+`warpzone/inbox_dolphin.py`, a kind handler in `inbox.kind_handlers()`.
+
+- **Claiming.** The handler claims an item (a file, a folder, or an archive listed with
+  `inbox_console_iso.names_in`) when a file name ends in `.rvz` or `.wia`, case-insensitively.
+  Names alone never identify: a claimed file whose header is not valid goes to review. Other
+  non-sidecar files of a claimed item are named in the review reason. `.gcz` is a different
+  format (no copy of the disc header) and keeps the `dolphin-tool` path of the DAT pipeline.
+- **Verdict.** `judge(head, file_size)` is pure; `detect` reads the first 0xD8 bytes and
+  nothing else. Big-endian fields: the magic `RVZ\x01` or `WIA\x01` at 0; the size of the
+  whole file at 0x2C (0 means not recorded, otherwise it must equal the real size, which
+  catches a copy that stopped early); the disc type u32 at 0x48 (1 GameCube, 2 Wii); the disc
+  header at 0x58: game ID (6 bytes, `[A-Z0-9]`), the Wii magic `5D1C9EA3` at +0x18, the
+  GameCube magic `C2339F3D` at +0x1C, the title (64 bytes) at +0x20. The disc type and the
+  magic must agree and exactly one magic may be present. Anything else is `invalid` with a
+  reason (no magic, header cut short, size mismatch, unknown disc type, magic mismatch, bad
+  game ID).
+- **Placement.** `library/roms/wii/` or `library/roms/gc/` (the ES-DE systems Dolphin serves),
+  named `<Title> [<GAME ID>]` with the original extension in lower case. The title keeps only
+  ASCII, drops control characters and `/ \ * ? " < > |`, writes `:` as ` -` and collapses
+  blanks; an empty title leaves `[<GAME ID>]`. The file is copied unchanged with
+  `inbox_console_iso.place_file` and `destination_verdict`, as for 3DS images: an existing
+  name with the same size and SHA1 is "already in the library", a different one is a review,
+  and report mode writes nothing.
+- **No DAT.** The Redump DAT of a compressed image cannot be matched without hashing the
+  expanded disc, which needs `dolphin-tool`. The name therefore comes from the header, and a
+  GameCube `.rvz` is no longer named after the DAT. Two files of one item filed under the same
+  name: the second goes to review.
 
 ## PS4 packages
 

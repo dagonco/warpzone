@@ -267,7 +267,7 @@ TOOLS: tuple[ToolSpec, ...] = (
     ToolSpec(
         "dolphin-tool",
         ("dolphin-tool",),
-        "only for compressed GameCube images (.rvz)",
+        "only for compressed GameCube images (.gcz)",
         DOLPHIN_HINTS,
         setting="dolphin_tool",
         version_args=None,

@@ -2,7 +2,7 @@
 title: "Adding new games: the inbox"
 ---
 
-How `warpzone inbox` identifies, converts and files new dumps, including Switch, 3DS, PS3, PS4, PS Vita, Xbox, Xbox 360, Wii U and arcade.
+How `warpzone inbox` identifies, converts and files new dumps, including Switch, 3DS, Wii and GameCube `.rvz`, PS3, PS4, PS Vita, Xbox, Xbox 360, Wii U and arcade.
 
 Drop new dumps (files, folders or archives) in `inbox/` on the hub's share and run `warpzone inbox` on a desktop machine that mounts it (the NAS is too weak for conversions). Without `--apply` it only reports:
 
@@ -55,7 +55,7 @@ mame2003plus_dat = "~/dats/mame2003-plus.xml"
    | `psx`, `saturn`, `dreamcast` | `<game>.chd` (`chdman createcd` from cue/bin or gdi), then `chdman verify` |
    | `ps2` | `<game>.chd` (`createdvd` for an `.iso`, `createcd` for cue/bin), then `verify` |
    | `psp` | the plain `.iso`, its CRC32 checked against the DAT |
-   | `gc` | `.iso` stays `.iso` (the report shows the `dolphin-tool convert -f rvz ...` command); an `.rvz` is kept as it is |
+   | `gc` | `.iso` stays `.iso` (the report shows the `dolphin-tool convert -f rvz ...` command); a `.gcz` is identified with `dolphin-tool` and kept as it is. An `.rvz` or `.wia` is read by its header instead, see [Wii and GameCube compressed images](#wii-and-gamecube-compressed-images) |
    | `nes`, `snes`, `n64`, `gb`, `gbc`, `gba`, `genesis`, `mastersystem`, `gamegear` | `<game>.zip` holding the ROM under its DAT name |
 
    A multi-disc game of a CHD system goes in `<game without disc tag>.m3u/` with every disc and a `<game>.m3u` playlist, and only when all its discs are in the item; otherwise it goes to review.
@@ -99,6 +99,24 @@ Titles come from a local clone of titledb (`git clone --depth 1 https://github.c
 A decrypted image is filed in `library/roms/n3ds/<name>.cci`. A `.3ds` is renamed to `.cci` on the way in and its bytes do not change, so the same game dropped as `.3ds` and as `.cci` is the same file ("already in the library"). Nothing is ever overwritten: a different file under that name goes to review. The report shows what was detected, the destination and the whitelist line (`!/roms/n3ds/<name>.cci`).
 
 An encrypted image goes to review: Azahar, the 3DS emulator of the consoles, opens only decrypted images, so decrypt it first and drop the result. A file whose header is not valid (no `NCSD` or `NCCH` magic, a size bigger than the file, a truncated dump) goes to review with the reason. `.3dsx` homebrew and `.cia` installers are not images and are not handled here.
+
+## Wii and GameCube compressed images
+
+An `.rvz` or `.wia` file (Dolphin's compressed disc formats) holds a copy of the disc header, so it is identified by reading the first 0xD8 bytes of the file, loose, in a folder or in an archive. No tool and no DAT is needed (`dolphin-tool` is not used for these):
+
+- the magic `RVZ\x01` or `WIA\x01` at the start;
+- the file size recorded at 0x2C, which must match the real size (a smaller file is a copy that stopped early);
+- the disc type at 0x48 (1 GameCube, 2 Wii), which must agree with the magic inside the disc header at 0x58: `5D1C9EA3` for Wii, `C2339F3D` for GameCube;
+- the game ID (6 letters or digits) and the title from that disc header.
+
+The image is filed with the bytes unchanged, because Dolphin (the emulator ES-DE launches for both systems) opens compressed images as they are:
+
+| Disc | Placed in | Name |
+|---|---|---|
+| Wii | `library/roms/wii/` | `<Title> [<GAME ID>].rvz` (or `.wia`) |
+| GameCube | `library/roms/gc/` | `<Title> [<GAME ID>].rvz` (or `.wia`) |
+
+The title is the one in the disc header with unsafe characters dropped and `:` written as ` -`, for example `MarioKartWii [RMCE01].rvz`. A compressed image cannot be matched to a Redump entry without expanding it, so the name comes from the header and not from a DAT. Nothing is overwritten: same size and SHA1 is "already in the library", anything else under that name goes to review. A file that is not an image, a truncated copy or a header whose disc type and magic disagree goes to review with the reason. The report shows the detection, the path and the whitelist line (`!/roms/wii/<name>`). A plain Wii `.iso` is not handled yet and goes to review as "no DAT match".
 
 ## PS3, PS4, Xbox, Xbox 360 and Wii U images
 
