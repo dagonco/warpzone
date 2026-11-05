@@ -213,8 +213,11 @@ logic is unit-tested without a network.
   travels both ways.
 - A second e2e test starts from an empty hub: its folders exist and hold nothing. `provision
   hub` runs while the whitelists and a game are copied in, so the bootstrap waits for them;
-  the test then checks the created `wz-*` folders, the final ignores, `check`, and that
-  `provision device` makes a device receive the whitelisted game and not the other one.
+  the test then checks the created `wz-*` folders, the final ignores, `check`, that a second
+  `provision hub` reports every device and folder unchanged and leaves Syncthing's devices,
+  folders and ignores as they were (the fake Syncthing keeps what was sent, a real one fills
+  in its defaults), and that `provision device` makes a device receive the whitelisted game
+  and not the other one.
 - The updater end to end (`test_e2e_updater.py`, same two instances): `updater.sh install`
   sets a device up from a clone of a throwaway repository whose releases are this checkout's
   `warpzone` package, and `updater.sh tick` then runs the real three-step verification, which

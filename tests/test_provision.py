@@ -21,6 +21,7 @@ from support import (
 )
 from warpzone import esde, provision_emulators, settings_state
 from warpzone.config import Config, parse_config
+from warpzone.model import hub_specs
 from warpzone.probes import DeviceProbes
 from warpzone.profiles import Profile, load_profile
 from warpzone.provision import (
@@ -265,6 +266,34 @@ class HubTests(unittest.TestCase):
             run_hub(cfg, PROFILES, Client(fake.url, API_KEY), rep)
             self.assertEqual(fake.writes(), [])
             self.assertEqual(rep.warnings, [])
+
+    def test_an_empty_hub_gets_every_folder_the_config_describes(self) -> None:
+        with FakeSyncthing(HUB_ID) as fake:
+            cfg = make_config(fake.url)
+            run_hub(cfg, PROFILES, Client(fake.url, API_KEY), reporter()[0])
+            specs = hub_specs(cfg, PROFILES)
+            self.assertEqual(set(fake.folders), {spec.id for spec in specs})
+            for spec in specs:
+                folder = fake.folders[spec.id]
+                self.assertEqual({k: folder[k] for k in spec.body()}, spec.body(), spec.id)
+                self.assertFalse(folder["paused"], spec.id)
+                self.assertEqual(fake.ignores[spec.id], list(spec.ignores), spec.id)
+
+    def test_a_second_run_reports_every_folder_and_device_unchanged(self) -> None:
+        with FakeSyncthing(HUB_ID) as fake:
+            cfg = make_config(fake.url)
+            run_hub(cfg, PROFILES, Client(fake.url, API_KEY), reporter()[0])
+            names = ["patterns-common.stignore", "patterns-deck.stignore"]
+            fake.browse = {fid: [*names, "patterns-machine.stignore"] for fid in fake.folders}
+            rep, lines = reporter()
+            run_hub(cfg, PROFILES, Client(fake.url, API_KEY), rep)
+            self.assertEqual(
+                lines,
+                [
+                    *(f"device {d.name}: already known" for d in cfg.devices.values()),
+                    *(f"{spec.id}: unchanged" for spec in hub_specs(cfg, PROFILES)),
+                ],
+            )
 
     def test_hub_id_mismatch(self) -> None:
         with FakeSyncthing(DECK_ID) as fake:
