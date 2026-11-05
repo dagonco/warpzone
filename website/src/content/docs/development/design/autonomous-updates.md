@@ -391,7 +391,9 @@ target as usual (signatures, retirements, the pin) and writes it to the state ke
 does not wait for the menu, verify or reconcile, not even on a dirty or development checkout; the
 next `--now` does all of that and clears `available`. A trial or a probation in progress is the
 exception: it was asked for by hand, and the timer finishes it the usual way (menu wait
-included), so a release that no longer starts is still put back without anybody asking. An unknown value
+included), so a release that no longer starts is still put back without anybody asking; such a
+tick tries nothing new (no second look at a suspect, no new release) and ends by noting the best
+target in `available`. An unknown value
 is logged and read as `auto`. `UPDATER_ABI` is 2 from the version that knows `--now`;
 `selfupdate.run_tick` sends `--now` to a live copy of that ABI or higher and `--fetch-now` to an
 older one.

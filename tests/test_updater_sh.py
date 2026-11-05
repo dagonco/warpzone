@@ -815,6 +815,20 @@ class ManualInstallTests(UpdaterCase):
         self.assertEqual(rig.on_tag(), "v0.1.0", "back on the version known to work")
         self.assertEqual((state["trying_tag"], state["last_result"]), ("", "rolled-back"))
 
+    def test_a_device_in_probation_is_not_moved_on_by_the_timer(self) -> None:
+        rig = self.rig
+        rig.write_conf(install="manual")
+        rig.release("0.2.0")
+        self.assertTick(rig.tick("--now"), 0)
+        self.assertEqual(rig.state()["probation"], "1")
+        rig.release("0.3.0")
+        proc = rig.tick(now=NOW + HOUR)
+        self.assertTick(proc, 0)
+        state = rig.state()
+        self.assertEqual(rig.on_tag(), "v0.2.0")
+        self.assertEqual(state["available"], "v0.3.0")
+        self.assertEqual(state["last_result"], "available")
+
     def test_a_watch_that_fetched_is_a_success(self) -> None:
         rig = self.rig
         rig.write_conf(install="manual")

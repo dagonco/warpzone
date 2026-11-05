@@ -2225,6 +2225,11 @@ tick_watch() {
 	WATCH=1
 	tick_checkout
 	tick_trust
+	watch_note
+}
+
+# watch_note: the end of a tick that only watches: the best target goes to `available`.
+watch_note() {
 	pick_target || true
 	S_available=$PICK
 	if [ -n "$PICK" ]; then
@@ -2252,6 +2257,11 @@ cmd_tick() {
 	tick_trust
 	if [ -n "$S_trying_tag" ]; then
 		resume
+	fi
+	if [ "$C_install" = manual ] && [ "$BY_HAND" != 1 ]; then
+		# A trial was finished above, or the probation is checked here; nothing new is tried.
+		probation_check
+		watch_note
 	fi
 	tick_suspect
 	probation_check
