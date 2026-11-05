@@ -139,7 +139,7 @@ class HubTests(unittest.TestCase):
             self.assertFalse([w for w in rep.warnings if "wz-songs" in w])
             self.assertIn(
                 "wz-songs: created at /data/games/songs, bootstrap ignores set, resumed, "
-                "final ignores set, full scan started",
+                "final ignores set, rescanned",
                 lines,
             )
 

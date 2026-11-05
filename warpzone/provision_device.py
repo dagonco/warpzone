@@ -34,6 +34,7 @@ from warpzone.provision_folders import (
     apply_ignores,
     ensure_device,
     in_sync,
+    rescan,
     unattended_refusals,
     unpause,
     upsert_folder,
@@ -175,8 +176,7 @@ def _provision_whitelisted(
         client.set_ignores(spec.id, final)
         if current is not None and current.get("paused"):
             unpause(client, spec, rep)
-        client.scan(spec.id)
-        rep.note(spec.id, "final ignores set (whitelists on disk), rescanning")
+        rep.note(spec.id, f"final ignores set (whitelists on disk), {rescan(client, spec.id)}")
         return
     if present != boot:
         client.set_ignores(spec.id, boot)
@@ -215,8 +215,7 @@ def _provision_whitelisted(
             clock=probes.clock,
         )
     client.set_ignores(spec.id, final)
-    client.scan(spec.id)
-    rep.note(spec.id, "whitelist active, rescanning")
+    rep.note(spec.id, f"whitelist active, {rescan(client, spec.id)}")
 
 
 def _create_target(spec: FolderSpec, dry_run: bool, rep: Reporter) -> bool:

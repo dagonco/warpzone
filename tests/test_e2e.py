@@ -249,7 +249,7 @@ rescan_seconds = 10
         # index holds the whitelists, then switches to the final ignores.
         out = self.wz("provision", "hub", *cfg)
         self.assertIn("wz-library: created", out)
-        self.assertIn("final ignores set, full scan started", out)
+        self.assertIn("final ignores set, rescanned", out)
         self.assertNotIn("not in the hub's index", self.output[-1])
         self.assertEqual(
             self.hub.client().get_ignores("wz-library")[-1], "#include patterns-common.stignore"
@@ -391,7 +391,7 @@ rescan_seconds = 10
         self.assertEqual(added, [])
         self.assertIn("wz-library: created", out)
         self.assertIn("bootstrap ignores set", out)
-        self.assertIn("final ignores set, full scan started", out)
+        self.assertIn("final ignores set, rescanned", out)
         self.assertNotIn("not in the hub's index", self.output[-1])  # the wait ended in time
 
         # Folders created, running, and on their final ignores.

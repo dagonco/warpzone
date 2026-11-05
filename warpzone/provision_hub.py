@@ -17,6 +17,7 @@ from warpzone.provision_folders import (
     apply_ignores,
     ensure_device,
     in_index,
+    rescan,
     same_path,
     unpause,
     upsert_folder,
@@ -66,8 +67,7 @@ def _bootstrap_hub_folder(
             clock=clock,
         )
     client.set_ignores(spec.id, list(spec.ignores))
-    client.scan(spec.id)
-    rep.note(spec.id, "final ignores set, full scan started")
+    rep.note(spec.id, f"final ignores set, {rescan(client, spec.id)}")
     if pending:
         rep.warn(
             f"{spec.id}: {', '.join(pending)} not in the hub's index after {timeout:.0f}s; "
