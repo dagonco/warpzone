@@ -193,6 +193,51 @@ class HubTests(unittest.TestCase):
             self.assertEqual(ignores, [fake.ignores["wz-songs"]])
             self.assertEqual(fake.ignores["wz-songs"][-1], "#include patterns-common.stignore")
 
+    def test_a_paused_folder_with_the_right_ignores_is_resumed(self) -> None:
+        # What an additive run leaves when its resume failed after the ignores were set.
+        with FakeSyncthing(HUB_ID) as fake:
+            cfg = make_config(fake.url)
+            run_hub(cfg, PROFILES, Client(fake.url, API_KEY), reporter()[0])
+            fake.folders["wz-tools"]["paused"] = True
+            fake.requests.clear()
+            rep, lines = reporter()
+            run_hub(cfg, PROFILES, Client(fake.url, API_KEY), rep)
+            self.assertFalse(fake.folders["wz-tools"]["paused"])
+            writes = [(m, p, b) for m, p, b in fake.writes()]
+            self.assertEqual([p for _, p, _ in writes], ["/rest/config/folders/wz-tools"])
+            self.assertEqual(writes[0][2], {"paused": False})
+            self.assertIn("wz-tools: was paused, resumed", lines)
+            self.assertFalse([w for w in rep.warnings if w.startswith("wz-tools")])
+
+    def test_every_paused_hub_folder_is_resumed_and_running_ones_are_not_touched(self) -> None:
+        with FakeSyncthing(HUB_ID) as fake:
+            cfg = make_config(fake.url)
+            run_hub(cfg, PROFILES, Client(fake.url, API_KEY), reporter()[0])
+            for folder_id in ("wz-library", "wz-songs"):  # the whitelisted ones too
+                fake.folders[folder_id]["paused"] = True
+            fake.requests.clear()
+            run_hub(cfg, PROFILES, Client(fake.url, API_KEY), reporter()[0])
+            self.assertFalse([f for f, v in fake.folders.items() if v["paused"]])
+            self.assertEqual(
+                sorted(p for _, p, _ in fake.writes()),
+                ["/rest/config/folders/wz-library", "/rest/config/folders/wz-songs"],
+            )
+
+    def test_a_paused_folder_is_only_reported_in_a_dry_run(self) -> None:
+        with FakeSyncthing(HUB_ID) as fake:
+            cfg = make_config(fake.url)
+            run_hub(cfg, PROFILES, Client(fake.url, API_KEY), reporter()[0])
+            fake.folders["wz-tools"]["paused"] = True
+            fake.requests.clear()
+            sent: list[str] = []
+            client = Client(fake.url, API_KEY, label="hub", dry_run=True, sink=sent.append)
+            rep, lines = reporter()
+            run_hub(cfg, PROFILES, client, rep)
+            self.assertEqual(fake.writes(), [])
+            self.assertTrue(fake.folders["wz-tools"]["paused"])
+            self.assertIn("wz-tools: was paused, resumed", lines)
+            self.assertTrue(any("wz-tools" in line and "paused" in line for line in sent))
+
     def test_dry_run_prints_the_bootstrap_and_waits_for_nothing(self) -> None:
         with FakeSyncthing(HUB_ID) as fake:
             lines: list[str] = []
@@ -564,6 +609,17 @@ class DeviceTests(DeviceFixture):
             )
             self.assertTrue(any("pre-check" in w for w in rep.warnings))
             self.assertEqual(local.ignores["wz-library"], DECK_LIBRARY_IGNORES)
+
+    def test_a_paused_device_folder_with_the_right_ignores_is_left_alone(self) -> None:
+        # Only the hub run resumes such a folder: a device folder is paused for a reason
+        # only the person at the console knows (the menu, a manual pause).
+        with FakeSyncthing(DECK_ID) as local, FakeSyncthing(HUB_ID) as hub:
+            self.run_device(local, hub, folders=["tools"])
+            local.folders["wz-tools"]["paused"] = True
+            local.requests.clear()
+            self.run_device(local, hub, folders=["tools"])
+            self.assertTrue(local.folders["wz-tools"]["paused"])
+            self.assertEqual(local.writes(), [])
 
     def test_timeout_leaves_folder_on_bootstrap_ignores(self) -> None:
         with FakeSyncthing(DECK_ID) as local, FakeSyncthing(HUB_ID) as hub:

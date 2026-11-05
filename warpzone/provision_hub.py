@@ -114,7 +114,7 @@ def provision_hub(
                 client, spec, timeout=wait_timeout, poll=poll, rep=rep, sleep=sleep, clock=clock
             )
         else:
-            apply_ignores(client, spec, current, created, rep)
+            apply_ignores(client, spec, current, created, rep, resume_paused=True)
         rep.flush(spec.id)
         if not spec.required_files or bootstrapped:
             if bootstrapped and client.dry_run:

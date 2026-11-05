@@ -103,15 +103,28 @@ def unpause(client: Client, spec: FolderSpec, rep: Reporter) -> None:
 
 
 def apply_ignores(
-    client: Client, spec: FolderSpec, current: dict[str, Any] | None, created: bool, rep: Reporter
+    client: Client,
+    spec: FolderSpec,
+    current: dict[str, Any] | None,
+    created: bool,
+    rep: Reporter,
+    *,
+    resume_paused: bool = False,
 ) -> None:
-    """Set the final ignores directly (no bootstrap) and make sure the folder runs."""
+    """Set the final ignores directly (no bootstrap) and make sure the folder runs.
+
+    A paused folder is resumed when its ignores had to change. With `resume_paused` (the
+    hub run) it is resumed even when they were already right: that is what a creation that
+    stopped after the ignores was set looks like. A device leaves such a folder alone."""
     wanted = list(spec.ignores)
     changed = created or client.get_ignores(spec.id) != wanted
     if changed:
         client.set_ignores(spec.id, wanted)
         rep.note(spec.id, "ignores set")
-    if created or (changed and current is not None and current.get("paused")):
+    paused = current is not None and bool(current.get("paused"))
+    if created or (paused and (changed or resume_paused)):
+        if paused and not changed:
+            rep.note(spec.id, "was paused")
         unpause(client, spec, rep)
 
 
