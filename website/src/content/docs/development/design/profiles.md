@@ -162,7 +162,11 @@ arrangement already exists on devices, where save folders sit inside
 **Not synced on purpose.** xemu's HDD image (`~/Emulation/storage/xemu/xbox_hdd.qcow2`)
 holds that console's Xbox saves inside a single disk image that is rewritten
 while the game runs, so two-way sync would corrupt it or leave conflict copies.
-It is per device and has no entry. xemu's `eeprom.bin` has no folder either: it travels
+It is per device and has no entry, so Xbox saves do not travel between consoles. An xemu
+memory unit (a raw 8 MiB FATX image attached to a controller slot) would be a small file
+holding only saves, but in xemu 0.8.136 neither LEGO Star Wars nor FIFA Football 2004
+offered it: both saved to the HDD image without asking, and the memory unit stayed
+untouched. So there is no `saves.xemu-mu` entry. xemu's `eeprom.bin` has no folder either: it travels
 as [system data](/warpzone/development/design/emulator-settings/#system-data) of the emulator settings. xemu's BIOS files
 (`mcpx_1.0.bin`, `Complex_4627v1.03.bin`) are real files in `~/Emulation/bios`,
 so the library delivers them as it always did.
