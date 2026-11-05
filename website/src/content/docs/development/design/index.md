@@ -41,7 +41,7 @@ The pages after this one cover one subject each.
 ## Pages
 
 - [Hub, folders and ignores](/warpzone/development/design/hub-and-folders/): the hub layout, the Syncthing folders, the ignore files and the bootstrap problem.
-- [Profiles](/warpzone/development/design/profiles/): where things live on a kind of device, library exclusions and BIOS placements, frontend and RetroArch overrides, shadPS4.
+- [Profiles](/warpzone/development/design/profiles/): where things live on a kind of device, library exclusions and BIOS placements, frontend and RetroArch overrides, shadPS4, Cemu paths.
   - [Title links](/warpzone/development/design/title-links/): symlinks from the library's games into an emulator's own folder.
   - [Frontend artwork](/warpzone/development/design/frontend-artwork/): the artwork folders and the generated gamelists.
   - [Play state](/warpzone/development/design/play-state/): favourites and play statistics across devices.

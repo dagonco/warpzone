@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ## [Unreleased]
 
+### Fixed
+
+- On SteamOS with EmuDeck, `provision device` sets Cemu's MLC path to `~/Emulation/roms/wiiu/mlc01` and adds `~/Emulation/roms/wiiu/roms` to its game paths in `~/.config/Cemu/settings.xml` (a new `[cemu]` profile table), which EmuDeck leaves unset on SteamOS 3.9. Until now Cemu saved in `~/.local/share/Cemu/mlc01`, where warpzone does not sync, and its game list was empty. Only those two values change; the file is backed up first, skipped while Cemu runs, never created, and `mlc_path` stays as it is while the folder Cemu used holds saves. `warpzone doctor` reports `Cemu paths`.
+- The Cemu keys folder (`wz-bios-cemu-keys`) is created once `~/.config/Cemu` exists, so `keys.txt` arrives before Cemu first runs instead of being skipped.
+
 ## [0.3.0rc4] - 2026-11-05
 
 Fourth release candidate of 0.3.0: the Anbernic installs releases only from its Options menu, where "Warpzone Update Now" now works with the menu open, and Wii and GameCube `.rvz` images keep their own names.

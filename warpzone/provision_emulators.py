@@ -1,6 +1,6 @@
 """Device edits for the frontend and the emulators.
 
-ES-DE's system list, RetroArch, shadPS4 and the title links.
+ES-DE's system list, RetroArch, shadPS4, Cemu and the title links.
 """
 
 from __future__ import annotations
@@ -10,7 +10,7 @@ from collections.abc import Sequence
 from functools import partial
 from pathlib import Path
 
-from warpzone import esde, frontend, procs, safefile, settings_state, shadps4, titlelinks
+from warpzone import cemu, esde, frontend, procs, safefile, settings_state, shadps4, titlelinks
 from warpzone.paths import expand_home
 from warpzone.probes import REAL_PROBES, DeviceProbes
 from warpzone.profiles import Profile
@@ -260,6 +260,101 @@ def ensure_shadps4_dirs(
             rep.warn(f"{path} changed while it was being edited, so it was left alone: {again}")
             continue
         rep.out(f"shadps4: added the install folder {folders} to {path} (old file backed up)")
+
+
+def _cemu_apply(text: str, mlc: str | None, game_path: str) -> bytes:
+    return cemu.apply(text, mlc, game_path).encode("utf-8")
+
+
+def ensure_cemu_paths(
+    name: str,
+    profile: Profile,
+    home: Path,
+    rep: Reporter,
+    *,
+    dry_run: bool,
+    probes: DeviceProbes = REAL_PROBES,
+    state_root: Path,
+) -> None:
+    """Set Cemu's MLC path and add the library's Wii U folder to its game paths.
+
+    Only an existing `settings.xml` is edited (Cemu writes it on its first start, and its
+    first-start dialog shows only while there is none), only while Cemu is closed, and only
+    those two elements; every other byte is kept. The MLC path stays as it is while the folder
+    Cemu uses now holds saves, which would vanish from its view. The old file is backed up
+    before the edit and a second run changes nothing.
+    """
+    rule = profile.cemu
+    if rule is None or "library" not in profile.paths:
+        return
+    library = expand_home(profile.paths["library"], home).rstrip("/")
+    mlc, game_path = rule.wants(library)
+    path = Path(expand_home(rule.settings, home))
+    again = f"run `warpzone provision device {name}` again"
+    try:
+        text = path.read_bytes().decode("utf-8")
+    except FileNotFoundError:
+        rep.warn(
+            f"no Cemu settings file found ({path}), so its MLC path and game folder were not "
+            f"set: start Cemu once, finish its first-start dialog and close it, then {again}"
+        )
+        return
+    except (OSError, UnicodeDecodeError) as exc:
+        rep.warn(f"cannot read {path} ({exc}), so it was left alone")
+        return
+    try:
+        current = cemu.read(text)
+        gaps = cemu.missing(text, mlc, game_path)
+    except cemu.CemuConfigError as exc:
+        rep.warn(f"{path} was left alone: {exc}")
+        return
+    if not gaps:
+        rep.out(f"cemu: {path} already has the MLC path and the game folder")
+        return
+    want_mlc: str | None = mlc if cemu.MLC in gaps else None
+    if want_mlc is not None:
+        old = Path(expand_home(cemu.in_use(current, rule.default_mlc), home)) / "usr" / "save"
+        if _holds_anything(old):
+            want_mlc = None
+            rep.warn(
+                f"Cemu keeps saves in {old}, which warpzone does not sync, so its mlc_path in "
+                f"{path} was left as it is: move what is in that folder to {mlc}/usr/save "
+                f"with Cemu closed, then {again}"
+            )
+    keys = [k for k in gaps if k != cemu.MLC or want_mlc is not None]
+    if not keys:
+        return
+    what = "Cemu's settings.xml"
+    if busy(rule.process, "Cemu", what, again, rep, probes):
+        return
+    shown = " and ".join(keys)
+    if dry_run:
+        rep.out(f"cemu: dry-run: would set {shown} in {path}")
+        return
+    try:
+        outcome = safefile.guarded_edit(
+            path,
+            partial(_cemu_apply, text, want_mlc, game_path),
+            expect=safefile.stamp(path),
+            busy=lambda: busy(rule.process, "Cemu", what, again, rep, probes),
+            backup=partial(settings_state.backup, path, "cemu", path.name, root=state_root),
+        )
+    except cemu.CemuConfigError as exc:
+        rep.warn(f"{path} was left alone: {exc}")
+        return
+    if outcome is safefile.Edit.BUSY:
+        return
+    if outcome is safefile.Edit.CHANGED:
+        rep.warn(f"{path} changed while it was being edited, so it was left alone: {again}")
+        return
+    rep.out(f"cemu: set {shown} in {path} (old file backed up)")
+
+
+def _holds_anything(folder: Path) -> bool:
+    try:
+        return any(folder.iterdir())
+    except OSError:
+        return False
 
 
 def ensure_title_links(

@@ -15,11 +15,11 @@ refused with the list of the ones that are. Paths use `~` and are expanded on th
 
 Besides `name` and `description`, a profile has the top-level flag `ignore_perms` and these
 tables: `[paths]`, `[library]`, `[saves.*]`, `[bios.*]`, `[settings.*]`, `[es_systems]`,
-`[retroarch]`, `[artwork]`, `[play_state]`, `[shadps4]`, `[links.*]`, `[options_menu]` and
+`[retroarch]`, `[artwork]`, `[play_state]`, `[shadps4]`, `[cemu]`, `[links.*]`, `[options_menu]` and
 `[updater]` (`profiles.parse_profile` refuses any other key). The shipped files are the reference; this is
 the shape of the first four, and the others are described where their feature is
 ([Frontend and RetroArch overrides](#frontend-and-retroarch-overrides),
-[shadPS4 install directories](#shadps4-install-directories), [Options menu](#options-menu), [Title links](/warpzone/development/design/title-links/),
+[shadPS4 install directories](#shadps4-install-directories), [Cemu paths](#cemu-paths), [Options menu](#options-menu), [Title links](/warpzone/development/design/title-links/),
 [Frontend artwork](/warpzone/development/design/frontend-artwork/), [Play state](/warpzone/development/design/play-state/) and, for `[settings.*]`,
 [Emulator settings](/warpzone/development/design/emulator-settings/#profile-entries)):
 
@@ -126,7 +126,7 @@ Shipped placements:
 | `wz-bios-eden-keys` | `bios/eden/keys` | `~/.local/share/eden/keys` | `prod.keys`, `title.keys` |
 | `wz-bios-eden-firmware` | `bios/eden/firmware` | `~/Emulation/storage/eden/nand/system/Contents/registered` (`verify`) | everything in the folder |
 | `wz-bios-azahar-keys` | `bios/azahar` | `~/.local/share/azahar-emu/sysdata` | `aes_keys.txt` |
-| `wz-bios-cemu-keys` | `bios/cemu` | `~/.local/share/Cemu` | `keys.txt` |
+| `wz-bios-cemu-keys` | `bios/cemu` | `~/.local/share/Cemu` (`create_when` `~/.config/Cemu`) | `keys.txt` |
 
 Keys travel in exactly these files and nowhere else; their content is never
 printed. Eden firmware is uncertain: EmuDeck's `bios/eden/firmware` symlink
@@ -282,6 +282,45 @@ changed; `provision device` backs the file up, refuses while ES-DE runs and uses
 write that fails if the file changed meanwhile. `doctor` compares the script with the text
 `provision` would write and reads the rule. The ES-DE startup scripts do not depend on any of
 this: if EmuDeck puts its entry back, only PS4 launching goes back to the Qt launcher.
+
+## Cemu paths
+
+Cemu keeps its installs and saves below the MLC folder, `<mlc_path>` in
+`~/.config/Cemu/settings.xml`; an empty value means its user data folder
+(`~/.local/share/Cemu/mlc01`). Its own game list comes from `<GamePaths>`, a list of `<Entry>`
+elements; ES-DE starts games with `-g <file>` and does not need it. EmuDeck sets both with an
+`xmlstarlet` that does not start on SteamOS 3.9 (it lacks `libxml2.so.2`), so a new console keeps
+EmuDeck's template: `mlc_path` empty, which puts the saves outside `saves.cemu-saves`
+(`~/Emulation/roms/wiiu/mlc01/usr/save`), and a game path on an SD card that is not there. A
+profile with `[cemu]` (`settings`, `process`, `mlc`, `default_mlc`, `game_path`; `mlc` and
+`game_path` may use `{library}`) has `provision device` fix both, for a device that subscribes
+to `library`, after the shadPS4 steps. The profile `steamos-emudeck` declares
+`{library}/roms/wiiu/mlc01` (whose `usr/save` is the synced save folder) and
+`{library}/roms/wiiu/roms` (where `inbox` files `.wua` archives).
+
+- **Edit.** `<mlc_path>` is set to `mlc`, and `game_path` is appended to `<GamePaths>` unless it
+  is listed (trailing slashes do not count); the other entries stay. Both must be children of
+  the root `<content>`. Only those elements are edited, as text, so every other byte is kept
+  (Cemu rewrites the whole file in its own layout when it saves anyway). A missing element is
+  added as the root's last child. The result must parse to the original with only those values
+  changed, and a file with an element twice, hidden in a comment or nested elsewhere is left
+  alone with a warning (`cemu.apply` is pure).
+- **No file.** A missing `settings.xml` is never created: Cemu shows its first-start dialog only
+  while there is none, and that dialog is where it offers the community graphic packs. The run
+  warns to start Cemu once, finish the dialog, close it and run `provision` again.
+- **Saves in the old folder.** When `mlc_path` would change and the folder Cemu uses now
+  (`mlc_path`, or `default_mlc` when empty) holds anything in `usr/save`, `mlc_path` is left as
+  it is, with a warning naming that folder and the synced one: changing it would hide those
+  saves from Cemu. The game path is still added. Moving the saves is left to the user, because a
+  title may already have a save from the hub there.
+- **Safety.** As for shadPS4: written only while none of `process` runs (`Cemu`, and
+  `Cemu.AppImage`), the old file backed up first to the settings state folder (`backups/cemu`),
+  and an atomic write that is refused if the file changed meanwhile. A second run changes nothing;
+  `--dry-run` prints what it would set.
+- **Doctor.** `doctor` reports `Cemu paths`: a warning when the file is missing, does not read,
+  has an `mlc_path` that is not `mlc` (naming the folder Cemu uses instead) or lacks the game path.
+- **Why not the settings layer.** It has no XML format, and both values follow each console's
+  own library path, so they are declared in the profile like the shadPS4 list.
 
 ## Options menu
 

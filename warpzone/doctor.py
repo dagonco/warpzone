@@ -39,6 +39,7 @@ from pathlib import Path
 from warpzone import (
     __version__,
     artwork,
+    cemu,
     esde,
     frontend,
     localst,
@@ -766,6 +767,7 @@ def load_config_state(path: Path) -> ConfigState:
                     profile.es_systems
                     or profile.retroarch
                     or profile.shadps4
+                    or profile.cemu
                     or profile.links
                     or art
                 ):
@@ -1366,6 +1368,42 @@ def judge_shadps4_dirs(
     return _merge(parts)
 
 
+def judge_cemu_paths(
+    *,
+    device: str,
+    path: str,
+    text: str | None,
+    mlc: str,
+    default_mlc: str,
+    game_path: str,
+) -> tuple[str, str, str]:
+    """Verdict on Cemu's MLC path and game paths in its `settings.xml` (None if absent)."""
+    again = f"run `warpzone provision device {device}` with Cemu closed"
+    if text is None:
+        return (
+            WARN,
+            f"no Cemu settings file found ({path})",
+            f"start Cemu once, finish its first-start dialog and close it, then {again}",
+        )
+    try:
+        paths = cemu.read(text)
+        gaps = cemu.missing(text, mlc, game_path)
+    except cemu.CemuConfigError as exc:
+        return WARN, f"{path}: {exc}", "fix the file by hand, or start Cemu again"
+    if not gaps:
+        return OK, f"{path} uses {mlc} and lists {game_path}", ""
+    parts: list[str] = []
+    if cemu.MLC in gaps:
+        now = "is empty" if not paths.mlc else f"is {paths.mlc}"
+        parts.append(
+            f"its mlc_path {now}, so Cemu keeps saves in {cemu.in_use(paths, default_mlc)}, "
+            f"not in {mlc}/usr/save, which warpzone syncs"
+        )
+    if cemu.GAME_PATHS in gaps:
+        parts.append(f"its GamePaths lack {game_path}, so Cemu's own game list misses the library")
+    return WARN, f"{path}: {'; '.join(parts)}", again
+
+
 def judge_shadps4_launch(
     *,
     device: str,
@@ -1690,6 +1728,18 @@ def check_frontend(ctx: Context) -> list[Result]:
                 emulator=launch.emulator,
             )
             results.append(Result("shadPS4 launcher", G_FRONTEND, *verdict))
+    if (wiiu := profile.cemu) is not None:
+        settings = Path(expand_home(wiiu.settings, p.home))
+        mlc, game_path = wiiu.wants(library)
+        verdict = judge_cemu_paths(
+            device=device.name,
+            path=str(settings),
+            text=p.read_text(settings) if p.is_file(settings) else None,
+            mlc=mlc,
+            default_mlc=expand_home(wiiu.default_mlc, p.home),
+            game_path=game_path,
+        )
+        results.append(Result("Cemu paths", G_FRONTEND, *verdict))
     if profile.links:
         results += _check_links(ctx, device)
     return results
