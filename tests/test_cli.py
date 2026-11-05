@@ -588,6 +588,10 @@ class SelfUpdateCommandTests(unittest.TestCase):
         self.assertEqual(change.call_args.args[1], "rc")
         self.assertEqual(change.call_args.args[0].name, "conf")
 
+    def test_now_and_channel_do_not_go_together(self) -> None:
+        code, _, _ = run("self-update", "--now", "--channel", "rc")
+        self.assertEqual(code, 2)
+
     def test_channel_takes_only_stable_or_rc(self) -> None:
         code, _, _ = run("self-update", "--channel", "beta")
         self.assertEqual(code, 2)

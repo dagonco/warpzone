@@ -49,6 +49,8 @@ show() {{
 """
 
 _STATUS = f"""
+# `warpzone doctor` may take a while: say so on the screen meanwhile.
+printf 'Warpzone: reading the status...\\n'
 # The status reads local files only (never the network).
 UPDATER_DIR="$WZ_HOME/.local/state/warpzone/updater"
 # kv FILE KEY: the value of the last `KEY=value` line of FILE, empty when there is none.
@@ -109,28 +111,6 @@ Last fetch: $(or_unknown "$FETCH")
 Doctor: $DOCTOR_TEXT"
 """
 
-_UPDATE = f"""
-# The live updater runs the update itself when it knows `tick --now`: it does not need the
-# clone's Python, so it can still put back a release that no longer starts.
-LIVE="$WZ_HOME/.local/share/warpzone/updater/updater.sh"
-if [ -f "$LIVE" ] && grep -Eq '^UPDATER_ABI=([2-9]|[1-9][0-9]+)[[:space:]]*$' "$LIVE"; then
-	OUT=$(sh "$LIVE" tick --now 2>&1)
-	RC=$?
-elif [ -x "$WZ" ]; then
-	OUT=$("$WZ" self-update --now 2>&1)
-	RC=$?
-else
-	show "warpzone is not installed here (unknown)"
-	exit 0
-fi
-LAST=$(printf '%s\\n' "$OUT" | grep -v '^$' | tail -n 6 | cut -c1-{LINE_WIDTH})
-[ -n "$LAST" ] || LAST="(no output)"
-show "Update check finished (exit $RC)
-$LAST"
-exit 0
-"""
-
-
 _MENU = """
 # The live updater runs the update itself when it knows `tick --now`: it does not need the
 # clone's Python, so it can still put back a release that no longer starts.
@@ -153,30 +133,64 @@ $LAST"
 }
 
 TTY=${WZ_TTY:-/dev/tty1}
+# WZ_TTY is for tests: a plain file as the terminal, no controller helper and no font.
+GPTK=/opt/inttools/gptokeyb
+[ -z "${WZ_TTY:-}" ] || GPTK=
 if [ -z "${WZ_TTY:-}" ] && [ -e "$TTY" ] && [ ! -w "$TTY" ]; then
 	sudo -n chmod 666 "$TTY" >/dev/null 2>&1
 fi
-if ! command -v dialog >/dev/null 2>&1 || [ ! -w "$TTY" ]; then
+# Without dialog, the terminal or the controller helper, a box would wait for keys that never
+# come: show the status the old way instead.
+CAN=1
+command -v dialog >/dev/null 2>&1 || CAN=
+[ -w "$TTY" ] || CAN=
+[ -z "$GPTK" ] || [ -x "$GPTK" ] || CAN=
+if [ -z "$CAN" ]; then
 	show "$TEXT"
 	exit 0
 fi
 
-# The controller drives `dialog` through gptokeyb, as in ArkOS's own msgbox.
+# The font ArkOS's own Wifi entry uses, so the boxes fit; put back on exit as ArkOS does.
+FONT_SET=
+if [ -n "$GPTK" ]; then
+	FONT=Lat7-TerminusBold22x11
+	[ ! -e /dev/input/by-path/platform-odroidgo2-joypad-event-joystick ] || FONT=Lat7-Terminus16
+	sudo -n setfont "/usr/share/consolefonts/$FONT.psf.gz" >/dev/null 2>&1 && FONT_SET=1
+fi
+
+# The controller drives `dialog` through gptokeyb, as in ArkOS's own msgbox: started when none
+# runs, stopped (kill -9, as ArkOS does) while an update runs and on exit.
 GPTK_PID=
-if [ -z "${WZ_TTY:-}" ] && [ -x /opt/inttools/gptokeyb ] && [ -z "$(pgrep -f gptokeyb)" ]; then
+gptk_up() {
+	[ -n "$GPTK" ] || return 0
+	if pgrep -x gptokeyb >/dev/null 2>&1 || pgrep -f oga_controls >/dev/null 2>&1; then
+		return 0
+	fi
 	sudo -n chmod 666 /dev/uinput >/dev/null 2>&1
 	SDL_GAMECONTROLLERCONFIG_FILE=/opt/inttools/gamecontrollerdb.txt \\
-		/opt/inttools/gptokeyb -1 dialog -c /opt/inttools/keys.gptk >/dev/null 2>&1 &
+		"$GPTK" -1 dialog -c /opt/inttools/keys.gptk >/dev/null 2>&1 &
 	GPTK_PID=$!
-fi
+}
+gptk_down() {
+	[ -z "$GPTK_PID" ] || kill -9 "$GPTK_PID" >/dev/null 2>&1
+	GPTK_PID=
+}
+# drain: drop the keys pressed while nothing was listening, so they do not close the next box.
+drain() {
+	while read -r -s -t 0.2 -n 1 _ <"$TTY" 2>/dev/null; do :; done
+}
 [ -f /opt/inttools/noshadows.dialogrc ] && export DIALOGRC=/opt/inttools/noshadows.dialogrc
 # shellcheck disable=SC2329 # run by the trap
 finish() {
-	[ -z "$GPTK_PID" ] || kill "$GPTK_PID" >/dev/null 2>&1
+	gptk_down
+	if [ -n "$FONT_SET" ]; then
+		sudo -n setfont /usr/share/consolefonts/Lat7-Terminus20x10.psf.gz >/dev/null 2>&1
+	fi
 	printf '\\033c' >"$TTY" 2>/dev/null
 }
 trap finish EXIT
 printf '\\033c\\e[?25l' >"$TTY" 2>/dev/null
+gptk_up
 
 box() {
 	dialog --clear --title Warpzone --msgbox "$1" 20 50 >"$TTY" 2>&1
@@ -193,12 +207,17 @@ New release: $AVAILABLE"
 set -- status "Status"
 [ -z "$AVAILABLE" ] || set -- "$@" install "Install $AVAILABLE now"
 set -- "$@" channel "Follow $OTHER releases" exit "Exit"
-CHOICE=$(dialog --clear --title Warpzone --menu "$SUMMARY" 15 50 4 "$@" 2>&1 >"$TTY")
+CHOICE=$(dialog --clear --no-tags --title Warpzone --menu "$SUMMARY" 15 50 4 "$@" 2>&1 >"$TTY")
 case $CHOICE in
 status) box "$TEXT" ;;
 install)
+	gptk_down
+	stty -F "$TTY" -echo >/dev/null 2>&1
 	dialog --title Warpzone --infobox "Installing $AVAILABLE... (a few minutes)" 5 50 >"$TTY" 2>&1
 	update_now
+	stty -F "$TTY" echo >/dev/null 2>&1
+	drain
+	gptk_up
 	box "$RESULT"
 	;;
 channel)

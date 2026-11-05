@@ -317,6 +317,18 @@ class ChannelCommandTests(unittest.TestCase):
         self.assertEqual(self.change("stable", version="0.3.0rc4"), 0)
         self.assertTrue(any("0.3.0rc4" in line and "stable" in line for line in self.lines))
 
+    def test_a_dry_run_writes_nothing(self) -> None:
+        before = (self.config.read_text(), self.conf.read_text())
+        self.assertEqual(
+            selfupdate.change_channel(
+                self.conf, "rc", self.lines.append, version="0.3.0", dry_run=True
+            ),
+            0,
+        )
+        self.assertEqual((self.config.read_text(), self.conf.read_text()), before)
+        self.assertEqual(list(self.root.glob("config.toml.bak-*")), [])
+        self.assertTrue(all("dry-run" in line for line in self.lines))
+
     def test_the_same_channel_writes_nothing(self) -> None:
         before = self.conf.read_text()
         self.assertEqual(self.change("stable"), 0)

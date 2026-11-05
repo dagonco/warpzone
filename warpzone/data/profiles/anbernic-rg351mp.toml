@@ -91,14 +91,14 @@ refresh = "15min"
 ignore = ["(?d)/roms/*/gamelist.xml"]
 
 # ArkOS lists every executable .sh in /opt/system in its Options menu. `provision device`
-# adds "Warpzone Status.sh" (version, updater state and the problems `warpzone doctor`
-# finds, read from local files) and "Warpzone Update Now.sh" there, and touches nothing
-# else in the folder.
+# adds "Warpzone.sh" there (a menu with the status, "Install <tag> now" when the timer found a
+# release, and the channel), removes the entries of earlier versions it wrote, and touches
+# nothing else in the folder.
 [options_menu]
 dir = "/opt/system"
 
 # EmulationStation is open whenever the console is on, so a timer that waits for the menu to
 # close would wait for days, and one that does not would update in the middle of a session.
-# The timer only looks for a release; "Warpzone Update Now" in Options installs it.
+# The timer only looks for a release; "Install <tag> now" in the Warpzone entry installs it.
 [updater]
 install = "manual"

@@ -287,6 +287,13 @@ def ensure_options_menu(
                 rep.out(f"{tag}: wrote {path}")
         except OSError as exc:
             rep.warn(f"{tag}: cannot write {path} ({exc})")
+    # The old entries go only once the new one is ours, so the console is never left without one.
+    try:
+        entry = (folder / options_menu.ENTRY_NAME).read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        entry = ""
+    if options_menu.MARKER not in entry and not dry_run:
+        return
     for name in options_menu.OLD_NAMES:
         path = folder / name
         try:

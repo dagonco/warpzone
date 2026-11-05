@@ -119,6 +119,14 @@ class ProvisionTests(Device, unittest.TestCase):
         self.assertEqual(mine.read_text(), "#!/bin/bash\necho mine\n")
         self.assertEqual(len(rep.warnings), 1)
 
+    def test_the_old_entries_stay_when_the_new_one_could_not_be_written(self) -> None:
+        old = self.options_dir / options_menu.OLD_NAMES[0]
+        old.write_text("#!/bin/bash\n" + options_menu.MARKER + "\nold\n")
+        (self.options_dir / options_menu.ENTRY_NAME).write_text("#!/bin/bash\necho mine\n")
+        rep, _ = self.install()
+        self.assertTrue(old.exists(), "no warpzone entry would be left")
+        self.assertEqual(len(rep.warnings), 1)
+
     def test_the_entries_of_earlier_versions_are_removed_when_they_are_ours(self) -> None:
         ours, theirs = (self.options_dir / n for n in options_menu.OLD_NAMES)
         ours.write_text("#!/bin/bash\n" + options_menu.MARKER + "\nold\n")

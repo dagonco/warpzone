@@ -296,10 +296,13 @@ def set_channel_text(text: str, device: str, channel: str) -> str:
 def set_conf_channel(text: str, channel: str) -> str:
     """The updater's settings with `channel=` replaced (or added at the end) (pure)."""
     lines = text.splitlines(keepends=True)
+    found = False
     for i, line in enumerate(lines):
         if line.startswith("channel="):
             lines[i] = f"channel={channel}\n"
-            return "".join(lines)
+            found = True
+    if found:
+        return "".join(lines)
     if lines and not lines[-1].endswith("\n"):
         lines[-1] += "\n"
     return "".join(lines) + f"channel={channel}\n"
@@ -313,10 +316,12 @@ def change_channel(
     version: str,
     now: float | None = None,
     default_config: Path | None = None,
+    dry_run: bool = False,
 ) -> int:
     """`warpzone self-update --channel`: set the channel of this device in its config (with a
     backup next to it, `<config>.bak-<date>`) and in the updater's settings, so it holds from
-    the next tick and `provision device` keeps it. Returns 0, or 1 with a message."""
+    the next tick and `provision device` keeps it; `dry_run` says what it would write. Returns
+    0, or 1 with a message."""
     if channel not in CHANNELS:
         out(f"self-update: the channel must be stable or rc, not {channel!r}")
         return 1
@@ -345,6 +350,11 @@ def change_channel(
         return 1
     if new == text and kv.get("channel") == channel:
         out(f"self-update: {device} already follows {channel}")
+        return 0
+    if dry_run:
+        if new != text:
+            out(f'self-update: dry-run: would set channel = "{channel}" for {device} in {config}')
+        out(f"self-update: dry-run: would set channel={channel} in {conf}")
         return 0
     when = time.strftime("%Y%m%d-%H%M%S", time.localtime(time.time() if now is None else now))
     try:
