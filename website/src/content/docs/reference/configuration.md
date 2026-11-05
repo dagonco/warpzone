@@ -83,7 +83,7 @@ Optional. Only `warpzone inbox` and `warpzone doctor` read it. `inbox` works wit
 | `dolphin_tool` | `dolphin-tool` on `PATH` | Reads compressed GameCube `.gcz` images. `.rvz` and `.wia` need no tool. |
 | `nsz` | `nsz` on `PATH` | Reads the title ID and version of Switch `.nsp` and `.nsz` files, and decompresses `.nsz`. |
 | `orbis_pkg_util` | `orbis-pkg-util` on `PATH` | Unpacks PS4 `.pkg` games. Without it the package is filed as it is. |
-| `vita3k` | `/Applications/Vita3K.app` on macOS, else `vita3k` on `PATH` | Vita3K, the app bundle or its binary: installs PS Vita `.pkg` games. Without it such a package goes to review. |
+| `vita3k` | `/Applications/Vita3K.app` on macOS, else `vita3k` on `PATH` | Vita3K, which installs PS Vita `.pkg` games: on macOS the app bundle (or a link to its binary), on Linux a plain binary (an AppImage is refused). It runs only in a work folder of its own, never in its own data. Without it such a package goes to review. |
 | `vita_zrif` | none | A file you keep with the zRIF of each PS Vita `.pkg`: `CONTENT_ID<TAB>zRIF` lines, or a TSV with a header row such as NoPayStation's `PSV_GAMES.tsv`, of which only the `Content ID` and `zRIF` columns are read. warpzone never prints a zRIF and never downloads keys. |
 | `titledb_dir` | none | A local clone of `blawar/titledb`, which names Switch games. |
 | `switch_keys` | `~/.switch/prod.keys` | Your console's keys file. warpzone only passes the path to `nsz`; it never reads or prints the file. |

@@ -154,7 +154,7 @@ def find_tools(
                     f"[inbox] vita3k: {settings.vita3k} is neither Vita3K.app nor an "
                     "executable file"
                 )
-            return settings.vita3k
+            return os.path.abspath(settings.vita3k)
         if vita3k_default and _executable(vita3k_executable(vita3k_default)):
             return vita3k_default
         return which("vita3k") or which("Vita3K")

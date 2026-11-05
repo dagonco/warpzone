@@ -514,10 +514,28 @@ class ToolTests(TmpCase):
             executables=["/x/V.app/Contents/MacOS/Vita3K"],
         )
         self.assertEqual(check_tool(app, spec).status, OK)
-        binary = context(self.tmp, '[inbox]\nvita3k = "/x/vita3k"\n', executables=["/x/vita3k"])
-        self.assertEqual(check_tool(binary, spec).status, OK)
         bad = context(self.tmp, '[inbox]\nvita3k = "/nope/V.app"\n')
         self.assertEqual(check_tool(bad, spec).status, FAIL)
+
+    def test_vita3k_that_inbox_would_refuse_is_a_warning(self) -> None:
+        spec = next(t for t in doctor.TOOLS if t.key == "Vita3K")
+        elf = self.tmp / "vita3k"
+        elf.write_bytes(b"\x7fELF\x02\x01\x01" + bytes(9))
+        appimage = self.tmp / "Vita3K.AppImage"
+        appimage.write_bytes(b"\x7fELF\x02\x01\x01\x00AI\x02" + bytes(5))
+        linux = {"system": "Linux", "os_release": DEBIAN}
+
+        def check(path: Path, **kw) -> doctor.Result:  # type: ignore[no-untyped-def]
+            config = f'[inbox]\nvita3k = "{path}"\n'
+            return check_tool(context(self.tmp, config, executables=[str(path)], **kw), spec)
+
+        self.assertEqual(check(elf, **linux).status, OK)
+        r = check(appimage, **linux)
+        self.assertEqual(r.status, WARN)
+        self.assertIn("AppImage", r.detail)
+        r = check(elf)  # macOS: not inside an app bundle
+        self.assertEqual(r.status, WARN)
+        self.assertIn("app bundle", r.detail)
 
 
 class SwitchCheckTests(TmpCase):

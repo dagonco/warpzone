@@ -212,14 +212,14 @@ The folder is copied file by file with a read-back to `<TITLEID>.part` and renam
 
 A Vita `.pkg` (a PlayStation Store package, as NoPayStation lists them) is encrypted, and its licence comes apart as a zRIF, a short text key. With [Vita3K](https://vita3k.org) on this machine and the game's zRIF in a key file you keep, `--apply` installs the package with Vita3K and files the result exactly like a [game dump](#ps-vita-games): the game folder, the licence and the launcher. warpzone never downloads packages or keys.
 
-1. Install Vita3K. On macOS put `Vita3K.app` in `/Applications` (the default), or set `vita3k` in `[inbox]` to the app or its binary. Elsewhere `vita3k` on PATH is used; only the macOS app has been tried.
+1. Install Vita3K. On macOS put `Vita3K.app` in `/Applications` (the default), or set `vita3k` in `[inbox]` to the app (a link to the binary inside it works too). On Linux use a plain Vita3K binary, not the AppImage, set in `vita3k` or on PATH as `vita3k`; only the macOS app has been tried.
 2. Keep the zRIFs in a file and set `[inbox] vita_zrif` to it. Either one line per game, the content id and the zRIF separated by a tab (lines starting with `#` are comments):
 
    ```
    EP9000-PCSF00024_00-PDEUAP1648614960<TAB><zRIF>
    ```
 
-   or a TSV with a header row, such as NoPayStation's `PSV_GAMES.tsv`: only the `Content ID` and `zRIF` columns are read, the rest (links included) is ignored.
+   or a TSV with a header row, such as NoPayStation's `PSV_GAMES.tsv`: only the `Content ID` and `zRIF` columns are read, the rest (links included) is ignored. Fields may be in double quotes, and a zRIF may lack its trailing `=`.
 3. Drop the `.pkg` in `inbox/`, loose or in an archive, and run the report:
 
 ```
@@ -236,11 +236,12 @@ A Vita `.pkg` (a PlayStation Store package, as NoPayStation lists them) is encry
   note: detected: Vita package: UP4034-PCSE00567_00-LAMULANAEX000000
 ```
 
-The report runs nothing: the title id, the title and the licence are read from the package header, its unencrypted `param.sfo` and the zRIF, so all three whitelist lines are known before installing. `--apply` then runs Vita3K in a folder of its own inside the local work folder (it needs about the package's size free) and never touches Vita3K's own data or a console's: it uses Vita3K's portable mode, with a link to the app and an empty `portable/` folder, and runs `Vita3K --version` first, so that if Vita3K does not use that folder nothing is installed. Vita3K exits with success even when an install fails, so warpzone checks what it left: the game folder with `eboot.bin` and a `param.sfo` of the same title id, content id and a game category, no `sce_pfs`, and a licence equal to the zRIF. The work folder is deleted afterwards.
+The report runs nothing: the title id, the title and the licence are read from the package header, its unencrypted `param.sfo` and the zRIF, so all three whitelist lines are known before installing. `--apply` then runs Vita3K in a folder of its own inside the local work folder (it needs about the package's size free) and never touches Vita3K's own data or a console's: it uses Vita3K's portable mode (on macOS a link to the app next to an empty `portable/` folder, on Linux `APPIMAGE` pointing into that folder), and runs `Vita3K --version` first, so that if Vita3K does not use that folder nothing is installed. A Vita3K that cannot be pointed at that folder is never run, and the package goes to review saying why: on macOS a binary that is not inside `Vita3K.app`, on Linux an AppImage (its runtime sets `APPIMAGE` itself) or a wrapper script. `warpzone doctor` warns about such a Vita3K too. Vita3K exits with success even when an install fails, so warpzone checks what it left: the game folder with `eboot.bin` and a `param.sfo` of the same title id, content id and a game category, no `sce_pfs`, and a licence equal to the zRIF. The work folder is deleted afterwards.
 
 - The zRIF is a key and is never printed or written to a reason file: the command line is shown with `***` in its place. While Vita3K runs (under a second for a 200 MiB package) it is on Vita3K's command line, the only way Vita3K takes it, so another user of the machine could see it in the process list.
-- A package whose content id has no zRIF in the file, or a zRIF that does not decode to that game's licence, goes to review saying so, without running Vita3K. So does an update, DLC, a theme or a PlayStation Mobile package, and a package smaller than its header says (an incomplete download). PS3 and PSP packages keep their "not supported by inbox yet" outcome.
+- A package whose content id has no zRIF in the file, or a zRIF that does not decode to that game's licence, goes to review saying so, without running Vita3K. So does a package whose `param.sfo` has no content id. So does an update, DLC, a theme or a PlayStation Mobile package, and a package smaller than its header says (an incomplete download). PS3 and PSP packages keep their "not supported by inbox yet" outcome.
 - A game already in the library is not installed again; its licence and launcher are added if they are missing.
+- If the work folder cannot be deleted afterwards, a warning names it: delete it by hand, it holds the game's licence.
 - If Vita3K fails, the reason quotes its last error line (`header signature is invalid` for a zRIF of another game, `Failed to load pkg file` for an unreadable package), with the zRIF redacted.
 
 ## Arcade sets

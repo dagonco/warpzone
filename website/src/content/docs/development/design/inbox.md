@@ -450,7 +450,8 @@ packages or keys.
   to review with the reason. For an app (`pkg_problem`, pure): the content id must be a Vita one
   (`XXnnnn-PCS[A-I]nnnnn_nn-` and 16 characters), the total size must equal the file's size
   (a truncated download goes to review), the `param.sfo` must be readable with the `TITLE_ID`
-  of the content id and, when it has one, the same `CONTENT_ID`, and its `CATEGORY` decides as
+  of the content id and the same `CONTENT_ID` (one without it goes to review: the installed
+  game could not be checked against the package), and its `CATEGORY` decides as
   for dumps: `gd` or `gdc` go on, an update (`gp`) or anything else goes to review. Nothing is
   run for a package that goes to review.
 - **zRIF.** `[inbox] vita_zrif` names a file the user keeps (a configured path that is not a
@@ -458,12 +459,14 @@ packages or keys.
   and `#` comments skipped; any other line makes the file unreadable, and the reason names the
   line by its number only), or a TSV whose first line names the columns `Content ID` and `zRIF`
   (NoPayStation's `PSV_GAMES.tsv`), of which only those two columns are read; the links and
-  everything else are ignored (`parse_zrif_table`, pure). A row whose zRIF is empty, `MISSING`
+  everything else are ignored (`parse_zrif_table`, pure). A field may be quoted with double
+  quotes, in the header too. A row whose zRIF is empty, `MISSING`
   or `NOT REQUIRED` gives no key; a content id listed twice with different zRIFs is refused.
   The file is read once per run. A package whose content id has no zRIF there, or with no file
   configured, goes to review saying so. A zRIF is the base64 of a zlib stream compressed with
   a preset 1024-byte dictionary (`zrif_dict` of `pkg2zip_zrif.c`, mmozeiko/pkg2zip; the
-  stream's DICTID is its adler32, 0x627d1d5d). `decode_zrif` (pure) checks the zlib header for
+  stream's DICTID is its adler32, 0x627d1d5d); its base64 padding may be left out.
+  `decode_zrif` (pure) checks the zlib header for
   that dictionary, decompresses with a bound and requires exactly 512 bytes; `license_for`
   then reads it with `inbox_vita.parse_license` and requires the package's content id. A PSM
   licence (1024 bytes) or the licence of another game goes to review.
@@ -472,29 +475,46 @@ packages or keys.
   Vita3K's output that is quoted (`failure_line`). Reasons about the key file never quote a
   line of it. Vita3K takes the zRIF only on its command line (`--zrif`), so it is visible in
   the process list of the machine while Vita3K runs (under a second for a 200 MiB package).
-- **Tool.** `[inbox] vita3k` is the app bundle (`Vita3K.app`) or a binary; unset, inbox uses
-  `/Applications/Vita3K.app` on macOS when its `Contents/MacOS/Vita3K` is executable, and
-  `vita3k` (or `Vita3K`) on PATH otherwise. Reported in the `tools:` line and by `doctor` as an
-  optional inbox tool; `doctor` does not run it (that would write Vita3K's config in the
-  user's data folder). Without it a package goes to review, in report mode too, unless the game
-  is already in the library.
+- **Tool.** `[inbox] vita3k` is the app bundle (`Vita3K.app`) or a binary (a relative path is
+  made absolute); unset, inbox uses `/Applications/Vita3K.app` on macOS when its
+  `Contents/MacOS/Vita3K` is executable, and `vita3k` (or `Vita3K`) on PATH otherwise. Reported
+  in the `tools:` line and by `doctor` as an optional inbox tool; `doctor` does not run it
+  (that would write Vita3K's config in the user's data folder), and warns when inbox would
+  refuse it (see below). Without it a package goes to review, in report mode too, unless the
+  game is already in the library.
 - **Isolation.** Vita3K has no option for where `--pkg` installs (`-c` is not read on that
   path, and on macOS it ignores `HOME`), and it deletes `ux0/app/<TITLEID>` before
   installing, so it must never run against its own data or a console's. Its portable mode is
   used instead, in a new folder of the local work folder (`work_dir`, which must have 1.1 times
   the package's size free): Vita3K takes a `portable/` folder, when there is one, for all its
-  data (`fs`, config, log, cache). On macOS it looks four levels above `Contents/Resources` of
-  the bundle it runs from, and does not resolve a link, so the folder gets a symbolic link
-  `Vita3K.app` to the configured bundle and an empty `portable/`, and the program run is
-  `<folder>/Vita3K.app/Contents/MacOS/Vita3K` (`launch_plan`, pure). For a plain binary
-  (Linux), Vita3K takes the folder next to `$APPIMAGE`, so it runs with `APPIMAGE` set to
-  `<folder>/Vita3K`; this is not tested with a real Linux build. Either way, `Vita3K --version`
-  runs first: in a new portable folder it writes `config.yml`, without which `--pkg` stops
-  with exit code 134. If `portable/config.yml` is not there afterwards, Vita3K is not using
+  data (`fs`, config, log, cache); where it looks for that folder is read from `init_paths`
+  (`app/src/app_init.cpp`). The configured path is first made absolute and resolved through
+  every symbolic link (`resolve_tool`), so a link such as `/usr/local/bin/vita3k` to the binary
+  inside the bundle counts as the bundle. Vita3K is then run only when its portable folder is
+  known to be the work folder's (`vita3k_problem`, pure, on the resolved path, `sys.platform`
+  and the first 16 bytes of the program); otherwise the package goes to review with the
+  reason, in report mode too, and nothing is run:
+  - *macOS:* Vita3K looks four levels above `Contents/Resources` of the bundle it runs from,
+    and does not resolve a link, so the folder gets a symbolic link `Vita3K.app` to the
+    resolved bundle and an empty `portable/`, and the program run is
+    `<folder>/Vita3K.app/Contents/MacOS/Vita3K` (`launch_plan`, pure). A binary that is not
+    inside an app bundle is refused: it would look for `portable/` next to itself, or use the
+    user's `~/Library/Application Support/Vita3K`.
+  - *Linux:* Vita3K reads `$APPIMAGE` whenever it is set and takes the folder next to it, and
+    when that folder exists every path (fs, config, cache, log) goes there and none comes from
+    XDG or `HOME`. So a plain ELF binary runs with `APPIMAGE` set to `<folder>/Vita3K`. An
+    AppImage (an ELF file with `AI` and type 1 or 2 at offset 8) is refused, because its
+    runtime overwrites `APPIMAGE` with its own path, and so is a file that is not ELF (a
+    wrapper script could run Vita3K anywhere, a Flatpak for one). This has not been tried with
+    a real Linux build.
+  - *Anything else* (a bundle on Linux, another system) is refused.
+
+  Then `Vita3K --version` runs first: in a new portable folder it writes `config.yml`,
+  without which `--pkg` stops with exit code 134. If `portable/config.yml` is not there afterwards, Vita3K is not using
   the folder, and the package goes to review before `--pkg` ever runs. Then
   `Vita3K --pkg <file> --zrif <zRIF>` runs in that folder with a one-hour limit; it opens no
   window and needs no firmware. The work folder is deleted afterwards (the link is removed,
-  never followed).
+  never followed); if it cannot be deleted, a warning names it, since it holds the licence.
 - **Result.** Vita3K exits 0 even when the install fails, so the result is judged on disk
   (`judge_installed`, pure): `portable/fs/ux0/app/<TITLEID>/` must hold `eboot.bin` and a
   `sce_sys/param.sfo` with the package's `TITLE_ID` and `CONTENT_ID` and a game `CATEGORY`, no

@@ -20,25 +20,29 @@ base64 of a zlib stream made with a fixed 1024-byte dictionary (`zrif_dict` of
 to review. warpzone never downloads keys or packages.
 
 With `--apply`, Vita3K installs it (`--pkg <file> --zrif <zRIF>`) in a folder of its own in
-the local work folder, in Vita3K's portable mode: a `portable/` folder next to a symbolic
-link to the configured app bundle (`[inbox] vita3k`, default `/Applications/Vita3K.app` on
-macOS), or, for a plain binary, `APPIMAGE` pointing into that folder (Vita3K on Linux reads
-its portable folder next to `$APPIMAGE`). `Vita3K --version` runs first: it writes
-`portable/config.yml`, without which `--pkg` fails, and if that file does not appear Vita3K is
-not using the work folder and nothing is installed (Vita3K deletes `ux0/app/<TITLEID>` before
-installing, so it must never run against its own data). Vita3K exits 0 even when the install
-fails, so the result is judged on disk: `ux0/app/<TITLEID>` with `eboot.bin` and a
-`sce_sys/param.sfo` whose title id, category and content id match the package, no
-`sce_pfs`, and `ux0/license/<TITLEID>/<CONTENT_ID>.rif` equal to the decoded zRIF. The game
-folder and that licence are then filed by `inbox_vita.install`, and the work folder is
-deleted.
+the local work folder, in Vita3K's portable mode. The configured tool (`[inbox] vita3k`,
+default `/Applications/Vita3K.app` on macOS) is resolved through links first, and Vita3K is
+run only when its portable folder is known to be the work folder's (`vita3k_problem`): on
+macOS it must be the app bundle, which gets a symbolic link in the work folder next to a
+`portable/` folder; on Linux it must be a plain ELF binary, run with `APPIMAGE` pointing
+into the work folder (Vita3K's `init_paths` takes the portable folder next to `$APPIMAGE`).
+An AppImage is refused (its runtime sets `APPIMAGE` to its own path), and so is anything
+else, without running it. `Vita3K --version` runs first: it writes `portable/config.yml`,
+without which `--pkg` fails, and if that file does not appear nothing is installed. Vita3K
+deletes `ux0/app/<TITLEID>` before installing, so it must never run against its own data.
+Vita3K exits 0 even when the install fails, so the result is judged on disk:
+`ux0/app/<TITLEID>` with `eboot.bin` and a `sce_sys/param.sfo` whose title id, category and
+content id match the package, no `sce_pfs`, and `ux0/license/<TITLEID>/<CONTENT_ID>.rif`
+equal to the decoded zRIF. The game folder and that licence are then filed by
+`inbox_vita.install`, and the work folder is deleted.
 
 A zRIF is a key: it is never printed, logged or written to a reason file; the command line
 shown has it redacted. It is passed to Vita3K on the command line, the only way Vita3K
 takes it, so it is visible in the process list while Vita3K runs (under a second).
 
 The decisions (`parse_header`, `parse_meta`, `vita_kind`, `pkg_problem`, `parse_zrif_table`,
-`decode_zrif`, `license_for`, `launch_plan`, `shown_command`, `judge_installed`) are pure, and
+`decode_zrif`, `license_for`, `vita3k_problem`, `launch_plan`, `shown_command`,
+`judge_installed`) are pure, and
 `read_pkg` reads only small bounded pieces of a file object; the rest touches the disk, and
 Vita3K runs through `RUN`, which tests replace. See development/design/inbox.md.
 """
@@ -51,6 +55,7 @@ import os
 import shutil
 import struct
 import subprocess
+import sys
 import tempfile
 import weakref
 import zlib
@@ -59,7 +64,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import BinaryIO
 
-from warpzone import inbox_ps4, inbox_vita
+from warpzone import inbox_core, inbox_ps4, inbox_vita
 from warpzone.inbox_core import (
     VITA3K_BINARY,
     Context,
@@ -102,6 +107,9 @@ MAX_TABLE_BYTES = 64 << 20
 NO_KEY = frozenset({"", "MISSING", "NOT REQUIRED"})  # NoPayStation's words for "no zRIF"
 TSV_CONTENT_ID, TSV_ZRIF = "Content ID", "zRIF"
 
+ELF_MAGIC = b"\x7fELF"
+APPIMAGE_AT, APPIMAGE_MAGICS = 8, (b"AI\x01", b"AI\x02")  # AppImage type 1 and 2
+TOOL_HEAD = 16  # how much of the Vita3K binary is read to tell an ELF from an AppImage
 APP_LINK = "Vita3K.app"  # the link to the app bundle in the work folder
 APPIMAGE_NAME = "Vita3K"  # what `APPIMAGE` names in the work folder for a plain binary
 PORTABLE = "portable"
@@ -241,7 +249,12 @@ def pkg_problem(rel: str, info: PkgInfo, file_size: int) -> str | None:
             f"{title_id}"
         )
     sfo_content = info.sfo.get("CONTENT_ID")
-    if sfo_content and sfo_content != info.content_id:
+    if not sfo_content:
+        return (
+            f"{rel}: its param.sfo has no content id, so the installed game could not be "
+            "checked against the package"
+        )
+    if sfo_content != info.content_id:
         return (
             f"{rel}: its param.sfo says content id {sfo_content}, but the package header says "
             f"{info.content_id}"
@@ -258,28 +271,37 @@ class ZrifTable:
     doubled: frozenset[str] = frozenset()  # content ids listed with different zRIFs
 
 
+def _cell(text: str) -> str:
+    """A field without surrounding blanks and one pair of surrounding double quotes."""
+    text = text.strip()
+    if len(text) >= 2 and text[0] == text[-1] == '"':
+        text = text[1:-1].strip()
+    return text
+
+
 def parse_zrif_table(text: str) -> ZrifTable:
-    """The zRIFs of a key file: `CONTENT_ID<TAB>zRIF` lines (blank lines and `#` comments
-    skipped), or a TSV whose first line names the columns `Content ID` and `zRIF`, of which
-    only those two are read. Rows whose zRIF is empty, `MISSING` or `NOT REQUIRED` are left
-    out. A line that cannot be read raises `ValueError` naming its number, never its text."""
+    """The zRIFs of a key file: `CONTENT_ID<TAB>zRIF` lines (blank lines and `#` comments skipped),
+    or a TSV whose first line names the columns `Content ID` and `zRIF`, of which only those two
+    are read. Fields may be quoted with double quotes. Rows whose zRIF is empty, `MISSING` or
+    `NOT REQUIRED` are left out. A line that cannot be read raises `ValueError` naming its
+    number, never its text."""
     lines = text.lstrip("﻿").splitlines()
     first = next((n for n, line in enumerate(lines) if line.strip()), None)
-    columns = lines[first].rstrip("\r").split("\t") if first is not None else []
+    columns = [_cell(c) for c in lines[first].split("\t")] if first is not None else []
     rows: list[tuple[str, str]] = []
     if TSV_CONTENT_ID in columns and TSV_ZRIF in columns:
         assert first is not None
         cid_at, zrif_at = columns.index(TSV_CONTENT_ID), columns.index(TSV_ZRIF)
         for line in lines[first + 1 :]:
-            cells = line.rstrip("\r").split("\t")
+            cells = line.split("\t")
             if len(cells) > max(cid_at, zrif_at):
-                rows.append((cells[cid_at].strip(), cells[zrif_at].strip()))
+                rows.append((_cell(cells[cid_at]), _cell(cells[zrif_at])))
     else:
         for n, line in enumerate(lines, 1):
             stripped = line.strip()
             if not stripped or stripped.startswith("#"):
                 continue
-            cells = [c.strip() for c in stripped.split("\t")]
+            cells = [_cell(c) for c in stripped.split("\t")]
             if len(cells) != 2 or not cells[0]:
                 raise ValueError(f"line {n} is not CONTENT_ID<TAB>zRIF")
             rows.append((cells[0], cells[1]))
@@ -294,11 +316,12 @@ def parse_zrif_table(text: str) -> ZrifTable:
 
 
 def decode_zrif(text: str) -> bytes:
-    """The licence a zRIF holds, or `ValueError` with the reason (which never quotes it)."""
+    """The licence a zRIF holds, or `ValueError` with the reason (which never quotes it).
+    The base64 padding may be left out."""
     if len(text) > MAX_ZRIF_CHARS:
         raise ValueError("is far too long for a zRIF")
     try:
-        raw = base64.b64decode(text, validate=True)
+        raw = base64.b64decode(text + "=" * (-len(text) % 4), validate=True)
     except (binascii.Error, ValueError):
         raise ValueError("is not base64, as a zRIF is") from None
     if len(raw) < 6 or raw[0] & 0x0F != 8 or not raw[1] & 0x20:
@@ -360,10 +383,53 @@ def _bundle_of(tool: str) -> tuple[str, str] | None:
     return None
 
 
+def resolve_tool(tool: str) -> str:
+    """The configured Vita3K path made absolute, with every symbolic link resolved, so that a
+    link to the binary inside the app bundle counts as the bundle."""
+    return os.path.realpath(os.path.abspath(tool))
+
+
+def vita3k_problem(tool: str, system: str, head: bytes) -> str | None:
+    """Why Vita3K at `tool` (resolved) cannot be run in a work folder of its own, or None.
+    `system` is `sys.platform`; `head` is the start of the program that would run.
+
+    From Vita3K's `init_paths` (`app/src/app_init.cpp`): on macOS the portable folder is four
+    levels above `Contents/Resources` of the bundle it runs from, so only the bundle can be
+    pointed at the work folder; on Linux it is the folder next to `$APPIMAGE` when that is set,
+    which an AppImage's runtime overwrites with its own path, and when it is a folder every
+    other path (fs, config, cache, log) goes there and none comes from XDG or `HOME`."""
+    bundle = _bundle_of(tool)
+    if system == "darwin":
+        if bundle:
+            return None
+        return (
+            f"Vita3K at {tool} is not inside an app bundle, and on macOS only Vita3K.app can be "
+            "run in a work folder of its own (portable mode), so it would install into its own "
+            "data; set [inbox] vita3k to Vita3K.app"
+        )
+    if system != "linux":
+        return "installing a Vita .pkg with Vita3K works only on macOS and Linux"
+    if bundle:
+        return f"{tool} is a macOS app bundle, which does not run here"
+    if head[:4] != ELF_MAGIC:
+        return (
+            f"{tool} is not an ELF binary (a wrapper script, for example), so it cannot be "
+            "told where Vita3K would install; set [inbox] vita3k to the Vita3K binary itself"
+        )
+    if head[APPIMAGE_AT : APPIMAGE_AT + 3] in APPIMAGE_MAGICS:
+        return (
+            f"{tool} is an AppImage, whose runtime sets APPIMAGE to its own path, so Vita3K "
+            "would install into its own data instead of a work folder; set [inbox] vita3k to "
+            "a plain (not AppImage) Vita3K binary"
+        )
+    return None
+
+
 def launch_plan(tool: str, run: Path) -> Launch:
-    """Vita3K on macOS takes its portable folder four levels above `Contents/Resources` of the
-    bundle it runs from, and does not resolve a link to the bundle, so a link in `run` makes
-    `run/portable` its folder. Elsewhere it takes the folder next to `$APPIMAGE`."""
+    """How to run Vita3K at `tool` (resolved, and with no `vita3k_problem`) in `run`. On macOS
+    Vita3K takes its portable folder four levels above `Contents/Resources` of the bundle it
+    runs from, and does not resolve a link to the bundle, so a link in `run` makes
+    `run/portable` its folder. On Linux it takes the folder next to `$APPIMAGE`."""
     bundle = _bundle_of(tool)
     portable = run / PORTABLE
     if bundle:
@@ -465,6 +531,16 @@ def run_vita3k(
 
 
 RUN: Runner = run_vita3k
+PLATFORM = sys.platform  # tests replace it
+
+
+def tool_head(tool: str) -> bytes:
+    """The first bytes of the program Vita3K at `tool` runs (empty when unreadable)."""
+    try:
+        with open(inbox_core.vita3k_executable(tool), "rb") as f:
+            return f.read(TOOL_HEAD)
+    except OSError:
+        return b""
 
 
 def validate(opts: Options) -> None:
@@ -605,9 +681,12 @@ def process(ctx: Context, path: Path, rel: str, result: ItemResult) -> bool:
         note = ""
         root: Path | None = None
         if not dest.exists():
-            tool = ctx.tools.vita3k
-            if not tool:
+            if not ctx.tools.vita3k:
                 raise ItemFailure(f"{rel}: {NO_TOOL}")
+            tool = resolve_tool(ctx.tools.vita3k)
+            refused = vita3k_problem(tool, PLATFORM, tool_head(tool))
+            if refused:
+                raise ItemFailure(f"{rel}: {refused} (nothing was run)")
             if not ctx.opts.apply:
                 argv = ["Vita3K", "--pkg", path.name, "--zrif", zrif]
                 note = f"would install it with Vita3K: {shown_command(argv, zrif)}"
@@ -628,4 +707,11 @@ def process(ctx: Context, path: Path, rel: str, result: ItemResult) -> bool:
     finally:
         if run is not None:
             shutil.rmtree(run, ignore_errors=True)
+            if run.exists():
+                warning = (
+                    f"could not delete the work folder {run}; it holds the game's licence "
+                    "(.rif), so delete it by hand"
+                )
+                ctx.rep.warn(warning)
+                result.notes.append(f"warning: {warning}")
     return True

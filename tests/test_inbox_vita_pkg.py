@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import ClassVar
 from unittest import mock
 
+from console_iso_support import sfo
 from inbox_support import make_stub
 from test_inbox import Base
 from test_inbox_vita import ENCRYPTED, rif, vita_sfo
@@ -67,6 +68,18 @@ def vita_pkg(
     return bytes(data)
 
 
+ELF = b"\x7fELF\x02\x01\x01" + bytes(9)
+APPIMAGE = b"\x7fELF\x02\x01\x01\x00AI\x02" + bytes(5)
+
+
+def fake_binary(path: Path, head: bytes = ELF) -> str:
+    """An executable file that starts like `head` (it is never run: tests replace RUN)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(head + b"rest of the program")
+    path.chmod(0o755)
+    return str(path)
+
+
 def info(pkg: bytes) -> vp.PkgInfo | None:
     return vp.read_pkg(io.BytesIO(pkg))
 
@@ -84,6 +97,11 @@ class ZrifTests(unittest.TestCase):
     def test_a_zrif_decodes_to_its_licence(self) -> None:
         self.assertEqual(vp.decode_zrif(ZRIF), RIF)
         self.assertEqual(vp.license_for(ZRIF, CONTENT_ID), RIF)
+
+    def test_a_zrif_without_its_base64_padding(self) -> None:
+        trimmed = ZRIF.rstrip("=")
+        self.assertNotEqual(trimmed, ZRIF, "the fixture needs padding for this test")
+        self.assertEqual(vp.decode_zrif(trimmed), RIF)
 
     def test_what_is_not_a_zrif(self) -> None:
         plain = base64.b64encode(zlib.compress(RIF)).decode()
@@ -144,6 +162,10 @@ class TableTests(unittest.TestCase):
         text = "﻿" + "\r\n".join([head, *rows]) + "\r\n"
         table = vp.parse_zrif_table(text)
         self.assertEqual(dict(table.keys), {CONTENT_ID: ZRIF})
+
+    def test_quoted_tsv_fields(self) -> None:
+        text = f'"Title ID"\t"zRIF"\t"Content ID"\n"{TITLE_ID}"\t"{ZRIF}"\t"{CONTENT_ID}"\n'
+        self.assertEqual(dict(vp.parse_zrif_table(text).keys), {CONTENT_ID: ZRIF})
 
     def test_a_content_id_listed_twice(self) -> None:
         same = vp.parse_zrif_table(f"{CONTENT_ID}\t{ZRIF}\n{CONTENT_ID}\t{ZRIF}\n")
@@ -208,6 +230,8 @@ class HeaderTests(unittest.TestCase):
             self.assertIn(word, problem(pkg, size) or "", word)
         other = vita_sfo().replace(b"PDEUAP1648614960", b"OTHEROTHEROTHER0")
         self.assertIn("content id", problem(vita_pkg(sfo=other)) or "")
+        no_cid = sfo({"CATEGORY": "gd", "TITLE": "GRAVITY RUSH", "TITLE_ID": TITLE_ID})
+        self.assertIn("no content id", problem(vita_pkg(sfo=no_cid)) or "")
 
 
 class LaunchTests(unittest.TestCase):
@@ -246,6 +270,48 @@ class LaunchTests(unittest.TestCase):
         self.assertEqual(line, "[x] zrif *** header signature is invalid")
         self.assertEqual(vp.failure_line("", ZRIF), "no output")
         self.assertEqual(vp.failure_line("a\nlast\n", ZRIF), "last")
+
+
+class Vita3KCheckTests(unittest.TestCase):
+    BUNDLE = "/Applications/Vita3K.app"
+    INSIDE = "/Applications/Vita3K.app/Contents/MacOS/Vita3K"
+
+    def problem(self, tool: str, system: str, head: bytes = b"") -> str:
+        return vp.vita3k_problem(tool, system, head) or ""
+
+    def test_macos_needs_the_app_bundle(self) -> None:
+        self.assertEqual(self.problem(self.BUNDLE, "darwin"), "")
+        self.assertEqual(self.problem(self.INSIDE, "darwin"), "")
+        self.assertIn("app bundle", self.problem("/usr/local/bin/vita3k", "darwin", ELF))
+
+    def test_linux_takes_a_plain_elf_binary_only(self) -> None:
+        self.assertEqual(self.problem("/opt/vita3k/Vita3K", "linux", ELF), "")
+        self.assertIn("AppImage", self.problem("/opt/Vita3K.AppImage", "linux", APPIMAGE))
+        type1 = ELF[:8] + b"AI\x01" + bytes(5)
+        self.assertIn("AppImage", self.problem("/opt/Vita3K.AppImage", "linux", type1))
+        self.assertIn("ELF", self.problem("/usr/bin/vita3k", "linux", b"#!/bin/sh\nexec x\n"))
+        self.assertIn("ELF", self.problem("/usr/bin/vita3k", "linux", b""))
+        self.assertIn("macOS", self.problem(self.BUNDLE, "linux"))
+
+    def test_other_systems(self) -> None:
+        self.assertIn("macOS and Linux", self.problem("C:/Vita3K/Vita3K.exe", "win32"))
+
+    def test_links_and_relative_paths_are_resolved(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            real = Path(tmp).resolve()
+            inside = fake_binary(real / "Vita3K.app" / "Contents" / "MacOS" / "Vita3K")
+            link = real / "bin" / "vita3k"
+            link.parent.mkdir()
+            link.symlink_to(inside)
+            self.assertEqual(vp.resolve_tool(str(link)), inside)
+            self.assertEqual(self.problem(vp.resolve_tool(str(link)), "darwin"), "")
+            self.assertIn("app bundle", self.problem(str(link), "darwin", ELF))
+            here = os.getcwd()
+            try:
+                os.chdir(real)
+                self.assertEqual(vp.resolve_tool("Vita3K.app"), str(real / "Vita3K.app"))
+            finally:
+                os.chdir(here)
 
 
 class JudgeTests(unittest.TestCase):
@@ -297,6 +363,15 @@ class ToolTests(unittest.TestCase):
             for bad in (gone, tmp):
                 with self.assertRaisesRegex(InboxError, "vita3k"):
                     find(InboxSettings(vita3k=bad), which=none)
+        with tempfile.TemporaryDirectory() as tmp:
+            make_stub(Path(tmp) / "Vita3K.app" / "Contents" / "MacOS", "Vita3K", "")
+            here = os.getcwd()
+            try:
+                os.chdir(tmp)
+                found = inbox_core.find_tools(InboxSettings(vita3k="Vita3K.app"), which=none)
+            finally:
+                os.chdir(here)
+            self.assertEqual(found.vita3k, os.path.join(os.path.realpath(tmp), "Vita3K.app"))
         self.assertIn("vita3k no", inbox._describe_tools(Tools()))
         self.assertIn("vita3k yes", inbox._describe_tools(Tools(vita3k="/x")))
         self.assertEqual(
@@ -358,11 +433,17 @@ class FlowBase(Base):
         patch = mock.patch.object(vp, "RUN", self.vita3k)
         patch.start()
         self.addCleanup(patch.stop)
+        self.platform("darwin")
         self.keys = self.tmp / "keys" / "zrif.txt"
         self.keys.parent.mkdir()
         self.keys.write_text(f"{CONTENT_ID}\t{ZRIF}\n")
         self.app_bundle = self.tmp / "Applications" / "Vita3K.app"
         make_stub(self.app_bundle / "Contents" / "MacOS", "Vita3K", "")
+
+    def platform(self, name: str) -> None:
+        patch = mock.patch.object(vp, "PLATFORM", name)
+        patch.start()
+        self.addCleanup(patch.stop)
 
     def go(self, *, tool: bool = True, keys: bool = True, **kw) -> int:  # type: ignore[no-untyped-def]
         tools = Tools(
@@ -473,13 +554,33 @@ class InstallTests(FlowBase):
         self.assertEqual(self.library(), first)
         self.assertEqual(len(self.installs()), 1)
 
-    def test_a_plain_binary_runs_with_appimage_in_the_work_folder(self) -> None:
-        binary = make_stub(self.tmp / "bin2", "vita3k", "")
+    def test_on_linux_a_plain_binary_runs_with_appimage_in_the_work_folder(self) -> None:
+        self.platform("linux")
+        binary = fake_binary(self.tmp / "bin2" / "vita3k")
         self.app_bundle = Path(binary)
         self.drop(PKG_NAME, vita_pkg())
         self.assertEqual(self.go(), 0, self.out)
-        self.assertEqual(self.vita3k.calls[0][0], binary)
+        self.assertEqual(self.vita3k.calls[0][0], os.path.realpath(binary))
         self.assertIn(LICENSE, self.library())
+
+    def test_on_macos_a_link_to_the_binary_in_the_bundle_runs_the_bundle(self) -> None:
+        link = self.tmp / "usr-local-bin" / "vita3k"
+        link.parent.mkdir()
+        link.symlink_to(self.app_bundle / "Contents" / "MacOS" / "Vita3K")
+        self.app_bundle = link
+        self.drop(PKG_NAME, vita_pkg())
+        self.assertEqual(self.go(), 0, self.out)
+        program = self.vita3k.calls[0][0]
+        self.assertTrue(program.endswith("/Vita3K.app/Contents/MacOS/Vita3K"), program)
+        self.assertTrue(program.startswith(str(self.tmp / "work")), program)
+        self.assertIn(LICENSE, self.library())
+
+    def test_a_work_folder_that_cannot_be_deleted_is_reported(self) -> None:
+        self.drop(PKG_NAME, vita_pkg())
+        with mock.patch("warpzone.inbox_vita_pkg.shutil.rmtree"):
+            self.assertEqual(self.go(), 0, self.out)
+        self.assertIn("could not delete", self.out)
+        self.assertIn(".rif", self.out)
 
 
 class ReviewTests(FlowBase):
@@ -587,6 +688,42 @@ class ReviewTests(FlowBase):
                     self.drop(PKG_NAME, vita_pkg())
                     self.assertEqual(self.go(), 1, self.out)
                     self.assert_review(PKG_NAME, word)
+
+    def assert_refused(self, *words: str) -> None:
+        for apply in (False, True):
+            for p in self.inbox.glob("_revisar/*"):
+                p.unlink()
+            self.drop(PKG_NAME, vita_pkg())
+            self.assertEqual(self.go(apply=apply), 1, self.out)
+            for word in words:
+                self.assertIn(word, self.out)
+            self.assertEqual(self.vita3k.calls, [], "Vita3K must never run")
+            self.assertEqual(self.library(), [])
+
+    def test_on_macos_a_binary_outside_an_app_bundle_is_never_run(self) -> None:
+        self.app_bundle = Path(fake_binary(self.tmp / "bin2" / "vita3k"))
+        self.assert_refused("app bundle", "nothing was run")
+
+    def test_on_linux_an_appimage_is_never_run(self) -> None:
+        self.platform("linux")
+        self.app_bundle = Path(fake_binary(self.tmp / "bin2" / "Vita3K.AppImage", APPIMAGE))
+        self.assert_refused("AppImage", "nothing was run")
+
+    def test_on_linux_a_wrapper_script_is_never_run(self) -> None:
+        self.platform("linux")
+        self.app_bundle = Path(make_stub(self.tmp / "bin2", "vita3k", ""))
+        self.assert_refused("ELF", "nothing was run")
+
+    def test_on_linux_an_app_bundle_is_never_run(self) -> None:
+        self.platform("linux")
+        self.assert_refused("macOS", "nothing was run")
+
+    def test_a_package_whose_sfo_has_no_content_id_is_never_installed(self) -> None:
+        no_cid = sfo({"CATEGORY": "gd", "TITLE": "GRAVITY RUSH", "TITLE_ID": TITLE_ID})
+        self.drop(PKG_NAME, vita_pkg(sfo=no_cid))
+        self.assertEqual(self.go(), 1, self.out)
+        self.assert_review(PKG_NAME, "no content id")
+        self.assertEqual(self.vita3k.calls, [])
 
     def test_a_ps3_package_keeps_its_outcome(self) -> None:
         self.drop("ps3.pkg", vita_pkg(pkg_type=1))
