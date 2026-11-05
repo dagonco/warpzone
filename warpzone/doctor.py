@@ -39,6 +39,7 @@ from pathlib import Path
 from warpzone import (
     __version__,
     artwork,
+    cemu,
     esde,
     frontend,
     inbox_core,
@@ -801,6 +802,7 @@ def load_config_state(path: Path) -> ConfigState:
                     profile.es_systems
                     or profile.retroarch
                     or profile.shadps4
+                    or profile.cemu
                     or profile.links
                     or art
                 ):
@@ -1401,6 +1403,53 @@ def judge_shadps4_dirs(
     return _merge(parts)
 
 
+def judge_cemu_paths(
+    *,
+    device: str,
+    path: str,
+    text: str | None,
+    mlc: str,
+    default_mlc: str,
+    game_path: str,
+    held: str | None = None,
+) -> tuple[str, str, str]:
+    """Verdict on Cemu's MLC path and game paths in its `settings.xml` (None if absent).
+
+    `held` is the `usr/save` of the MLC folder Cemu uses now when it holds game saves and is
+    not `mlc`: `provision` then keeps `mlc_path`, so the fix is to move those saves first.
+    """
+    again = f"run `warpzone provision device {device}` with Cemu closed"
+    if text is None:
+        return (
+            WARN,
+            f"no Cemu settings file found ({path})",
+            f"start Cemu once, finish its first-start dialog and close it, then {again}",
+        )
+    try:
+        paths = cemu.read(text)
+        gaps = cemu.missing(text, mlc, game_path)
+    except cemu.CemuConfigError as exc:
+        return WARN, f"{path}: {exc}", "fix the file by hand, or start Cemu again"
+    if not gaps:
+        return OK, f"{path} uses {mlc} and lists {game_path}", ""
+    parts: list[str] = []
+    if cemu.MLC in gaps:
+        now = "is empty" if not paths.mlc else f"is {paths.mlc}"
+        parts.append(
+            f"its mlc_path {now}, so Cemu keeps saves in {cemu.in_use(paths, default_mlc)}, "
+            f"not in {mlc}/usr/save, which warpzone syncs"
+        )
+    if cemu.GAME_PATHS in gaps:
+        parts.append(f"its GamePaths lack {game_path}, so Cemu's own game list misses the library")
+    if cemu.MLC in gaps and held is not None:
+        fix = (
+            f"move the saves in {held} to {mlc}/usr/save with Cemu closed, then run "
+            f"`warpzone provision device {device}`"
+        )
+        return WARN, f"{path}: {'; '.join(parts)}", fix
+    return WARN, f"{path}: {'; '.join(parts)}", again
+
+
 def judge_shadps4_launch(
     *,
     device: str,
@@ -1725,9 +1774,40 @@ def check_frontend(ctx: Context) -> list[Result]:
                 emulator=launch.emulator,
             )
             results.append(Result("shadPS4 launcher", G_FRONTEND, *verdict))
+    if (wiiu := profile.cemu) is not None:
+        settings = Path(expand_home(wiiu.settings, p.home))
+        mlc, game_path = (expand_home(x, p.home) for x in wiiu.wants(library))
+        default_mlc = expand_home(wiiu.default_mlc, p.home)
+        text = p.read_text(settings) if p.is_file(settings) else None
+        verdict = judge_cemu_paths(
+            device=device.name,
+            path=str(settings),
+            text=text,
+            mlc=mlc,
+            default_mlc=default_mlc,
+            game_path=game_path,
+            held=_cemu_held(p, text, default_mlc, mlc),
+        )
+        results.append(Result("Cemu paths", G_FRONTEND, *verdict))
     if profile.links:
         results += _check_links(ctx, device)
     return results
+
+
+def _cemu_held(p: Probes, text: str | None, default_mlc: str, mlc: str) -> str | None:
+    """The `usr/save` of the MLC folder Cemu uses now, when it is not `mlc` and holds the save
+    of a game or a demo; None otherwise (also when the file does not read)."""
+    try:
+        current = cemu.read(text) if text is not None else None
+    except cemu.CemuConfigError:
+        current = None
+    if current is None:
+        return None
+    old = cemu.in_use(current, default_mlc)
+    if os.path.realpath(old) == os.path.realpath(mlc):
+        return None
+    save = Path(old) / "usr" / "save"
+    return str(save) if any(cemu.is_title_save(f) for f in p.list_tree(save)) else None
 
 
 def _check_links(ctx: Context, device: SettingsDevice) -> list[Result]:

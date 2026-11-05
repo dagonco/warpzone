@@ -22,6 +22,7 @@ from warpzone.provision_artwork import (
     no_scope_warning,
 )
 from warpzone.provision_emulators import (
+    ensure_cemu_paths,
     ensure_retroarch_pins,
     ensure_shadps4_dirs,
     ensure_shadps4_launch,
@@ -420,6 +421,7 @@ def provision_device(
             ensure_retroarch_pins,
             ensure_shadps4_dirs,
             ensure_shadps4_launch,
+            ensure_cemu_paths,
             ensure_title_links,
         ):
             ensure(name, profile, home, rep, dry_run=local.dry_run, probes=probes, state_root=root)

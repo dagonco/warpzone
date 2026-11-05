@@ -52,7 +52,7 @@ warpzone/
   provision_folders.py  Syncthing folder steps both provisioning commands share (diff, patch, ignores, wait)
   provision_hub.py   `provision hub` (and `--additive`) and `check`: devices, folders, the whitelist bootstrap
   provision_device.py  `provision device`: the subscribed folders, then the steps below, in order
-  provision_emulators.py  device edits for ES-DE's system list, RetroArch, shadPS4 and title links
+  provision_emulators.py  device edits for ES-DE's system list, RetroArch, shadPS4, Cemu and title links
   provision_artwork.py  frontend artwork on a device: the scope of the artwork folders, the gamelists
   provision_scripts.py  the ES-DE startup scripts, turning ES-DE's event scripts on, the Options menu entries
   provision_timers.py  the artwork and play state systemd user timers
@@ -71,6 +71,7 @@ warpzone/
   inbox_vita.py      PS Vita game dumps: identify by param.sfo, place the folder and the .psvita file
   inbox_vita_pkg.py  PS Vita .pkg: header and zRIF checks, install with Vita3K in a work folder, judge the result
   shadps4.py         shadPS4's install directories and launch script edits (pure)
+  cemu.py            Cemu's MLC path and game paths in its settings.xml (pure)
   titlelinks.py      symlinks from the library's game folders into an emulator's own (pure plan)
   inbox_n3ds.py      3DS images (`.3ds`, `.cci`): NCSD / NCCH header check, placed as `.cci`
   inbox_dolphin.py   Wii and GameCube `.rvz` / `.wia`: header check (disc type, magic, game ID), placed in `wii/` or `gc/`

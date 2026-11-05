@@ -191,9 +191,13 @@ ignore = ["!/aes_keys.txt", "*"]
 create_when = "~/.local/share/azahar-emu"
 [bios.cemu-keys]
 hub = "bios/cemu"
-# Cemu reads keys.txt only from its user data folder.
+# Cemu reads keys.txt only from its user data folder (KeyCache.cpp), and writes a template
+# there on its first start when none is found. EmuDeck writes ~/.config/Cemu, not this
+# folder, so the folder is created once that one exists and the keys arrive before Cemu
+# first runs. The keys are needed for encrypted disc images (WUD/WUX), not for .wua archives.
 path = "~/.local/share/Cemu"
 ignore = ["!/keys.txt", "*"]
+create_when = "~/.config/Cemu"
 
 # shadPS4 has no package installer: it runs the extracted games it finds in its install
 # directories. `warpzone inbox` extracts PS4 packages into library/roms/ps4/games, so
@@ -207,6 +211,21 @@ ignore = ["!/keys.txt", "*"]
 config = ["~/.local/share/shadPS4/config.json", "~/.local/share/shadPS4/config.toml"]
 process = ["shadps4", "shadPS4QtLauncher", "Shadps4-qt.AppImage", "Shadps4-sdl.AppImage"]
 install_dirs = ["{library}/roms/ps4/games"]
+
+# Cemu keeps its installs and saves below `mlc_path` in settings.xml, and lists the games of
+# `GamePaths`. EmuDeck sets both with an xmlstarlet that does not start on SteamOS 3.9, which
+# leaves `mlc_path` empty (Cemu then uses `default_mlc`, a folder warpzone does not sync) and
+# `GamePaths` on a missing SD card. `provision device` sets `mlc_path` to the folder whose
+# `usr/save` is `saves.cemu-saves` and adds the library's Wii U folder to `GamePaths`, keeping
+# the rest of the file. It edits only an existing file, only while Cemu is closed, and keeps
+# `mlc_path` as it is while the folder Cemu uses now holds game saves. Like the shadPS4 list,
+# the values follow each console's library path, so they are declared here and not layered.
+[cemu]
+settings = "~/.config/Cemu/settings.xml"
+process = ["Cemu", "Cemu.AppImage"]
+mlc = "{library}/roms/wiiu/mlc01"
+default_mlc = "~/.local/share/Cemu/mlc01"
+game_path = "{library}/roms/wiiu/roms"
 
 # EmuDeck's shadps4.sh starts `Shadps4-qt.AppImage -d -g <eboot>`, and that Qt launcher can
 # crash with those arguments while the emulator itself runs the same game fine. EmuDeck
