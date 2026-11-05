@@ -6,19 +6,14 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ## [Unreleased]
 
+## [0.3.0rc6] - 2026-11-05
+
+Sixth release candidate of 0.3.0: Nintendo DS saves travel between the Anbernic's DraStic and melonDS on the Steam Deck and Steam Machine, `warpzone settings` covers Xenia, the Anbernic's Warpzone menu shows install progress and keeps looking for releases, and `provision` no longer times out while a folder is downloading.
+
 ### Added
 
 - Nintendo DS saves travel between DraStic on the Anbernic RG351MP and melonDS on the Steam Deck and Steam Machine. The new `warpzone saves convert <device> [--dry-run] [--quiet]` reconciles the hub's raw `<game>.sav` files (now synced to `/roms/warpzone/saves/melonds` on the Anbernic) with DraStic's `/roms/nds/backup/<game>.dsv`, which is the same data plus a 122-byte DeSmuME footer. Per game, when only one side changed it is copied to the other; when both changed the most recently modified file wins and the other is kept in `~/.local/state/warpzone/save-convert/backups/<rule>.conflicts/` (apart from the routine backups, so it is not rotated away); a save that exists on one side is copied to the other, deletions are never propagated, and a file that is not a valid save (or two sides of different sizes) is skipped with a warning. It never acts while DraStic runs, writes atomically and gives each copy the date of the file it came from, so Syncthing's own conflict resolution does not prefer it over a newer save from another device; Syncthing conflict files in the saves folder are reported and never touched. `provision device` wraps the `nds` command of the system list override so the conversion runs right before DraStic starts and right after it exits (it never stops a game from starting), and `frontend refresh` runs it on the existing timer (also on a device that lists `saves` but not `frontend`). `warpzone doctor` has a new `Save conversion` line. The profile table is `[save_convert.<key>]`; see [Save conversion](https://dagonco.github.io/warpzone/development/design/save-conversion/). DraStic's own configuration is untouched, so loading an old DraStic save state still rolls the cartridge save back (set `backup_in_savestates = 0` in `drastic.cfg` to avoid it).
 - `warpzone settings` covers Xenia Canary (the Proton build EmuDeck installs): its `xenia-canary.config.toml`, and `xconfig.settings` as a system data file, which is where Canary keeps the console language and country. Set the language once in Xenia (Console > Open console settings), capture with `--key 'xenia/data/*'`, and the other consoles get it at the next apply.
-
-### Fixed
-
-- `provision device` and `provision hub` no longer fail with "cannot reach ... (timed out)" when a folder is downloading while they run. Syncthing answers a scan only once it has run, and it runs it only after the download ends, which on a slow device takes more than the 30-second timeout. They now report "rescan queued" and go on; Syncthing runs the scan when the download ends. `prune` stops with a "folder is busy" message instead of deleting anything, and can run again when the folder is idle.
-- On SteamOS, the files RetroArch's Flycast and mame2003-plus cores write into the BIOS folder (`bios/dc/vulkan_pipeline.cache`, `bios/dc/data`, `bios/mame2003-plus/hiscore.dat` and `artwork`) are ignored, so they no longer show up as local changes of the library. Run `provision device` to apply it.
-
-## [0.3.0rc6] - 2026-11-05
-
-Sixth release candidate of 0.3.0: on the Anbernic the Warpzone menu shows a progress bar while it installs, stays open until Exit and has a Doctor item, and the console keeps looking for releases after an update.
 
 ### Changed
 
@@ -27,6 +22,8 @@ Sixth release candidate of 0.3.0: on the Anbernic the Warpzone menu shows a prog
 ### Fixed
 
 - On a device with `install = "manual"` (the Anbernic), the timer no longer stops looking for releases after an update installed from the menu. The check after the next restart waited for EmulationStation to close, which does not happen there, so the device stayed on probation and the timer deferred every 15 minutes without fetching, for up to 72 hours. The timer now finishes an interrupted update and runs that check without waiting for the menu, goes back if the check fails, and then notes a newer release as it always does; it still never installs one on its own.
+- `provision device` and `provision hub` no longer fail with "cannot reach ... (timed out)" when a folder is downloading while they run. Syncthing answers a scan only once it has run, and it runs it only after the download ends, which on a slow device takes more than the 30-second timeout. They now report "rescan queued" and go on; Syncthing runs the scan when the download ends. `prune` stops with a "folder is busy" message instead of deleting anything, and can run again when the folder is idle.
+- On SteamOS, the files RetroArch's Flycast and mame2003-plus cores write into the BIOS folder (`bios/dc/vulkan_pipeline.cache`, `bios/dc/data`, `bios/mame2003-plus/hiscore.dat` and `artwork`) are ignored, so they no longer show up as local changes of the library. Run `provision device` to apply it.
 
 ## [0.3.0rc5] - 2026-11-05
 
