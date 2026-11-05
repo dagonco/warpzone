@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ## [Unreleased]
 
+## [0.3.0rc6] - 2026-11-05
+
+Sixth release candidate of 0.3.0: on the Anbernic the Warpzone menu shows a progress bar while it installs, stays open until Exit and has a Doctor item, and the console keeps looking for releases after an update.
+
 ### Changed
 
 - The Warpzone menu of the Anbernic comes back after each item, with the status read again, until you choose Exit (or press Back). "Install vX now" shows a progress bar with the step the update is on (looking for releases, switching, each of the three checks) instead of a still box for the whole update. When the timer's own run is in progress, Install says so and to try again in a few minutes. A new "Doctor" item runs `warpzone doctor` and shows its whole report in a box that scrolls; the menu no longer runs doctor to open, so it opens at once, and Status points at the Doctor item.
@@ -182,7 +186,8 @@ First public release. warpzone keeps one game library on a home server and deliv
 - `warpzone doctor` checks the tools, config, Syncthing, DATs and hub folder of a machine and prints the fix for each problem.
 - `warpzone status`, `check` and `render-ignores` to inspect folder state, validate the config and preview a device's ignore lines. `provision` supports `--dry-run`.
 
-[Unreleased]: https://github.com/dagonco/warpzone/compare/v0.3.0rc5...HEAD
+[Unreleased]: https://github.com/dagonco/warpzone/compare/v0.3.0rc6...HEAD
+[0.3.0rc6]: https://github.com/dagonco/warpzone/compare/v0.3.0rc5...v0.3.0rc6
 [0.3.0rc5]: https://github.com/dagonco/warpzone/compare/v0.3.0rc4...v0.3.0rc5
 [0.3.0rc4]: https://github.com/dagonco/warpzone/compare/v0.3.0rc3...v0.3.0rc4
 [0.3.0rc3]: https://github.com/dagonco/warpzone/compare/v0.3.0rc2...v0.3.0rc3
