@@ -1140,7 +1140,10 @@ class RunTests(unittest.TestCase):
             ready=ready,
         )
         self.assertEqual((code, answers), (0, [200]))
-        self.assertTrue(lines[0].startswith("warpzone serve: listening on 127.0.0.1:"))
+        # The background catalog run may log before the listening line; look for it anywhere.
+        self.assertTrue(
+            any(line.startswith("warpzone serve: listening on 127.0.0.1:") for line in lines), lines
+        )
         self.assertNotIn(TOKEN, "\n".join(lines))
 
     def test_a_bad_address_is_a_usage_error(self) -> None:
