@@ -5,6 +5,7 @@ import http.client
 import json
 import os
 import signal
+import socket
 import tempfile
 import threading
 import unittest
@@ -230,7 +231,7 @@ class AuthTests(ServeCase):
         body = {"changes": [{"device": "deck", "system": "gba", "on": False}], "dry_run": True}
         body["expect"] = {"deck": self.etags()["deck"]}
         host = f"127.0.0.1:{self.port}"
-        for origin in (None, "http://evil.example", f"https://{host}", f"http://{host}.evil"):
+        for origin in (None, "http://evil.example", f"https://{host}.evil", f"http://{host}.evil"):
             headers = dict(cookie)
             if origin is not None:
                 headers["Origin"] = origin
@@ -847,16 +848,187 @@ class RefresherTests(unittest.TestCase):
             self.assertTrue((root / "catalog" / "systems" / "gba.json").is_file())
 
 
+class HardeningTests(ServeCase):
+    def raw(self, data: bytes, wait: float = 5.0) -> bytes:
+        sock = socket.create_connection(("127.0.0.1", self.port), timeout=wait)
+        try:
+            sock.sendall(data)
+            chunks = []
+            while True:
+                try:
+                    part = sock.recv(65536)
+                except OSError:
+                    break
+                if not part:
+                    break
+                chunks.append(part)
+            return b"".join(chunks)
+        finally:
+            sock.close()
+
+    def cookie_get(self, cookie: str) -> int:
+        return self.get("/api/v1/devices", headers={"Cookie": cookie}, auth=False).status
+
+    # --- 1. brute force
+
+    def test_a_wrong_bearer_is_delayed_like_a_wrong_login(self) -> None:
+        self.start(login_delay=1.0)
+        wrong = {"Authorization": "Bearer wrong"}
+        with mock.patch.object(serve.time, "sleep") as sleep:
+            reply = self.get("/api/v1/devices", headers=wrong, auth=False)
+        self.assertEqual(reply.status, 401)
+        sleep.assert_called_once_with(1.0)
+
+    def test_no_credentials_and_a_right_token_are_not_delayed(self) -> None:
+        self.start(login_delay=1.0)
+        with mock.patch.object(serve.time, "sleep") as sleep:
+            self.get("/api/v1/devices", auth=False)
+            self.get("/api/v1/devices")
+        sleep.assert_not_called()
+
+    def test_wrong_bearers_and_wrong_logins_share_one_limiter(self) -> None:
+        self.start(login_delay=1.0)
+        with mock.patch.object(serve.time, "sleep") as sleep:
+            self.get("/api/v1/devices", headers={"Authorization": "Bearer a"}, auth=False)
+            self.call("POST", "/api/v1/session", {"token": "b"}, auth=False)
+        first, second = (c.args[0] for c in sleep.call_args_list)
+        self.assertEqual(first, 1.0)
+        self.assertAlmostEqual(second, 2.0, delta=0.5)  # queued behind the first
+
+    # --- 2. slow and idle connections
+
+    def test_the_handler_times_out_by_default(self) -> None:
+        self.assertEqual(serve._Handler.timeout, 15)
+
+    def test_idle_and_stalled_connections_free_their_threads(self) -> None:
+        with mock.patch.object(serve._Handler, "timeout", 0.3):
+            before = threading.active_count()
+            idle = [socket.create_connection(("127.0.0.1", self.port)) for _ in range(6)]
+            stalled = socket.create_connection(("127.0.0.1", self.port))
+            stalled.sendall(
+                b"POST /api/v1/changes HTTP/1.1\r\nHost: x\r\nContent-Length: 10\r\n\r\nab"
+            )
+            threading.Event().wait(0.2)
+            self.assertGreaterEqual(threading.active_count(), before + 7)
+            for _ in range(60):
+                if threading.active_count() <= before:
+                    break
+                threading.Event().wait(0.1)
+            self.assertLessEqual(threading.active_count(), before)
+            for sock in [*idle, stalled]:
+                sock.close()
+        self.assertTrue(any("connection" in line for line in self.logs), self.logs)
+
+    def test_connections_above_the_cap_are_closed_at_once(self) -> None:
+        server = serve.UiServer(("127.0.0.1", 0), self.app, max_connections=2)
+        thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.02})
+        thread.daemon = True
+        thread.start()
+        port = server.server_address[1]
+        held = [socket.create_connection(("127.0.0.1", port)) for _ in range(2)]
+        try:
+            threading.Event().wait(0.3)
+            extra = socket.create_connection(("127.0.0.1", port), timeout=3)
+            self.assertEqual(extra.recv(10), b"")  # closed, not served
+            extra.close()
+            for sock in held:
+                sock.close()
+            threading.Event().wait(0.5)  # their threads end on EOF and give the slots back
+            conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+            conn.request("GET", "/healthz")
+            self.assertEqual(conn.getresponse().status, 200)
+            conn.close()
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
+
+    # --- 3. cookies
+
+    def test_the_session_cookie_is_found_among_other_cookies(self) -> None:
+        value = serve.session_cookie(TOKEN)
+        for header in (
+            f"pref=a b; wz_session={value}",
+            f'st={{"t":1}}; wz_session={value}',
+            f"wz_session=bad; wz_session={value}",
+            f"a=1;wz_session={value};b=2",
+            f"  wz_session = {value}  ",
+        ):
+            self.assertEqual(self.cookie_get(header), 200, header)
+        for header in ("pref=a b; wz_session=nope", "wz_session", f"x_wz_session={value}"):
+            self.assertEqual(self.cookie_get(header), 401, header)
+
+    # --- 4. bad request lines
+
+    def test_a_malformed_request_line_is_answered_and_does_not_crash_the_log(self) -> None:
+        reply = self.raw(b"NONSENSE\r\n\r\n")
+        self.assertTrue(reply.startswith(b"HTTP/1.0 400"), reply[:40])
+        reply = self.raw(b"GET /" + b"a" * 70000 + b" HTTP/1.1\r\n\r\n")
+        self.assertTrue(reply.startswith(b"HTTP/1.0 414"), reply[:40])
+        self.assertFalse([line for line in self.logs if "internal" in line or "Error" in line])
+
+    def test_control_characters_never_reach_the_log(self) -> None:
+        self.raw(b"GET /\x1b[31mred\x07 HTTP/1.1\r\nHost: x\r\n\r\n")
+        self.assertTrue(self.logs)
+        for line in self.logs:
+            self.assertTrue(line.isprintable(), repr(line))
+        self.assertTrue(any("\\x1b" in line for line in self.logs), self.logs)
+
+    # --- 5. TLS proxy
+
+    def test_a_cookie_write_from_the_https_origin_of_the_host_is_accepted(self) -> None:
+        value = serve.session_cookie(TOKEN)
+        body = {"changes": [], "expect": {}, "dry_run": True}
+        for origin, ok in (
+            ("https://example.lan", True),
+            ("http://example.lan", True),
+            ("https://evil.example", False),
+            ("ftp://example.lan", False),
+        ):
+            reply = self.call(
+                "POST",
+                "/api/v1/changes",
+                body,
+                headers={"Cookie": f"wz_session={value}", "Origin": origin, "Host": "example.lan"},
+                auth=False,
+            )
+            self.assertEqual(reply.status == 403, not ok, (origin, reply.status))
+
+    # --- the cheap ones
+
+    def test_only_post_writes(self) -> None:
+        for method in ("PUT", "PATCH", "DELETE"):
+            for path in ("/api/v1/changes", "/api/v1/catalog/refresh"):
+                reply = self.call(method, path, {})
+                self.assertEqual((reply.status, self.error(reply)["code"]), (404, "not-found"))
+
+    def test_a_bad_content_length_is_400_not_a_traceback(self) -> None:
+        for length in (b"abc", b"-5", b"9" * 5000, b"99999999999999999999", b"\xc2\xb2"):
+            reply = self.raw(
+                b"POST /api/v1/changes HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer "
+                + TOKEN.encode()
+                + b"\r\nContent-Type: application/json\r\nContent-Length: "
+                + length
+                + b"\r\n\r\n{}"
+            )
+            self.assertTrue(reply.startswith(b"HTTP/1.0 400"), (length[:20], reply[:40]))
+        self.assertFalse([line for line in self.logs if "internal" in line])
+
+
 class TokenTests(unittest.TestCase):
     def test_the_environment_wins_then_the_first_line_of_the_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "ui.token"
-            path.write_text("from-file\nsecond line\n")
+            path.write_text("from-file-0123456789\nsecond line\n")
             settings = ServeSettings(token_file=str(path))
             self.assertEqual(
-                serve.load_token({"WARPZONE_UI_TOKEN": " from-env "}, settings), "from-env"
+                serve.load_token(
+                    {"WARPZONE_UI_TOKEN": " from-env-0123456789 "},  # gitleaks:allow
+                    settings,
+                ),
+                "from-env-0123456789",
             )
-            self.assertEqual(serve.load_token({}, settings), "from-file")
+            self.assertEqual(serve.load_token({}, settings), "from-file-0123456789")
             path.write_text("\n")
             with self.assertRaises(serve.ServeError):
                 serve.load_token({}, settings)
@@ -866,6 +1038,46 @@ class TokenTests(unittest.TestCase):
             serve.load_token({}, ServeSettings())
         with self.assertRaises(serve.ServeError):
             serve.load_token({"WARPZONE_UI_TOKEN": "  "}, ServeSettings())
+
+    def test_a_short_token_is_refused_whichever_way_it_comes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "ui.token"
+            path.write_text("0123456789abcde\n")  # 15 characters
+            for env, settings in (
+                ({"WARPZONE_UI_TOKEN": "0123456789abcde"}, ServeSettings()),  # gitleaks:allow
+                ({}, ServeSettings(token_file=str(path))),
+                ({"WARPZONE_UI_TOKEN": "x"}, ServeSettings()),
+            ):
+                with self.assertRaises(serve.ServeError) as caught:
+                    serve.load_token(env, settings)
+                self.assertIn("at least 16", str(caught.exception))
+                self.assertNotIn("0123456789abcde", str(caught.exception))
+            path.write_text("0123456789abcdef\n")  # 16 characters
+            settings = ServeSettings(token_file=str(path))
+            self.assertEqual(serve.load_token({}, settings), "0123456789abcdef")
+
+
+class FailureLimiterTests(unittest.TestCase):
+    def test_failures_are_spaced_out_for_everyone_not_per_caller(self) -> None:
+        sleeps: list[float] = []
+        limiter = serve.FailureLimiter(1.0, clock=lambda: 100.0, sleep=sleeps.append)
+        for _ in range(3):  # three failures at the same instant, from three threads
+            limiter.failed()
+        self.assertEqual(sleeps, [1.0, 2.0, 3.0])
+
+    def test_the_backlog_drains_with_time(self) -> None:
+        now = [0.0]
+        sleeps: list[float] = []
+        limiter = serve.FailureLimiter(1.0, clock=lambda: now[0], sleep=sleeps.append)
+        limiter.failed()
+        now[0] = 10.0
+        limiter.failed()
+        self.assertEqual(sleeps, [1.0, 1.0])
+
+    def test_no_interval_means_no_waiting(self) -> None:
+        sleeps: list[float] = []
+        serve.FailureLimiter(0, sleep=sleeps.append).failed()
+        self.assertEqual(sleeps, [])
 
 
 class RunTests(unittest.TestCase):

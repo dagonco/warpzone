@@ -429,22 +429,35 @@ runs no-ops).
 ### Authentication
 
 The UI is meant for a home LAN and uses one shared token: `WARPZONE_UI_TOKEN` in the
-environment, or the first line of `[serve] token_file`. `serve` refuses to start without one
-(exit `2`), and never prints, logs or echoes it.
+environment, or the first line of `[serve] token_file`. `serve` refuses to start without one,
+or with one shorter than 16 characters (exit `2`; `openssl rand -hex 32` makes a good one), and
+never prints, logs or echoes it.
 
 - The page asks for the token once and sends it to `POST /api/v1/session` (`{"token": "..."}`).
   A right token answers `204` with a cookie `wz_session=<HMAC-SHA256 of the token over
   "warpzone-ui-session">; HttpOnly; SameSite=Strict; Path=/; Max-Age=2592000` (30 days); a
-  wrong one answers `401` after one second. The cookie needs no server state, survives a
+  wrong one answers `401` after a wait (see below). The cookie needs no server state, survives a
   restart and stops working when the token changes or when it expires; the next request then
   answers `401` and the page asks for the token again. There is no logout route: the page keeps
   no token and the cookie is `HttpOnly`, so ending a session means clearing the cookie or
   changing the token.
 - A client that is not a browser (the Decky plugin) sends `Authorization: Bearer <token>`.
 - Every `/api/` route except `POST /api/v1/session` needs one of the two, compared with
-  `hmac.compare_digest`; the static files and `GET /healthz` do not. A write authenticated by the
-  cookie must carry an `Origin` equal to `http://<Host>`, and every write must be
-  `Content-Type: application/json`, which together keep other pages from posting to it.
+  `hmac.compare_digest`; the static files and `GET /healthz` do not. The session cookie is
+  looked for among all the cookies of the request (other applications on the same host share
+  the jar), and every `wz_session` value is compared. A write authenticated by the cookie must
+  carry an `Origin` equal to `http://<Host>` or `https://<Host>` (a TLS reverse proxy keeps the
+  `Host` header the browser used), and every write must be `Content-Type: application/json`,
+  which together keep other pages from posting to it.
+- Writes are `POST` only: any other method on an `/api/` route is `404 not-found`.
+- A wrong token, at login or as a bearer, is answered `401` after a wait, and the waits are
+  shared: failures leave the server one second apart in all, however many connections send
+  them, so guessing in parallel gains nothing. A request with no credentials, or the right
+  ones, never waits.
+
+The server also bounds what a stranger can hold. A connection that sends nothing for 15
+seconds, also in the middle of a body, is closed; at most 64 connections are served at once and
+the next ones are closed without an answer. A `Content-Length` that is not a number is `400`.
 
 The traffic is plain HTTP, so anyone who can read the LAN can read the token. Access from
 outside the home goes through the user's own reverse proxy with TLS, which is out of scope.
@@ -583,7 +596,7 @@ last two when they apply):
 | 400 | `bad-request` | malformed JSON, a body over 64 KiB, an unknown key, a wrong type |
 | 401 | `unauthorized` | no session cookie or bearer token, or a wrong one |
 | 403 | `bad-origin` | a cookie-authenticated write from another origin |
-| 404 | `not-found` | an unknown device, system, game, media kind or route |
+| 404 | `not-found` | an unknown device, system, game, media kind or route, or a method other than `GET`, `HEAD` and `POST` |
 | 409 | `not-managed` | the device's whitelist needs `warpzone whitelist migrate` |
 | 409 | `covered` | a part stays off under an exclusion of a parent folder |
 | 409 | `cannot-apply` | the change would not reach its state or would change other games |

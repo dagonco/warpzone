@@ -104,7 +104,7 @@ Optional. Only `warpzone serve` reads it (together with `[hub]`, `[devices.*]` a
 | Key | Default | Meaning |
 |---|---|---|
 | `listen` | `"0.0.0.0:8780"` | `HOST:PORT` to listen on (`[::1]:8780` for IPv6). `--listen` overrides it. |
-| `token_file` | none | A file whose first line is the UI token. The environment variable `WARPZONE_UI_TOKEN` takes precedence. |
+| `token_file` | none | A file whose first line is the UI token, at least 16 characters (`openssl rand -hex 32` makes one). The environment variable `WARPZONE_UI_TOKEN` takes precedence. |
 
 `serve` refuses to start (exit `2`) without a token. The token is never printed or logged. See [`warpzone serve`](/warpzone/reference/commands/#warpzone-serve).
 

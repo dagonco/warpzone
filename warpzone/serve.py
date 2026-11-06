@@ -12,12 +12,12 @@ from __future__ import annotations
 
 import hashlib
 import hmac
-import http.cookies
 import json
 import os
 import signal
 import socket
 import socketserver
+import sys
 import threading
 import time
 import urllib.parse
@@ -43,6 +43,9 @@ CACHE_SECONDS = 5.0  # a file is checked for a change at most this often
 MEDIA_SECONDS = 60.0  # the listing of the media folders is read again after this long
 PROGRESS_SECONDS = 15.0
 LOGIN_DELAY = 1.0
+MIN_TOKEN = 16  # characters; a shorter token is refused at start
+MAX_CONNECTIONS = 64  # connections served at once; the rest are closed
+SOCKET_TIMEOUT = 15  # seconds a connection may stay silent, also in the middle of a body
 CATALOG_PERIOD = 6 * 3600.0
 RA_LISTS_PERIOD = 24 * 3600.0
 UI_DIR = Path(__file__).resolve().parent / "data" / "ui"
@@ -75,7 +78,7 @@ def load_token(env: Mapping[str, str], settings: ServeSettings) -> str:
     """The UI token: `WARPZONE_UI_TOKEN`, else the first line of `[serve] token_file`."""
     token = env.get(TOKEN_ENV, "").strip()
     if token:
-        return token
+        return _long_enough(token, f"{TOKEN_ENV}")
     if settings.token_file:
         try:
             lines = Path(settings.token_file).read_text(encoding="utf-8").splitlines()
@@ -83,11 +86,48 @@ def load_token(env: Mapping[str, str], settings: ServeSettings) -> str:
             raise ServeError(f"[serve] token_file: cannot read {settings.token_file}") from exc
         first = lines[0].strip() if lines else ""
         if first:
-            return first
+            return _long_enough(first, f"[serve] token_file {settings.token_file}")
         raise ServeError(
             f"[serve] token_file: {settings.token_file} has no token on its first line"
         )
     raise ServeError(f"no UI token: set {TOKEN_ENV} or `token_file` in the [serve] table")
+
+
+def _long_enough(token: str, source: str) -> str:
+    if len(token) < MIN_TOKEN:
+        raise ServeError(
+            f"{source}: the token must be at least {MIN_TOKEN} characters; make one with "
+            "`openssl rand -hex 32`"
+        )
+    return token
+
+
+class FailureLimiter:
+    """One limiter for every failed authentication, whichever thread it comes from: the
+    failures are answered `interval` seconds apart, so parallel guesses queue up behind each
+    other instead of each sleeping on its own. A right token never comes here."""
+
+    def __init__(
+        self,
+        interval: float,
+        *,
+        clock: Callable[[], float] = time.monotonic,
+        sleep: Callable[[float], None] | None = None,
+    ) -> None:
+        self.interval = interval
+        self._clock = clock
+        self._sleep = sleep
+        self._lock = threading.Lock()
+        self._next = float("-inf")
+
+    def failed(self) -> None:
+        if not self.interval:
+            return
+        with self._lock:
+            now = self._clock()
+            wait = self.interval + max(0.0, self._next - now)
+            self._next = now + wait
+        (self._sleep or time.sleep)(wait)
 
 
 def session_cookie(token: str) -> str:
@@ -97,6 +137,18 @@ def session_cookie(token: str) -> str:
 
 def _same(a: str, b: str) -> bool:
     return hmac.compare_digest(a.encode("utf-8"), b.encode("utf-8"))
+
+
+def cookie_values(header: str, name: str) -> list[str]:
+    """Every value of the cookie `name` in a `Cookie` header, parsed by hand: other
+    applications on the same host share the cookie jar, and their odd values must not hide
+    ours."""
+    found = []
+    for part in header.split(";"):
+        key, sep, value = part.partition("=")
+        if sep and key.strip() == name:
+            found.append(value.strip())
+    return found
 
 
 # --------------------------------------------------------------------------- requests
@@ -480,6 +532,7 @@ class App:
             refresher.after = self.files.invalidate
         self.ui_dir = ui_dir
         self.login_delay = login_delay
+        self.limiter = FailureLimiter(login_delay)
         self.progress_seconds = progress_seconds
         self.log = log
         self.now = now
@@ -498,6 +551,10 @@ class App:
         except Exception as exc:  # the answer says nothing; the log names the kind
             self.log(f"internal error: {type(exc).__name__}")
             response = error_response(ApiError("internal", "internal error"))
+        return self.secure(response)
+
+    @staticmethod
+    def secure(response: Response) -> Response:
         response.headers.append(("X-Content-Type-Options", "nosniff"))
         response.headers.append(("Content-Security-Policy", CSP))
         return response
@@ -518,18 +575,18 @@ class App:
         """`bearer` or `cookie` when the request carries the token in one of the two ways."""
         auth = request.headers.get("authorization", "")
         scheme, _, given = auth.partition(" ")
-        if scheme.lower() == "bearer" and given and _same(given.strip(), self._token):
+        given = given.strip()
+        bearer = scheme.lower() == "bearer" and bool(given)
+        if bearer and _same(given, self._token):
             return "bearer"
-        raw = request.headers.get("cookie", "")
-        if raw:
-            jar = http.cookies.SimpleCookie()
-            try:
-                jar.load(raw)
-            except http.cookies.CookieError:
-                return None
-            morsel = jar.get(COOKIE)
-            if morsel is not None and _same(morsel.value, self._cookie):
-                return "cookie"
+        # Every `wz_session` value is compared: a client may send others it does not know of.
+        if any(
+            _same(value, self._cookie)
+            for value in cookie_values(request.headers.get("cookie", ""), COOKIE)
+        ):
+            return "cookie"
+        if bearer:  # a token was offered and it is wrong: the same wait as a wrong login
+            self.limiter.failed()
         return None
 
     def _json_body(self, request: Request) -> object:
@@ -554,8 +611,7 @@ class App:
         ):
             raise ApiError("bad-request", 'the body must be {"token": "..."}')
         if not _same(body["token"], self._token):
-            if self.login_delay:
-                time.sleep(self.login_delay)
+            self.limiter.failed()
             raise ApiError("unauthorized", "wrong token")
         cookie = (
             f"{COOKIE}={self._cookie}; HttpOnly; SameSite=Strict; Path=/; Max-Age={COOKIE_MAX_AGE}"
@@ -570,10 +626,14 @@ class App:
         who = self._authenticated(request)
         if who is None:
             raise ApiError("unauthorized", "a session cookie or a bearer token is needed")
-        write = request.method not in ("GET", "HEAD")
+        if request.method not in ("GET", "HEAD", "POST"):
+            raise ApiError("not-found", "no such route")
+        write = request.method == "POST"
         if write and who == "cookie":
+            # The page may be behind a TLS proxy that keeps the Host header: either scheme.
             host = request.headers.get("host", "")
-            if not host or request.headers.get("origin") != f"http://{host}":
+            origin = request.headers.get("origin")
+            if not host or origin not in (f"http://{host}", f"https://{host}"):
                 raise ApiError("bad-origin", "the request does not come from this page")
         segments = [urllib.parse.unquote(s) for s in path.removeprefix("/api/v1").split("/")[1:]]
         if not path.startswith("/api/v1/") or not segments or "" in segments:
@@ -801,11 +861,37 @@ def _reason(exc: BaseException) -> str:
 class UiServer(ThreadingHTTPServer):
     daemon_threads = True
 
-    def __init__(self, address: tuple[str, int], app: App) -> None:
+    def __init__(
+        self, address: tuple[str, int], app: App, max_connections: int = MAX_CONNECTIONS
+    ) -> None:
         self.app = app
+        self._slots = threading.BoundedSemaphore(max_connections)
         if ":" in address[0]:
             self.address_family = socket.AF_INET6
         super().__init__(address, _Handler)
+
+    def process_request(self, request: Any, client_address: Any) -> None:
+        # One thread per connection, so the number of connections is capped: above it the
+        # connection is closed at once, not queued.
+        if not self._slots.acquire(blocking=False):
+            self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except BaseException:
+            self._slots.release()
+            raise
+
+    def process_request_thread(self, request: Any, client_address: Any) -> None:
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._slots.release()
+
+    def handle_error(self, request: Any, client_address: Any) -> None:
+        # The default prints a traceback (with the client's address) to stderr.
+        kind = type(sys.exc_info()[1]).__name__
+        self.app.log(f"connection error: {kind}")
 
     def server_bind(self) -> None:
         # HTTPServer.server_bind asks DNS for the host's name, which can stall for seconds.
@@ -814,32 +900,35 @@ class UiServer(ThreadingHTTPServer):
         self.server_name, self.server_port = str(host), port
 
 
+def _printable(text: str) -> str:
+    """`text` with every control or non-ASCII character escaped: it comes from a stranger and
+    goes to a terminal or a log."""
+    return text.encode("unicode_escape").decode("ascii")
+
+
 class _Handler(BaseHTTPRequestHandler):
     server: UiServer
     server_version = "warpzone"
     sys_version = ""
+    timeout = SOCKET_TIMEOUT  # a connection silent for this long, also mid-body, is dropped
+    # An error for a request line that cannot be parsed still gets a status line: Python 3.11
+    # answers such a line HTTP/0.9 style (a bare body) unless the default version is 1.0.
+    default_request_version = "HTTP/1.0"
 
     def log_message(self, format: str, *args: Any) -> None:
-        path = urllib.parse.urlsplit(self.path).path
-        self.server.app.log(f"{self.command} {path} {args[1] if len(args) > 1 else ''}")
+        # Called for errors before a request line was parsed: command and path may not exist.
+        if len(args) < 2:
+            self.server.app.log(_printable(f"connection: {format % args}")[:300])
+            return
+        command = getattr(self, "command", None) or "-"
+        raw = getattr(self, "path", "") or ""
+        try:
+            path = urllib.parse.urlsplit(raw).path
+        except ValueError:
+            path = raw
+        self.server.app.log(_printable(f"{command} {path[:200]} {args[1]}"))
 
-    def _handle(self) -> None:
-        length_text = self.headers.get("Content-Length")
-        body, too_large = b"", False
-        if length_text is not None:
-            length = int(length_text) if length_text.strip().isdigit() else 0
-            if length > library_api.MAX_BODY:
-                too_large = True
-            else:
-                body = self.rfile.read(length)
-        request = Request(
-            self.command,
-            self.path,
-            {k.lower(): v for k, v in self.headers.items()},
-            body,
-            too_large,
-        )
-        response = self.server.app.handle(request)
+    def _send(self, response: Response) -> None:
         self.send_response(response.status)
         if response.status != 204:
             self.send_header("Content-Type", response.content_type)
@@ -852,6 +941,33 @@ class _Handler(BaseHTTPRequestHandler):
         self.end_headers()
         if self.command != "HEAD":
             self.wfile.write(response.body)
+
+    def _handle(self) -> None:
+        length_text = self.headers.get("Content-Length")
+        body, too_large = b"", False
+        if length_text is not None:
+            text = length_text.strip()
+            if not (text.isascii() and text.isdigit()):
+                bad = ApiError("bad-request", "the Content-Length is not a number")
+                self._send(self.server.app.secure(error_response(bad)))
+                return
+            if len(text) > 9 or int(text) > library_api.MAX_BODY:
+                too_large = True
+            else:
+                try:
+                    body = self.rfile.read(int(text))
+                except OSError as exc:  # the client stalled or went away mid-body
+                    self.server.app.log(f"connection: body not received ({type(exc).__name__})")
+                    self.close_connection = True
+                    return
+        request = Request(
+            self.command,
+            self.path,
+            {k.lower(): v for k, v in self.headers.items()},
+            body,
+            too_large,
+        )
+        self._send(self.server.app.handle(request))
 
     do_GET = do_HEAD = do_POST = do_PUT = do_PATCH = do_DELETE = _handle
 

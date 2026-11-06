@@ -328,9 +328,9 @@ The UI rewrites device whitelists and nothing else in the library: each request 
 | `--config PATH` | see above | The private config file. |
 | `--listen HOST:PORT` | `[serve] listen`, else `0.0.0.0:8780` | The address to listen on. |
 
-The token is the shared secret of the UI. Give it in `WARPZONE_UI_TOKEN`, or as the first line of the file `[serve] token_file` names. The page asks for it once and then uses a cookie; a client that is not a browser sends `Authorization: Bearer <token>`. The server never prints, logs or answers with the token. The traffic is plain HTTP, so use it on a home network only, and put TLS in front of it with your own reverse proxy if you need it from outside.
+The token is the shared secret of the UI, at least 16 characters (a shorter one is refused). Make one with `openssl rand -hex 32` or `python3 -c "import secrets; print(secrets.token_hex(32))"`. Give it in `WARPZONE_UI_TOKEN`, or as the first line of the file `[serve] token_file` names. The page asks for it once and then uses a cookie; a client that is not a browser sends `Authorization: Bearer <token>`. The server never prints, logs or answers with the token. The traffic is plain HTTP, so use it on a home network only, and put TLS in front of it with your own reverse proxy if you need it from outside.
 
-Exit `0` after a clean stop; `2` when there is no token, `[hub] root` has no `library/.stfolder` (an unmounted share never looks like an empty library) or the address cannot be listened on.
+Exit `0` after a clean stop; `2` when there is no token or it is too short, `[hub] root` has no `library/.stfolder` (an unmounted share never looks like an empty library) or the address cannot be listened on.
 
 ```bash
 WARPZONE_UI_TOKEN=... warpzone serve
