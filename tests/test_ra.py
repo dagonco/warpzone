@@ -10,7 +10,13 @@ from warpzone import __version__, ra
 
 LIST = json.dumps(
     [
-        {"Title": "Adventure Island", "NumAchievements": 12, "Hashes": ["ABCDEF" + "0" * 26]},
+        {
+            "Title": "Adventure Island",
+            "ID": 77,
+            "NumAchievements": 12,
+            "Points": 150,
+            "Hashes": ["ABCDEF" + "0" * 26],
+        },
         {"Title": "Empty Set", "NumAchievements": 0, "Hashes": ["1" * 32]},
         {"Title": "No Hashes"},
         "junk",
@@ -26,6 +32,12 @@ class ParseTests(unittest.TestCase):
         self.assertEqual(games["1" * 32].achievements, 0)
         self.assertEqual(len(games), 2)
 
+    def test_the_id_and_points_are_kept(self) -> None:
+        games = ra.parse_game_list(LIST)
+        first = games["abcdef" + "0" * 26]
+        self.assertEqual((first.id, first.points), (77, 150))
+        self.assertEqual((games["1" * 32].id, games["1" * 32].points), (0, 0))
+
     def test_not_a_list_is_an_error(self) -> None:
         with self.assertRaises(ValueError):
             ra.parse_game_list(b'{"Error": "x"}')
@@ -34,6 +46,39 @@ class ParseTests(unittest.TestCase):
         from warpzone.dat import SYSTEMS
 
         self.assertEqual(set(ra.CONSOLE_IDS), set(SYSTEMS.values()))
+
+
+class FetchTests(unittest.TestCase):
+    def test_the_list_of_a_console_is_asked_for_with_hashes_and_the_key(self) -> None:
+        urls: list[str] = []
+        games = ra.fetch_game_list(12, KEY, lambda url: urls.append(url) or LIST)
+        self.assertEqual(urls, [f"{ra.API_URL}?i=12&h=1&y={KEY}"])
+        self.assertEqual(len(games), 2)
+
+    def test_a_failure_names_its_kind_and_keeps_nothing_of_the_original_error(self) -> None:
+        forbidden = urllib.error.HTTPError(
+            f"http://x/?y={KEY}",
+            403,
+            "Forbidden",
+            {},  # type: ignore[arg-type]
+            io.BytesIO(),
+        )
+        self.addCleanup(forbidden.close)
+        for error, kind in (
+            (forbidden, "HTTP 403"),
+            (urllib.error.URLError(f"cannot reach http://x/?y={KEY}"), "URLError"),
+            (ValueError(f"bad json for y={KEY}"), "ValueError"),
+            (TimeoutError(f"timed out y={KEY}"), "TimeoutError"),
+        ):
+
+            def fetch(url: str, error: Exception = error) -> bytes:
+                raise error
+
+            with self.assertRaises(ra.FetchError) as caught:
+                ra.fetch_game_list(12, KEY, fetch)
+            self.assertEqual(str(caught.exception), kind)
+            self.assertIsNone(caught.exception.__cause__)
+            self.assertTrue(caught.exception.__suppress_context__)
 
 
 class LookupTests(unittest.TestCase):
