@@ -74,6 +74,11 @@ folders = ["library", "tools", "saves", "frontend", "bios", "settings"]
 # API key in this config. Default false.
 # auto_hub = false
 
+# Optional. Systems (folder names below library/roms/) this device does not run. The library
+# UI never turns one on for it and `warpzone check` reports a whitelist that names one. Plain
+# names of lower-case letters, digits, '-' and '_'. Default: none, the device runs all.
+# exclude_systems = ["ps4", "switch"]
+
 [devices.machine]
 device_id = "CCCCCCC-CCCCCCC-CCCCCCC-CCCCCCC-CCCCCCC-CCCCCCC-CCCCCCC-CCCCCCC"
 profile = "steamos-emudeck"

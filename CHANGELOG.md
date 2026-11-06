@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ## [Unreleased]
 
+### Added
+
+- `warpzone whitelist migrate [device ...] [--root PATH] [--dry-run]` converts the hand-written `patterns-<device>.stignore` files on the hub into the format the library UI will write (managed whitelists: systems, games and exclusions in a fixed order, paths escaped for Syncthing). Before writing it drops the lines that have no effect, proves on the hub's `library/` that exactly the same paths stay on, saves the old file under `catalog/whitelists/<device>/` and asks the hub's Syncthing to scan the new one; a file with a wildcard or any other pattern it cannot read literally is refused with its line numbers and left as it is. Hand comments are lost.
+- `exclude_systems = ["ps4", "switch"]` under a device lists the systems it does not run (default: none). `warpzone check` reports a device whitelist that names one, and takes `--root PATH` to read the whitelists on a mounted hub.
+
 ## [0.3.0rc6] - 2026-11-05
 
 Sixth release candidate of 0.3.0: Nintendo DS saves travel between the Anbernic's DraStic and melonDS on the Steam Deck and Steam Machine, `warpzone settings` covers Xenia, the Anbernic's Warpzone menu shows install progress and keeps looking for releases, and `provision` no longer times out while a folder is downloading.

@@ -17,6 +17,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from support import API_KEY
+from warpzone import whitelist as wl
 from warpzone.config import load_config
 from warpzone.model import hub_specs
 from warpzone.profiles import available_profiles, load_profile
@@ -182,6 +183,9 @@ class EndToEndTests(unittest.TestCase):
     def test_bootstrap_from_an_empty_hub(self) -> None:
         self.run_logged(self.empty_hub_scenario)
 
+    def test_whitelist_matcher_agrees_with_syncthing(self) -> None:
+        self.run_logged(self.matcher_scenario)
+
     def scenario(self) -> None:
         self.hub.start()
         self.deck.start()
@@ -314,6 +318,44 @@ rescan_seconds = 10
         self.settings_scenario(root)
 
         self.wz("status", *cfg)
+
+    def matcher_scenario(self) -> None:
+        """The migration's first-match matcher against Syncthing itself: for hand-written
+        whitelists, the files `decide_lines` keeps are exactly the ones Syncthing indexes."""
+        self.hub.start()
+        client = self.hub.client()
+        my_id = client.my_id()
+        for number, text in enumerate(MATCHER_WHITELISTS):
+            hand = wl.parse_hand(text)
+            self.assertEqual(hand.errors, (), text)
+            folder = self.base / f"matcher-{number}"
+            for name in MATCHER_FILES:
+                self.write(folder / name, "x")
+            (folder / ".stfolder").mkdir()
+            fid = f"wz-matcher-{number}"
+            # Created paused with the ignores in place, as `provision` does, so nothing is
+            # indexed before they apply. The include of the common file is left out: that file
+            # is not in this folder, and the junk names it ignores are not among the files.
+            client.add_folder(
+                {
+                    "id": fid,
+                    "label": fid,
+                    "path": str(folder),
+                    "type": "sendreceive",
+                    "paused": True,
+                    "fsWatcherEnabled": False,
+                    "devices": [{"deviceID": my_id}],
+                }
+            )
+            client.set_ignores(
+                fid, [ln for ln in text.splitlines() if not ln.startswith("#include")]
+            )
+            client.patch_folder(fid, {"paused": False})
+            wait_for(lambda fid=fid: client.scan(fid), f"{fid} to be scanned", 60)
+            matcher = wl.LineMatcher(hand.lines)
+            expected = {name for name in MATCHER_FILES if matcher.on(name)}
+            self.assertTrue(expected and expected != set(MATCHER_FILES), text)
+            self.assertEqual(indexed_files(client, fid), expected, text)
 
     def empty_hub_scenario(self) -> None:
         """A hub with nothing in its library folder: provision it, add the whitelists and a
@@ -537,6 +579,81 @@ DEVICE_LAYER = """format = 1
 [retroarch.cfg]
 video_fullscreen = "true"
 """
+
+
+MATCHER_FILES = [
+    "roms/snes/Example (USA).sfc",
+    "roms/snes/disc/Extra.bin",
+    "roms/psx/Example Game (Europe).chd",
+    "roms/psx/Hole (USA)/disc.cue",
+    "roms/psx/Hole (USA)/disc.bin",
+    "roms/n64/Example (USA).z64",
+    "roms/wii/Example Game [ABCD01].rvz",
+    "roms/wii/Other Game [WXYZ01].rvz",
+    "roms/ps4/games/CUSA00000/eboot.bin",
+    "roms/ps4/games/CUSA00001/eboot.bin",
+    "roms/ps4/shortcuts/Example Game.desktop",
+    "roms/ps4/shortcuts/Other Game.desktop",
+    "roms/psvita/app/PCSE00000/eboot.bin",
+    "roms/psvita/license/PCSE00000/license.rif",
+    "roms/psvita/Example Vita Game.psvita",
+    "roms/psvita/Another Game.psvita",
+    "extras/switch/updates/Example Update/update.nsp",
+    "bios/psx/scph-fake.bin",
+]
+
+# Hand-written whitelists of the shapes the migration accepts, with first-match order that
+# matters: a hole before its system, a file kept inside an excluded folder, a shadowed line.
+MATCHER_WHITELISTS = [
+    """#include patterns-common.stignore
+!/roms/snes
+!/roms/psx
+!/roms/wii/Example Game \\[ABCD01\\].rvz
+!/roms/ps4/games/CUSA00000
+!/roms/ps4/shortcuts/Example Game.desktop
+!/roms/psvita/app/PCSE00000
+!/roms/psvita/license/PCSE00000
+!/roms/psvita/Example Vita Game.psvita
+!/bios
+*
+""",
+    """// a hole inside a system, a redundant exclusion and a shadowed line
+#include patterns-common.stignore
+/roms/psx/Hole (USA)
+/roms/n64/Example (USA).z64
+!/roms/psx
+!/roms/psx/Example Game (Europe).chd
+!/extras/switch/updates
+!/roms/snes/disc
+/roms/snes/disc/Extra.bin
+*
+""",
+    """#include patterns-common.stignore
+!/roms/snes/disc/Extra.bin
+/roms/snes/disc
+!/roms/snes
+/roms/wii/Other Game \\[WXYZ01\\].rvz
+!/roms/wii
+*
+""",
+]
+
+
+def indexed_files(client: Client, folder_id: str) -> set[str]:
+    """The files Syncthing keeps in the folder's index (those the ignores let through)."""
+    found: set[str] = set()
+
+    def visit(entries: list[dict[str, object]], prefix: str) -> None:
+        for entry in entries:
+            name = prefix + str(entry["name"])
+            children = entry.get("children")
+            if isinstance(children, list):
+                visit(children, name + "/")
+            else:
+                found.add(name)
+
+    visit(client.get("/rest/db/browse", folder=folder_id) or [], "")
+    return found
 
 
 def library_file(library: Path, which: str) -> Path:
