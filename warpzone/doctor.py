@@ -1443,9 +1443,17 @@ def judge_retroarch_paths(
 
 
 def judge_shadps4_dirs(
-    *, device: str, files: Sequence[tuple[str, str, str | None]], wants: Sequence[str]
+    *,
+    device: str,
+    files: Sequence[tuple[str, str, str | None]],
+    wants: Sequence[str],
+    addon: str | None = None,
 ) -> tuple[str, str, str]:
-    """Verdict on shadPS4's install folders: `files` holds (path, kind, text or None if absent)."""
+    """Verdict on shadPS4's install and DLC folders.
+
+    `files` holds (path, kind, text or None if absent); `addon` is the DLC folder the profile
+    declares, None when it declares none.
+    """
     again = f"run `warpzone provision device {device}` with shadPS4 closed"
     present = [(path, kind, text) for path, kind, text in files if text is not None]
     if not present:
@@ -1459,6 +1467,7 @@ def judge_shadps4_dirs(
     for path, kind, text in present:
         try:
             gap = shadps4.missing(kind, text, wants)
+            old = shadps4.addon_gap(kind, text, addon)
         except shadps4.Shadps4ConfigError as exc:
             parts.append((WARN, f"{path}: {exc}", "fix the file by hand, or start shadPS4 again"))
             continue
@@ -1471,7 +1480,16 @@ def judge_shadps4_dirs(
                     again,
                 )
             )
-        else:
+        if old is not None:
+            parts.append(
+                (
+                    WARN,
+                    f"{path} reads DLC from {old or 'its default folder'}, not {addon}, so "
+                    "shadPS4 does not find the DLC that inbox files there",
+                    again,
+                )
+            )
+        if not gap and old is None:
             parts.append((OK, f"{path} lists the install folder", ""))
     return _merge(parts)
 
@@ -1840,7 +1858,12 @@ def check_frontend(ctx: Context) -> list[Result]:
                     p.read_text(path) if p.is_file(path) else None,
                 )
             )
-        verdict = judge_shadps4_dirs(device=device.name, files=files, wants=dirs.wants(library))
+        verdict = judge_shadps4_dirs(
+            device=device.name,
+            files=files,
+            wants=dirs.wants(library),
+            addon=dirs.wants_addon(library),
+        )
         results.append(Result("shadPS4 install folder", G_FRONTEND, *verdict))
         if (launch := dirs.launch) is not None:
             script, rules = (
