@@ -35,6 +35,8 @@ setUpModule = stub_self_update
 PROFILE = load_profile("steamos-emudeck")
 GAMES = "/home/deck/Emulation/roms/ps4/games"
 OWN = "/home/deck/Emulation/storage/shadps4/games"
+DLC = "/home/deck/Emulation/roms/ps4/dlc"
+OWN_DLC = "/home/deck/Emulation/storage/shadps4/dlc"
 JSON_TEXT = json.dumps(
     {
         "General": {
@@ -169,6 +171,101 @@ class TomlTests(unittest.TestCase):
         self.assertEqual(new, text.replace('["a"]', f'["a", "{GAMES}"]'))
 
 
+class AddonJsonTests(unittest.TestCase):
+    def test_an_absent_key_is_a_gap_and_is_set_at_the_end_of_general(self) -> None:
+        self.assertEqual(shadps4.addon_gap("json", JSON_TEXT, DLC), "")
+        new = shadps4.apply("json", JSON_TEXT, [GAMES], DLC)
+        data = json.loads(new)
+        self.assertEqual(data["General"]["addon_install_dir"], DLC)
+        self.assertEqual(list(data["General"])[-1], "addon_install_dir")
+        self.assertEqual(data["General"]["install_dirs"][-1]["path"], GAMES)
+        self.assertIsNone(shadps4.addon_gap("json", new, DLC))
+
+    def test_a_different_value_is_replaced_and_the_rest_is_kept(self) -> None:
+        data = json.loads(JSON_TEXT)
+        data["General"]["addon_install_dir"] = OWN_DLC
+        text = json.dumps(data, indent=2, ensure_ascii=False)
+        self.assertEqual(shadps4.addon_gap("json", text, DLC), OWN_DLC)
+        new = shadps4.apply("json", text, [OWN], DLC)
+        self.assertEqual(new, text.replace(OWN_DLC, DLC))
+
+    def test_a_trailing_slash_is_not_a_difference(self) -> None:
+        data = json.loads(JSON_TEXT)
+        data["General"]["addon_install_dir"] = DLC + "/"
+        text = json.dumps(data, indent=2, ensure_ascii=False)
+        self.assertIsNone(shadps4.addon_gap("json", text, DLC))
+        self.assertIsNone(shadps4.addon_gap("json", text, DLC + "/"))
+        self.assertEqual(shadps4.apply("json", text, [OWN], DLC), text)
+
+    def test_without_a_wanted_folder_the_key_is_not_looked_at(self) -> None:
+        self.assertIsNone(shadps4.addon_gap("json", JSON_TEXT, None))
+        self.assertEqual(shadps4.apply("json", JSON_TEXT, [OWN], None), JSON_TEXT)
+
+    def test_a_value_that_is_not_a_string_is_refused(self) -> None:
+        text = json.dumps({"General": {"addon_install_dir": 3}}, indent=2)
+        with self.assertRaisesRegex(shadps4.Shadps4ConfigError, "addon_install_dir"):
+            shadps4.addon_gap("json", text, DLC)
+
+
+class AddonTomlTests(unittest.TestCase):
+    def gui(self, text: str) -> dict:
+        return tomllib.loads(text)["GUI"]
+
+    def test_the_value_is_replaced_in_place(self) -> None:
+        self.assertEqual(shadps4.addon_gap("toml", TOML_TEXT, DLC), OWN_DLC)
+        new = shadps4.apply("toml", TOML_TEXT, [OWN], DLC)
+        self.assertEqual(new, TOML_TEXT.replace(OWN_DLC, DLC))
+        self.assertIsNone(shadps4.addon_gap("toml", new, DLC))
+        self.assertEqual(shadps4.apply("toml", new, [OWN], DLC), new)
+
+    def test_the_install_directory_and_the_dlc_folder_are_one_edit(self) -> None:
+        new = shadps4.apply("toml", TOML_TEXT, [GAMES], DLC)
+        self.assertEqual(self.gui(new)["installDirs"], [OWN, GAMES])
+        self.assertEqual(self.gui(new)["addonInstallDir"], DLC)
+        self.assertEqual(
+            new,
+            TOML_TEXT.replace(OWN_DLC, DLC).replace(f'["{OWN}"]', f'["{OWN}", "{GAMES}"]'),
+        )
+
+    def test_a_literal_string_and_a_comment_are_kept(self) -> None:
+        text = TOML_TEXT.replace(f'"{OWN_DLC}"', f"'{OWN_DLC}'  # mine")
+        new = shadps4.apply("toml", text, [OWN], DLC)
+        self.assertEqual(self.gui(new)["addonInstallDir"], DLC)
+        self.assertIn('addonInstallDir = "' + DLC + '"  # mine', new)
+
+    def test_an_empty_value_and_a_missing_key(self) -> None:
+        empty = TOML_TEXT.replace(f'"{OWN_DLC}"', '""')
+        self.assertEqual(shadps4.addon_gap("toml", empty, DLC), "")
+        self.assertEqual(self.gui(shadps4.apply("toml", empty, [OWN], DLC))["addonInstallDir"], DLC)
+        gone = TOML_TEXT.replace(f'addonInstallDir = "{OWN_DLC}"\n', "")
+        self.assertEqual(shadps4.addon_gap("toml", gone, DLC), "")
+        new = shadps4.apply("toml", gone, [OWN], DLC)
+        self.assertEqual(self.gui(new)["addonInstallDir"], DLC)
+        self.assertEqual(
+            {k: v for k, v in self.gui(new).items() if k != "addonInstallDir"}, self.gui(gone)
+        )
+
+    def test_a_trailing_slash_is_not_a_difference(self) -> None:
+        text = TOML_TEXT.replace(OWN_DLC, DLC + "/")
+        self.assertIsNone(shadps4.addon_gap("toml", text, DLC))
+
+    def test_a_missing_gui_table_is_added(self) -> None:
+        new = shadps4.apply("toml", '[General]\nlogType = "async"\n', [GAMES], DLC)
+        self.assertEqual(self.gui(new), {"installDirs": [GAMES], "addonInstallDir": DLC})
+
+    def test_a_value_that_is_not_a_string_is_refused(self) -> None:
+        with self.assertRaisesRegex(shadps4.Shadps4ConfigError, "addonInstallDir"):
+            shadps4.addon_gap("toml", "[GUI]\naddonInstallDir = 3\n", DLC)
+
+    def test_similar_keys_and_other_tables_are_untouched(self) -> None:
+        text = (
+            f'[GUI]\naddonInstallDirX = "a"\naddonInstallDir = "{OWN_DLC}"\n'
+            '[Other]\naddonInstallDir = "z"\n'
+        )
+        new = shadps4.apply("toml", text, [], DLC)
+        self.assertEqual(new, text.replace(f'= "{OWN_DLC}"', f'= "{DLC}"'))
+
+
 class ProfileTests(unittest.TestCase):
     def test_the_shipped_profile_declares_the_install_directory(self) -> None:
         rule = PROFILE.shadps4
@@ -179,6 +276,24 @@ class ProfileTests(unittest.TestCase):
         self.assertIn("~/.local/share/shadPS4/config.toml", rule.config)
         for name in ("shadps4", "shadPS4QtLauncher"):
             self.assertIn(name, rule.process)
+
+    def test_the_shipped_profile_declares_the_dlc_folder(self) -> None:
+        rule = PROFILE.shadps4
+        assert rule is not None
+        self.assertEqual(rule.addon_dir, "{library}/roms/ps4/dlc")
+        self.assertEqual(rule.wants_addon("/home/deck/Emulation"), DLC)
+
+    def test_addon_dir_is_optional_and_checked(self) -> None:
+        good = {"config": ["~/a.json"], "process": ["p"], "install_dirs": ["{library}/g"]}
+        rule = self.parse(**good).shadps4
+        assert rule is not None
+        self.assertIsNone(rule.addon_dir)
+        self.assertIsNone(rule.wants_addon("/lib"))
+        for value in ("rel/dlc", "{nope}/dlc", "", 3, ["{library}/dlc"]):
+            with self.assertRaisesRegex(ProfileError, "shadps4.addon_dir"):
+                self.parse(**good, addon_dir=value)
+        with self.assertRaisesRegex(ProfileError, "shadps4.addon_dir"):
+            parse_profile({"name": "x", "shadps4": {**good, "addon_dir": "{library}/d"}}, "t")
 
     def parse(self, **table):
         base = {"name": "x", "paths": {"library": "~/lib"}, "shadps4": table}
@@ -228,6 +343,7 @@ class Device:
         self.json.write_text(JSON_TEXT.replace(OWN, f"{self.home}/Emulation/storage/shadps4/games"))
         self.toml.write_text(TOML_TEXT.replace(OWN, f"{self.home}/Emulation/storage/shadps4/games"))
         self.games = f"{self.home}/Emulation/roms/ps4/games"
+        self.dlc = f"{self.home}/Emulation/roms/ps4/dlc"
         # the rest of the profile needs files this test does not make
         self.profile = dataclasses.replace(PROFILE, retroarch=None, es_systems=None, artwork=None)
 
@@ -293,6 +409,74 @@ class ProvisionTests(Device, unittest.TestCase):
             tomllib.loads(self.toml.read_text())["GUI"]["installDirs"][1:], [self.games]
         )
         self.assertTrue(any("shadps4" in line for line in lines))
+
+    def test_both_config_files_get_the_dlc_folder_in_the_same_backup(self) -> None:
+        rep, _ = self.provision()
+        self.assertEqual(self.mine(rep), [])
+        general = json.loads(self.json.read_text())["General"]
+        self.assertEqual(general["addon_install_dir"], self.dlc)
+        self.assertEqual(tomllib.loads(self.toml.read_text())["GUI"]["addonInstallDir"], self.dlc)
+        self.assertEqual(len(self.backups()), 2)
+
+    def test_a_second_run_leaves_the_dlc_folder_alone(self) -> None:
+        self.provision()
+        stamps = [p.stat().st_mtime_ns for p in (self.json, self.toml)]
+        backups = self.backups()
+        self.provision()
+        self.assertEqual([p.stat().st_mtime_ns for p in (self.json, self.toml)], stamps)
+        self.assertEqual(self.backups(), backups)
+
+    def test_only_the_dlc_folder_wrong_is_still_fixed(self) -> None:
+        self.provision()
+        data = json.loads(self.json.read_text())
+        data["General"]["addon_install_dir"] = "/elsewhere"
+        self.json.write_text(json.dumps(data, indent=2, ensure_ascii=False))
+        toml_before = self.toml.read_text()
+        self.provision()
+        general = json.loads(self.json.read_text())["General"]
+        self.assertEqual(general["addon_install_dir"], self.dlc)
+        self.assertEqual(self.toml.read_text(), toml_before)
+
+    def set_old_dlc(self, old: Path) -> None:
+        data = json.loads(self.json.read_text())
+        data["General"]["addon_install_dir"] = str(old)
+        self.json.write_text(json.dumps(data, indent=2, ensure_ascii=False))
+
+    def test_dlc_installed_by_hand_in_the_old_folder_is_warned_about(self) -> None:
+        old = self.home / "Emulation/storage/shadps4/dlc"
+        (old / "CUSA00001").mkdir(parents=True)
+        self.set_old_dlc(old)
+        rep, _ = self.provision()
+        (warning,) = [w for w in rep.warnings if "DLC" in w]
+        self.assertIn(str(old), warning)
+        general = json.loads(self.json.read_text())["General"]
+        self.assertEqual(general["addon_install_dir"], self.dlc)
+        self.assertTrue((old / "CUSA00001").is_dir())
+
+    def test_an_empty_or_missing_old_dlc_folder_is_not_warned_about(self) -> None:
+        old = self.home / "Emulation/storage/shadps4/dlc"
+        self.set_old_dlc(old)
+        rep, _ = self.provision()
+        self.assertEqual([w for w in rep.warnings if "DLC" in w], [])
+        old.mkdir(parents=True)
+        self.set_old_dlc(old)
+        rep, _ = self.provision()
+        self.assertEqual([w for w in rep.warnings if "DLC" in w], [])
+
+    def test_dry_run_reports_the_dlc_folder_and_writes_nothing(self) -> None:
+        before = self.json.read_text(), self.toml.read_text()
+        _rep, lines = self.provision(dry_run=True)
+        self.assertEqual((self.json.read_text(), self.toml.read_text()), before)
+        self.assertTrue(any("would" in line and self.dlc in line for line in lines))
+
+    def test_a_profile_without_addon_dir_leaves_the_dlc_folder_alone(self) -> None:
+        assert self.profile.shadps4 is not None
+        self.profile = dataclasses.replace(
+            self.profile, shadps4=dataclasses.replace(self.profile.shadps4, addon_dir=None)
+        )
+        self.provision()
+        self.assertNotIn("addon_install_dir", json.loads(self.json.read_text())["General"])
+        self.assertIn(OWN_DLC, self.toml.read_text())
 
     def test_the_old_files_are_backed_up_before_the_edit(self) -> None:
         old_json, old_toml = self.json.read_text(), self.toml.read_text()
@@ -463,6 +647,36 @@ folders = ["library", "saves"]
         self.assertEqual(result.status, WARN)
         self.assertIn("config.toml", result.detail)
         self.assertNotIn("config.json", result.detail)
+
+    def test_a_different_dlc_folder_is_a_warning_with_the_fix(self) -> None:
+        self.provision()
+        data = json.loads(self.json.read_text())
+        data["General"]["addon_install_dir"] = "/elsewhere"
+        self.json.write_text(json.dumps(data, indent=2, ensure_ascii=False))
+        result = by_name(self.check(), "shadPS4 install folder")
+        self.assertEqual(result.status, WARN)
+        self.assertIn(self.dlc, result.detail)
+        self.assertIn("config.json", result.detail)
+        self.assertNotIn("config.toml", result.detail)
+        self.assertIn("warpzone provision device deck", result.fix)
+
+    def test_an_unset_dlc_folder_is_a_warning(self) -> None:
+        self.provision()
+        data = json.loads(self.json.read_text())
+        del data["General"]["addon_install_dir"]
+        self.json.write_text(json.dumps(data, indent=2, ensure_ascii=False))
+        result = by_name(self.check(), "shadPS4 install folder")
+        self.assertEqual(result.status, WARN)
+        self.assertIn("DLC", result.detail)
+
+    def test_a_profile_without_addon_dir_is_not_checked_for_it(self) -> None:
+        assert self.profile.shadps4 is not None
+        self.provision()
+        self.profile = dataclasses.replace(
+            self.profile, shadps4=dataclasses.replace(self.profile.shadps4, addon_dir=None)
+        )
+        self.toml.write_text(TOML_TEXT.replace(OWN, self.games))
+        self.assertEqual(by_name(self.check(), "shadPS4 install folder").status, OK)
 
     def test_no_config_yet_says_to_start_shadps4(self) -> None:
         self.json.unlink()

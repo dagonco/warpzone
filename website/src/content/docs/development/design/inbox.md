@@ -111,7 +111,8 @@ Syncthing state. The contract:
   [Compressed Wii and GameCube images](#compressed-wii-and-gamecube-images) below; they are
   identified by the disc header copy they carry, not by DAT and not with `dolphin-tool`.
 - **PS4 packages.** See [PS4 packages](#ps4-packages) below; with `orbis-pkg-util` they are
-  extracted into a game folder with a shortcut.
+  extracted into a game folder with a shortcut; an update and a DLC are filed beside the
+  game they belong to.
 - **PS Vita packages.** See [PS Vita packages](#ps-vita-packages) below; Vita3K installs them
   with the zRIF of a key file the user keeps, and the result is filed like a Vita dump.
 - **Out of scope.** Vita `.vpk` packages, and PS3 or Xbox content that is not a disc image
@@ -320,11 +321,13 @@ lists only the `.desktop` files of `roms/ps4/shortcuts`, whose command on the co
   <pkg>`. Reported in the `tools:` line and by `doctor` as an optional inbox tool. Without it
   the `.pkg` is placed as it is in `roms/ps4/` with a note saying so (the earlier behaviour).
 - **Kind.** The header says what the package is before anything is unpacked: the u32
-  big-endian content type at 0x74 (`0x1A` game data, `0x1B` additional content) and the
-  content flags at 0x78 (`0x100000` or `0x40000000` mark a patch). An update or DLC goes to
-  review with a message saying that updates are not merged (nothing is extracted, even when
-  the base game is in the library). After extraction the `CATEGORY` of `sce_sys/param.sfo`
-  decides again (`gd*` game, `gp` update, `ac` DLC) and its `TITLE_ID` must equal the header's.
+  big-endian content type at 0x74 (`0x1A` game data; `0x1B` additional content and `0x1C`
+  additional license, a DLC with no data) and the content flags at 0x78 (`0x100000` or
+  `0x40000000` mark a patch). The content id (at 0x40) and the PFS image size (u64 at 0x418,
+  0 for a DLC without data) are read from the same header. After extraction the `CATEGORY` of
+  `sce_sys/param.sfo` decides again (`gd*` game, `gp` update, `ac*` DLC) and must agree with
+  the header, and its `TITLE_ID` must equal the header's. A package of another content type
+  goes to review.
 - **Game folder.** The extraction goes to a temporary folder in the local work folder
   (`work_dir`), which must have the package's size free. It must hold `eboot.bin` and
   `sce_sys/param.sfo` and no symbolic link. The folder is then copied file by file with a
@@ -348,11 +351,65 @@ lists only the `.desktop` files of `roms/ps4/shortcuts`, whose command on the co
   as the game and runs `Shadps4-qt.AppImage -d -g <path>`. In the Qt launcher `-d` is the
   alias of `-e default`: the version selected in its settings. Nothing expands `~` or
   `$HOME` on that path, so it is written out under the SteamOS home (`DEVICE_LIBRARY`).
-- **Whitelists.** Two lines per game: `!/roms/ps4/games/<CUSAxxxxx>` and
-  `!/roms/ps4/shortcuts/<Title>.desktop`. A report without `--apply` does not unpack
-  anything, so it cannot name the shortcut and prints only the first.
-- **Install directory.** The consoles must list `~/Emulation/roms/ps4/games` as an install
-  directory of shadPS4. See [shadPS4 install directories](/warpzone/development/design/profiles/#shadps4-install-directories).
+- **Update.** shadPS4 overlays a sibling folder `<game folder>-UPDATE` on the base game, file
+  by file and read-only, so an update becomes `library/roms/ps4/games/<CUSAxxxxx>-UPDATE/`,
+  holding what `orbis-pkg-util extract` produces from the patch package (copied through
+  `.part` and renamed like a game). The base game `games/<CUSAxxxxx>/` must already be in the
+  library, else the package goes to review ("install the game first"; nothing is extracted).
+  The extracted `param.sfo` must have the header's `TITLE_ID` and `CATEGORY` `gp`, and an
+  `APP_VER`. When `games/<CUSAxxxxx>-UPDATE/` already exists, `update_action` compares the
+  `APP_VER` of the package with the one in the library copy's `sce_sys/param.sfo`, numerically
+  per dot part (`01.09` is 1.9): the same version is "already in the library" and nothing is
+  touched, an older one goes to review ("older than the update in the library, vX"), a newer one
+  replaces it. A library copy with no readable `APP_VER` goes to review.
+  This replacement is the one exception to "nothing in the library is overwritten". It is
+  acceptable because the original package of the old update was filed in `inbox/_done` by the
+  run that placed it. The replacement is built so the library holds a complete update at every
+  moment: the new folder is copied (with read-back) to `<CUSAxxxxx>-UPDATE.part`; right before
+  acting, the library copy is read again and must still have the version that was compared
+  (else review); the old folder is renamed to `.old`, `.part` is renamed into place and `.old`
+  is deleted. A failing rename puts the old folder back, and a `.old` found beside a missing
+  update (a run that stopped between the two renames) is restored before comparing. The unit
+  note says which versions were replaced. A report without `--apply` cannot know the new
+  `APP_VER` before extracting, so it says it would extract the package and compare, and shows
+  the version in the library.
+- **DLC.** shadPS4 looks for a DLC in `<addon_install_dir>/<TITLE_ID of the running game>/
+  <entry>/`, where an entry holds `sce_sys/param.sfo` (`CATEGORY` starting with `ac`, and a
+  `CONTENT_ID`) and the license (`sce_sys/license.info`, else `license.dat`); an entry with
+  no data still loads. A DLC therefore becomes
+  `library/roms/ps4/dlc/<CUSAxxxxx>/<entitlement label>/`, the label being the part of the
+  content id after its second `-` (`UP9000-CUSA00900_00-SPEXPANSIONDLC03` gives
+  `SPEXPANSIONDLC03`; `entitlement_label` accepts only `[A-Za-z0-9_]`, anything else goes to
+  review before extraction). **Which game.** If the inbox item is a folder whose name is
+  exactly a title id (`inbox/CUSA03173/`, at any depth inside it; `item_title_id`, fed by
+  `ConsoleIsoHandler.process`, which sees the item), the DLC is filed for that game, whatever
+  title id the DLC itself carries (`UP9000-CUSA00900_00-SPEXPANSIONDLC03` in `inbox/CUSA03173/`
+  goes to `dlc/CUSA03173/SPEXPANSIONDLC03/`). Any other item (a folder with another name, an
+  archive, a loose file) files the DLC for its own title id: the header's, which `param.sfo`
+  must confirm. Either way `games/<target>/` must already be in the library (only the folder
+  is checked, not its contents) or the DLC goes to review naming the missing title id and the
+  `inbox/<CUSAnnnnn>/` folder option; the whitelist line is `!/roms/ps4/dlc/<target>`. An
+  entry folder already in the library is "already in the library", not compared and never
+  touched. The extracted `param.sfo` must have the header's `TITLE_ID`, a `CATEGORY`
+  starting with `ac` and a `CONTENT_ID` equal to the header's, and the tree holds no symbolic
+  link. A DLC without data (PFS size 0 in the header) makes `orbis-pkg-util` write `sce_sys`
+  and then exit 1 ("cannot open outer PFS ... source buffer is too short"); inbox accepts
+  that exit status only when the header's PFS size is 0 and `sce_sys/param.sfo` was written,
+  and any other failure is the usual extraction failure. The folder is placed with the
+  `.part` and rename approach.
+- **No shortcut.** Updates and DLC get no shortcut: the game's own one starts the game, and
+  shadPS4 finds the update and the DLC beside it. The disk space check is the one for games.
+- **Whitelists.** A game has two lines: `!/roms/ps4/games/<CUSAxxxxx>` and
+  `!/roms/ps4/shortcuts/<Title>.desktop`. An update has `!/roms/ps4/games/<CUSAxxxxx>-UPDATE`
+  and a DLC `!/roms/ps4/dlc/<CUSAxxxxx>` (the title folder, so one line serves all its DLC).
+  A report without `--apply` does not unpack anything, so for a game it cannot name the
+  shortcut and prints only the first line.
+- **Install directories.** The consoles must list `~/Emulation/roms/ps4/games` as an install
+  directory of shadPS4, and `~/Emulation/roms/ps4/dlc` as its `addon_install_dir`. See
+  [shadPS4 install directories](/warpzone/development/design/profiles/#shadps4-install-directories)
+  and [the EmuDeck guide](/warpzone/guides/emudeck/#shadps4-install-directory).
+- **Catalog.** `games/<CUSAxxxxx>-UPDATE/` and `dlc/<CUSAxxxxx>/` are parts of the game
+  `<CUSAxxxxx>`, not games of their own (see [the library UI](/warpzone/development/design/library-ui/)).
 
 ## PS Vita games
 

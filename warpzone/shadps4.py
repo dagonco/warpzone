@@ -1,11 +1,13 @@
-"""Pure edits for shadPS4: its install directories and the launch script ES-DE runs.
+"""Pure edits for shadPS4: its install and DLC directories and the launch script ES-DE runs.
 
 shadPS4 runs extracted games it finds in its install directories. Two config files can hold
 them, depending on the version: `config.json` (v0.21 and later: `General.install_dirs`, a
 list of `{"enabled": true, "path": "..."}`) and the older `config.toml` (`GUI.installDirs`,
-a list of strings). A profile with `[shadps4]` has `provision device` add the folders it
-declares to both, and `doctor` check them. No I/O here. See development/design/profiles.md, "shadPS4
-install directories".
+a list of strings). The same files hold the one folder it reads DLC from
+(`General.addon_install_dir` in JSON, `GUI.addonInstallDir` in TOML, a path string). A
+profile with `[shadps4]` has `provision device` add the install folders it declares to both
+and set the DLC folder, and `doctor` check them. No I/O here. See
+development/design/profiles.md, "shadPS4 install directories".
 """
 
 from __future__ import annotations
@@ -15,7 +17,7 @@ import json
 import re
 import tomllib
 import xml.etree.ElementTree as ET
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from typing import Any
 
 from warpzone.errors import WarpzoneError
@@ -23,6 +25,7 @@ from warpzone.errors import WarpzoneError
 JSON, TOML = "json", "toml"
 _HEADER = re.compile(r"^\s*\[([^\[\]]+)\]\s*(?:#.*)?$")
 _KEY = re.compile(r"^[ \t]*installDirs[ \t]*=[ \t]*", re.MULTILINE)
+_ADDON_KEY = re.compile(r"^[ \t]*addonInstallDir[ \t]*=[ \t]*", re.MULTILINE)
 
 
 class Shadps4ConfigError(WarpzoneError):
@@ -39,6 +42,11 @@ def kind_of(path: str) -> str | None:
 
 def _norm(path: str) -> str:
     return path.rstrip("/") or "/"
+
+
+def _same_addon(current: str, want: str) -> bool:
+    """Whether the DLC folder is already `want`: unset never is, trailing slashes do not count."""
+    return bool(current) and _norm(current) == _norm(want)
 
 
 # ------------------------------------------------------------------ config.json
@@ -64,7 +72,14 @@ def _json_enabled(dirs: Sequence[dict[str, Any]]) -> set[str]:
     return {_norm(d["path"]) for d in dirs if d.get("enabled", True) is not False}
 
 
-def _json_apply(text: str, wants: Sequence[str]) -> str:
+def _json_addon(general: dict[str, Any]) -> str:
+    value = general.get("addon_install_dir", "")
+    if not isinstance(value, str):
+        raise Shadps4ConfigError("General.addon_install_dir is not a string")
+    return value
+
+
+def _json_apply(text: str, wants: Sequence[str], addon: str | None) -> str:
     data, general, dirs = _json_load(text)
     # A layout other than the one shadPS4 writes would be rewritten wholesale.
     dumped = json.dumps(data, indent=2, ensure_ascii=False)
@@ -74,6 +89,9 @@ def _json_apply(text: str, wants: Sequence[str]) -> str:
         )
     have = _json_enabled(dirs)
     changed = False
+    if addon is not None and not _same_addon(_json_addon(general), addon):
+        changed = True
+        general["addon_install_dir"] = addon
     for want in wants:
         if _norm(want) in have:
             continue
@@ -142,7 +160,66 @@ def _gui_span(text: str) -> tuple[int, int] | None:
     return None if start is None else (start, pos)
 
 
-def _toml_apply(text: str, wants: Sequence[str]) -> str:
+def _toml_put(
+    text: str,
+    line: str,
+    key_re: re.Pattern[str],
+    value_end: Callable[[str, int], int],
+    value: str,
+) -> str:
+    """`text` with `value` as that key of the `[GUI]` table; `line` is used when it is new.
+
+    An existing value runs from the key's `=` to `value_end(text, start)` and is replaced; a
+    missing key is added as `line` after the table's last line, and a missing table at the end.
+    """
+    eol = "\r\n" if "\r\n" in text else "\n"
+    span = _gui_span(text)
+    if span is None:
+        glue = "" if not text or text.endswith("\n") else eol
+        return f"{text}{glue}{eol if text else ''}[GUI]{eol}{line}{eol}"
+    start, end = span
+    key = key_re.search(text, start, end)
+    if key is not None:
+        return text[: key.end()] + value + text[value_end(text, key.end()) :]
+    last = start + len(text[start:end].rstrip())
+    if last == start:  # an empty table: the line goes right after the header
+        lead = "" if text[:start].endswith("\n") else eol
+        return f"{text[:start]}{lead}{line}{eol}{text[start:]}"
+    return f"{text[:last]}{eol}{line}{text[last:]}"
+
+
+def _array_value_end(text: str, start: int) -> int:
+    if text[start : start + 1] != "[":
+        raise Shadps4ConfigError("GUI.installDirs is not an array")
+    return _array_end(text, start) + 1
+
+
+def _string_value_end(text: str, start: int) -> int:
+    """Index just after the single-line string that starts at `start`."""
+    quote = text[start : start + 1]
+    if quote not in ("'", '"') or text[start : start + 3] in ('"""', "'''"):
+        raise Shadps4ConfigError("GUI.addonInstallDir is not a single-line string")
+    i, size = start + 1, len(text)
+    while i < size and text[i] not in (quote, "\n"):
+        i += 2 if quote == '"' and text[i] == "\\" else 1
+    if i >= size or text[i] != quote:
+        raise Shadps4ConfigError("GUI.addonInstallDir is not closed")
+    return i + 1
+
+
+def _checked(new: str, expected: dict[str, Any]) -> str:
+    """`new` if it reads back as `expected`, that is, the edit changed nothing else."""
+    try:
+        if tomllib.loads(new) != expected:
+            raise Shadps4ConfigError(
+                "the edit would change more than the value, so it was not made"
+            )
+    except tomllib.TOMLDecodeError as exc:
+        raise Shadps4ConfigError(f"the edit would not read back ({exc})") from exc
+    return new
+
+
+def _toml_apply_dirs(text: str, wants: Sequence[str]) -> str:
     data, current = _toml_load(text)
     have = {_norm(d) for d in current}
     add = [w for w in wants if _norm(w) not in have]
@@ -150,35 +227,36 @@ def _toml_apply(text: str, wants: Sequence[str]) -> str:
         return text
     merged = [*current, *add]
     value = "[" + ", ".join(json.dumps(d, ensure_ascii=False) for d in merged) + "]"
-    eol = "\r\n" if "\r\n" in text else "\n"
-    span = _gui_span(text)
-    if span is None:
-        glue = "" if not text or text.endswith("\n") else eol
-        new = f"{text}{glue}{eol if text else ''}[GUI]{eol}installDirs = {value}{eol}"
-    else:
-        start, end = span
-        key = _KEY.search(text, start, end)
-        if key is not None:
-            if text[key.end() : key.end() + 1] != "[":
-                raise Shadps4ConfigError("GUI.installDirs is not an array")
-            close = _array_end(text, key.end())
-            new = text[: key.end()] + value + text[close + 1 :]
-        else:
-            line = f"installDirs = {value}"
-            last = start + len(text[start:end].rstrip())
-            if last == start:  # an empty table: the line goes right after the header
-                lead = "" if text[:start].endswith("\n") else eol
-                new = f"{text[:start]}{lead}{line}{eol}{text[start:]}"
-            else:
-                new = f"{text[:last]}{eol}{line}{text[last:]}"
+    new = _toml_put(text, f"installDirs = {value}", _KEY, _array_value_end, value)
     expected = copy.deepcopy(data)
     expected.setdefault("GUI", {})["installDirs"] = merged
+    return _checked(new, expected)
+
+
+def _toml_addon(text: str) -> str:
     try:
-        if tomllib.loads(new) != expected:
-            raise Shadps4ConfigError("the edit would change more than the list, so it was not made")
+        gui = tomllib.loads(text).get("GUI", {})
     except tomllib.TOMLDecodeError as exc:
-        raise Shadps4ConfigError(f"the edit would not read back ({exc})") from exc
-    return new
+        raise Shadps4ConfigError(f"not valid TOML ({exc})") from exc
+    value = gui.get("addonInstallDir", "") if isinstance(gui, dict) else ""
+    if not isinstance(value, str):
+        raise Shadps4ConfigError("GUI.addonInstallDir is not a string")
+    return value
+
+
+def _toml_apply_addon(text: str, want: str) -> str:
+    if _same_addon(_toml_addon(text), want):
+        return text
+    value = json.dumps(want, ensure_ascii=False)
+    new = _toml_put(text, f"addonInstallDir = {value}", _ADDON_KEY, _string_value_end, value)
+    expected = copy.deepcopy(tomllib.loads(text))
+    expected.setdefault("GUI", {})["addonInstallDir"] = want
+    return _checked(new, expected)
+
+
+def _toml_apply(text: str, wants: Sequence[str], addon: str | None) -> str:
+    new = _toml_apply_dirs(text, wants)
+    return new if addon is None else _toml_apply_addon(new, addon)
 
 
 # ------------------------------------------------------------------ both
@@ -193,9 +271,25 @@ def missing(kind: str, text: str, wants: Sequence[str]) -> list[str]:
     return [w for w in wants if _norm(w) not in have]
 
 
-def apply(kind: str, text: str, wants: Sequence[str]) -> str:
-    """`text` with every folder of `wants` listed; every other byte is kept."""
-    return _json_apply(text, wants) if kind == JSON else _toml_apply(text, wants)
+def addon_gap(kind: str, text: str, want: str | None) -> str | None:
+    """The DLC folder the config has now ("" if unset) when it is not `want`, else None.
+
+    None also when `want` is None (the profile declares no DLC folder). Trailing slashes do
+    not count as a difference.
+    """
+    if want is None:
+        return None
+    current = _json_addon(_json_load(text)[1]) if kind == JSON else _toml_addon(text)
+    return None if _same_addon(current, want) else current
+
+
+def apply(kind: str, text: str, wants: Sequence[str], addon: str | None = None) -> str:
+    """`text` with every folder of `wants` listed and the DLC folder set to `addon`.
+
+    The DLC folder is replaced when it differs and left alone when `addon` is None; every
+    other byte is kept.
+    """
+    return _json_apply(text, wants, addon) if kind == JSON else _toml_apply(text, wants, addon)
 
 
 # ------------------------------------------------------------------ launch script

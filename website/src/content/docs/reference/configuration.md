@@ -276,13 +276,14 @@ Scraped artwork and metadata for a frontend that is not ES-DE. The hub's media a
 
 ### `[shadps4]`
 
-Adds install directories to shadPS4's config files and, optionally, a launch script.
+Adds install directories to shadPS4's config files, sets its DLC folder and, optionally, a launch script.
 
 | Key | Type | Default | Rules |
 |---|---|---|---|
 | `config` | array of strings | none (required) | Non-empty paths ending in `.json` or `.toml`; each is edited only if it exists. |
 | `process` | array of strings | none (required) | shadPS4 and its launcher; a file is edited only while none runs. |
 | `install_dirs` | array of strings | none (required) | Non-empty absolute paths (or `~`); `{library}` is the only placeholder. Existing entries are kept. |
+| `addon_dir` | string | none | The folder shadPS4 reads DLC from: an absolute path (or `~`); `{library}` is the only placeholder. Replaces `General.addon_install_dir` / `GUI.addonInstallDir` when it differs. Without it the setting is left alone. |
 | `launch` | table | none | `qt_ini`, `versions`, `script` and `find_rules` (each an absolute path or starting with `~/`) and `emulator` (the ES-DE emulator name), all required non-empty strings without `"` or line breaks. |
 
 ### `[cemu]`
