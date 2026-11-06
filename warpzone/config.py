@@ -130,11 +130,34 @@ class InboxSettings:
     switch_keys: str | None = None
 
 
+SERVE_KEYS = ("listen", "token_file")
+DEFAULT_LISTEN = "0.0.0.0:8780"
+
+
+@dataclass(frozen=True)
+class ServeSettings:
+    """The optional `[serve]` table, read only by `warpzone serve`: the address it listens on
+    and the file whose first line is the UI token (else `WARPZONE_UI_TOKEN` is used)."""
+
+    listen: str = DEFAULT_LISTEN
+    token_file: str | None = None
+
+
+def split_listen(value: str) -> tuple[str, int] | None:
+    """`host:port` (or `[v6]:port`) as a host and a port, or None when it is not one."""
+    host, sep, port = value.rpartition(":")
+    host = host.removeprefix("[").removesuffix("]")
+    if not sep or not host or not port.isdigit() or not 0 <= int(port) <= 65535:
+        return None
+    return host, int(port)
+
+
 @dataclass(frozen=True)
 class Config:
     hub: Hub
     devices: dict[str, Device]
     inbox: InboxSettings = field(default_factory=InboxSettings)
+    serve: ServeSettings = field(default_factory=ServeSettings)
 
 
 # Defaults of the command line, kept here so that building the parser imports no command.
@@ -242,6 +265,26 @@ def parse_inbox(raw: object, errors: list[str]) -> InboxSettings:
     return InboxSettings(**values)
 
 
+def parse_serve(raw: object, errors: list[str]) -> ServeSettings:
+    if raw is None:
+        return ServeSettings()
+    if not isinstance(raw, dict):
+        errors.append("[serve]: must be a table")
+        return ServeSettings()
+    _check_keys(raw, set(SERVE_KEYS), "serve", errors)
+    listen = raw.get("listen", DEFAULT_LISTEN)
+    if not isinstance(listen, str) or split_listen(listen.strip()) is None:
+        errors.append("serve.listen: must be HOST:PORT, such as 0.0.0.0:8780")
+        listen = DEFAULT_LISTEN
+    token_file = raw.get("token_file")
+    if "token_file" in raw and (not isinstance(token_file, str) or not token_file.strip()):
+        errors.append("serve.token_file: must be a non-empty path string")
+        token_file = None
+    return ServeSettings(
+        listen.strip(), str(Path(token_file.strip()).expanduser()) if token_file else None
+    )
+
+
 def load_inbox_settings(path: Path) -> InboxSettings:
     """Only the `[inbox]` table of the config, so `inbox` works on a machine that has no
     Syncthing devices configured. A missing file means all defaults."""
@@ -261,8 +304,9 @@ def load_inbox_settings(path: Path) -> InboxSettings:
 def parse_config(data: dict[str, Any], known_profiles: set[str] | None = None) -> Config:
     """Validate a decoded config. `known_profiles` enables the profile-name check."""
     errors: list[str] = []
-    _check_keys(data, {"hub", "devices", "inbox"}, "config", errors)
+    _check_keys(data, {"hub", "devices", "inbox", "serve"}, "config", errors)
     inbox = parse_inbox(data.get("inbox"), errors)
+    serve = parse_serve(data.get("serve"), errors)
 
     raw_hub = data.get("hub")
     hub: Hub | None = None
@@ -389,7 +433,7 @@ def parse_config(data: dict[str, Any], known_profiles: set[str] | None = None) -
     if errors:
         raise ConfigError("\n".join(errors))
     assert hub is not None
-    return Config(hub, devices, inbox)
+    return Config(hub, devices, inbox, serve)
 
 
 def load_config(path: Path, known_profiles: set[str] | None = None) -> Config:

@@ -141,6 +141,28 @@ class ConfigTests(unittest.TestCase):
             "exclude_systems: listed more than once: 'ps4'",
         )
 
+    def test_serve_table_is_optional_and_checked(self) -> None:
+        cfg = parse_config(config_data())
+        self.assertEqual((cfg.serve.listen, cfg.serve.token_file), ("0.0.0.0:8780", None))
+        data = copy.deepcopy(config_data())
+        data["serve"] = {"listen": " 127.0.0.1:9000 ", "token_file": "/config/ui.token"}
+        cfg = parse_config(data)
+        self.assertEqual(
+            (cfg.serve.listen, cfg.serve.token_file), ("127.0.0.1:9000", "/config/ui.token")
+        )
+        data["serve"] = {"listen": "[::1]:80"}
+        self.assertEqual(parse_config(data).serve.listen, "[::1]:80")
+        for bad in ("8780", "host", ":80", "host:x", "host:70000", 80, ""):
+            self.assert_error(
+                lambda d, bad=bad: d.update(serve={"listen": bad}),
+                "serve.listen: must be HOST:PORT",
+            )
+        self.assert_error(
+            lambda d: d.update(serve={"token_file": ""}), "serve.token_file: must be a non-empty"
+        )
+        self.assert_error(lambda d: d.update(serve={"port": 1}), "serve: unknown key 'port'")
+        self.assert_error(lambda d: d.update(serve=[]), "[serve]: must be a table")
+
     def test_channel_defaults_to_stable_and_must_be_known(self) -> None:
         self.assertEqual(parse_config(config_data()).devices["deck"].channel, "stable")
         data = copy.deepcopy(config_data())

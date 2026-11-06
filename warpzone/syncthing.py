@@ -190,6 +190,18 @@ class Client:
             raise
         return info if isinstance(info, dict) else None
 
+    def connections(self) -> dict[str, dict[str, Any]]:
+        """`GET /rest/system/connections`: the connection of each remote device, by device ID."""
+        answer = self.get("/rest/system/connections")
+        found = answer.get("connections") if isinstance(answer, dict) else None
+        return found if isinstance(found, dict) else {}
+
+    def completion(self, folder_id: str, device_id: str) -> dict[str, Any]:
+        """`GET /rest/db/completion`: how much of the folder `device_id` has (`completion`,
+        `needBytes`, `needItems`, `remoteState`)."""
+        answer = self.get("/rest/db/completion", folder=folder_id, device=device_id)
+        return answer if isinstance(answer, dict) else {}
+
     def browse(self, folder_id: str) -> list[str]:
         """Names at the top level of a folder."""
         entries = self.get("/rest/db/browse", folder=folder_id, levels="0") or []

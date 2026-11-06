@@ -341,6 +341,18 @@ def _build_parser() -> argparse.ArgumentParser:
         help="print the new files and the dropped lines, write nothing",
     )
 
+    sv_ui = sub.add_parser(
+        "serve",
+        parents=[common],
+        help="serve the library UI and its JSON API (run where the hub root is mounted; "
+        "token in WARPZONE_UI_TOKEN or [serve] token_file)",
+    )
+    sv_ui.add_argument(
+        "--listen",
+        metavar="HOST:PORT",
+        help="the address to listen on (default: [serve] listen, 0.0.0.0:8780)",
+    )
+
     st_dry_run = argparse.ArgumentParser(add_help=False)
     st_dry_run.add_argument(
         "--dry-run", action="store_true", help="print what it would do and change nothing"
@@ -859,6 +871,13 @@ def _run(args: argparse.Namespace) -> int:
 
     if args.command == "whitelist":
         return _whitelist(args, cfg)
+
+    if args.command == "serve":
+        from warpzone import serve
+
+        return serve.run(
+            cfg, listen=args.listen, client_factory=lambda: _hub_client(cfg), log=_eprint
+        )
 
     if args.command == "check":
         from warpzone import whitelist_store

@@ -141,6 +141,10 @@ class FakeSyncthing:
         self.after_sub_scan: dict[tuple[str, str], dict[str, Any]] = {}
         self.ignores_error: str | None = None  # what db/ignores reports for a bad include
         self.scans = 0  # shows up as db/status stateChanged, like a finished scan
+        # system/connections: device ID -> its connection entry.
+        self.connections: dict[str, dict[str, Any]] = {}
+        # db/completion: (folder, device ID) -> the answer; a pair that is not there is a 404.
+        self.completion: dict[tuple[str, str], dict[str, Any]] = {}
         # Seconds a full scan takes to answer: Syncthing holds it while the folder pulls.
         self.scan_delay = 0.0
         self.requests: list[tuple[str, str, Any]] = []
@@ -235,6 +239,11 @@ class FakeSyncthing:
                 "globalFiles": 3,
                 "needFiles": 0,
             }
+        if (method, path) == ("GET", "/rest/system/connections"):
+            return 200, {"connections": self.connections, "total": {}}
+        if (method, path) == ("GET", "/rest/db/completion"):
+            answer = self.completion.get((folder, query.get("device", "")))
+            return (404, "no such folder or device") if answer is None else (200, answer)
         if path == "/rest/db/browse":
             if folder not in self.browse and folder not in self.folders:
                 return 500, "no such folder"

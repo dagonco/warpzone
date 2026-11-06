@@ -13,7 +13,7 @@ warpzone --version                # prints "warpzone X.Y.Z" and exits 0
 
 ## Reading this page
 
-**Where a command runs.** `catalog` and `whitelist migrate` run where the hub root is mounted. `check`, `provision hub`, `status`, `render-ignores`, `bios` and `inbox` run on any machine that can reach what they need (the hub's Syncthing API, or the library on a disk). `provision device`, `prune`, `frontend refresh`, `play-state sync`, `links sync`, `saves convert`, `settings`, `self-update` and `health` run on a console, because they read its local Syncthing and write its files. `doctor` runs anywhere and only queries the local Syncthing on `127.0.0.1`.
+**Where a command runs.** `catalog`, `serve` and `whitelist migrate` run where the hub root is mounted. `check`, `provision hub`, `status`, `render-ignores`, `bios` and `inbox` run on any machine that can reach what they need (the hub's Syncthing API, or the library on a disk). `provision device`, `prune`, `frontend refresh`, `play-state sync`, `links sync`, `saves convert`, `settings`, `self-update` and `health` run on a console, because they read its local Syncthing and write its files. `doctor` runs anywhere and only queries the local Syncthing on `127.0.0.1`.
 
 **What changes files.** Commands report first and act only when you ask:
 
@@ -22,6 +22,7 @@ warpzone --version                # prints "warpzone X.Y.Z" and exits 0
 | `check`, `status`, `render-ignores`, `bios`, `doctor`, `health`, `settings audit` | No. Read only. |
 | `prune`, `inbox` | Report only. They delete or move files only with `--apply`. |
 | `provision hub`, `provision device`, `frontend refresh`, `play-state sync`, `links sync`, `saves convert`, `settings apply`, `settings capture`, `catalog`, `whitelist migrate` | Yes, and each accepts `--dry-run` to show what it would do and change nothing. |
+| `serve` | Only on request: it rewrites a device's `patterns-<device>.stignore` (with a backup of the old file), and writes `catalog/` when it runs `catalog`. It has no `--dry-run`; every change request can set `dry_run` instead. |
 | `self-update` | Yes: it runs one tick of the updater, which can switch the checkout to a newer release. It has no `--dry-run`. |
 
 **`--config PATH`.** Almost every leaf command takes `--config PATH`: the private config file. Without it warpzone uses `$WARPZONE_CONFIG`, then `$XDG_CONFIG_HOME/warpzone/config.toml`, then `~/.config/warpzone/config.toml`. The option goes after the full command (`warpzone provision hub --config FILE`, not before `provision`). `self-update` is the exception: it needs no config and takes only `--now`.
@@ -56,6 +57,7 @@ Every error warpzone raises on purpose derives from one base class and carries i
 | [`bios`](#warpzone-bios) | Which BIOS and firmware files a library has, lacks or has wrong. |
 | [`inbox`](#warpzone-inbox) | Identify, convert and file new games. |
 | [`catalog`](#warpzone-catalog) | Build and update the catalog index of the library on the hub. |
+| [`serve`](#warpzone-serve) | Serve the library UI and its JSON API from the hub. |
 | [`frontend refresh`](#warpzone-frontend-refresh) | Update artwork scope and rewrite a frontend's gamelists. |
 | [`play-state sync`](#warpzone-play-state-sync) | Share favourites and play statistics. |
 | [`links sync`](#warpzone-links-sync) | Link library games into an emulator's own folder. |
@@ -309,6 +311,30 @@ warpzone catalog
 warpzone catalog --ra-hash --dry-run
 warpzone catalog --ra-hash
 RA_API_KEY=... warpzone catalog --ra-lists
+```
+
+## `warpzone serve`
+
+```
+warpzone serve [--config PATH] [--listen HOST:PORT]
+```
+
+Serves the library UI (the static page in `warpzone/data/ui/`) and its JSON API from one port, with `http.server`. It runs where the hub root is mounted, normally in the hub's container, and stays up until it is stopped (Ctrl-C or `SIGTERM`). It reads `[hub]` (the root and the Syncthing API), `[devices.*]`, `[serve]` and `[inbox] rahasher`. See [HTTP API](/warpzone/development/design/library-ui/#http-api) for the endpoints.
+
+The UI rewrites device whitelists and nothing else in the library: each request that turns games or systems on or off for a device replaces `library/patterns-<device>.stignore`, after copying the old file to `catalog/whitelists/<device>/` (the 50 newest are kept), and asks the hub's Syncthing to scan it. A request is refused when the whitelist changed since the client read it, and a device whose whitelist is not in the UI's format is refused until `warpzone whitelist migrate` has run. While it runs, the server also updates the catalog in a background thread: at start and every 6 hours (`catalog`, with RAHasher when `[inbox] rahasher` is set), and `catalog --ra-lists` once a day when `RA_API_KEY` is set.
+
+| Option | Default | Meaning |
+|---|---|---|
+| `--config PATH` | see above | The private config file. |
+| `--listen HOST:PORT` | `[serve] listen`, else `0.0.0.0:8780` | The address to listen on. |
+
+The token is the shared secret of the UI, at least 16 characters (a shorter one is refused). Make one with `openssl rand -hex 32` or `python3 -c "import secrets; print(secrets.token_hex(32))"`. Give it in `WARPZONE_UI_TOKEN`, or as the first line of the file `[serve] token_file` names. The page asks for it once and then uses a cookie; a client that is not a browser sends `Authorization: Bearer <token>`. The server never prints, logs or answers with the token. The traffic is plain HTTP, so use it on a home network only, and put TLS in front of it with your own reverse proxy if you need it from outside.
+
+Exit `0` after a clean stop; `2` when there is no token or it is too short, `[hub] root` has no `library/.stfolder` (an unmounted share never looks like an empty library) or the address cannot be listened on.
+
+```bash
+WARPZONE_UI_TOKEN=... warpzone serve
+warpzone serve --listen 127.0.0.1:8780
 ```
 
 ## `warpzone frontend refresh`
