@@ -111,7 +111,7 @@
   }
 
   const STATE_LABEL = {
-    on: 'On', off: 'Off', partial: 'Partial', unsupported: 'Unsupported',
+    on: 'On', off: 'Off', partial: 'Partial', unsupported: 'Unsupported', unknown: 'Unknown',
     all: 'All games', some: 'Some games', none: 'None',
   };
 
@@ -128,9 +128,11 @@
     etags: {},              // device -> the whitelist etag the page last saw
     lists: new Map(),       // system -> {games: [...], byId: Map}
     listLoads: new Map(),   // system -> promise (dedupes loads)
+    unclaimed: new Map(),   // system -> update/DLC folders no game claims (Switch)
     byId: new Map(),        // game id -> {game, system}
     progress: {},           // device -> progress entry
     progressError: false,
+    catalog: null,          // {ready, running, last_run, systems, games, updated} from /catalog
     route: { path: '/', game: null },
     q: '',                  // the search box
     searchResult: null,     // {q, groups} from the API
@@ -155,6 +157,12 @@
     }
   }
 
+  // The catalog's own state: built yet, a refresh running. A server that does not answer it
+  // (or an error) leaves S.catalog null and the page behaves as if the catalog were ready.
+  async function loadCatalog() {
+    try { S.catalog = await api.catalog(); } catch (err) { if (err.code === 'unauthorized') throw err; S.catalog = null; }
+  }
+
   async function loadSystems() {
     S.systems = ensureArray(await api.systems(), 'systems').sort((a, b) =>
       systemName(a.system).localeCompare(systemName(b.system)));
@@ -177,6 +185,7 @@
     if (!force && S.listLoads.has(system)) return S.listLoads.get(system);
     const p = api.games(system).then((r) => {
       indexList(system, ensureArray(r, 'games'));
+      S.unclaimed.set(system, (r && r.unclaimed) || []);
       S.listLoads.delete(system);
       listsChanged();
       return S.lists.get(system);
@@ -207,16 +216,24 @@
     S.lists.clear();
     S.byId.clear();
     S.listLoads.clear();
-    try { await Promise.all([loadDevices(), loadSystems()]); } catch (err) { await handleError(err, true); return; }
+    try { await Promise.all([loadDevices(), loadSystems(), loadCatalog()]); } catch (err) { await handleError(err, true); return; }
     renderConsoles();
     refreshView();
     if (S.detail) openDetail(S.detail.system, S.detail.id, true);
     preloadLists();
   }
 
+  // A whitelist the UI may write: one in its format, or none yet (the first change creates it).
+  // `needs-migration` is read-only until `warpzone whitelist migrate` has converted it.
   function isManaged(deviceName) {
     const d = S.devices.find((x) => x.name === deviceName);
-    return !d || !d.whitelist || d.whitelist.state === 'managed';
+    return !d || !d.whitelist || d.whitelist.state === 'managed' || d.whitelist.state === 'missing';
+  }
+
+  // Whether a change for every console can be sent: a console that needs migration would make
+  // the server refuse the whole request, so the all-consoles controls wait for the migration.
+  function allBlocked(system) {
+    return S.devices.some((d) => !excludes(d.name, system) && !isManaged(d.name));
   }
 
   function excludes(deviceName, system) {
@@ -300,13 +317,14 @@
   function renderConsoles() {
     const ul = $('#consoles');
     ul.replaceChildren(...S.devices.map((d) => {
-      const needs = d.whitelist && d.whitelist.state !== 'managed';
+      const needs = d.whitelist && d.whitelist.state === 'needs-migration';
+      const none = d.whitelist && d.whitelist.state === 'missing';
       return h('li', { class: 'console' + (needs ? ' needs-migration' : '') },
         h('span', { class: 'console-name' }, d.name),
         needs
-          ? h('span', { class: 'prog', title: 'Run warpzone whitelist migrate on the hub' },
-            d.whitelist.state === 'missing' ? 'No whitelist' : 'Needs migration')
+          ? h('span', { class: 'prog', title: 'Run warpzone whitelist migrate on the hub' }, 'Needs migration')
           : progressNode(d.name),
+        none ? h('span', { class: 'prog prog-none', title: 'The console has no whitelist yet. The first change made here creates it.' }, 'No whitelist yet') : null,
         h('span', { class: 'bar', 'aria-hidden': 'true' }));
     }));
     paintProgress();
@@ -433,16 +451,14 @@
     const totalGames = S.systems.reduce((n, s) => n + (s.games || 0), 0);
     const totalSize = S.systems.reduce((n, s) => n + (s.size || 0), 0);
 
-    const intro = h('section', { class: 'intro' },
-      h('h1', null, 'Library'),
-      h('p', { class: 'muted' }, S.systems.length
-        ? `${plural(totalGames, 'game')} in ${plural(S.systems.length, 'system')}, ${formatBytes(totalSize)} in all.`
-        : 'The catalog is empty.'));
+    const introText = h('p', { class: 'muted', role: 'status' });
+    const introNote = h('p', null);
+    const intro = h('section', { class: 'intro' }, h('h1', null, 'Library'), introText, introNote);
     const shelves = h('div', { class: 'shelves' });
     const status = h('p', { class: 'muted loading-note', role: 'status' });
     const tiles = h('div', { class: 'tiles' });
     const bySystem = h('div', { class: 'shelves' });
-    const refresh = h('button', { class: 'btn', type: 'button', onclick: refreshCatalog }, 'Rescan the library');
+    const refresh = h('button', { class: 'btn', type: 'button', onclick: refreshCatalog, dataset: { fk: 'rescan' } }, 'Rescan the library');
 
     root.append(
       intro,
@@ -456,8 +472,25 @@
       h('div', { class: 'footer-actions' }, refresh,
         h('span', { class: 'muted' }, 'Runs the catalog scan on the hub now. It also runs by itself every few hours.')));
 
-    if (!S.systems.length) {
-      intro.append(h('p', null, 'Nothing is listed yet. Run "warpzone catalog" on the hub, or press the button below.'));
+    // The top of the page follows the catalog: counts, or why there is nothing to show.
+    function paintIntro() {
+      const running = !!(S.catalog && S.catalog.running);
+      refresh.disabled = running;
+      refresh.textContent = running ? 'Scanning the library...' : 'Rescan the library';
+      const failed = S.catalog && S.catalog.last_run && S.catalog.last_run.ok === false;
+      if (S.systems.length) {
+        introText.textContent = `${plural(totalGames, 'game')} in ${plural(S.systems.length, 'system')}, ${formatBytes(totalSize)} in all.`
+          + (running ? ' A scan of the library is running; this page updates when it finishes.' : '');
+        introNote.textContent = '';
+      } else if (running) {
+        introText.textContent = 'The catalog is being built on the hub. This page updates when it finishes.';
+        introNote.textContent = '';
+      } else {
+        introText.textContent = 'The catalog has not been built yet.';
+        introNote.textContent = failed
+          ? `The last scan failed: ${S.catalog.last_run.message || 'unknown error'}. Run "warpzone catalog" on the hub, or press the button below.`
+          : 'Nothing is listed until the hub scans the library. Run "warpzone catalog" on the hub, or press the button below.';
+      }
     }
 
     function paintTiles() {
@@ -491,11 +524,12 @@
     }
 
     setMain(root, '');
+    paintIntro();
     paintTiles();
     paintShelves();
     return {
       kind: 'home',
-      refresh() { const fk = captureFocus(); paintTiles(); paintShelves(); restoreFocus(fk); },
+      refresh() { const fk = captureFocus(); paintIntro(); paintTiles(); paintShelves(); restoreFocus(fk); },
       listsChanged() { const fk = captureFocus(); paintTiles(); paintShelves(); restoreFocus(fk); },
     };
   }
@@ -537,6 +571,7 @@
     const seq = S.viewSeq;
     const vs = { filter: '', sort: 'name', chip: 'all', limit: 120 };
     const panelHost = h('div', { class: 'panel-host' });
+    const unclaimedHost = h('div', { class: 'unclaimed-host' });
     const gridHost = h('div', { class: 'grid-host' });
     const countEl = h('span', { class: 'muted', role: 'status' });
     let observer = null;
@@ -565,6 +600,7 @@
         h('h1', null, systemName(name)),
         h('p', { class: 'muted' }, `${plural(entry.games, 'game')} · ${formatBytes(entry.size)}`)),
       panelHost,
+      unclaimedHost,
       h('div', { class: 'toolbar' }, filterInput, sortSel, chips, countEl),
       gridHost);
 
@@ -620,6 +656,15 @@
       } else { vs.limit = games.length; more(); }
     }
 
+    // Switch updates and DLC that no base game claims are in the library but belong to no card.
+    function paintUnclaimed() {
+      const folders = S.unclaimed.get(name) || [];
+      unclaimedHost.replaceChildren(folders.length ? h('details', { class: 'parts unclaimed' },
+        h('summary', null, `${plural(folders.length, 'update or DLC folder')} belong to no game in the library`),
+        h('p', { class: 'muted small-text' }, 'Their base game is not on the hub, so they have no card here and cannot be turned on or off from the UI.'),
+        h('ul', null, folders.map((f) => h('li', null, h('code', null, f))))) : null);
+    }
+
     function paintPanel() {
       panelHost.replaceChildren(consolePanel(name));
       paintProgress();
@@ -629,7 +674,7 @@
     paintChips();
     paintPanel();
     paintGrid();
-    ensureList(name).then(() => { if (seq === S.viewSeq) paintGrid(); },
+    ensureList(name).then(() => { if (seq === S.viewSeq) { paintGrid(); paintUnclaimed(); } },
       (err) => { if (seq === S.viewSeq) { handleError(err); gridHost.replaceChildren(h('p', { class: 'empty-note' }, 'The games of this system could not be loaded.')); } });
 
     return {
@@ -684,7 +729,8 @@
     if (sts.length && sts.every((x) => x === 'all')) allState = 'all';
     else if (!sts.length || sts.every((x) => x === 'none')) allState = 'none';
     const allRow = S.devices.length > 1
-      ? row('All consoles', '*', allState, sts.length && usable.every((d) => states(d).whole), 'No console offers it', !usable.length)
+      ? row('All consoles', '*', allState, sts.length && usable.every((d) => states(d).whole),
+        usable.length ? 'Waiting for warpzone whitelist migrate' : 'No console offers it', !usable.length || allBlocked(system))
       : null;
     return h('section', { class: 'cpanel', 'aria-label': 'Consoles for this whole system' },
       h('div', { class: 'section-head' }, h('h2', null, 'Consoles'),
@@ -900,6 +946,7 @@
           stateBadge(st),
           st === 'on' || st === 'partial' ? progressNode(d.name, true) : null,
           !managed ? h('span', { class: 'muted small-text' }, 'Whitelist needs "warpzone whitelist migrate"') : null,
+          st === 'unknown' && managed ? h('span', { class: 'muted small-text' }, 'The state of this game on the console is not known') : null,
           st === 'unsupported' ? h('span', { class: 'muted small-text' }, 'This console does not take this system') : null),
         h('div', { class: 'console-actions' },
           st === 'off' ? addBtn('Add') : null,
@@ -909,18 +956,20 @@
     const eligible = S.devices.filter((d) => !excludes(d.name, system) && dev[d.name] !== 'unsupported');
     const canAdd = eligible.some((d) => dev[d.name] !== 'on');
     const canRemove = S.devices.some((d) => dev[d.name] === 'on' || dev[d.name] === 'partial');
+    const blocked = allBlocked(system);
     return h('section', { class: 'consoles-block', 'aria-label': 'Consoles' },
       h('h3', null, 'Consoles'),
       h('ul', { class: 'console-list' }, rows),
       S.devices.length > 1 ? h('div', { class: 'all-actions' },
         h('button', {
-          type: 'button', class: 'btn primary', disabled: !canAdd || locked || null, dataset: { fk: 'add:*', write: '1' },
+          type: 'button', class: 'btn primary', disabled: !canAdd || locked || blocked || null, dataset: { fk: 'add:*', write: '1' },
           onclick: () => changeGame(game, system, '*', true),
         }, 'Add to all consoles'),
         h('button', {
-          type: 'button', class: 'btn', disabled: !canRemove || locked || null, dataset: { fk: 'rm:*', write: '1' },
+          type: 'button', class: 'btn', disabled: !canRemove || locked || blocked || null, dataset: { fk: 'rm:*', write: '1' },
           onclick: () => changeGame(game, system, '*', false),
         }, 'Remove from all consoles')) : null,
+      S.devices.length > 1 && blocked ? h('p', { class: 'muted small-text' }, 'A console still needs "warpzone whitelist migrate", so the all-consoles buttons wait. Use the buttons of each console.') : null,
       h('p', { class: 'muted small-text' }, 'A removed game leaves the console within about an hour: the console deletes it on its next cleanup.'));
   }
 
@@ -1079,13 +1128,44 @@
     });
   }
 
+  // A refresh runs on the hub for a while: poll /catalog until it ends, then load what it found.
+  let catalogTimer = null;
+
+  function watchCatalog(ms) {
+    clearTimeout(catalogTimer);
+    catalogTimer = setTimeout(pollCatalog, ms);
+  }
+
+  async function pollCatalog() {
+    const was = !!(S.catalog && S.catalog.running);
+    try { await loadCatalog(); } catch (err) { return; }
+    const running = !!(S.catalog && S.catalog.running);
+    if (was && !running) {
+      const last = S.catalog && S.catalog.last_run;
+      if (last && last.ok === false) toast(`The catalog scan failed: ${last.message || 'unknown error'}.`, 'error');
+      else toast('The catalog scan finished.', 'ok');
+      await reloadAll();
+    } else {
+      refreshView();
+    }
+    if (running) watchCatalog(3000);
+    else watchCatalog(60000);
+  }
+
   async function refreshCatalog() {
     try {
       await api.refreshCatalog();
-      toast('A catalog scan started on the hub. Reload in a minute to see what it finds.', 'ok');
+      S.catalog = { ...(S.catalog || {}), running: true };
+      refreshView();
+      toast('A catalog scan started on the hub.', 'ok');
+      watchCatalog(1500);
     } catch (err) {
-      if (err.status === 409) toast('A catalog scan is already running.', 'info');
-      else await handleError(err);
+      if (err.code === 'catalog-running') {
+        S.catalog = { ...(S.catalog || {}), running: true };
+        refreshView();
+        toast('A catalog scan is already running.', 'info');
+        watchCatalog(1500);
+      } else await handleError(err);
     }
   }
 
@@ -1201,7 +1281,7 @@
 
   async function boot() {
     try {
-      await Promise.all([loadDevices(), loadSystems()]);
+      await Promise.all([loadDevices(), loadSystems(), loadCatalog()]);
     } catch (err) {
       if (err.code !== 'unauthorized') {
         $('#main').replaceChildren(h('div', { class: 'page empty' }, h('h1', null, 'The library is not available'),
@@ -1218,6 +1298,7 @@
     S.detailFromLoad = false;
     pollProgress();
     preloadLists();
+    watchCatalog(S.catalog && S.catalog.running ? 1500 : 60000);
   }
 
   function init() {

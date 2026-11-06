@@ -431,9 +431,12 @@ environment, or the first line of `[serve] token_file`. `serve` refuses to start
 
 - The page asks for the token once and sends it to `POST /api/v1/session` (`{"token": "..."}`).
   A right token answers `204` with a cookie `wz_session=<HMAC-SHA256 of the token over
-  "warpzone-ui-session">; HttpOnly; SameSite=Strict; Path=/`; a wrong one answers `401` after
-  one second. The cookie needs no server state, survives a restart and stops working when the
-  token changes.
+  "warpzone-ui-session">; HttpOnly; SameSite=Strict; Path=/; Max-Age=2592000` (30 days); a
+  wrong one answers `401` after one second. The cookie needs no server state, survives a
+  restart and stops working when the token changes or when it expires; the next request then
+  answers `401` and the page asks for the token again. There is no logout route: the page keeps
+  no token and the cookie is `HttpOnly`, so ending a session means clearing the cookie or
+  changing the token.
 - A client that is not a browser (the Decky plugin) sends `Authorization: Bearer <token>`.
 - Every `/api/` route except `POST /api/v1/session` needs one of the two, compared with
   `hmac.compare_digest`; the static files and `GET /healthz` do not. A write authenticated by the
@@ -456,6 +459,7 @@ outside the home goes through the user's own reverse proxy with TLS, which is ou
 | `GET /api/v1/games/{id}/media/{kind}` | the game's image of that kind, or `404` |
 | `GET /api/v1/search?q=...` | games whose title key matches, grouped by key |
 | `GET /api/v1/progress` | the [progress state](#progress) of each device |
+| `GET /api/v1/catalog` | whether the catalog is built, and the state of the background run |
 | `POST /api/v1/changes` | turns games and systems on and off |
 | `POST /api/v1/catalog/refresh` | starts a `catalog` run now (`202`; `409` while one runs) |
 
@@ -466,19 +470,49 @@ outside the home goes through the user's own reverse proxy with TLS, which is ou
   "whitelist": {"state": "managed", "etag": "sha256:…"}}]
 ```
 
+`whitelist.state` is `managed` (the UI's format), `needs-migration` (a hand-written file, or one
+that cannot be read: every write for the device is refused with `not-managed`) or `missing` (no
+file yet: a write creates it, inside an existing `library/`). `etag` is `sha256:<hex>` of the
+file's bytes, or `absent` for a missing file; a client echoes it exactly as it got it in
+`expect`.
+
+`GET /api/v1/catalog`:
+
+```json
+{"ready": true, "systems": 7, "games": 412, "updated": "2026-11-06T10:00:00Z",
+ "running": false,
+ "last_run": {"started": "2026-11-06T10:00:00Z", "finished": "2026-11-06T10:00:09Z",
+              "ok": true, "message": "..."}}
+```
+
+`ready` is false while the server has no catalog file to show (a hub where `warpzone catalog`
+has not run yet), `running` is true while a background run is in progress, and `last_run` is
+`null` until the first run of this server process ends. `updated` is `null` without a catalog. A
+page uses it to say "the catalog has not been built yet", to show a running refresh and to
+reload when `running` goes back to false.
+
 `GET /api/v1/systems/{system}/games` (one entry per game; all of them, no paging: a system of
 several thousand arcade sets is a few hundred KiB):
 
 ```json
 {"system": "psx", "games": [
   {"id": "5d0c1f3a9b2e7c48", "title": "Example Game", "name": "Example Game", "size": 512000000,
-   "added": "2026-10-28", "cover": true, "ra": "supported",
-   "devices": {"deck": "on", "machine": "off", "rg351mp": "unsupported"}}]}
+   "added": "2026-10-28", "cover": true, "ra": "supported", "flags": [],
+   "devices": {"deck": "on", "machine": "off", "rg351mp": "unsupported"}}],
+ "unclaimed": []}
 ```
+
+A game's state on a device is `on`, `off`, `partial` (some of its parts), `unsupported` (the
+system is in the device's `exclude_systems`) or `unknown` (the device's whitelist is
+`needs-migration`, so its effect cannot be known). `flags` holds `unlistable` when a part has a
+path that cannot be written as a whitelist line (the game cannot be changed from the UI).
+`unclaimed` lists the Switch update and DLC folders that no base game claims (empty for every
+other system).
 
 `name` is the gamelist's `<name>` when there is one, else the catalog title. `GET /api/v1/systems`
 gives per system `{"system", "games", "size", "devices": {"deck": {"state": "some", "whole":
-false}}}`.
+false}}}`, where `state` is `all`, `some` or `none` of the games turned on, `unsupported` or
+`unknown` (as for a game) and `whole` says the system has its own line in the whitelist.
 
 `GET /api/v1/games/{id}` adds `parts` (path, type, size), `dat`, `meta` (the gamelist fields
 above), `media` (the kinds that exist), `ra` (`{"state", "achievements", "points", "url"}` as
@@ -514,9 +548,13 @@ whitelist once. The answer:
 ```json
 {"dry_run": false, "devices": [
    {"device": "deck", "written": true, "etag": "sha256:…", "on": ["…"], "off": ["5d0c1f3a9b2e7c48"],
-    "bytes_on": 0, "bytes_off": 512000000}],
+    "bytes_on": 0, "bytes_off": 512000000, "warnings": ["…"]}],
  "skipped": [{"device": "rg351mp", "system": "gba", "reason": "unsupported"}]}
 ```
+
+`etag` is the new file's for a device that was written and its current one for the rest.
+`warnings` appears only when there is something to say, today a failed request to the hub's
+Syncthing to scan the new file (the file is written anyway and the hub's watcher picks it up).
 
 With `"dry_run": true` the server validates and computes the effect and writes nothing; the page
 uses it to show what a change does before the user confirms it.
@@ -531,7 +569,8 @@ the request touches and equals its current `etag`; nothing of an unsupported sys
 for a named device; each change applies and its effect is the one asked for. Only then does the
 server take the lock and write, re-checking each file as described above. A request that fails
 validation writes nothing. If writing one device fails after another was written (a disk error),
-the answer is `500` with the per-device results, each file being whole either way.
+the answer is `500` with `write-failed` (or `stale`, when the file changed during the write)
+and the per-device results of the files already written, each file being whole either way.
 
 Errors are `{"error": {"code": "...", "message": "...", "device": "...", "game": "..."}}` (the
 last two when they apply):
@@ -546,9 +585,12 @@ last two when they apply):
 | 409 | `covered` | a part stays off under an exclusion of a parent folder |
 | 409 | `cannot-apply` | the change would not reach its state or would change other games |
 | 409 | `unlistable` | a part's path cannot be written as a whitelist line |
+| 409 | `catalog-running` | `catalog/refresh` while a run is in progress |
 | 412 | `stale` | an `expect` differs from the file as it is now |
 | 422 | `unsupported` | turning on a system in the device's `exclude_systems` |
 | 428 | `expect-missing` | a touched device has no `expect` |
+| 500 | `write-failed` | a whitelist could not be written (a disk error); the answer also lists the devices already written |
+| 500 | `internal` | an unexpected failure of the server (the log has the exception name, never a token) |
 | 503 | `hub-unreachable` | only `progress`: the hub's API did not answer |
 
 ## Progress

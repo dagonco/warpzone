@@ -57,6 +57,7 @@
     search: (q, signal) => request('GET', `/api/v1/search?q=${encodeURIComponent(q)}`, undefined, signal),
     progress: () => request('GET', '/api/v1/progress'),
     changes: (body) => request('POST', '/api/v1/changes', body),
+    catalog: () => request('GET', '/api/v1/catalog'),
     refreshCatalog: () => request('POST', '/api/v1/catalog/refresh', {}),
     // An image URL, not a request: the browser loads it (lazily) through an <img>.
     mediaUrl: (id, kind) => `/api/v1/games/${encodeURIComponent(id)}/media/${kind}`,
@@ -89,8 +90,14 @@
         return `${dev || 'This console'} does not support that system, so it cannot be turned on there.`;
       case 'expect-missing':
         return 'The page did not know the current version of a console whitelist. It reloaded; try again.' + where;
+      case 'catalog-running':
+        return 'A catalog scan is already running on the hub.';
+      case 'write-failed':
+        return `The server could not write the whitelist of ${dev || 'a console'}. Nothing of it was changed; check the hub's disk and try again.`;
       case 'hub-unreachable':
         return 'The hub could not reach its Syncthing, so progress is unknown for now.';
+      case 'internal':
+        return 'The server failed in a way it did not expect. Reload the page and try again; the hub has the details in its log.';
       case 'network':
         return 'The server did not answer. Check the connection and try again.';
       default:

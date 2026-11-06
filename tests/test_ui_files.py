@@ -112,6 +112,32 @@ class UiFilesTest(unittest.TestCase):
         missing = sorted(code for code in codes if f"case '{code}':" not in text)
         self.assertEqual(missing, [], "api.js humanError has no message for these codes")
 
+    def test_every_state_the_api_can_send_has_a_display(self):
+        # The states of "HTTP API" and "Progress" in the design: the page must name each one.
+        text = read("app.js")
+        states = [
+            "unknown",
+            "unsupported",
+            "needs-migration",
+            "missing",
+            "not-shared",
+            "paused",
+            "offline",
+            "pending",
+            "downloading",
+            "done",
+        ]
+        for state in states:
+            self.assertRegex(text, rf"""['"]{state}['"]|\b{state}:""", state)
+        design = DESIGN.read_text(encoding="utf-8")
+        for state in states:
+            self.assertIn(f"`{state}`", design, f"the design does not describe {state}")
+
+    def test_the_page_reads_the_catalog_state(self):
+        text = read("app.js")
+        self.assertIn("api.catalog()", text)
+        self.assertIn("has not been built yet", text)
+
     def test_package_data_includes_the_ui(self):
         pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
         self.assertRegex(pyproject, r'"warpzone\.data"\s*=\s*\[[^\]]*"ui/\*"')
