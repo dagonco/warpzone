@@ -28,13 +28,14 @@ warpzone = "warpzone.cli:main"
 
 [tool.setuptools]
 # The data folders hold TOML only; listing them keeps setuptools from warning about them.
+# data/ui (the library UI's static files) is no package: it ships through package-data below.
 packages = ["warpzone", "warpzone.data", "warpzone.data.profiles"]
 
 [tool.setuptools.dynamic]
 version = { attr = "warpzone.__version__" }
 
 [tool.setuptools.package-data]
-"warpzone.data" = ["*.toml", "*.sh", "allowed_signers"]
+"warpzone.data" = ["*.toml", "*.sh", "allowed_signers", "ui/*"]
 "warpzone.data.profiles" = ["*.toml"]
 
 [tool.mypy]

@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="dark">
+  <meta name="theme-color" content="#0d1117">
+  <title>warpzone library</title>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="style.css">
+  <!--
+    No inline script or style anywhere: the server sends Content-Security-Policy: default-src 'self'.
+    The page is built by app.js from the JSON API (development/design/library-ui.md).
+  -->
+  <script src="api.js" defer></script>
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <a class="skip" href="#main">Skip to the content</a>
+
+  <header class="topbar">
+    <a class="brand" href="#/" data-fk="brand" aria-label="warpzone library, home">
+      <span class="brand-mark" aria-hidden="true"></span>
+      <span class="brand-name">warpzone</span>
+    </a>
+
+    <form class="search" role="search" id="search-form" autocomplete="off">
+      <label class="sr-only" for="search">Search the library</label>
+      <svg class="search-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5 21 21"/></svg>
+      <input id="search" type="search" placeholder="Search every system   ( / )" enterkeyhint="search"
+             spellcheck="false" autocapitalize="off" data-fk="search">
+    </form>
+
+    <ul class="consoles" id="consoles" aria-label="Consoles"></ul>
+  </header>
+
+  <div id="banner" class="banner" role="status" hidden></div>
+
+  <main id="main" tabindex="-1" aria-busy="true">
+    <p class="loading-note">Loading the library...</p>
+  </main>
+
+  <!-- A game: the side sheet. Escape or a click outside closes it. -->
+  <dialog id="detail" class="sheet" aria-labelledby="detail-title"></dialog>
+
+  <!-- Confirmation of a whole-system change, filled from the dry run. -->
+  <dialog id="confirm" class="modal" aria-labelledby="confirm-title"></dialog>
+
+  <!-- The token form. It cannot be dismissed: nothing works without a session. -->
+  <dialog id="login" class="modal" aria-labelledby="login-title">
+    <form method="dialog" id="login-form" autocomplete="off">
+      <h2 id="login-title">Sign in</h2>
+      <p class="muted">Enter the access token of this server (WARPZONE_UI_TOKEN). It is sent once to open a session and is not kept by the page.</p>
+      <label class="field">
+        <span>Access token</span>
+        <input id="login-token" type="password" required autocomplete="current-password" spellcheck="false">
+      </label>
+      <p id="login-error" class="error-text" role="alert" hidden></p>
+      <div class="actions">
+        <button type="submit" class="btn primary">Sign in</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div id="toasts" class="toasts" popover="manual" aria-live="polite"></div>
+</body>
+</html>

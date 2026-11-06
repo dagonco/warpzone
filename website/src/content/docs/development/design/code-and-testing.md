@@ -118,6 +118,12 @@ warpzone/
                      search, RA badge state, JSON encoding and merge (pure)
   catalog_store.py   `warpzone catalog`: the walk, hashing, RAHasher and RA list runs, guarded writes
   localst.py         find and parse the local Syncthing config.xml
+  data/ui/index.html the library UI page (static, no build step)
+  data/ui/api.js     its API client: requests, error messages, title key port
+  data/ui/app.js     its views: home, system, search, the game sheet, changes
+  data/ui/style.css
+  data/ui/placeholder.svg  the cover of a game with no scrape
+  data/ui/favicon.svg
   data/updater.sh    the updater (POSIX sh): choose a release, verify it, roll it back
   data/bios.toml     BIOS manifest (names, sizes, hashes, signatures only)
   data/allowed_signers  the keys that sign releases, in the format of `ssh-keygen -Y` (see "Autonomous updates")
@@ -146,10 +152,6 @@ warpzone/
   library_api.py     the API's routes as pure functions: validation, `plan_changes`, responses
   progress.py        per-device progress states from the hub's completion (pure)
   serve.py           `warpzone serve`: http.server, sessions, the write lock, caches, background runs
-  data/ui/index.html the library UI page (static, no build step)
-  data/ui/app.js
-  data/ui/style.css
-  data/ui/placeholder.svg  the cover of a game with no scrape
 docker/Dockerfile    the hub's container image
 examples/compose.example.yaml
 ```
