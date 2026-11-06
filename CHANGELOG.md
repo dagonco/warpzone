@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ## [Unreleased]
 
+### Added
+
+- `warpzone whitelist migrate [device ...] [--root PATH] [--dry-run]` converts the hand-written `patterns-<device>.stignore` files on the hub into the format the library UI will write (managed whitelists: systems, games and exclusions in a fixed order, paths escaped for Syncthing). Before writing it drops the lines that have no effect, proves on the hub's `library/` that exactly the same paths stay on, saves the old file under `catalog/whitelists/<device>/` and asks the hub's Syncthing to scan the new one; a file with a wildcard or any other pattern it cannot read literally is refused with its line numbers and left as it is. Hand comments are lost.
+- `exclude_systems = ["ps4", "switch"]` under a device lists the systems it does not run (default: none). `warpzone check` reports a device whitelist that names one, and takes `--root PATH` to read the whitelists on a mounted hub.
+
 ## [0.3.0] - 2026-11-06
 
 Consoles now keep themselves on a working release, the inbox takes in many more systems, warpzone supports a second device profile (the Anbernic RG351MP), and favourites, play statistics and Nintendo DS saves travel between devices. This section sums up the six release candidates; each of them, below, has the full detail.
