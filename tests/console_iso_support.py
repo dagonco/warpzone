@@ -140,21 +140,33 @@ def ps4_pkg(
     magic: bytes = b"\x7fCNT",
     content_type: int = 0x1A,
     flags: int = 0x0A000000,
+    pfs_size: int | None = None,
 ) -> bytes:
     """A synthetic PS4 `.pkg`: the magic, a big-endian header, the content id at 0x40, and the
-    DRM type, content type and content flags at 0x70. The defaults are a base game."""
+    DRM type, content type and content flags at 0x70. The defaults are a base game. With
+    `pfs_size` the header also holds the PFS image size (u64 at 0x418)."""
     head = magic + struct.pack(">I", 1) + bytes(0x38)
     head += content_id.encode("ascii").ljust(36, b"\x00") + bytes(12)
-    return head + struct.pack(">III", 0x0F, content_type, flags) + b"\x5a" * 400
+    head += struct.pack(">III", 0x0F, content_type, flags)
+    if pfs_size is not None:
+        head += bytes(0x418 - len(head)) + struct.pack(">Q", pfs_size)
+    return head + b"\x5a" * 400
 
 
-def ps4_sfo(title_id: str = "CUSA07934", title: str = "Test Game", category: str = "gd") -> bytes:
-    """The `sce_sys/param.sfo` of an extracted PS4 package."""
+def ps4_sfo(
+    title_id: str = "CUSA07934",
+    title: str = "Test Game",
+    category: str = "gd",
+    *,
+    app_ver: str | None = "01.00",
+    content_id: str | None = None,
+) -> bytes:
+    """The `sce_sys/param.sfo` of an extracted PS4 package (no APP_VER with `app_ver=None`)."""
     return sfo(
         {
-            "APP_VER": "01.00",
+            **({"APP_VER": app_ver} if app_ver is not None else {}),
             "CATEGORY": category,
-            "CONTENT_ID": f"EP9000-{title_id}_00-SCES503610000001",
+            "CONTENT_ID": content_id or f"EP9000-{title_id}_00-SCES503610000001",
             "TITLE": title,
             "TITLE_ID": title_id,
             "VERSION": "01.00",
@@ -164,7 +176,10 @@ def ps4_sfo(title_id: str = "CUSA07934", title: str = "Test Game", category: str
 
 # A stand-in for orbis-pkg-util: `extract [-q] -o DIR PKG` writes a small game folder.
 # The environment picks the outcome: STUB_PKG_SFO (hex of the param.sfo), STUB_PKG_FAIL,
-# STUB_PKG_NO_EBOOT, STUB_PKG_NO_SFO, STUB_PKG_LINK, STUB_PKG_LOG (a file that gets the argv).
+# STUB_PKG_NO_EBOOT, STUB_PKG_NO_SFO, STUB_PKG_LINK, STUB_PKG_LOG (a file that gets the argv),
+# STUB_PKG_MARK (the text eboot.bin is made of), STUB_PKG_LICENSE (also write
+# sce_sys/license.dat) and STUB_PKG_NO_DATA (what a DLC without data does: write sce_sys, then
+# fail with orbis-pkg-util's "source buffer is too short" error).
 ORBIS_PKG_UTIL = r"""
 import os, sys
 
@@ -181,10 +196,22 @@ if os.environ.get("STUB_PKG_FAIL"):
     sys.exit(1)
 out = args[args.index("-o") + 1]
 os.makedirs(os.path.join(out, "sce_sys"))
+if os.environ.get("STUB_PKG_NO_DATA"):
+    if not os.environ.get("STUB_PKG_NO_SFO"):
+        with open(os.path.join(out, "sce_sys", "param.sfo"), "wb") as f:
+            f.write(bytes.fromhex(os.environ["STUB_PKG_SFO"]))
+    with open(os.path.join(out, "sce_sys", "license.dat"), "wb") as f:
+        f.write(b"LICENSE")
+    print("error: cannot open outer PFS: source buffer is too short to read the header",
+          file=sys.stderr)
+    sys.exit(1)
 os.makedirs(os.path.join(out, "Content", "data"))
 if not os.environ.get("STUB_PKG_NO_EBOOT"):
     with open(os.path.join(out, "eboot.bin"), "wb") as f:
-        f.write(b"EBOOT" * 100)
+        f.write(os.environ.get("STUB_PKG_MARK", "EBOOT").encode() * 100)
+if os.environ.get("STUB_PKG_LICENSE"):
+    with open(os.path.join(out, "sce_sys", "license.dat"), "wb") as f:
+        f.write(b"LICENSE")
 if not os.environ.get("STUB_PKG_NO_SFO"):
     with open(os.path.join(out, "sce_sys", "param.sfo"), "wb") as f:
         f.write(bytes.fromhex(os.environ["STUB_PKG_SFO"]))
