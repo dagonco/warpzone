@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ## [Unreleased]
 
+### Added
+
+- A game turned off for a console now leaves it by itself. `warpzone prune <device> --apply --unattended` is the form of `prune` for a run nobody watches: it has no size cap (one PS4 game is larger than the 50 GiB default), and instead deletes nothing, in any folder, when a folder would lose more than half of what the device holds in it (the case of a whitelist emptied by mistake or a library folder that briefly looks wrong); it prints why and exits `1`, and the removal stays until you run `prune --apply` by hand. A folder that is still pulling is not a failure: the run deletes nothing and exits `0`, and the next one tries again. Every other safety rule of `prune` holds, with the re-check right before each delete. `--unattended` needs `--apply` and refuses `--max-gib` and `--force` (exit `2`). It prints only the summary lines, whatever `--list` says.
+- `provision device` installs the `warpzone-prune` systemd user timer on a device that lists `library` (it runs the unattended prune 15 minutes after boot and then every hour). The new `auto_prune` device key turns it off: with `auto_prune = false` the units are removed if they exist. Default `true`.
+
 ## [0.3.0rc6] - 2026-11-05
 
 Sixth release candidate of 0.3.0: Nintendo DS saves travel between the Anbernic's DraStic and melonDS on the Steam Deck and Steam Machine, `warpzone settings` covers Xenia, the Anbernic's Warpzone menu shows install progress and keeps looking for releases, and `provision` no longer times out while a folder is downloading.

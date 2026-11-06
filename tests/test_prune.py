@@ -8,8 +8,17 @@ from pathlib import Path
 from typing import Any
 from unittest import mock
 
-from support import API_KEY, DECK_ID, DECK_LIBRARY_IGNORES, FakeSyncthing, make_config
+from support import (
+    API_KEY,
+    DECK_ID,
+    DECK_LIBRARY_IGNORES,
+    FakeSyncthing,
+    config_data,
+    make_config,
+)
 from test_cli import run, write_config
+from warpzone.config import parse_config
+from warpzone.errors import UsageError
 from warpzone.probes import DeviceProbes
 from warpzone.profiles import load_profile
 from warpzone.prune import (
@@ -19,6 +28,7 @@ from warpzone.prune import (
     Verdict,
     apply_folder,
     classify,
+    guard,
     notify,
     parse_time,
     prune_device,
@@ -40,6 +50,10 @@ def hub_copy(size: int = 5, kind: str = FILE, modified: str = SYNCED_AT) -> dict
 def ignored_info(hub: dict[str, Any] | None) -> dict[str, Any]:
     """What db/file says once the whitelist stops matching a file the hub still has."""
     return {"global": hub, "local": {"ignored": True, "invalid": True, "size": 0}}
+
+
+def wanted_info(size: int) -> dict[str, Any]:
+    return {"global": hub_copy(size), "local": {"ignored": False}}
 
 
 def entry(size: int = 5, kind: str = "file", mtime: float = MTIME) -> Entry:
@@ -131,6 +145,40 @@ class Device:
         self.lines: list[str] = []
         self.warnings: list[str] = []
         self.rep = Reporter(self.lines.append, warn_sink=self.warnings.append)
+
+    def add_songs(self) -> Path:
+        """Make the deck also subscribe to the whitelisted songs folder."""
+        songs = self.home / "Songs"
+        (songs / ".stfolder").mkdir(parents=True)
+        self.fake.folders["wz-songs"] = {
+            "id": "wz-songs",
+            "path": str(songs),
+            "type": "receiveonly",
+            "paused": False,
+        }
+        self.fake.ignores["wz-songs"] = ["#include patterns-deck.stignore"]
+        for name in ("patterns-common.stignore", "patterns-deck.stignore"):
+            self.fake.file_info[("wz-songs", name)] = {
+                "global": {"version": ["X:1"]},
+                "local": {"version": ["X:1"]},
+            }
+            (songs / name).write_text("x")
+        data = config_data(self.fake.url)
+        data["devices"]["deck"]["folders"] = ["library", "songs"]
+        self.cfg = parse_config(data)
+        return songs
+
+    def put_song(self, rel: str, content: str = "12345", leftover: bool = True) -> Path:
+        path = self.home / "Songs" / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content)
+        os.utime(path, (MTIME, MTIME))
+        if leftover:
+            info: dict[str, Any] = ignored_info(hub_copy(len(content)))
+        else:
+            info = wanted_info(len(content))
+        self.fake.file_info[("wz-songs", rel)] = info
+        return path
 
     def put(self, rel: str, content: str = "12345", info: Any = "leftover") -> Path:
         path = self.root / rel
@@ -362,6 +410,178 @@ class PruneDeviceTests(unittest.TestCase):
         self.assertIn("  roms/n64/g2.z64", self.dev.lines)
 
 
+class GuardTests(unittest.TestCase):
+    def test_exactly_half_passes_and_one_byte_over_fails(self) -> None:
+        self.assertEqual(guard({"a": (50, 100)}), [])
+        self.assertEqual(guard({"a": (51, 100)}), ["a"])
+        self.assertEqual(guard({"a": (5, 9)}), ["a"])
+        self.assertEqual(guard({"a": (4, 9)}), [])
+
+    def test_everything_or_nothing_held_is_an_edge_not_a_pass(self) -> None:
+        self.assertEqual(guard({"a": (100, 100)}), ["a"])
+        self.assertEqual(guard({"a": (1, 0)}), ["a"])
+        self.assertEqual(guard({"a": (0, 0)}), [])
+        self.assertEqual(guard({}), [])
+
+    def test_names_every_folder_that_exceeds(self) -> None:
+        totals = {"ok": (10, 100), "big": (80, 100), "half": (50, 100), "bigger": (3, 4)}
+        self.assertEqual(guard(totals), ["big", "bigger"])
+
+
+class UnattendedTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.dev = Device(self)
+
+    def run_prune(self, **kw: Any) -> int:
+        return self.dev.prune(apply=True, unattended=True, **kw)
+
+    def test_deletes_with_no_size_cap(self) -> None:
+        d = self.dev
+        gone = d.put("roms/ps4/game/data.bin", "x" * 10)
+        kept = d.put("roms/nes/mario.nes", "y" * 40, info=wanted_info(40))
+        # The attended cap would refuse; unattended has none (max_gib is not consulted).
+        self.assertEqual(self.run_prune(max_gib=0), 0)
+        self.assertFalse(gone.exists())
+        self.assertTrue(kept.exists())
+        self.assertIn("deleted 1 file(s), 10 B", "\n".join(d.lines))
+
+    def test_exactly_half_of_the_folder_is_deleted(self) -> None:
+        d = self.dev
+        gone = d.put("roms/n64/a.z64", "12345")
+        d.put("roms/nes/mario.nes", "abcde", info=wanted_info(5))
+        self.assertEqual(self.run_prune(), 0)
+        self.assertFalse(gone.exists())
+
+    def test_just_over_half_deletes_nothing(self) -> None:
+        d = self.dev
+        leftover = d.put("roms/n64/a.z64", "12345")
+        d.put("roms/nes/mario.nes", "abcd", info=wanted_info(4))
+        self.assertEqual(self.run_prune(), 1)
+        self.assertTrue(leftover.exists())
+        self.assertIn("refusing to delete anything", d.warnings[0])
+        self.assertIn("wz-library", d.warnings[0])
+        self.assertIn("by hand", d.warnings[0])
+        self.assertNotIn("deleted", "\n".join(d.lines))
+
+    def test_a_device_that_holds_only_leftovers_is_left_alone(self) -> None:
+        leftover = self.dev.put("roms/n64/a.z64")
+        self.assertEqual(self.run_prune(), 1)
+        self.assertTrue(leftover.exists())
+
+    def test_symlinks_and_nested_folders_do_not_count_as_held(self) -> None:
+        d = self.dev
+        leftover = d.put("roms/n64/a.z64", "12345")
+        # 4 bytes held in a wanted file; a symlink and a nested Syncthing folder add nothing.
+        d.put("roms/nes/mario.nes", "abcd", info=wanted_info(4))
+        nested = d.root / "saves"
+        nested.mkdir()
+        (nested / "big.sav").write_text("z" * 1000)
+        d.fake.folders["wz-saves"] = {
+            "id": "wz-saves",
+            "path": str(nested),
+            "type": "sendreceive",
+        }
+        (d.root / "link").symlink_to(nested / "big.sav")
+        self.assertEqual(self.run_prune(), 1)
+        self.assertTrue(leftover.exists())
+
+    def test_one_folder_over_half_stops_the_other_folders_too(self) -> None:
+        d = self.dev
+        d.add_songs()
+        library = d.put("roms/n64/a.z64", "12345")
+        d.put("roms/nes/mario.nes", "x" * 95, info=wanted_info(95))  # library: 5 of 100
+        song = d.put_song("a/song.ogg", "12345")  # songs: 5 of 5
+        self.assertEqual(self.run_prune(), 1)
+        self.assertTrue(library.exists())
+        self.assertTrue(song.exists())
+        self.assertIn("wz-songs would lose", d.warnings[0])
+        self.assertNotIn("wz-library would lose", d.warnings[0])
+
+    def test_every_folder_under_the_line_is_pruned(self) -> None:
+        d = self.dev
+        d.add_songs()
+        library = d.put("roms/n64/a.z64", "12345")
+        d.put("roms/nes/mario.nes", "x" * 95, info=wanted_info(95))
+        song = d.put_song("a/song.ogg", "12345")
+        d.put_song("b/keep.ogg", "y" * 20, leftover=False)
+        self.assertEqual(self.run_prune(), 0)
+        self.assertFalse(library.exists())
+        self.assertFalse(song.exists())
+
+    def test_busy_deletes_nothing_and_is_not_a_failure(self) -> None:
+        d = self.dev
+        leftover = d.put("roms/n64/a.z64", "12345")
+        d.put("roms/nes/mario.nes", "x" * 95, info=wanted_info(95))
+        with mock.patch.object(Client, "scan", return_value=False):
+            self.assertEqual(self.run_prune(), 0)
+        self.assertTrue(leftover.exists())
+        self.assertEqual(d.warnings, [])
+        self.assertIn("busy", "\n".join(d.lines))
+
+    def test_busy_in_one_folder_holds_back_the_others(self) -> None:
+        d = self.dev
+        d.add_songs()
+        library = d.put("roms/n64/a.z64", "12345")
+        d.put("roms/nes/mario.nes", "x" * 95, info=wanted_info(95))
+        song = d.put_song("a/song.ogg", "12345")
+        d.put_song("b/keep.ogg", "y" * 20, leftover=False)
+        real_scan = Client.scan
+
+        def scan(client: Client, folder_id: str, sub: str | None = None) -> bool:
+            if folder_id == "wz-songs" and sub is None:
+                return False
+            return real_scan(client, folder_id, sub)
+
+        with mock.patch.object(Client, "scan", scan):
+            self.assertEqual(self.run_prune(), 0)
+        self.assertTrue(library.exists())
+        self.assertTrue(song.exists())
+
+    def test_busy_is_still_a_failure_when_a_person_runs_it(self) -> None:
+        d = self.dev
+        d.put("roms/n64/a.z64")
+        with mock.patch.object(Client, "scan", return_value=False):
+            self.assertEqual(d.prune(apply=True), 1)
+        self.assertIn("busy", d.warnings[0])
+
+    def test_another_unsafe_folder_still_fails(self) -> None:
+        d = self.dev
+        d.put("roms/n64/a.z64")
+        (d.root / ".stfolder").rmdir()
+        self.assertEqual(self.run_prune(), 1)
+        self.assertIn("not mounted", d.warnings[0])
+
+    def test_bootstrap_ignores_still_fail(self) -> None:
+        self.dev.put("roms/n64/a.z64")
+        self.dev.fake.ignores["wz-library"] = ["*"]
+        self.assertEqual(self.run_prune(), 1)
+        self.assertIn("ignores are not the final", self.dev.warnings[0])
+
+    def test_output_is_the_summary_and_list_is_ignored(self) -> None:
+        d = self.dev
+        d.put("roms/n64/a.z64", "12345")
+        d.put("roms/n64/mine.txt", info=ignored_info(None))
+        d.put("roms/nes/mario.nes", "x" * 95, info=wanted_info(95))
+        self.run_prune(list_all=True)
+        out = "\n".join(d.lines)
+        self.assertIn("wz-library: 1 leftover file(s), 5 B", out)
+        self.assertIn("kept 1 ignored file(s)", out)
+        self.assertNotIn("roms/n64", out)
+        self.assertNotIn("mine.txt", out)
+
+    def test_it_needs_apply(self) -> None:
+        with self.assertRaises(UsageError):
+            self.dev.prune(unattended=True)
+
+    def test_notify_reports_a_refused_run_as_not_applied(self) -> None:
+        d = self.dev
+        d.put("roms/n64/a.z64")
+        with Receiver() as hook:
+            self.run_prune(notify_url=hook.url)
+        self.assertFalse(hook.bodies[0]["applied"])
+        self.assertEqual(hook.bodies[0]["files"], 1)
+
+
 class ApplyRecheckTests(unittest.TestCase):
     def test_a_file_that_became_wanted_again_is_not_deleted(self) -> None:
         d = Device(self)
@@ -559,6 +779,35 @@ class CliTests(unittest.TestCase):
         code, _, err = self.prune("--apply", "--max-gib", "0")
         self.assertEqual(code, 1)
         self.assertIn("refusing to delete", err)
+        self.assertTrue(leftover.exists())
+
+    def test_unattended_applies_with_no_cap(self) -> None:
+        gone = self.dev.put("roms/n64/a.z64")
+        self.dev.put("roms/nes/mario.nes", "x" * 95, info=wanted_info(95))
+        code, out, err = self.prune("deck", "--apply", "--unattended", "--timeout", "5")
+        self.assertEqual((code, err), (0, ""))
+        self.assertIn("deleted 1 file(s)", out)
+        self.assertFalse(gone.exists())
+
+    def test_unattended_guard_is_exit_1(self) -> None:
+        leftover = self.dev.put("roms/n64/a.z64")
+        code, _, err = self.prune("deck", "--apply", "--unattended", "--timeout", "5")
+        self.assertEqual(code, 1)
+        self.assertIn("refusing to delete anything", err)
+        self.assertTrue(leftover.exists())
+
+    def test_unattended_usage_errors_are_exit_2(self) -> None:
+        leftover = self.dev.put("roms/n64/a.z64")
+        for args in (
+            ("--unattended",),
+            ("--apply", "--unattended", "--max-gib", "5"),
+            ("--apply", "--unattended", "--max-gib", "50"),
+            ("--apply", "--unattended", "--force"),
+        ):
+            with self.subTest(args=args):
+                code, _, err = self.prune("deck", *args, "--timeout", "5")
+                self.assertEqual(code, 2)
+                self.assertIn("--unattended", err)
         self.assertTrue(leftover.exists())
 
     def test_usage_errors_are_exit_2(self) -> None:

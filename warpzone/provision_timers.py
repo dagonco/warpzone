@@ -1,4 +1,4 @@
-"""The systemd user timers that run the frontend refresh and the play state sync."""
+"""The systemd user timers that run the frontend refresh, the play state sync and the prune."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 
 from warpzone import artwork, safefile
+from warpzone.config import Device
 from warpzone.probes import REAL_PROBES, DeviceProbes
 from warpzone.profiles import Profile
 from warpzone.provision_scripts import script_config
@@ -101,6 +102,86 @@ def ensure_play_state_timer(
     )
 
 
+def ensure_prune_timer(
+    name: str,
+    device: Device,
+    home: Path,
+    rep: Reporter,
+    *,
+    dry_run: bool,
+    python: str | None = None,
+    config_path: Path | None = None,
+    probes: DeviceProbes = REAL_PROBES,
+) -> None:
+    """Install and start the `systemd --user` timer that runs `prune --apply --unattended`.
+
+    Only for a device that lists `library` and does not set `auto_prune = false`; for any other
+    the units are removed if they exist. So a game turned off on the hub leaves the console by
+    itself (see development/design/prune.md, "Unattended runs"). Like the other timers the units
+    run the Python that runs this command, are rewritten only when their text differs, and a
+    second run makes no systemctl call.
+    """
+    if not device.prunes_unattended:
+        _remove_timer(artwork.PRUNE_UNIT, "prune", home, rep, dry_run, probes.user_systemctl)
+        return
+    python = python or sys.executable
+    if not probes.import_check(python):
+        rep.warn(
+            f"the prune timer was not installed: {python} cannot import warpzone from "
+            "outside the current folder (run from a clone?). Set the device up with "
+            f"`updater.sh install {name}`, which provisions from a venv"
+        )
+        return
+    service, timer = artwork.render_prune_units(python, name, script_config(config_path, home))
+    _install_timer(
+        artwork.PRUNE_UNIT,
+        service,
+        timer,
+        artwork.PRUNE_INTERVAL,
+        "prune",
+        home,
+        rep,
+        dry_run,
+        probes.user_systemctl,
+        "deleting only what the hub still has and the device no longer whitelists",
+    )
+
+
+def _remove_timer(
+    unit_name: str,
+    label: str,
+    home: Path,
+    rep: Reporter,
+    dry_run: bool,
+    systemctl: SystemctlRunner,
+) -> None:
+    """Stop the timer and delete its two units, when they exist."""
+    folder = home / ".config" / "systemd" / "user"
+    present = [
+        p for p in (folder / f"{unit_name}.timer", folder / f"{unit_name}.service") if p.exists()
+    ]
+    if not present:
+        return
+    if dry_run:
+        for path in present:
+            rep.out(f"timer: dry-run: would remove {path}")
+        return
+    if not systemctl(("disable", "--now", f"{unit_name}.timer")):
+        rep.warn(
+            f"`systemctl --user disable --now {unit_name}.timer` failed, so the {label} timer "
+            "may still be loaded until the next login: run it by hand"
+        )
+    for path in present:
+        try:
+            path.unlink()
+        except OSError as exc:
+            rep.warn(f"cannot remove {path} ({exc})")
+            return
+        rep.out(f"timer: removed {path}")
+    if not systemctl(("daemon-reload",)):
+        rep.warn("`systemctl --user daemon-reload` failed: run it by hand")
+
+
 def _install_timer(
     unit_name: str,
     service: str,
@@ -111,6 +192,7 @@ def _install_timer(
     rep: Reporter,
     dry_run: bool,
     systemctl: SystemctlRunner,
+    detail: str = "skipping while the frontend is open",
 ) -> None:
     folder = home / ".config" / "systemd" / "user"
     wanted = {f"{unit_name}.service": service, f"{unit_name}.timer": timer}
@@ -148,4 +230,4 @@ def _install_timer(
                 f"run: run it by hand (is a user session running? `loginctl enable-linger`)"
             )
             return
-    rep.out(f"timer: {unit} runs every {interval}, skipping while the frontend is open")
+    rep.out(f"timer: {unit} runs every {interval}, {detail}")

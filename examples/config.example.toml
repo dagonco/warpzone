@@ -74,6 +74,11 @@ folders = ["library", "tools", "saves", "frontend", "bios", "settings"]
 # API key in this config. Default false.
 # auto_hub = false
 
+# Optional. `provision device` installs a timer that runs `warpzone prune --apply --unattended`
+# every hour on a device that lists "library", so what leaves its whitelist is deleted by
+# itself. Set false to remove it and prune by hand. Default true.
+# auto_prune = true
+
 [devices.machine]
 device_id = "CCCCCCC-CCCCCCC-CCCCCCC-CCCCCCC-CCCCCCC-CCCCCCC-CCCCCCC-CCCCCCC"
 profile = "steamos-emudeck"
