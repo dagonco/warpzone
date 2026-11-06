@@ -278,21 +278,35 @@ warpzone inbox --apply
 
 ```
 warpzone catalog [--config PATH] [--root PATH] [--dry-run]
+                 [--ra-hash [--rahasher PATH]] [--ra-lists [--force]]
 ```
 
-Builds and updates the catalog index: one `catalog/systems/<system>.json` per system folder of `library/roms/`, at the hub root and outside every Syncthing folder, so no console receives it. Each file lists the games of the system, the library paths each game needs (its parts), its size and its SHA-1 where it is a file. The first run reads every file of the library once to hash it; after that a run only looks at sizes and dates. Games that are gone from the library are dropped, and what `inbox` recorded about a game (its filing date and DAT name) is kept. It writes only under `catalog/`, never touches `library/`, and does not rewrite a file whose games did not change. `warpzone inbox --apply` updates the index by itself for the systems it placed games in, so this command is for the first run and for games added or removed by hand. See [The catalog index](/warpzone/development/design/library-ui/#the-catalog-index).
+Builds and updates the catalog index: one `catalog/systems/<system>.json` per system folder of `library/roms/`, at the hub root and outside every Syncthing folder, so no console receives it. Each file lists the games of the system, the library paths each game needs (its parts), its size and its SHA-1 where it is a file. The first run reads every file of the library once to hash it; after that a run only looks at sizes and dates. Games that are gone from the library are dropped, and what `inbox` recorded about a game (its filing date, DAT name and RetroAchievements hash) is kept. It writes only under `catalog/`, never touches `library/`, and does not rewrite a file whose games did not change. `warpzone inbox --apply` updates the index by itself for the systems it placed games in, so this command is for the first run and for games added or removed by hand. See [The catalog index](/warpzone/development/design/library-ui/#the-catalog-index).
 
 | Option | Default | Meaning |
 |---|---|---|
 | `--config PATH` | see above | The private config file; read only for `[hub] root`. |
 | `--root PATH` | `[hub] root` | The hub root as mounted on the machine that runs the command, holding `library/`. |
-| `--dry-run` | off | Say per system how many games would be added, removed or changed; hash and write nothing. |
+| `--dry-run` | off | Say per system how many games would be added, removed or changed; hash, download and write nothing. |
+| `--ra-hash` | off | Run RAHasher on every game of a system RetroAchievements knows (the ones that have a console id in the code) that has no RA hash yet, or whose hashed file changed. See below. |
+| `--rahasher PATH` | `[inbox] rahasher` | The RAHasher for `--ra-hash` (built with CHD support). Only valid with `--ra-hash`. |
+| `--ra-lists` | off | Download the RetroAchievements game list of each console the library has into `catalog/ra/<console id>.json`. Needs `RA_API_KEY` in the environment. |
+| `--force` | off | With `--ra-lists`, download the lists again even if the cached ones are under 7 days old. |
 
-Exit `0` when it finished; `1` when a system file could not be read or written, or kept changing under it (the other systems are still written); `2` when the hub root has no `library/roms/` folder.
+Exit `0` when it finished; `1` when a system file could not be read or written, or kept changing under it (the other systems are still written), or when a RetroAchievements list could not be downloaded and none was cached; `2` when the hub root has no `library/roms/` folder, `--ra-hash` has no usable RAHasher, `--ra-lists` has no `RA_API_KEY`, or `--rahasher` or `--force` is used without the option it belongs to.
+
+### RetroAchievements
+
+Each game can carry the RetroAchievements (RA) hash of its main file (for a `.m3u` folder, of its first disc), together with the size and date that file had when it was hashed. `warpzone inbox --apply` records it for the games it files when `[inbox] rahasher` is set. `--ra-hash` is the one-time pass for the games that were already in the library: it reads every such image once, so on a large library it takes hours. It can be stopped (Ctrl-C) and run again: it writes a system's file after every 10 games, and a game whose file has not changed since it was hashed is skipped. A game RAHasher cannot hash (for instance a Redump Dreamcast `.cue`, which RAHasher needs as a `.gdi`) is reported at the end of its system and tried again on the next run. Systems RA has no console for are not touched.
+
+`--ra-lists` keeps a copy of RA's game list for each console the library has, so a game's RA state (no hash, not linked, linked, or supported with its achievements and points) can be told without asking RA again. A list younger than 7 days is not downloaded again unless you pass `--force`. If a download fails the cached list is kept and a warning names the kind of failure (`HTTP 401`, `URLError`, ...); the API key is never printed, logged or put in a message. Both options also run the normal scan of the library first, and both honour `--dry-run`: it says how many games would be hashed and which lists would be downloaded.
 
 ```bash
 warpzone catalog --dry-run
 warpzone catalog
+warpzone catalog --ra-hash --dry-run
+warpzone catalog --ra-hash
+RA_API_KEY=... warpzone catalog --ra-lists
 ```
 
 ## `warpzone frontend refresh`

@@ -187,7 +187,9 @@ class ShadPS4Dirs:
     shadPS4 runs the extracted games it finds in its install directories. `config` lists the
     files that can hold them (`config.json` of v0.21 and later, the older `config.toml`),
     each edited only if it exists; existing entries are kept. A directory may contain
-    `{library}`, replaced by the profile's library path. `process` names shadPS4 and its
+    `{library}`, replaced by the profile's library path. `addon_dir`, when set, is the one
+    folder shadPS4 reads DLC from (`<addon_dir>/<TITLE_ID>/<entry>/`); unlike the install
+    directories it replaces the value that is there. `process` names shadPS4 and its
     launcher: a file is edited only while none of them runs.
     """
 
@@ -195,9 +197,13 @@ class ShadPS4Dirs:
     process: tuple[str, ...]
     install_dirs: tuple[str, ...]
     launch: ShadPS4Launch | None = None
+    addon_dir: str | None = None
 
     def wants(self, library: str) -> list[str]:
         return [d.replace("{library}", library) for d in self.install_dirs]
+
+    def wants_addon(self, library: str) -> str | None:
+        return None if self.addon_dir is None else self.addon_dir.replace("{library}", library)
 
 
 @dataclass(frozen=True)
@@ -748,7 +754,7 @@ def _parse_shadps4(raw: Any, has_library: bool, err: Callable[[str], None]) -> S
     if not isinstance(raw, dict):
         err("`shadps4` must be a table")
         return None
-    extras = sorted(set(raw) - {"config", "process", "install_dirs", "launch"})
+    extras = sorted(set(raw) - {"config", "process", "install_dirs", "launch", "addon_dir"})
     for extra in extras:
         err(f"shadps4.{extra}: unknown key")
     problems = len(extras)
@@ -774,13 +780,31 @@ def _parse_shadps4(raw: Any, has_library: bool, err: Callable[[str], None]) -> S
         elif "{library}" in d and not has_library:
             err(f"shadps4.install_dirs: {d!r} uses {{library}} but there is no paths.library")
             problems += 1
+    addon = raw.get("addon_dir")
+    if "addon_dir" in raw:
+        if not isinstance(addon, str) or not addon:
+            err("shadps4.addon_dir: must be a non-empty string")
+            problems += 1
+        elif (
+            "{" in addon.replace("{library}", "")
+            or '"' in addon
+            or not addon.startswith(("/", "~", "{library}"))
+        ):
+            err(
+                f"shadps4.addon_dir: {addon!r} must be an absolute path; "
+                "{library} is the only placeholder"
+            )
+            problems += 1
+        elif "{library}" in addon and not has_library:
+            err(f"shadps4.addon_dir: {addon!r} uses {{library}} but there is no paths.library")
+            problems += 1
     launch = None
     if "launch" in raw:
         launch = _parse_shadps4_launch(raw["launch"], err)
         problems += launch is None
     if problems:
         return None
-    return ShadPS4Dirs(tuple(config), tuple(raw["process"]), tuple(dirs), launch)
+    return ShadPS4Dirs(tuple(config), tuple(raw["process"]), tuple(dirs), launch, addon)
 
 
 _LAUNCH_KEYS = ("qt_ini", "versions", "script", "find_rules", "emulator")

@@ -6,8 +6,9 @@ Listings are built in memory, so nothing here touches a filesystem.
 import json
 import unittest
 from dataclasses import replace
+from datetime import UTC, datetime
 
-from warpzone import catalog
+from warpzone import catalog, ra
 from warpzone.catalog import Listing, Node, Part
 
 
@@ -598,6 +599,168 @@ class SearchTests(unittest.TestCase):
 
     def test_at_most_limit_groups(self) -> None:
         self.assertEqual(len(catalog.search("metal", self.games(), limit=2)), 2)
+
+
+class RaTargetTests(unittest.TestCase):
+    def targets(self, system: str, files: dict[str, int | str]):  # type: ignore[no-untyped-def]
+        listed = listing(files)
+        games = catalog.derive(system, listed)
+        found = catalog.ra_targets(system, games, listed)
+        return {g.primary: found[g.id] for g in games if g.id in found}, games
+
+    def test_a_file_game_is_hashed_by_its_primary_part(self) -> None:
+        targets, _ = self.targets("psx", {"roms/psx/A.chd": 10})
+        self.assertEqual(targets["roms/psx/A.chd"], catalog.RaTarget("roms/psx/A.chd", 10, 1000))
+
+    def test_an_m3u_folder_is_hashed_by_its_first_disc(self) -> None:
+        targets, _ = self.targets(
+            "psx",
+            {
+                "roms/psx/G.m3u/G (Disc 2).chd": 20,
+                "roms/psx/G.m3u/G (Disc 1).chd": 10,
+                "roms/psx/G.m3u/G.m3u": "G (Disc 1).chd\nG (Disc 2).chd\n",
+            },
+        )
+        self.assertEqual(
+            targets["roms/psx/G.m3u"], catalog.RaTarget("roms/psx/G.m3u/G (Disc 1).chd", 10, 1000)
+        )
+
+    def test_the_playlist_decides_which_disc_is_first_not_the_name(self) -> None:
+        targets, _ = self.targets(
+            "psx",
+            {
+                "roms/psx/G.m3u/a.chd": 20,
+                "roms/psx/G.m3u/b.chd": 10,
+                "roms/psx/G.m3u/G.m3u": "b.chd\na.chd\n",
+            },
+        )
+        self.assertEqual(targets["roms/psx/G.m3u"].of, "roms/psx/G.m3u/b.chd")
+
+    def test_an_m3u_folder_without_a_usable_playlist_has_no_target(self) -> None:
+        targets, games = self.targets(
+            "psx", {"roms/psx/G.m3u/a.chd": 20, "roms/psx/G.m3u/G.m3u": "missing.chd\n"}
+        )
+        self.assertEqual((len(games), targets), (1, {}))
+
+    def test_a_system_ra_does_not_know_has_no_targets(self) -> None:
+        targets, games = self.targets("switch", {"roms/switch/A [0100000000000000].nsp": 10})
+        self.assertEqual((len(games), targets), (1, {}))
+
+    def test_a_cue_game_is_hashed_by_its_cue(self) -> None:
+        targets, _ = self.targets(
+            "psx", {"roms/psx/A.cue": 'FILE "A.bin" BINARY\n', "roms/psx/A.bin": 100}
+        )
+        self.assertEqual(list(targets), ["roms/psx/A.cue"])
+
+    def test_pending_means_no_hash_or_a_hash_of_a_part_that_changed(self) -> None:
+        listed = listing({"roms/gba/A.zip": 10, "roms/gba/B.zip": 10, "roms/gba/C.zip": 10})
+        games = catalog.derive("gba", listed)
+        targets = catalog.ra_targets("gba", games, listed)
+        by = by_primary(games)
+        fresh = catalog.ra_entry("a" * 32, targets[by["roms/gba/A.zip"].id])
+        stale = {**fresh, "size": 11}
+        games = catalog.with_ra(
+            games, {by["roms/gba/A.zip"].id: fresh, by["roms/gba/B.zip"].id: stale}
+        )
+        self.assertEqual(
+            [g.primary for g in catalog.ra_pending(games, targets)],
+            ["roms/gba/B.zip", "roms/gba/C.zip"],
+        )
+
+    def test_ra_survives_the_json_round_trip_and_a_merge(self) -> None:
+        listed = listing({"roms/gba/A.zip": 10})
+        games = catalog.derive("gba", listed)
+        targets = catalog.ra_targets("gba", games, listed)
+        entry = catalog.ra_entry("a" * 32, targets[games[0].id])
+        with_ra = catalog.with_ra(games, {games[0].id: entry})
+        doc = catalog.decode(catalog.encode("gba", with_ra, "2026-11-06T00:00:00Z"))
+        assert doc is not None
+        self.assertEqual(
+            doc.games[games[0].id].ra,
+            {"hash": "a" * 32, "of": "roms/gba/A.zip", "size": 10, "mtime": 1000},
+        )
+        merged = catalog.merge(doc.games, games, today="2026-11-07")
+        self.assertEqual(merged[0].ra, doc.games[games[0].id].ra)
+
+
+RA_H = "a" * 32
+RA_LISTS = {
+    12: catalog.RaList(
+        12,
+        "2026-11-01T00:00:00Z",
+        {RA_H: ra.RaGame("Example", 20, 77, 200), "b" * 32: ra.RaGame("Empty", 0, 78, 0)},
+    )
+}
+
+
+class RaStateTests(unittest.TestCase):
+    H = RA_H
+    LISTS = RA_LISTS
+
+    def state(self, system: str, stored, lists=None):  # type: ignore[no-untyped-def]
+        return catalog.ra_state(system, stored, self.LISTS if lists is None else lists)
+
+    def test_supported_carries_count_points_and_link(self) -> None:
+        got = self.state("psx", {"hash": self.H})
+        self.assertEqual(
+            (got.state, got.title, got.achievements, got.points, got.url),
+            ("supported", "Example", 20, 200, "https://retroachievements.org/game/77"),
+        )
+
+    def test_linked_is_a_known_hash_without_achievements(self) -> None:
+        self.assertEqual(self.state("psx", {"hash": "b" * 32}).state, "linked")
+
+    def test_not_linked_is_a_hash_the_list_does_not_have(self) -> None:
+        self.assertEqual(self.state("psx", {"hash": "c" * 32}).state, "not-linked")
+
+    def test_no_hash_when_the_list_is_there_and_the_game_has_none(self) -> None:
+        self.assertEqual(self.state("psx", None).state, "no-hash")
+
+    def test_no_list_for_a_console_without_a_cached_list_or_outside_the_table(self) -> None:
+        self.assertEqual(self.state("gba", {"hash": self.H}).state, "no-list")
+        self.assertEqual(self.state("switch", None).state, "no-list")
+        self.assertEqual(self.state("psx", {"hash": self.H}, {}).state, "no-list")
+
+    def test_the_hash_is_compared_in_lower_case(self) -> None:
+        self.assertEqual(self.state("psx", {"hash": self.H.upper()}).state, "supported")
+
+
+class RaListTests(unittest.TestCase):
+    def test_the_list_round_trips_with_ids_and_points(self) -> None:
+        games = {"a" * 32: ra.RaGame("Example", 20, 77, 200)}
+        data = catalog.encode_ra_list(12, games, "2026-11-06T10:00:00Z")
+        self.assertEqual(
+            json.loads(data),
+            {
+                "format": 1,
+                "console": 12,
+                "fetched": "2026-11-06T10:00:00Z",
+                "games": {
+                    "a" * 32: {"id": 77, "title": "Example", "achievements": 20, "points": 200}
+                },
+            },
+        )
+        self.assertEqual(data, catalog.encode_ra_list(12, games, "2026-11-06T10:00:00Z"))
+        decoded = catalog.decode_ra_list(data)
+        assert decoded is not None
+        self.assertEqual((decoded.console, decoded.fetched), (12, "2026-11-06T10:00:00Z"))
+        self.assertEqual(decoded.games, games)
+
+    def test_what_is_not_a_list_decodes_to_none(self) -> None:
+        for data in (b"", b"[]", b"\xff", b'{"format": 2}', b'{"format": 1, "console": 12}'):
+            self.assertIsNone(catalog.decode_ra_list(data), data)
+
+    def test_a_list_is_fresh_for_seven_days(self) -> None:
+        at = "2026-11-01T00:00:00Z"
+        self.assertTrue(catalog.ra_list_fresh(at, datetime(2026, 11, 1, tzinfo=UTC)))
+        self.assertTrue(catalog.ra_list_fresh(at, datetime(2026, 11, 7, 23, tzinfo=UTC)))
+        self.assertFalse(catalog.ra_list_fresh(at, datetime(2026, 11, 8, tzinfo=UTC)))
+        self.assertFalse(catalog.ra_list_fresh(at, datetime(2026, 11, 30, tzinfo=UTC)))
+
+    def test_a_time_that_does_not_parse_or_is_in_the_future_is_stale(self) -> None:
+        now = datetime(2026, 11, 6, tzinfo=UTC)
+        self.assertFalse(catalog.ra_list_fresh("yesterday", now))
+        self.assertFalse(catalog.ra_list_fresh("2026-11-09T00:00:00Z", now))
 
 
 if __name__ == "__main__":

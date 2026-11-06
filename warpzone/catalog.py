@@ -18,9 +18,10 @@ import re
 import unicodedata
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from warpzone import inbox, whitelist
+from warpzone import inbox, ra, whitelist
 from warpzone.inbox_switch import base_title_id
 
 FORMAT = 1
@@ -624,6 +625,175 @@ def decode(data: bytes) -> SystemDoc | None:
         if game is not None:
             games[ident] = game
     return SystemDoc(system, updated if isinstance(updated, str) else "", games)
+
+
+# ------------------------------------------------------------------ RetroAchievements
+
+RA_LIST_FORMAT = 1
+RA_LIST_DAYS = 7  # a cached game list younger than this is not downloaded again
+RA_GAME_URL = "https://retroachievements.org/game/"
+NO_HASH, NO_LIST, NOT_LINKED, LINKED, SUPPORTED = (
+    "no-hash",
+    "no-list",
+    "not-linked",
+    "linked",
+    "supported",
+)
+_RA_TIME = "%Y-%m-%dT%H:%M:%SZ"
+
+
+@dataclass(frozen=True)
+class RaTarget:
+    """The part RAHasher is run on for a game, as it is on disk now."""
+
+    of: str  # path below library/
+    size: int
+    mtime: int
+
+
+def _m3u_first_disc(tree: _Tree, listing: Listing, folder: str) -> Node | None:
+    """The first disc of a `<game>.m3u/` folder: the first entry of the playlist inside it
+    (the one named like the folder, else the first by name)."""
+    playlists = sorted(
+        (n for n in tree.kids(folder, FILE) if _suffix(n.path) == ".m3u"),
+        key=lambda n: (posixpath.basename(n.path) != posixpath.basename(folder), n.path),
+    )
+    available = tree.files_under(folder)
+    for playlist in playlists:
+        for ref in _m3u_refs(listing.texts.get(playlist.path, "")):
+            found = inbox.resolve_refs(playlist.path, [ref], available)
+            return tree.nodes[found[0]] if found else None
+    return None
+
+
+def ra_targets(system: str, games: Iterable[Game], listing: Listing) -> dict[str, RaTarget]:
+    """Game id -> the part to hash for RetroAchievements: the primary part, or the first
+    disc of an `.m3u` folder. Only systems in `ra.CONSOLE_IDS` have any; a game with no such
+    part (a folder that is not an `.m3u`, a playlist that names nothing) has none."""
+    if system not in ra.CONSOLE_IDS:
+        return {}
+    tree = _Tree(listing.nodes)
+    out: dict[str, RaTarget] = {}
+    for game in games:
+        node = tree.nodes.get(game.primary)
+        if node is None:
+            continue
+        if node.kind == DIR and game.primary.lower().endswith(".m3u"):
+            node = _m3u_first_disc(tree, listing, game.primary)
+        if node is not None and node.kind == FILE:
+            out[game.id] = RaTarget(node.path, node.size, node.mtime)
+    return out
+
+
+def ra_current(game: Game, target: RaTarget) -> bool:
+    """Whether the stored RA hash of the game is of the part as it is now."""
+    stored = game.ra
+    return (
+        isinstance(stored, Mapping)
+        and isinstance(stored.get("hash"), str)
+        and (stored.get("of"), stored.get("size"), stored.get("mtime"))
+        == (target.of, target.size, target.mtime)
+    )
+
+
+def ra_pending(games: Iterable[Game], targets: Mapping[str, RaTarget]) -> list[Game]:
+    """The games that have a part to hash and no hash of it as it is now."""
+    return [g for g in games if g.id in targets and not ra_current(g, targets[g.id])]
+
+
+def ra_entry(ra_hash: str, target: RaTarget) -> dict[str, Any]:
+    return {"hash": ra_hash, "of": target.of, "size": target.size, "mtime": target.mtime}
+
+
+def with_ra(games: Sequence[Game], entries: Mapping[str, Mapping[str, Any]]) -> list[Game]:
+    """The games with the `ra` of each id in `entries` set."""
+    return [replace(g, ra=dict(entries[g.id])) if g.id in entries else g for g in games]
+
+
+@dataclass(frozen=True)
+class RaList:
+    """The cached game list of one RA console."""
+
+    console: int
+    fetched: str  # UTC time, `%Y-%m-%dT%H:%M:%SZ`
+    games: Mapping[str, ra.RaGame]  # RA hash -> game
+
+
+def encode_ra_list(console: int, games: Mapping[str, ra.RaGame], fetched: str) -> bytes:
+    doc = {
+        "format": RA_LIST_FORMAT,
+        "console": console,
+        "fetched": fetched,
+        "games": {
+            h: {"id": g.id, "title": g.title, "achievements": g.achievements, "points": g.points}
+            for h, g in games.items()
+        },
+    }
+    return (json.dumps(doc, sort_keys=True, ensure_ascii=False) + "\n").encode("utf-8")
+
+
+def decode_ra_list(data: bytes) -> RaList | None:
+    """The list in `data`, or None when it is not a cached list of this format."""
+    try:
+        doc = json.loads(data.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        return None
+    if not isinstance(doc, dict) or doc.get("format") != RA_LIST_FORMAT:
+        return None
+    console, fetched, raw = _int(doc.get("console")), doc.get("fetched"), doc.get("games")
+    if console is None or not isinstance(fetched, str) or not isinstance(raw, dict):
+        return None
+    games: dict[str, ra.RaGame] = {}
+    for ra_hash, item in raw.items():
+        if not isinstance(item, dict):
+            continue
+        games[ra_hash] = ra.RaGame(
+            str(item.get("title", "?")),
+            _int(item.get("achievements")) or 0,
+            _int(item.get("id")) or 0,
+            _int(item.get("points")) or 0,
+        )
+    return RaList(console, fetched, games)
+
+
+def ra_list_fresh(fetched: str, now: datetime) -> bool:
+    """Whether a list fetched at `fetched` is younger than `RA_LIST_DAYS`. A time that does
+    not parse, or one in the future, counts as stale."""
+    try:
+        when = datetime.strptime(fetched, _RA_TIME).replace(tzinfo=UTC)
+    except ValueError:
+        return False
+    return timedelta(0) <= now - when < timedelta(days=RA_LIST_DAYS)
+
+
+@dataclass(frozen=True)
+class RaState:
+    state: str  # NO_HASH | NO_LIST | NOT_LINKED | LINKED | SUPPORTED
+    title: str | None = None  # RA's title for the game, when its hash is in the list
+    achievements: int = 0
+    points: int = 0
+    url: str | None = None
+
+
+def ra_state(system: str, stored: Mapping[str, Any] | None, lists: Mapping[int, RaList]) -> RaState:
+    """The badge state of a game from its stored `ra` and the cached lists (by console id).
+
+    `no-list` comes first: a console RA has no list for cannot say anything about a hash,
+    and a library system that is not in `ra.CONSOLE_IDS` is never waiting for one."""
+    console = ra.CONSOLE_IDS.get(system)
+    ra_list = lists.get(console) if console is not None else None
+    if ra_list is None:
+        return RaState(NO_LIST)
+    ra_hash = stored.get("hash") if stored else None
+    if not isinstance(ra_hash, str):
+        return RaState(NO_HASH)
+    game = ra_list.games.get(ra_hash.lower())
+    if game is None:
+        return RaState(NOT_LINKED)
+    url = f"{RA_GAME_URL}{game.id}" if game.id else None
+    if not game.achievements:
+        return RaState(LINKED, game.title, 0, game.points, url)
+    return RaState(SUPPORTED, game.title, game.achievements, game.points, url)
 
 
 # ------------------------------------------------------------------ search
