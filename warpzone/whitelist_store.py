@@ -89,6 +89,16 @@ def backup(root: Path, device: str, data: bytes, now: datetime) -> Path:
     return target
 
 
+class NoLibrary(WarpzoneError):
+    """A whitelist cannot be created because the `library/` folder is not there (an unmounted
+    or wrong hub root); nothing is created."""
+
+
+def _require_library(path: Path) -> None:
+    if not path.parent.is_dir():
+        raise NoLibrary(f"{path.parent} is not a folder; is the hub root mounted and right?")
+
+
 @dataclass(frozen=True)
 class Written:
     edit: safefile.Edit
@@ -108,6 +118,8 @@ def write(
     rename. A missing file (`"absent"`) is created, and a file that appeared meanwhile is not
     overwritten.
     """
+    if snapshot.stamp is None:
+        _require_library(snapshot.path)
     saved: list[Path] = []
 
     def save() -> None:
@@ -146,12 +158,15 @@ def replace(
     """The UI's write: read again, compare the `etag`, build the new file, back up, write, scan.
 
     `build` gets the snapshot just read and returns the bytes to write (it may raise, and then
-    nothing is written). Raises `Stale` when the file differs from `etag` or changes during the
+    nothing is written). A missing file is created only inside an existing `library/`
+    (`NoLibrary` otherwise). Raises `Stale` when the file differs from `etag` or changes during the
     write. Returns warnings (a failed scan). The caller holds the lock that serializes writes.
     """
     snapshot = read(whitelist_path(root, device))
     if snapshot.etag != etag:
         raise Stale(device)
+    if snapshot.stamp is None:
+        _require_library(snapshot.path)
     result = write(root, device, build(snapshot), snapshot, now=now)
     if not result.ok:
         raise Stale(device)

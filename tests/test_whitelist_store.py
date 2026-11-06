@@ -127,6 +127,18 @@ class SnapshotAndWriteTests(StoreCase):
         self.assertFalse(whitelist_store.write(self.root, "deck", b"second\n", snap).ok)
         self.assertEqual(path.read_bytes(), b"first\n")
 
+    def test_a_missing_file_is_not_created_without_a_library_folder(self) -> None:
+        empty = self.root.parent / "unmounted"
+        snap = whitelist_store.read(whitelist_store.whitelist_path(empty, "deck"))
+        with self.assertRaises(whitelist_store.NoLibrary):
+            whitelist_store.write(empty, "deck", b"x\n", snap)
+        with self.assertRaises(whitelist_store.NoLibrary):
+            whitelist_store.replace(empty, "deck", "absent", lambda s: b"x\n")
+        self.assertFalse(empty.exists())
+        # With the library folder there, the same write creates the file.
+        (empty / "library").mkdir(parents=True)
+        self.assertTrue(whitelist_store.write(empty, "deck", b"x\n", snap).ok)
+
     def test_the_fifty_newest_backups_are_kept(self) -> None:
         directory = whitelist_store.backups_dir(self.root, "deck")
         for n in range(53):

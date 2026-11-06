@@ -320,42 +320,69 @@ rescan_seconds = 10
         self.wz("status", *cfg)
 
     def matcher_scenario(self) -> None:
-        """The migration's first-match matcher against Syncthing itself: for hand-written
-        whitelists, the files `decide_lines` keeps are exactly the ones Syncthing indexes."""
+        """The migration's first-match matcher and the managed file's `render` against Syncthing
+        itself: the files the model keeps are exactly the ones Syncthing's index holds."""
         self.hub.start()
         client = self.hub.client()
-        my_id = client.my_id()
         for number, text in enumerate(MATCHER_WHITELISTS):
             hand = wl.parse_hand(text)
             self.assertEqual(hand.errors, (), text)
-            folder = self.base / f"matcher-{number}"
-            for name in MATCHER_FILES:
-                self.write(folder / name, "x")
-            (folder / ".stfolder").mkdir()
-            fid = f"wz-matcher-{number}"
-            # Created paused with the ignores in place, as `provision` does, so nothing is
-            # indexed before they apply. The include of the common file is left out: that file
-            # is not in this folder, and the junk names it ignores are not among the files.
-            client.add_folder(
-                {
-                    "id": fid,
-                    "label": fid,
-                    "path": str(folder),
-                    "type": "sendreceive",
-                    "paused": True,
-                    "fsWatcherEnabled": False,
-                    "devices": [{"deviceID": my_id}],
-                }
-            )
-            client.set_ignores(
-                fid, [ln for ln in text.splitlines() if not ln.startswith("#include")]
-            )
-            client.patch_folder(fid, {"paused": False})
-            wait_for(lambda fid=fid: client.scan(fid), f"{fid} to be scanned", 60)
             matcher = wl.LineMatcher(hand.lines)
             expected = {name for name in MATCHER_FILES if matcher.on(name)}
             self.assertTrue(expected and expected != set(MATCHER_FILES), text)
-            self.assertEqual(indexed_files(client, fid), expected, text)
+            lines = [ln for ln in text.splitlines() if not ln.startswith("#include")]
+            got = self.included_by_syncthing(client, f"hand-{number}", MATCHER_FILES, lines)
+            self.assertEqual(got, expected, text)
+
+        # What `render` writes: names with every character that needs escaping.
+        names = list(ESCAPED_FILES)
+        if os.sep == "/":
+            names.append(ESCAPED_BACKSLASH_FILE)
+        model = wl.Model(
+            frozenset({"gba"}),
+            frozenset({ESCAPED_FILES[0], ESCAPED_FILES[2], *(names[5:])}),
+            frozenset({ESCAPED_FILES[1]}),
+        )
+        rendered = wl.render(model)
+        self.assertTrue(wl.is_managed(rendered))
+        lines = [ln for ln in rendered.splitlines() if not ln.startswith("#include")]
+        expected = {name for name in names if wl.decide(model, name)}
+        self.assertTrue(expected and expected != set(names), rendered)
+        got = self.included_by_syncthing(client, "rendered", names, lines)
+        self.assertEqual(got, expected, rendered)
+
+    def included_by_syncthing(
+        self, client: Client, label: str, files: list[str], ignores: list[str]
+    ) -> set[str]:
+        """Which of `files` a real Syncthing indexes when its folder has these ignores.
+
+        The folder is created paused with the ignores in place, as `provision` does, so nothing
+        is indexed before they apply (a directory that was indexed first and became ignored
+        later may still be recorded as not ignored on Linux; that does not arise here). Each
+        file is asked for with `db/file`, since `db/browse` fails when a file is included while
+        its parent directory is ignored. The include of the common file is left out: that file
+        is not in the folder, and the junk names it ignores are not among the files.
+        """
+        folder = self.base / f"matcher-{label}"
+        for name in files:
+            self.write(folder / name, "x")
+        (folder / ".stfolder").mkdir()
+        fid = f"wz-matcher-{label}"
+        client.add_folder(
+            {
+                "id": fid,
+                "label": fid,
+                "path": str(folder),
+                "type": "sendreceive",
+                "paused": True,
+                "fsWatcherEnabled": False,
+                "devices": [{"deviceID": client.my_id()}],
+            }
+        )
+        client.set_ignores(fid, ignores)
+        client.patch_folder(fid, {"paused": False})
+        wait_for(lambda: client.scan(fid), f"{fid} to be scanned", 60)
+        return {name for name in files if in_index(client.db_file(fid, name))}
 
     def empty_hub_scenario(self) -> None:
         """A hub with nothing in its library folder: provision it, add the whitelists and a
@@ -638,22 +665,25 @@ MATCHER_WHITELISTS = [
 """,
 ]
 
+# Names that need escaping in a whitelist line: braces, brackets, `*` and `?`, and a backslash
+# (a path separator on Windows, so that file is created only where `/` is the separator).
+ESCAPED_FILES = [
+    "roms/psx/Odd {Name} [1] *star* ?q.chd",
+    "roms/gba/Hole {1} [x] *y* ?z.gba",
+    "roms/psx/Odd2 [2] {b}.chd",
+    "roms/gba/Kept {1} (USA).gba",
+    "roms/psx/Other (USA).chd",
+]
+ESCAPED_BACKSLASH_FILE = "roms/psx/back\\slash [3].chd"
 
-def indexed_files(client: Client, folder_id: str) -> set[str]:
-    """The files Syncthing keeps in the folder's index (those the ignores let through)."""
-    found: set[str] = set()
 
-    def visit(entries: list[dict[str, object]], prefix: str) -> None:
-        for entry in entries:
-            name = prefix + str(entry["name"])
-            children = entry.get("children")
-            if isinstance(children, list):
-                visit(children, name + "/")
-            else:
-                found.add(name)
-
-    visit(client.get("/rest/db/browse", folder=folder_id) or [], "")
-    return found
+def in_index(info: dict[str, object] | None) -> bool:
+    """Whether a `db/file` answer is a live record of this device that the ignores let through
+    (no record, an ignored, invalid or deleted one all mean the file is left out)."""
+    local = (info or {}).get("local")
+    if not isinstance(local, dict) or not local:
+        return False
+    return not (local.get("ignored") or local.get("invalid") or local.get("deleted"))
 
 
 def library_file(library: Path, which: str) -> Path:

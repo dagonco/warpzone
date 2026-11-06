@@ -117,6 +117,10 @@ def check_path(path: str) -> str | None:
     """Why `path` cannot be written as a whitelist line, or None when it can."""
     if not path:
         return "the path is empty"
+    try:
+        path.encode("utf-8")
+    except UnicodeEncodeError:
+        return "the name is not valid UTF-8 (a lone surrogate)"
     for part in path.split("/"):
         if not part:
             return "the path has an empty component (a leading, trailing or doubled slash)"
@@ -425,9 +429,11 @@ def set_game(model: Model, parts: Sequence[str], on: bool) -> Model:
 
 
 def set_system(model: Model, system: str, on: bool) -> Model:
-    """Turn a system on (what is below its roots falls away) or off (and all that is below goes)."""
-    if on:
-        return normalize(Model(model.systems | {system}, model.includes, model.excludes))
+    """Turn a system on or off; what is below its roots (includes and holes) falls away.
+
+    On: every game of the system is on, including games added later. Off: the roots go and so
+    does everything below them.
+    """
     roots = system_roots(system)
 
     def below(path: str) -> bool:
@@ -435,7 +441,7 @@ def set_system(model: Model, system: str, on: bool) -> Model:
 
     return normalize(
         Model(
-            model.systems - {system},
+            model.systems | {system} if on else model.systems - {system},
             frozenset(i for i in model.includes if not below(i)),
             frozenset(e for e in model.excludes if not below(e)),
         )

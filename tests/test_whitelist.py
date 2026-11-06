@@ -117,6 +117,7 @@ class PathTests(unittest.TestCase):
             "/roms/a",
             "roms/../a",
             "roms/./a",
+            "roms/bad\udcff.chd",  # a non-UTF-8 name read with surrogateescape
         ):
             self.assertTrue(wl.unlistable(bad), repr(bad))
         self.assertFalse(wl.unlistable("roms/psx/Some Game (Europe).chd"))
@@ -320,6 +321,22 @@ class ChangeTests(unittest.TestCase):
         self.assertEqual(got.model, Model(frozenset({"psx"}), frozenset({PS4_GAME})))
         self.assertEqual(got.effect.turned_on, ("a",))  # "b" was already on
 
+    def test_system_on_removes_the_holes_below_its_roots(self) -> None:
+        hole = game("p", "psx", "roms/psx/a.chd")
+        other = game("q", "psx", "roms/psx/b.chd")
+        model = Model(frozenset({"psx"}), excludes=frozenset({"roms/psx/a.chd"}))
+        got = wl.apply(model, SystemChange("psx", True), [hole, other])
+        self.assertEqual(got.model, Model(frozenset({"psx"})))
+        self.assertEqual(got.effect.turned_on, ("p",))
+        sub_hole = game("r", "psx", "roms/psx/sub/a.chd")
+        sub_other = game("s", "psx", "roms/psx/sub/b.chd")
+        model = Model(
+            includes=frozenset({"roms/psx/sub"}), excludes=frozenset({"roms/psx/sub/a.chd"})
+        )
+        got = wl.apply(model, SystemChange("psx", True), [sub_hole, sub_other])
+        self.assertEqual(got.model, Model(frozenset({"psx"})))
+        self.assertEqual(got.effect.turned_on, ("r",))
+
     def test_system_off_drops_the_roots_and_everything_below(self) -> None:
         got = self.applied(MANAGED_MODEL, SystemChange("psx", False))
         self.assertEqual(
@@ -382,6 +399,36 @@ class ChangeTests(unittest.TestCase):
                                 wl.game_state(got.model, other.parts),
                             )
                     self.assertEqual(wl.game_state(got.model, item.parts), "on" if on else "off")
+            for system in ("psx", "ps4", "gba", "wii", "switch"):
+                members = [g for g in CATALOG if g.system == system]
+                for on in (True, False):
+                    # None of these models has an exclusion above a root: never refused.
+                    got = self.applied(model, SystemChange(system, on))
+                    for other in CATALOG:
+                        state = wl.game_state(got.model, other.parts)
+                        if other.system == system:
+                            self.assertEqual(state, "on" if on else "off", other.id)
+                        else:
+                            self.assertEqual(state, wl.game_state(model, other.parts), other.id)
+                    self.assertEqual(system in got.model.systems, on)
+                    self.assertTrue(members)
+
+    def test_system_changes_from_a_model_with_holes_never_refuse(self) -> None:
+        # Holes and includes below the roots must not stop a system from turning on or off.
+        models = [
+            Model(frozenset({"psx"}), excludes=frozenset({PSX_GAME})),
+            Model(
+                frozenset({"psx", "switch"}), excludes=frozenset({"roms/switch/Example Base.nsp"})
+            ),
+            Model(
+                includes=frozenset({"roms/gba"}),
+                excludes=frozenset({"roms/gba/Example Advance (USA).gba"}),
+            ),
+        ]
+        for model in models:
+            for system in ("psx", "gba", "switch"):
+                for on in (True, False):
+                    self.applied(model, SystemChange(system, on))
 
     def test_states(self) -> None:
         self.assertEqual(wl.game_state(MANAGED_MODEL, CATALOG[3].parts), "on")
