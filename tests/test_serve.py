@@ -1022,7 +1022,10 @@ class TokenTests(unittest.TestCase):
             path.write_text("from-file-0123456789\nsecond line\n")
             settings = ServeSettings(token_file=str(path))
             self.assertEqual(
-                serve.load_token({"WARPZONE_UI_TOKEN": " from-env-0123456789 "}, settings),
+                serve.load_token(
+                    {"WARPZONE_UI_TOKEN": " from-env-0123456789 "},  # gitleaks:allow
+                    settings,
+                ),
                 "from-env-0123456789",
             )
             self.assertEqual(serve.load_token({}, settings), "from-file-0123456789")
@@ -1041,7 +1044,7 @@ class TokenTests(unittest.TestCase):
             path = Path(tmp) / "ui.token"
             path.write_text("0123456789abcde\n")  # 15 characters
             for env, settings in (
-                ({"WARPZONE_UI_TOKEN": "0123456789abcde"}, ServeSettings()),
+                ({"WARPZONE_UI_TOKEN": "0123456789abcde"}, ServeSettings()),  # gitleaks:allow
                 ({}, ServeSettings(token_file=str(path))),
                 ({"WARPZONE_UI_TOKEN": "x"}, ServeSettings()),
             ):

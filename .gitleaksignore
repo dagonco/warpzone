@@ -1,2 +1,5 @@
 # Fake API key in the test fixtures (tests/support.py), flagged by generic-api-key.
 76c1f3e9ecbbc5d989974df6e481a100a9c05573:tests/support.py:generic-api-key:17
+# Fake library UI tokens in the serve tests, flagged by generic-api-key.
+69bf80a5e0118adbdcb5d48c5eee0af1b1a9f540:tests/test_serve.py:generic-api-key:1025
+69bf80a5e0118adbdcb5d48c5eee0af1b1a9f540:tests/test_serve.py:generic-api-key:1044
