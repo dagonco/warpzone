@@ -1,9 +1,10 @@
 import json
 import os
 import tempfile
+import time
 import unittest
 import zipfile
-from datetime import date
+from datetime import UTC, date, datetime
 from pathlib import Path
 from unittest import mock
 
@@ -851,6 +852,103 @@ class FileSystemTests(Base):
         self.drop("a.nes", NES_ROM)
         self.assertEqual(self.go(tools=Tools()), 0)
         self.assertEqual(self.library(), ["nes/Adventure (USA).zip"])
+
+
+class CatalogHookTests(Base):
+    """`--apply` updates the catalog index of the systems it placed games in."""
+
+    # The inbox clock also tells how old an item is, so it must run ahead of the real time.
+    NOW = time.time() + 30 * 86400
+    ADDED = datetime.fromtimestamp(NOW, UTC).date().isoformat()
+
+    def catalog_file(self, system: str) -> dict:
+        return json.loads((self.hub / "catalog" / "systems" / f"{system}.json").read_text())
+
+    def test_a_placed_game_is_in_the_index_with_its_dat_name_and_date(self) -> None:
+        (self.roms / "nes" / "Old.zip").write_bytes(b"older game")
+        self.drop("a.nes", NES_ROM)
+        self.assertEqual(self.go(tools=Tools(), now=lambda: self.NOW), 0)
+        games = {g["primary"]: g for g in self.catalog_file("nes")["games"].values()}
+        self.assertEqual(sorted(games), ["roms/nes/Adventure (USA).zip", "roms/nes/Old.zip"])
+        adventure = games["roms/nes/Adventure (USA).zip"]
+        self.assertEqual((adventure["dat"], adventure["added"]), ("Adventure (USA)", self.ADDED))
+        self.assertEqual(adventure["title"], "Adventure (USA)")
+        self.assertEqual(
+            adventure["parts"][0]["sha1"],
+            inbox_core.file_sha1(self.roms / "nes" / "Adventure (USA).zip"),
+        )
+        self.assertEqual(games["roms/nes/Old.zip"]["dat"], None)
+        self.assertFalse((self.hub / "catalog" / "systems" / "psx.json").exists())
+
+    def test_the_ra_hash_of_a_placed_file_is_in_the_index(self) -> None:
+        self.drop("a.nes", NES_ROM)
+        self.assertEqual(self.go(tools=Tools(rahasher=self.rahasher), now=lambda: self.NOW), 0)
+        stored = next(iter(self.catalog_file("nes")["games"].values()))
+        placed = self.roms / "nes" / "Adventure (USA).zip"
+        self.assertEqual(
+            stored["ra"],
+            {
+                "hash": stub_md5(NES_ROM),
+                "of": "roms/nes/Adventure (USA).zip",
+                "size": placed.stat().st_size,
+                "mtime": int(placed.stat().st_mtime),
+            },
+        )
+
+    def test_a_copied_iso_records_the_hash_of_its_source(self) -> None:
+        self.zip_of("psp.zip", {"renamed.iso": ISO})
+        self.assertEqual(self.go(tools=Tools(rahasher=self.rahasher), now=lambda: self.NOW), 0)
+        stored = next(iter(self.catalog_file("psp")["games"].values()))
+        self.assertEqual(stored["ra"]["hash"], stub_md5(ISO))
+        self.assertEqual(stored["ra"]["of"], f"roms/psp/{HUB_ISO_NAME}")
+
+    def test_a_multi_disc_game_records_the_hash_of_its_first_disc(self) -> None:
+        self.drop("ff7", {"d1.bin": FF_D1, "d2.bin": FF_D2})
+        self.assertEqual(self.go(now=lambda: self.NOW), 0)
+        stored = next(iter(self.catalog_file("psx")["games"].values()))
+        disc1 = "roms/psx/Final Fantasy VII (Europe).m3u/Final Fantasy VII (Europe) (Disc 1).chd"
+        self.assertEqual(stored["primary"], "roms/psx/Final Fantasy VII (Europe).m3u")
+        self.assertEqual((stored["ra"]["hash"], stored["ra"]["of"]), (stub_md5(FF_D1), disc1))
+        self.assertEqual(stored["ra"]["size"], (self.hub / "library" / disc1).stat().st_size)
+
+    def test_without_a_rahasher_the_game_has_no_ra_hash(self) -> None:
+        self.drop("a.nes", NES_ROM)
+        self.assertEqual(self.go(tools=Tools(), now=lambda: self.NOW), 0)
+        self.assertIsNone(next(iter(self.catalog_file("nes")["games"].values()))["ra"])
+
+    def test_a_report_changes_nothing_and_a_review_updates_nothing(self) -> None:
+        self.drop("a.nes", NES_ROM)
+        self.go(apply=False, tools=Tools())
+        self.assertFalse((self.hub / "catalog").exists())
+        self.drop("mystery.bin", b"nothing like it")
+        self.go(tools=Tools(), now=lambda: self.NOW)
+        self.assertEqual(
+            sorted(self.catalog_file("nes")["games"].values(), key=str)[0]["primary"],
+            "roms/nes/Adventure (USA).zip",
+        )
+        self.assertFalse((self.hub / "catalog" / "systems" / "psx.json").exists())
+
+    def test_a_failed_update_is_a_warning_and_the_item_is_still_done(self) -> None:
+        self.drop("a.nes", NES_ROM)
+        rep = Reporter(self.lines.append)
+        with mock.patch(
+            "warpzone.catalog_store.update_after_inbox", side_effect=RuntimeError("boom")
+        ):
+            code = run_inbox(self.options(tools=Tools()), rep)
+        self.assertEqual(code, 0)
+        self.assertEqual(self.done(), ["a.nes"])
+        self.assertEqual(len(rep.warnings), 1)
+        self.assertIn("catalog: not updated", rep.warnings[0])
+        self.assertIn("warpzone catalog", rep.warnings[0])
+
+    def test_a_conflict_on_the_index_is_a_warning_not_a_review(self) -> None:
+        self.drop("a.nes", NES_ROM)
+        rep = Reporter(self.lines.append)
+        with mock.patch("warpzone.safefile.atomic_write", return_value=False):
+            code = run_inbox(self.options(tools=Tools()), rep)
+        self.assertEqual(code, 0)
+        self.assertEqual(self.review(), [])
+        self.assertTrue(any("nes: conflict" in w for w in rep.warnings))
 
 
 class CliTests(Base):

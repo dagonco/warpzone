@@ -114,6 +114,9 @@ warpzone/
   doctor.py          machine checklist (`warpzone doctor`): checks, install hints, renderer
   health.py          `warpzone health`: the dry runs and file checks that say a version works (decisions pure)
   ra.py              RetroAchievements: RAHasher wrapper, game list lookup and parsing (ids, points)
+  catalog.py         catalog index: derivation of games and parts, system roots, title keys,
+                     search, RA badge state, JSON encoding and merge (pure)
+  catalog_store.py   `warpzone catalog`: the walk, hashing, RAHasher and RA list runs, guarded writes
   localst.py         find and parse the local Syncthing config.xml
   data/updater.sh    the updater (POSIX sh): choose a release, verify it, roll it back
   data/bios.toml     BIOS manifest (names, sizes, hashes, signatures only)
@@ -140,9 +143,6 @@ package, so it cannot list files that do not exist yet):
 
 ```
 warpzone/
-  catalog.py         catalog index: derivation of games and parts, system roots, title keys,
-                     search, RA badge state, JSON encoding and merge (pure)
-  catalog_store.py   `warpzone catalog`: the walk, hashing, RAHasher and RA list runs, guarded writes
   library_api.py     the API's routes as pure functions: validation, `plan_changes`, responses
   progress.py        per-device progress states from the hub's completion (pure)
   serve.py           `warpzone serve`: http.server, sessions, the write lock, caches, background runs

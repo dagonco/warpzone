@@ -25,7 +25,7 @@ import zipfile
 import zlib
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import date
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 from warpzone import dat as datmod
@@ -445,16 +445,17 @@ def _verify_placed(prepared: Prepared, match: GameMatch, part: Path) -> None:
 
 def _ra_lines(
     ctx: Context, system: str, prepared: Prepared, label: str, produced: Path | None
-) -> tuple[list[str], str]:
-    """RA status lines for one disc, and a failure reason if the conversion changed the hash."""
+) -> tuple[list[str], str, str | None]:
+    """RA status lines for one disc, a failure reason if the conversion changed the hash, and
+    the RA hash of what is placed (None when there is none to record)."""
     tools = ctx.tools
     if not tools.rahasher or system not in ra.CONSOLE_IDS or prepared.kind == "rvz":
-        return [], ""
+        return [], "", None
     if prepared.ra_input is None:
-        return [], ""
+        return [], "", None
     before = ra.hash_image(tools.rahasher, system, prepared.ra_input)
     if before is None:
-        return [f"RA{label}: source hash unavailable"], ""
+        return [f"RA{label}: source hash unavailable"], "", None
     if ctx.lookup.enabled:
         text = ctx.lookup.status(system, before)
     else:
@@ -463,20 +464,29 @@ def _ra_lines(
     if produced is not None and prepared.kind in ("cd", "dvd", "zip"):
         after = ra.hash_image(tools.rahasher, system, produced)
         if after is None:
-            return lines, f"RA hash of {produced.name} could not be computed after the conversion"
+            return (
+                lines,
+                f"RA hash of {produced.name} could not be computed after the conversion",
+                None,
+            )
         if after != before:
             return (
                 lines,
                 f"RA hash changed by the conversion of {produced.name}: {before} -> {after}",
+                None,
             )
         lines[0] += " [hash kept]"
-    return lines, ""
+        return lines, "", after
+    # An "iso" is the source itself, copied and verified: its hash is the placed file's.
+    return lines, "", before if prepared.kind == "iso" else None
 
 
 def process_unit(
     ctx: Context, unit: Unit, staged: Mapping[str, Staged], scratch: Path
 ) -> UnitResult:
     res = UnitResult(unit.system, unit.entry, "planned" if not ctx.opts.apply else "placed")
+    if len(unit.matches) == 1 and not unit.entry.endswith(".m3u"):
+        res.dat = unit.matches[0].game.name
     sysdir = ctx.roms / unit.system
     dest = sysdir / unit.entry
     try:
@@ -499,9 +509,12 @@ def process_unit(
             if ctx.opts.apply:
                 out = _produce(ctx, p, m, out_dir)
                 produced.append(out)
-            lines, bad = _ra_lines(ctx, unit.system, p, label, out)
+            lines, bad, ra_hash = _ra_lines(ctx, unit.system, p, label, out)
             res.ra.extend(lines)
             failure = failure or bad
+            if i == 0 and ra_hash and not bad:  # the catalog keeps the hash of the first disc
+                res.ra_hash = ra_hash
+                res.ra_of = f"{unit.entry}/{p.out_name}" if unit.is_m3u else unit.entry
         if failure:
             raise ItemFailure(failure)
         if not ctx.opts.apply:
@@ -810,7 +823,38 @@ def _run(opts: Options, rep: Reporter, inbox: Path, library: DatLibrary) -> int:
             )
     if purged:
         rep.out(f"{DONE_DIR}: deleted {len(purged)} folder(s) older than {DONE_KEEP_DAYS} days")
+    if opts.apply:
+        _update_catalog(opts, rep, results)
     return _summary(rep, results, opts.apply)
+
+
+def _update_catalog(opts: Options, rep: Reporter, results: Sequence[ItemResult]) -> None:
+    """Bring the catalog index up to date for the systems this run placed something in.
+    A failure is a warning, never a review: the next `warpzone catalog` picks the game up."""
+    from warpzone import catalog_store
+
+    placed = [u for r in results for u in r.units if u.outcome == "placed"]
+    systems = {u.catalog_system for u in placed}
+    if not systems:
+        return
+    dat = {f"{u.library_folder}/{u.entry}": u.dat for u in placed if u.dat}
+    ra_known = {
+        f"{u.library_folder}/{u.entry}": (u.ra_hash, f"{u.library_folder}/{u.ra_of}")
+        for u in placed
+        if u.ra_hash
+    }
+    try:
+        catalog_store.update_after_inbox(
+            opts.root,
+            systems,
+            dat=dat,
+            ra_known=ra_known,
+            out=rep.out,
+            warn=rep.warn,
+            now=datetime.fromtimestamp(opts.now(), UTC),
+        )
+    except Exception as exc:  # the files are filed; the index can be rebuilt
+        rep.warn(f"catalog: not updated ({type(exc).__name__}: {exc}); run `warpzone catalog`")
 
 
 def _file_away(inbox: Path, item: Path, result: ItemResult, today: date) -> None:
