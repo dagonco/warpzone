@@ -19,7 +19,7 @@ Every table rejects unknown keys, so a typo is an error and not a silently ignor
 
 Copy [`examples/config.example.toml`](https://github.com/dagonco/warpzone/blob/main/examples/config.example.toml) to the path above and fill it in. It holds the hub's API key and device IDs, so keep it out of any repository. The file is found in this order: the `--config PATH` option, the `WARPZONE_CONFIG` environment variable, then `$XDG_CONFIG_HOME/warpzone/config.toml`, then `~/.config/warpzone/config.toml`. A missing file is an error, except that `warpzone inbox` treats a missing file as "all defaults" for its `[inbox]` table.
 
-Top-level tables: `[hub]` (required), `[devices.<name>]` (at least one) and `[inbox]` (optional). Anything else is an unknown key.
+Top-level tables: `[hub]` (required), `[devices.<name>]` (at least one), `[inbox]` (optional) and `[serve]` (optional). Anything else is an unknown key.
 
 ### `[hub]`
 
@@ -95,6 +95,17 @@ Optional. Only `warpzone inbox` and `warpzone doctor` read it. `inbox` works wit
 | `gamelist_ps3` | `<root>/frontend/es-de/gamelists/ps3/gamelist.xml` | The ES-DE gamelist that records the alternative emulator for PS3 games. |
 
 The environment variable `RA_API_KEY`, when set, is used for RetroAchievements lookups; it is not a config key. See [Adding games](/warpzone/setup/inbox/) for how each tool is used.
+
+### `[serve]`
+
+Optional. Only `warpzone serve` reads it (together with `[hub]`, `[devices.*]` and `[inbox] rahasher`).
+
+| Key | Default | Meaning |
+|---|---|---|
+| `listen` | `"0.0.0.0:8780"` | `HOST:PORT` to listen on (`[::1]:8780` for IPv6). `--listen` overrides it. |
+| `token_file` | none | A file whose first line is the UI token. The environment variable `WARPZONE_UI_TOKEN` takes precedence. |
+
+`serve` refuses to start (exit `2`) without a token. The token is never printed or logged. See [`warpzone serve`](/warpzone/reference/commands/#warpzone-serve).
 
 ### A complete example
 
