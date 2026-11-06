@@ -135,7 +135,10 @@ which are small) and returns the games. The rules, by system:
   each entry in it follows the same rule. In a folder, a `.cue`, `.gdi` or `.m3u` file claims the
   files it names as parts of its game (`inbox.resolve_refs`); every other file is a game.
 - **`ps4`.** Each folder `roms/ps4/games/<CUSA>/` is a game. Its parts are the folder and every
-  `roms/ps4/shortcuts/*.desktop` whose `Exec=` path ends in `/games/<CUSA>/eboot.bin`. The title
+  `roms/ps4/shortcuts/*.desktop` whose `Exec=` path ends in `/games/<CUSA>/eboot.bin`. The
+  folders `roms/ps4/games/<CUSA>-UPDATE/` (its update) and `roms/ps4/dlc/<CUSA>/` (its DLC)
+  are parts of game `<CUSA>` too, not games; a `<CUSA>-UPDATE` folder whose base game is not
+  in the library stays a game of its own. The title
   is the shortcut's name; without one it is the `CUSA` id. A `.pkg` left in `roms/ps4/` (filed
   without `orbis-pkg-util`) is a game of one part. `gamelist` is the shortcut.
 - **`psvita`.** Each folder `roms/psvita/app/<TITLEID>/` is a game. Its parts are the folder,

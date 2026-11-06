@@ -151,6 +151,8 @@ shadPS4 has no package installer: it runs extracted game folders, and ES-DE list
 |---|---|
 | The extracted game (`eboot.bin`, `sce_sys/param.sfo`, data) | `library/roms/ps4/games/<CUSAnnnnn>/` |
 | The shortcut ES-DE lists | `library/roms/ps4/shortcuts/<Title>.desktop` |
+| An update (patch) of that game | `library/roms/ps4/games/<CUSAnnnnn>-UPDATE/` |
+| A DLC of that game | `library/roms/ps4/dlc/<CUSAnnnnn>/<entitlement label>/` |
 
 ```
   ps4: CUSA30992: placed
@@ -173,9 +175,58 @@ Exec=shadps4 "/home/deck/Emulation/roms/ps4/games/<CUSAnnnnn>/eboot.bin"
 EmuDeck's `shadps4.sh` reads the quoted path of the `Exec=` line and runs shadPS4's Qt launcher with it, which boots the version you selected there. The path is written out because nothing expands `~` in it; it assumes the SteamOS home `/home/deck`. The consoles must also have `~/Emulation/roms/ps4/games` in shadPS4's install directories: `provision device` adds it for profiles that declare it ([the EmuDeck guide](/warpzone/guides/emudeck/#shadps4-install-directory)).
 
 - A game already in the library is reported and never replaced or compared; its shortcut is created if it is missing.
-- An update (patch) or DLC package goes to review: they are not merged into the game yet. The header shows it before anything is unpacked, and the `CATEGORY` of `param.sfo` is checked again afterwards.
+- The header shows whether a package is a game, an update or a DLC before anything is unpacked, and the `CATEGORY` of `param.sfo` is checked again afterwards.
+- An update and a DLC need the base game in the library: without it they go to review ("install the game first"). For a DLC, see [PS4 DLC](#ps4-dlc) for how the game is chosen.
 - A shortcut with that name that runs another game is kept, and the new one gets the title id in its name.
 - Without `orbis-pkg-util` the `.pkg` is placed as it is in `library/roms/ps4/` with a note saying so; shadPS4 cannot run it from there.
+
+### PS4 updates
+
+shadPS4 overlays a folder named like the game with `-UPDATE` added over the game, file by file, so the extracted patch goes to `library/roms/ps4/games/<CUSAnnnnn>-UPDATE/` and needs no shortcut of its own:
+
+```
+  ps4: CUSA03173-UPDATE: placed
+    path: library/roms/ps4/games/CUSA03173-UPDATE
+    note: detected: PS4 package: CUSA03173
+    whitelist: !/roms/ps4/games/CUSA03173-UPDATE
+```
+
+If the library already has that update, inbox compares the `APP_VER` of both (numerically: `01.09` is newer than `01.08`, older than `01.10`):
+
+| The package is | Result |
+|---|---|
+| the same version | "already in the library"; nothing is touched |
+| older | review: "older than the update in the library, v01.10" |
+| newer | the library update is replaced; the report says which versions (`replaced the update v01.05 with v01.09`) |
+
+Replacing is the one case where inbox changes a file that is already in the library, and it is safe to do: the package of the old update was filed in `inbox/_done` when it was placed. The new folder is copied and read back beside the old one, checked once more, and swapped in with renames, so the library always holds a complete update, the old or the new. A report without `--apply` cannot know the version of the package before unpacking it, so it prints the version in the library and says it would unpack and compare.
+
+### PS4 DLC
+
+shadPS4 looks for DLC in its `addon_install_dir`, in `<that folder>/<title id of the game>/<entry>/`. The entry is named after the last part of the content id (`UP9000-CUSA00900_00-SPEXPANSIONDLC03` gives `SPEXPANSIONDLC03`), so a DLC goes to `library/roms/ps4/dlc/<CUSAnnnnn>/<entitlement label>/`:
+
+```
+  ps4: CUSA00900/SPEXPANSIONDLC03: placed
+    path: library/roms/ps4/dlc/CUSA00900/SPEXPANSIONDLC03
+    note: detected: PS4 package: CUSA00900
+    whitelist: !/roms/ps4/dlc/CUSA00900
+```
+
+The whitelist line is the title folder, so one line serves every DLC of that game.
+
+Which game a DLC belongs to is decided by the inbox item. Normally it is the title id inside the package (`CUSA00900` above). When the title id of the DLC is not the one of the game you have, put the package in an inbox folder named after your game, for example `inbox/CUSA03173/dlc.pkg`: the DLC is then filed for that game, whatever title id it carries.
+
+```
+  ps4: CUSA03173/SPEXPANSIONDLC03: placed
+    path: library/roms/ps4/dlc/CUSA03173/SPEXPANSIONDLC03
+    note: detected: PS4 package: CUSA00900
+    note: filed for CUSA03173: the inbox folder is named after that game
+    whitelist: !/roms/ps4/dlc/CUSA03173
+```
+
+Either way the game folder `library/roms/ps4/games/<CUSAnnnnn>/` must already exist, or the DLC goes to review naming the missing title id. Only a folder whose whole name is a title id counts; an archive, or a folder with any other name, files the DLC for the title id it carries. A DLC that is already in the library is reported as "already in the library" and is not compared. A DLC with no data of its own (what some stores sell as an "additional license") makes `orbis-pkg-util` write the license files and then stop with an error about the PFS; inbox accepts that only when the package header says the PFS is empty and `param.sfo` was written, and anything else goes to review as an extraction failure.
+
+The consoles need `~/Emulation/roms/ps4/dlc` as shadPS4's `addon_install_dir`; `provision device` sets it for profiles that declare it ([the EmuDeck guide](/warpzone/guides/emudeck/#shadps4-install-directory)).
 
 ## PS Vita games
 

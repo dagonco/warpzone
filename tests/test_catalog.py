@@ -322,6 +322,37 @@ class Ps4Tests(unittest.TestCase):
         self.assertEqual(paths(second), ["roms/ps4/games/CUSA00002"])
         self.assertEqual(len(games), 2)
 
+    def test_the_update_and_the_dlc_folders_are_parts_of_the_game(self) -> None:
+        games = catalog.derive(
+            "ps4",
+            listing(
+                {
+                    "roms/ps4/games/CUSA00001/eboot.bin": 100,
+                    "roms/ps4/games/CUSA00001-UPDATE/eboot.bin": 20,
+                    "roms/ps4/dlc/CUSA00001/DLCONE/sce_sys/param.sfo": 5,
+                    "roms/ps4/dlc/CUSA00001/DLCTWO/sce_sys/param.sfo": 5,
+                    "roms/ps4/dlc/CUSA00009/DLCONE/sce_sys/param.sfo": 5,
+                    "roms/ps4/shortcuts/Example Game.desktop": DESKTOP.format("CUSA00001"),
+                    "roms/ps4/games/CUSA00002-UPDATE/eboot.bin": 7,
+                }
+            ),
+        )
+        by = by_primary(games)
+        self.assertEqual(
+            sorted(by), ["roms/ps4/games/CUSA00001", "roms/ps4/games/CUSA00002-UPDATE"]
+        )
+        self.assertEqual(
+            paths(by["roms/ps4/games/CUSA00001"]),
+            [
+                "roms/ps4/games/CUSA00001",
+                "roms/ps4/games/CUSA00001-UPDATE",
+                "roms/ps4/dlc/CUSA00001",
+                "roms/ps4/shortcuts/Example Game.desktop",
+            ],
+        )
+        parts = by["roms/ps4/games/CUSA00001"].parts
+        self.assertEqual([p.size for p in parts[:3]], [100, 20, 10])
+
     def test_a_pkg_left_in_the_folder_is_a_game(self) -> None:
         games = catalog.derive("ps4", listing({"roms/ps4/Pkg Game.pkg": 100}))
         self.assertEqual([g.primary for g in games], ["roms/ps4/Pkg Game.pkg"])

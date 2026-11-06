@@ -301,6 +301,7 @@ def _default_games(tree: _Tree, system: str, listing: Listing, roots: Sequence[s
     return games
 
 
+PS4_UPDATE_SUFFIX = "-UPDATE"  # `games/<CUSA>-UPDATE/`, see inbox_ps4
 _EXEC_GAME = re.compile(r'/games/([^/"\']+)/eboot\.bin["\']?\s*$')
 
 
@@ -316,12 +317,22 @@ def _ps4_games(tree: _Tree, system: str, listing: Listing) -> list[Game]:
                     shortcuts.setdefault(m.group(1), []).append(node.path)
                 break
     games = []
-    for node in tree.kids("roms/ps4/games", DIR):
+    folders = tree.kids("roms/ps4/games", DIR)
+    names = {posixpath.basename(n.path) for n in folders}
+    for node in folders:
         cusa = posixpath.basename(node.path)
+        if cusa.endswith(PS4_UPDATE_SUFFIX) and cusa[: -len(PS4_UPDATE_SUFFIX)] in names:
+            continue  # the update of a game in the library: a part of that game
         linked = shortcuts.get(cusa, [])
+        parts = [node.path]
+        if cusa + PS4_UPDATE_SUFFIX in names:
+            parts.append(f"{node.path}{PS4_UPDATE_SUFFIX}")
+        dlc = f"roms/ps4/dlc/{cusa}"
+        if dlc in tree.nodes and tree.nodes[dlc].kind == DIR:
+            parts.append(dlc)
         title = _stem(posixpath.basename(linked[0])) if linked else cusa
         gamelist = _gamelist_path(system, linked[0] if linked else node.path)
-        games.append(_build(tree, title, node.path, [node.path, *linked], gamelist))
+        games.append(_build(tree, title, node.path, [*parts, *linked], gamelist))
     for node in tree.kids("roms/ps4", FILE):  # a .pkg filed without orbis-pkg-util
         if _suffix(node.path) == ".pkg":
             title = _stem(posixpath.basename(node.path))
