@@ -8,6 +8,7 @@ environment by the caller and is never printed, logged or put in an error.
 
 from __future__ import annotations
 
+import http.client
 import json
 import re
 import subprocess
@@ -96,6 +97,8 @@ def cue_to_gdi(cue: str, sector_counts: list[int]) -> str:
 class RaGame:
     title: str
     achievements: int
+    id: int = 0  # RA's game id, which the game page of the site is named by
+    points: int = 0
 
 
 def parse_game_list(data: bytes) -> dict[str, RaGame]:
@@ -107,7 +110,12 @@ def parse_game_list(data: bytes) -> dict[str, RaGame]:
     for game in games:
         if not isinstance(game, dict):
             continue
-        entry = RaGame(str(game.get("Title", "?")), int(game.get("NumAchievements") or 0))
+        entry = RaGame(
+            str(game.get("Title", "?")),
+            int(game.get("NumAchievements") or 0),
+            int(game.get("ID") or 0),
+            int(game.get("Points") or 0),
+        )
         for h in game.get("Hashes") or []:
             if isinstance(h, str):
                 out.setdefault(h.lower(), entry)
@@ -118,6 +126,28 @@ def http_fetch(url: str) -> bytes:
     request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     with urllib.request.urlopen(request, timeout=120) as response:
         return response.read()
+
+
+class FetchError(Exception):
+    """A list download that failed. The text says the kind of failure only: the URL
+    carries the key, so nothing of the original error is kept."""
+
+
+def fetch_game_list(console: int, key: str, fetch: Fetch = http_fetch) -> dict[str, RaGame]:
+    """The game list of one console (hash -> game). Raises `FetchError`, never with the key."""
+    url = f"{API_URL}?i={console}&h=1&y={key}"
+    try:
+        return parse_game_list(fetch(url))
+    except urllib.error.HTTPError as exc:
+        raise FetchError(f"HTTP {exc.code}") from None
+    except (
+        urllib.error.URLError,
+        http.client.HTTPException,
+        OSError,
+        ValueError,
+        TypeError,
+    ) as exc:
+        raise FetchError(type(exc).__name__) from None
 
 
 class Lookup:
@@ -134,14 +164,11 @@ class Lookup:
 
     def _list(self, console: int) -> dict[str, RaGame] | str:
         if console not in self._lists:
-            url = f"{API_URL}?i={console}&h=1&y={self._key}"
+            assert self._key
             try:
-                self._lists[console] = parse_game_list(self._fetch(url))
-            except urllib.error.HTTPError as exc:
-                self._lists[console] = f"HTTP {exc.code}"
-            except (urllib.error.URLError, OSError, ValueError, TypeError) as exc:
-                # The URL carries the key, so only the kind of failure is kept.
-                self._lists[console] = type(exc).__name__
+                self._lists[console] = fetch_game_list(console, self._key, self._fetch)
+            except FetchError as exc:
+                self._lists[console] = str(exc)
         return self._lists[console]
 
     def status(self, system: str, ra_hash: str) -> str:

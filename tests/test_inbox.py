@@ -880,6 +880,42 @@ class CatalogHookTests(Base):
         self.assertEqual(games["roms/nes/Old.zip"]["dat"], None)
         self.assertFalse((self.hub / "catalog" / "systems" / "psx.json").exists())
 
+    def test_the_ra_hash_of_a_placed_file_is_in_the_index(self) -> None:
+        self.drop("a.nes", NES_ROM)
+        self.assertEqual(self.go(tools=Tools(rahasher=self.rahasher), now=lambda: self.NOW), 0)
+        stored = next(iter(self.catalog_file("nes")["games"].values()))
+        placed = self.roms / "nes" / "Adventure (USA).zip"
+        self.assertEqual(
+            stored["ra"],
+            {
+                "hash": stub_md5(NES_ROM),
+                "of": "roms/nes/Adventure (USA).zip",
+                "size": placed.stat().st_size,
+                "mtime": int(placed.stat().st_mtime),
+            },
+        )
+
+    def test_a_copied_iso_records_the_hash_of_its_source(self) -> None:
+        self.zip_of("psp.zip", {"renamed.iso": ISO})
+        self.assertEqual(self.go(tools=Tools(rahasher=self.rahasher), now=lambda: self.NOW), 0)
+        stored = next(iter(self.catalog_file("psp")["games"].values()))
+        self.assertEqual(stored["ra"]["hash"], stub_md5(ISO))
+        self.assertEqual(stored["ra"]["of"], f"roms/psp/{HUB_ISO_NAME}")
+
+    def test_a_multi_disc_game_records_the_hash_of_its_first_disc(self) -> None:
+        self.drop("ff7", {"d1.bin": FF_D1, "d2.bin": FF_D2})
+        self.assertEqual(self.go(now=lambda: self.NOW), 0)
+        stored = next(iter(self.catalog_file("psx")["games"].values()))
+        disc1 = "roms/psx/Final Fantasy VII (Europe).m3u/Final Fantasy VII (Europe) (Disc 1).chd"
+        self.assertEqual(stored["primary"], "roms/psx/Final Fantasy VII (Europe).m3u")
+        self.assertEqual((stored["ra"]["hash"], stored["ra"]["of"]), (stub_md5(FF_D1), disc1))
+        self.assertEqual(stored["ra"]["size"], (self.hub / "library" / disc1).stat().st_size)
+
+    def test_without_a_rahasher_the_game_has_no_ra_hash(self) -> None:
+        self.drop("a.nes", NES_ROM)
+        self.assertEqual(self.go(tools=Tools(), now=lambda: self.NOW), 0)
+        self.assertIsNone(next(iter(self.catalog_file("nes")["games"].values()))["ra"])
+
     def test_a_report_changes_nothing_and_a_review_updates_nothing(self) -> None:
         self.drop("a.nes", NES_ROM)
         self.go(apply=False, tools=Tools())
