@@ -20,7 +20,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any
 
-from warpzone import inbox
+from warpzone import inbox, whitelist
 from warpzone.inbox_switch import base_title_id
 
 FORMAT = 1
@@ -28,8 +28,9 @@ ID_LENGTH = 16
 FILE, DIR = "file", "dir"
 UNLISTABLE = "unlistable"
 # Systems whose games live one level down, in `roms/<system>/roms/`.
-INNER_ROMS = frozenset({"xbox360", "wiiu", "model2"})
-SWITCH_EXTRAS = ("extras/switch/updates", "extras/switch/dlc")
+# The whitelist model owns the rule of which paths a whole system is (`whitelist.system_roots`).
+INNER_ROMS = whitelist.SUBROOT_SYSTEMS
+SWITCH_EXTRAS = whitelist.system_roots("switch")[1:]
 # Files whose text derive reads (a launcher, a shortcut, a cue sheet).
 TEXT_SUFFIXES = (".desktop", ".psvita", ".cue", ".gdi", ".m3u")
 SIDECAR_SUFFIXES = (".m3u", ".cue", ".gdi")  # claim order: playlists first
@@ -89,11 +90,7 @@ def game_id(primary: str) -> str:
 
 def system_roots(system: str) -> list[str]:
     """The paths a whole system is whitelisted by, relative to `library/`."""
-    if system == "switch":
-        return ["roms/switch", *SWITCH_EXTRAS]
-    if system in INNER_ROMS:
-        return [f"roms/{system}/roms"]
-    return [f"roms/{system}"]
+    return list(whitelist.system_roots(system))
 
 
 # ------------------------------------------------------------------ title key

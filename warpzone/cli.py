@@ -65,6 +65,13 @@ def _build_parser() -> argparse.ArgumentParser:
         "check", parents=[common], help="validate config, find missing whitelists"
     )
     check.add_argument("--offline", action="store_true", help="validate files only, skip the hub")
+    check.add_argument(
+        "--root",
+        type=Path,
+        help="the hub root as mounted on this machine: also read the device whitelists in its "
+        "library/ for systems the device's exclude_systems names (without it, only the copy in "
+        "this machine's own library folder)",
+    )
 
     prov = sub.add_parser("provision", help="configure Syncthing")
     prov_sub = prov.add_subparsers(dest="target", required=True, metavar="target")
@@ -272,6 +279,31 @@ def _build_parser() -> argparse.ArgumentParser:
         "--root",
         type=Path,
         help="the hub root as mounted on this machine, holding library/ (default: [hub] root)",
+    )
+
+    wlst = sub.add_parser("whitelist", help="the device whitelists on the hub")
+    wl_sub = wlst.add_subparsers(dest="whitelist_command", required=True, metavar="action")
+    wl_migrate = wl_sub.add_parser(
+        "migrate",
+        parents=[common],
+        help="convert hand-written patterns-<device>.stignore files to the library UI's format, "
+        "proving the included paths stay the same (run where the hub root is mounted)",
+    )
+    wl_migrate.add_argument(
+        "devices",
+        nargs="*",
+        metavar="device",
+        help="device names (default: every device with the library folder)",
+    )
+    wl_migrate.add_argument(
+        "--root",
+        type=Path,
+        help="the hub root as mounted on this machine (default: [hub] root in the config)",
+    )
+    wl_migrate.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="print the new files and the dropped lines, write nothing",
     )
 
     st_dry_run = argparse.ArgumentParser(add_help=False)
@@ -723,6 +755,23 @@ def _health(args: argparse.Namespace, rep: Reporter) -> int:
     return health.run_health(lambda: _load(args), args.name, probes, rep.out)
 
 
+def _whitelist(args: argparse.Namespace, cfg: Config) -> int:
+    from warpzone import whitelist_store
+
+    names = [_device(cfg, n) for n in args.devices] or [
+        n for n, d in sorted(cfg.devices.items()) if "library" in d.folders
+    ]
+    root = args.root or Path(cfg.hub.root)
+    return whitelist_store.migrate(
+        root,
+        names,
+        dry_run=args.dry_run,
+        out=print,
+        warn=lambda text: _eprint(f"warning: {text}"),
+        scan_client=lambda: _hub_client(cfg),
+    )
+
+
 def _run(args: argparse.Namespace) -> int:
     if args.command == "settings":  # the apply path: no network code
         return _settings(args, *_load(args))
@@ -750,11 +799,21 @@ def _run(args: argparse.Namespace) -> int:
         return _catalog(args, rep)
     cfg, profiles = _load(args)
 
+    if args.command == "whitelist":
+        return _whitelist(args, cfg)
+
     if args.command == "check":
+        from warpzone import whitelist_store
+
         rep.out(f"config ok: {len(cfg.devices)} device(s), profiles: {', '.join(profiles)}")
-        if args.offline:
-            return EXIT_OK
-        problems = provision.check_hub(cfg, profiles, _hub_client(cfg), rep)
+        excluded, notes = whitelist_store.excluded_system_report(
+            cfg, profiles, root=args.root, home=Path.home()
+        )
+        for text in [*notes, *excluded]:
+            rep.out(text)
+        problems = len(excluded)
+        if not args.offline:
+            problems += provision.check_hub(cfg, profiles, _hub_client(cfg), rep)
         return EXIT_RUNTIME if problems else EXIT_OK
 
     if args.command == "render-ignores":

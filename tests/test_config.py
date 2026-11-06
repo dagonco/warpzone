@@ -117,6 +117,30 @@ class ConfigTests(unittest.TestCase):
                 "auto_hub: must be true or false",
             )
 
+    def test_exclude_systems_defaults_to_none_and_takes_plain_system_names(self) -> None:
+        self.assertEqual(parse_config(config_data()).devices["deck"].exclude_systems, ())
+        data = copy.deepcopy(config_data())
+        data["devices"]["deck"]["exclude_systems"] = ["ps4", "switch", "pc-98", "n64_dd"]
+        cfg = parse_config(data)
+        self.assertEqual(cfg.devices["deck"].exclude_systems, ("ps4", "switch", "pc-98", "n64_dd"))
+        self.assertEqual(cfg.devices["machine"].exclude_systems, ())
+        data["devices"]["deck"]["exclude_systems"] = []
+        self.assertEqual(parse_config(data).devices["deck"].exclude_systems, ())
+        for bad in ("ps4", 4, [4], ["ps4", None]):
+            self.assert_error(
+                lambda d, bad=bad: d["devices"]["deck"].update(exclude_systems=bad),
+                "exclude_systems: must be a list of system names",
+            )
+        for bad in (["PS4"], ["roms/ps4"], ["ps 4"], [""], ["ps4/"], ["../x"], ["ps4."]):
+            self.assert_error(
+                lambda d, bad=bad: d["devices"]["deck"].update(exclude_systems=bad),
+                "exclude_systems: not a plain system name",
+            )
+        self.assert_error(
+            lambda d: d["devices"]["deck"].update(exclude_systems=["ps4", "wii", "ps4"]),
+            "exclude_systems: listed more than once: 'ps4'",
+        )
+
     def test_channel_defaults_to_stable_and_must_be_known(self) -> None:
         self.assertEqual(parse_config(config_data()).devices["deck"].channel, "stable")
         data = copy.deepcopy(config_data())
