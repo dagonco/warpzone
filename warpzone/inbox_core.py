@@ -28,7 +28,7 @@ from datetime import date
 from pathlib import Path
 from typing import Protocol
 
-from warpzone import ra
+from warpzone import ra, whitelist
 from warpzone.config import InboxSettings
 from warpzone.dat import DatLibrary, FileInfo
 from warpzone.errors import UsageError
@@ -52,7 +52,6 @@ UNSUPPORTED_EXTENSIONS = {
 }
 _DATA_SHA1 = re.compile(r"^\s*Data SHA1:\s*([0-9a-f]{40})\s*$", re.IGNORECASE | re.MULTILINE)
 _SHA1 = re.compile(r"^\s*SHA1:\s*([0-9a-f]{40})\s*$", re.IGNORECASE | re.MULTILINE)
-_WILDCARDS = re.compile(r"([\\*?\[\]{}])")
 
 
 class InboxError(UsageError):
@@ -81,7 +80,7 @@ def unsafe_member(name: str) -> str | None:
 
 def whitelist_line(system: str, entry_name: str) -> str:
     """The Syncthing whitelist line that would deliver `roms/<system>/<entry_name>`."""
-    return "!/roms/" + system + "/" + _WILDCARDS.sub(r"\\\1", entry_name)
+    return "!" + whitelist.escape(f"roms/{system}/{entry_name}")
 
 
 def unsupported_reason(rels: Sequence[str]) -> str | None:

@@ -68,6 +68,10 @@ warpzone/
   provision_updater.py  the autonomous update: settings file, live updater script, its timer
   prune.py           leftover detection (pure `classify`), the unattended guard (pure `guard`), delete, webhook
   bios.py            BIOS manifest, local overrides, pure `judge_*`, disk checks
+  whitelist.py       managed whitelists: escape, parse, render, normalize, changes, matcher,
+                     effect, migration parsing and classification, unsupported systems (pure)
+  whitelist_store.py whitelist files on the hub: read with a stamp, backups, guarded write,
+                     hub scan, `whitelist migrate` and its proof walk
   dat.py             Redump / No-Intro DAT parsing, cache, matching, disc grouping (pure)
   inbox_core.py      what the inbox pipeline and its handlers share: errors, options, results, staging
   inbox_lock.py      the `inbox/.warpzone.lock` file that keeps two `--apply` runs apart
@@ -139,10 +143,6 @@ package, so it cannot list files that do not exist yet):
 
 ```
 warpzone/
-  whitelist.py       managed whitelists: escape, parse, render, normalize, changes, matcher,
-                     effect, migration parsing and classification, unsupported systems (pure)
-  whitelist_store.py whitelist files on the hub: read with a stamp, backups, guarded write,
-                     hub scan, `whitelist migrate` and its proof walk
   library_api.py     the API's routes as pure functions: validation, `plan_changes`, responses
   progress.py        per-device progress states from the hub's completion (pure)
   serve.py           `warpzone serve`: http.server, sessions, the write lock, caches, background runs
