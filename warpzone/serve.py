@@ -911,6 +911,9 @@ class _Handler(BaseHTTPRequestHandler):
     server_version = "warpzone"
     sys_version = ""
     timeout = SOCKET_TIMEOUT  # a connection silent for this long, also mid-body, is dropped
+    # An error for a request line that cannot be parsed still gets a status line: Python 3.11
+    # answers such a line HTTP/0.9 style (a bare body) unless the default version is 1.0.
+    default_request_version = "HTTP/1.0"
 
     def log_message(self, format: str, *args: Any) -> None:
         # Called for errors before a request line was parsed: command and path may not exist.
