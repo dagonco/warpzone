@@ -17,7 +17,7 @@ The pages after this one cover one subject each.
 
 - One source of truth for ROMs, BIOS and extras: the hub. Devices only receive.
 - Each device chooses what it gets with a whitelist that is **edited only on the
-  hub**. No file is ever edited by hand on a device after provisioning.
+  hub**, in the library UI. No file is ever edited by hand on a device after provisioning.
 - Saves sync in both directions between all devices, with history kept on the hub.
 - Emulator settings are changed in each emulator's own interface, on any device, and
   captured to the hub as key-level layers (common and per device) that every device
@@ -31,8 +31,10 @@ The pages after this one cover one subject each.
 - Moving, renaming or converting ROMs that are already in the library. New content goes through `warpzone inbox`, which only ever adds.
 - Shipping or locating any copyrighted content (ROMs, BIOS, keys, firmware).
   The BIOS checker compares what the user has with public names, sizes and hashes.
-- Running on the hub itself. Many NAS ship an old Python; the hub is driven
-  remotely through its Syncthing REST API.
+- Running on the hub's own Python. Many NAS ship an old one, so on the hub warpzone runs in a
+  container with its own Python (the library UI, `catalog`, the whitelist migration; see
+  [The container](/warpzone/development/design/library-ui/#the-container)), and every other
+  command drives the hub remotely through its Syncthing REST API.
 - Per-game emulator settings (RetroArch core and game overrides, per-game INI files),
   controller mappings and input profiles. Settings travel only as single keys.
 - Moving logins. RetroAchievements and other sessions are made on each console and
@@ -50,6 +52,7 @@ The pages after this one cover one subject each.
 - [Pruning](/warpzone/development/design/prune/): detecting and deleting what a device no longer whitelists.
 - [BIOS check](/warpzone/development/design/bios/): the manifest and the judgements.
 - [Inbox](/warpzone/development/design/inbox/): identifying, converting and filing new games, kind by kind.
+- [Library UI](/warpzone/development/design/library-ui/): the catalog index, the managed whitelists, the web page and its API, the container on the hub.
 - [Emulator settings](/warpzone/development/design/emulator-settings/): layers, apply, capture and audit.
 - [Doctor](/warpzone/development/design/doctor/): the machine checklist.
 - [Self-update](/warpzone/development/design/self-update/): the device install, the settings, the timer.
