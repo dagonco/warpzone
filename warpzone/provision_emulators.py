@@ -224,8 +224,25 @@ def ensure_retroarch_pins(
         rep.out(f"retroarch: set {keys} in {path} (old file backed up)")
 
 
-def _shadps4_apply(kind: str, text: str, wants: Sequence[str]) -> bytes:
-    return shadps4.apply(kind, text, wants).encode("utf-8")
+def _shadps4_apply(kind: str, text: str, wants: Sequence[str], addon: str | None) -> bytes:
+    return shadps4.apply(kind, text, wants, addon).encode("utf-8")
+
+
+def _warn_dlc_left(rep: Reporter, old: str, config: Path, home: Path) -> None:
+    """Warn when the DLC folder being replaced exists and holds entries; nothing is moved.
+
+    An unset value means shadPS4's default, `addcont` next to its config file.
+    """
+    folder = Path(expand_home(old, home)) if old else config.parent / "addcont"
+    try:
+        if not (folder.is_dir() and any(folder.iterdir())):
+            return
+    except OSError:
+        return
+    rep.warn(
+        f"shadps4: {config} used {folder} as its DLC folder and it holds entries: DLC installed "
+        "there by hand is no longer seen (nothing was moved or deleted)"
+    )
 
 
 def ensure_shadps4_dirs(
@@ -238,19 +255,23 @@ def ensure_shadps4_dirs(
     probes: DeviceProbes = REAL_PROBES,
     state_root: Path,
 ) -> None:
-    """List the profile's install folders in shadPS4's config files, while it is closed.
+    """List the profile's install folders in shadPS4's config files and set its DLC folder.
 
     Each file of `shadps4.config` that exists gets the folders it lacks, next to the entries
-    it already has; every other byte is kept. A file that is missing is never created
-    (shadPS4 writes it on its first start); one that does not read as expected is left
-    alone. The old file is backed up before each edit and a second run changes nothing.
+    it already has, and the DLC folder (`addon_dir`) set to the profile's when it differs;
+    every other byte is kept, and both go in one edit and one backup. A DLC folder that was
+    in use and holds entries is not moved: the run warns that DLC put there by hand is no
+    longer seen. A file that is missing is never created (shadPS4 writes it on its first
+    start); one that does not read as expected is left alone. The old file is backed up
+    before each edit and a second run changes nothing.
     """
     rule = profile.shadps4
     if rule is None or "library" not in profile.paths:
         return
-    wants = rule.wants(expand_home(profile.paths["library"], home).rstrip("/"))
+    library = expand_home(profile.paths["library"], home).rstrip("/")
+    wants, addon = rule.wants(library), rule.wants_addon(library)
     again = f"run `warpzone provision device {name}` again"
-    pending: list[tuple[Path, str, str, list[str]]] = []
+    pending: list[tuple[Path, str, str, list[str], str | None]] = []
     seen = 0
     for raw in rule.config:
         path, kind = Path(expand_home(raw, home)), shadps4.kind_of(raw) or shadps4.JSON
@@ -265,11 +286,12 @@ def ensure_shadps4_dirs(
         seen += 1
         try:
             gap = shadps4.missing(kind, text, wants)
+            old = shadps4.addon_gap(kind, text, addon)
         except shadps4.Shadps4ConfigError as exc:
             rep.warn(f"{path} was left alone: {exc}")
             continue
-        if gap:
-            pending.append((path, kind, text, gap))
+        if gap or old is not None:
+            pending.append((path, kind, text, gap, old))
         else:
             rep.out(f"shadps4: {path} already lists the install folder")
     if not seen:
@@ -282,15 +304,23 @@ def ensure_shadps4_dirs(
     what = "shadPS4's config files"
     if not pending or busy(rule.process, "shadPS4", what, again, rep, probes):
         return
-    for path, kind, text, gap in pending:
+    for path, kind, text, gap, old in pending:
         folders = ", ".join(gap)
+        what_set = []
+        if gap:
+            what_set.append(f"the install folder {folders}")
+        if old is not None:
+            what_set.append(f"the DLC folder {addon}")
+        done = " and ".join(what_set)
         if dry_run:
-            rep.out(f"shadps4: dry-run: would add the install folder {folders} to {path}")
+            rep.out(f"shadps4: dry-run: would set {done} in {path}")
+            if old is not None:
+                _warn_dlc_left(rep, old, path, home)
             continue
         try:
             outcome = safefile.guarded_edit(
                 path,
-                partial(_shadps4_apply, kind, text, wants),
+                partial(_shadps4_apply, kind, text, wants, addon),
                 expect=safefile.stamp(path),
                 busy=lambda: busy(rule.process, "shadPS4", what, again, rep, probes),
                 backup=partial(settings_state.backup, path, "shadps4", path.name, root=state_root),
@@ -303,7 +333,9 @@ def ensure_shadps4_dirs(
         if outcome is safefile.Edit.CHANGED:
             rep.warn(f"{path} changed while it was being edited, so it was left alone: {again}")
             continue
-        rep.out(f"shadps4: added the install folder {folders} to {path} (old file backed up)")
+        rep.out(f"shadps4: set {done} in {path} (old file backed up)")
+        if old is not None:
+            _warn_dlc_left(rep, old, path, home)
 
 
 def _cemu_apply(text: str, mlc: str | None, game_path: str) -> bytes:

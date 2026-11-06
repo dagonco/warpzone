@@ -257,9 +257,15 @@ warpzone cannot check.
 
 shadPS4 runs the extracted games it finds in its install directories, and the PS4 games that
 `inbox` extracts land in `library/roms/ps4/games` ([PS4 packages](/warpzone/development/design/inbox/#ps4-packages)). A profile
-with `[shadps4]` (`config`, `process`, `install_dirs`) has `provision device` list that folder
+with `[shadps4]` (`config`, `process`, `install_dirs`, optionally `addon_dir`) has `provision device` list that folder
 there, for a device that subscribes to `library`, at the end of the same step as the other
 overrides. The profile `steamos-emudeck` declares `{library}/roms/ps4/games`.
+
+shadPS4 reads DLC from a single folder, `<addon folder>/<TITLE_ID>/<entry>/`, which is the
+layout `inbox` files PS4 DLC in under `library/roms/ps4/dlc`. The optional key `addon_dir`
+(same `{library}` expansion as `install_dirs`; `steamos-emudeck` declares
+`{library}/roms/ps4/dlc`) makes `provision device` point that setting at it. A profile without
+`addon_dir` leaves the setting alone.
 
 - **Files.** Each path of `config` that exists is edited, chosen by its suffix. `config.json`
   (shadPS4 v0.21 and later) holds `General.install_dirs`, a list of
@@ -273,12 +279,22 @@ overrides. The profile `steamos-emudeck` declares `{library}/roms/ps4/games`.
   the edit re-serialises it. In `config.toml` only the `installDirs` value is replaced (or the key
   or the `[GUI]` table added) and the result must read back as the original plus the new folders.
   Anything that does not read as expected is left alone with a warning (`shadps4.apply` is pure).
+- **DLC folder.** With `addon_dir`, the same edit also sets `General.addon_install_dir`
+  (`config.json`) or `GUI.addonInstallDir` (`config.toml`), a single path string that shadPS4
+  defaults to `addcont` in its own user folder when empty. Unlike the install directories this
+  value is replaced when it differs (trailing slashes do not count; unset always differs), with
+  the file backed up first, in the same edit and backup as the install folders. The key is added
+  when absent, and in `config.toml` only that value is replaced. If the old value points at a
+  folder (or, when unset, the default `addcont` next to the config file) that exists and holds
+  entries, the run warns that DLC installed there by hand is no longer seen; nothing is moved or
+  deleted. A value that is not a string leaves the file alone with a warning.
 - **Safety.** Written only while none of `process` runs (the emulator, its Qt launcher and the
   AppImages: `/proc` is read as for the other overrides, and a missing `/proc` is a warning), with
   the old file backed up first to the settings state folder and an atomic write that is refused if
   the file changed meanwhile. A second run changes nothing; `--dry-run` prints what it would add.
 - **Doctor.** `doctor` reports `shadPS4 install folder`: a warning naming each existing file that
-  lacks the folder (with the command to run), or none found.
+  lacks the folder or whose DLC folder is not the profile's `addon_dir` (with the command to
+  run), or none found.
 - **Why not the settings layer.** `settings apply` layers typed scalar keys from the hub, and its
   `json` and `toml` handlers write scalars only; this list is an array (of objects, in JSON). Its
   value is also derived from each console's own library path, not shared between consoles, so it

@@ -218,6 +218,10 @@ create_when = "~/.config/Cemu"
 config = ["~/.local/share/shadPS4/config.json", "~/.local/share/shadPS4/config.toml"]
 process = ["shadps4", "shadPS4QtLauncher", "Shadps4-qt.AppImage", "Shadps4-sdl.AppImage"]
 install_dirs = ["{library}/roms/ps4/games"]
+# shadPS4 reads DLC from one folder, `<addon_dir>/<TITLE_ID>/<entry>/`, which `warpzone inbox`
+# fills in library/roms/ps4/dlc. Unlike the install directories this value is replaced, not
+# extended (`General.addon_install_dir` in config.json, `GUI.addonInstallDir` in config.toml).
+addon_dir = "{library}/roms/ps4/dlc"
 
 # Cemu keeps its installs and saves below `mlc_path` in settings.xml, and lists the games of
 # `GamePaths`. EmuDeck sets both with an xmlstarlet that does not start on SteamOS 3.9, which
