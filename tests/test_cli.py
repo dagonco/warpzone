@@ -518,6 +518,7 @@ class ExitCodeTests(unittest.TestCase):
             "InboxError",
             "ModelError",
             "ProfileError",
+            "ServeError",
         }
         seen = set()
         for info in pkgutil.iter_modules(warpzone.__path__):

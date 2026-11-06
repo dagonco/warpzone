@@ -2,7 +2,7 @@ import http.client
 import unittest
 from unittest import mock
 
-from support import API_KEY, HUB_ID, FakeSyncthing
+from support import API_KEY, DECK_ID, HUB_ID, FakeSyncthing
 from warpzone.localst import (
     LocalSyncthingError,
     candidate_paths,
@@ -116,6 +116,17 @@ class ClientTests(unittest.TestCase):
         with self.assertRaises(SyncthingError) as ctx:
             Client("http://127.0.0.1:1", API_KEY, timeout=1).scan("wz-library")
         self.assertFalse(ctx.exception.timed_out)
+
+    def test_connections_and_completion(self) -> None:
+        with FakeSyncthing(HUB_ID) as fake:
+            fake.connections = {DECK_ID: {"connected": True}}
+            fake.completion[("wz-library", DECK_ID)] = {"completion": 42.5, "needBytes": 7}
+            client = Client(fake.url, API_KEY)
+            self.assertEqual(client.connections(), {DECK_ID: {"connected": True}})
+            self.assertEqual(client.completion("wz-library", DECK_ID)["needBytes"], 7)
+            with self.assertRaises(SyncthingError) as ctx:
+                client.completion("wz-library", "X")
+            self.assertEqual(ctx.exception.status, 404)
 
     def test_db_file_404_is_none(self) -> None:
         with FakeSyncthing(HUB_ID) as fake:
