@@ -20,6 +20,7 @@ title: "Hub, folders and ignores"
 ├── songs/                   hub: send-only → opted-in devices, per-device whitelist
 ├── tools/                   hub: send-only → devices (scripts, docs)
 ├── settings/                hub: send-receive ⇄ devices: send-receive, emulator settings layers
+├── catalog/                 never synced; the catalog index and whitelist backups (see Library UI)
 └── inbox/                   never synced; drop zone for new content (SMB)
 ```
 
@@ -120,8 +121,8 @@ arrived. Provisioning therefore does, for each whitelisted folder:
 3. Replace the ignores with `#include patterns-<device>.stignore` and trigger a
    rescan.
 
-**Applying later edits.** After provisioning, the user edits
-`patterns-<device>.stignore` on the hub only. It reaches the device through
+**Applying later edits.** After provisioning, `patterns-<device>.stignore` changes
+on the hub only, written by the [library UI](/warpzone/development/design/library-ui/#the-whitelist-model). It reaches the device through
 normal sync, but Syncthing v2.1.7 re-evaluates ignores (and pulls files that
 became un-ignored) only on a full scan of the folder. A scan of a single
 sub-path does not do it, and a file synced in by the puller does not reliably

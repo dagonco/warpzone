@@ -16,6 +16,8 @@ only for loopback addresses).
 - `GET /rest/db/status?folder=`, `GET /rest/db/file?folder=&file=`,
   `GET /rest/db/browse?folder=&levels=0`
 - `POST /rest/db/scan?folder=`
+- `GET /rest/system/connections`, `GET /rest/db/completion?folder=&device=` (the library UI's
+  progress, read on the hub; see [Progress](/warpzone/development/design/library-ui/#progress))
 
 `POST /rest/db/scan` answers only when the scan is done, and a folder that is pulling runs a
 scan only after the pull, which on a slow device can take longer than the client's timeout
@@ -62,9 +64,9 @@ warpzone/
   provision_emulators.py  device edits for ES-DE's system list, RetroArch, shadPS4, Cemu and title links
   provision_artwork.py  frontend artwork on a device: the scope of the artwork folders, the gamelists
   provision_scripts.py  the ES-DE startup scripts, turning ES-DE's event scripts on, the Options menu entries
-  provision_timers.py  the artwork and play state systemd user timers
+  provision_timers.py  the artwork, play state and unattended prune systemd user timers
   provision_updater.py  the autonomous update: settings file, live updater script, its timer
-  prune.py           leftover detection (pure `classify`), delete, webhook
+  prune.py           leftover detection (pure `classify`), the unattended guard (pure `guard`), delete, webhook
   bios.py            BIOS manifest, local overrides, pure `judge_*`, disk checks
   dat.py             Redump / No-Intro DAT parsing, cache, matching, disc grouping (pure)
   inbox_core.py      what the inbox pipeline and its handlers share: errors, options, results, staging
@@ -107,7 +109,7 @@ warpzone/
   tomlw.py           TOML scalar and key writer (tomllib only reads)
   doctor.py          machine checklist (`warpzone doctor`): checks, install hints, renderer
   health.py          `warpzone health`: the dry runs and file checks that say a version works (decisions pure)
-  ra.py              RetroAchievements: RAHasher wrapper, game list lookup
+  ra.py              RetroAchievements: RAHasher wrapper, game list lookup and parsing (ids, points)
   localst.py         find and parse the local Syncthing config.xml
   data/updater.sh    the updater (POSIX sh): choose a release, verify it, roll it back
   data/bios.toml     BIOS manifest (names, sizes, hashes, signatures only)
@@ -127,6 +129,30 @@ website/             documentation site (Starlight); the design pages are
 `model.py` is pure: config + profiles in, list of desired folder specs out. All
 I/O sits in `syncthing.py`, `localst.py` and the `provision_*` modules, so the diffing
 logic is unit-tested without a network.
+
+The [library UI](/warpzone/development/design/library-ui/) adds these files. They join the
+block above in the pull request that creates each one (the test compares that block with the
+package, so it cannot list files that do not exist yet):
+
+```
+warpzone/
+  catalog.py         catalog index: derivation of games and parts, system roots, title keys,
+                     search, RA badge state, JSON encoding and merge (pure)
+  catalog_store.py   `warpzone catalog`: the walk, hashing, RAHasher and RA list runs, guarded writes
+  whitelist.py       managed whitelists: escape, parse, render, normalize, changes, matcher,
+                     effect, migration parsing and classification, unsupported systems (pure)
+  whitelist_store.py whitelist files on the hub: read with a stamp, backups, guarded write,
+                     hub scan, `whitelist migrate` and its proof walk
+  library_api.py     the API's routes as pure functions: validation, `plan_changes`, responses
+  progress.py        per-device progress states from the hub's completion (pure)
+  serve.py           `warpzone serve`: http.server, sessions, the write lock, caches, background runs
+  data/ui/index.html the library UI page (static, no build step)
+  data/ui/app.js
+  data/ui/style.css
+  data/ui/placeholder.svg  the cover of a game with no scrape
+docker/Dockerfile    the hub's container image
+examples/compose.example.yaml
+```
 
 ## Testing
 

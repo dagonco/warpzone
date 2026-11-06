@@ -91,6 +91,10 @@ Syncthing state. The contract:
 - **Whitelists are never edited.** The report prints, per placed game, the whitelist
   line to add (`!/roms/psx/Silent Hill (Europe) (En,Fr,De,Es,It).chd`; Syncthing
   wildcards in names are escaped) and a combined list at the end.
+- **Catalog.** After filing, `--apply` updates the catalog index of every system it placed
+  something in (the same derivation `warpzone catalog` runs, plus the SHA-1, DAT name, filing
+  date and RA hash it knows); a failure is a warning, never a review. See
+  [Building and updating it](/warpzone/development/design/library-ui/#building-and-updating-it).
 - **Missing tools.** `chdman`, `bsdtar`, `RAHasher` and `dolphin-tool` are located with
   `[inbox]` config keys or PATH (RAHasher only when configured). A tool that an item
   needs and is missing sends that item to review with a clear reason; other items

@@ -83,6 +83,7 @@ export default defineConfig({
                 { label: 'Pruning', slug: 'development/design/prune' },
                 { label: 'BIOS check', slug: 'development/design/bios' },
                 { label: 'Inbox', slug: 'development/design/inbox' },
+                { label: 'Library UI', slug: 'development/design/library-ui' },
                 { label: 'Emulator settings', slug: 'development/design/emulator-settings' },
                 { label: 'Doctor', slug: 'development/design/doctor' },
                 { label: 'Self-update', slug: 'development/design/self-update' },

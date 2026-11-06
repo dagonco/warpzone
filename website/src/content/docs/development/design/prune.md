@@ -74,7 +74,9 @@ that are now empty are removed (`rmdir`, so a non-empty one is never touched).
 
 The default is report only. `--apply` deletes. A run that would delete more than
 `--max-gib` (default 50) refuses to delete anything, exits 1, and needs
-`--force` or a higher cap; the cap counts the total over all folders.
+`--force` or a higher cap; the cap counts the total over all folders. A run with
+`--unattended` has no size cap and the half-of-device guard instead (see
+[Unattended runs](#unattended-runs)).
 
 Output is a per-folder summary (leftover files and bytes, grouped by the first
 two path levels; `--list` prints every file), the files kept and why, and the
@@ -83,9 +85,43 @@ commands: `0` ok (a report with leftovers is still `0`), `1` for a runtime
 error, a folder that was skipped as unsafe, a refused cap or files that could not
 be deleted, `2` for usage or config errors.
 
-`--notify-url URL` (http or https) POSTs one JSON object per folder that has
-leftovers: `{"device", "folder", "files", "bytes", "applied"}`. When applied,
+`--notify-url URL` (http or https), with or without `--unattended`, POSTs one
+JSON object per folder that has leftovers: `{"device", "folder", "files", "bytes", "applied"}`. When applied,
 `files` and `bytes` are what was actually deleted. It is meant for a Home
 Assistant webhook. The URL may embed a secret, so it is never printed, and a
 failed notification is a warning, not a failure of the run. No API key or path
 appears in the payload.
+
+## Unattended runs
+
+A game turned off in the [library UI](/warpzone/development/design/library-ui/) must leave
+the console without anyone running a command there, so each console that lists `library` runs
+`prune <device> --apply --unattended` from a timer. This is the one exception to the rule that a
+destructive command acts only when a person runs it with `--apply` (see
+[Writing commands](/warpzone/development/design/configuration/#writing-commands)). Every safety
+rule above still holds, file by file, with the re-check right before each delete. What changes:
+
+- **No size cap.** `--max-gib` does not apply: one PS4 game is larger than the 50 GiB default.
+  `--unattended` requires `--apply` and refuses `--max-gib` and `--force` (usage error).
+- **The half-of-device guard.** For each folder, the bytes the run would delete are compared
+  with the bytes of the regular files the walk found in that folder (what the device holds there,
+  nested Syncthing folders excluded). When any folder would lose more than half
+  (`2 * delete > held`), the run deletes nothing in any folder, prints why and exits 1.
+  `prune.guard` (pure) decides it from the per-folder totals. It is what stops a whitelist that
+  was emptied by mistake, or a library folder that briefly looks wrong, from wiping a console. A
+  removal it refuses stays until the user runs `prune --apply` by hand, where the size cap and
+  `--force` apply as usual; a device that holds a single game can only lose it that way.
+- **Busy is not a failure.** A full scan that gets no answer in time ("rescan queued", see
+  [Syncthing API surface](/warpzone/development/design/code-and-testing/#syncthing-api-surface-used))
+  means the device is still pulling: the run deletes nothing and exits 0, and the next tick tries
+  again. Every other unsafe folder (no marker, bootstrap ignores, whitelists not in sync) still
+  exits 1, so the unit shows as failed.
+- **Output.** Only the summary lines; `--list` is ignored. `--notify-url` works as for any run.
+
+The timer is installed by `provision device` for a device that lists `library`, unless its
+config sets `auto_prune = false`: `~/.config/systemd/user/warpzone-prune.service` (`Type=oneshot`,
+`ExecStart=<python> -m warpzone prune <device> --apply --unattended`, naming `--config` only when
+it is not the default) and `warpzone-prune.timer` (`OnBootSec=15min`, `OnUnitActiveSec=1h`),
+written and started like the [artwork timer](/warpzone/development/design/frontend-artwork/)
+(rewritten only when their text differs, the same import check of the Python, the user manager
+running without a login session). With `auto_prune = false` the units are removed if they exist.
