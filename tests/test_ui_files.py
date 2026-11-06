@@ -133,6 +133,10 @@ class UiFilesTest(unittest.TestCase):
         for state in states:
             self.assertIn(f"`{state}`", design, f"the design does not describe {state}")
 
+    def test_replace_children_is_never_given_a_null(self):
+        # `replaceChildren(null)` inserts the text "null"; an optional node goes in as a spread.
+        self.assertNotRegex(read("app.js"), r"replaceChildren\([^;]*:\s*null\)")
+
     def test_the_page_reads_the_catalog_state(self):
         text = read("app.js")
         self.assertIn("api.catalog()", text)

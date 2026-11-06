@@ -448,8 +448,6 @@
 
   function viewHome() {
     const root = h('div', { class: 'page home' });
-    const totalGames = S.systems.reduce((n, s) => n + (s.games || 0), 0);
-    const totalSize = S.systems.reduce((n, s) => n + (s.size || 0), 0);
 
     const introText = h('p', { class: 'muted', role: 'status' });
     const introNote = h('p', null);
@@ -474,6 +472,8 @@
 
     // The top of the page follows the catalog: counts, or why there is nothing to show.
     function paintIntro() {
+      const totalGames = S.systems.reduce((n, s) => n + (s.games || 0), 0);
+      const totalSize = S.systems.reduce((n, s) => n + (s.size || 0), 0);
       const running = !!(S.catalog && S.catalog.running);
       refresh.disabled = running;
       refresh.textContent = running ? 'Scanning the library...' : 'Rescan the library';
@@ -659,10 +659,10 @@
     // Switch updates and DLC that no base game claims are in the library but belong to no card.
     function paintUnclaimed() {
       const folders = S.unclaimed.get(name) || [];
-      unclaimedHost.replaceChildren(folders.length ? h('details', { class: 'parts unclaimed' },
+      unclaimedHost.replaceChildren(...(folders.length ? [h('details', { class: 'parts unclaimed' },
         h('summary', null, `${plural(folders.length, 'update or DLC folder')} belong to no game in the library`),
         h('p', { class: 'muted small-text' }, 'Their base game is not on the hub, so they have no card here and cannot be turned on or off from the UI.'),
-        h('ul', null, folders.map((f) => h('li', null, h('code', null, f))))) : null);
+        h('ul', null, folders.map((f) => h('li', null, h('code', null, f)))))] : []));
     }
 
     function paintPanel() {
@@ -787,8 +787,11 @@
       return known ? known.game.cover : g.cover !== false;
     }) || group.games[0];
     const known = (id) => (S.byId.get(id) ? S.byId.get(id).game.devices : null);
+    // Ask for the image only when the game list says there is one (the search answer has no
+    // `cover`): a request for a missing image is a 404 in the log for nothing.
+    const hasCover = S.byId.get(withCover.id) ? !!S.byId.get(withCover.id).game.cover : withCover.cover !== false;
     return h('article', { class: 'group' },
-      coverBox(withCover.system, withCover.id, true, 'covers'),
+      coverBox(withCover.system, withCover.id, hasCover, 'covers'),
       h('div', { class: 'group-body' },
         h('h2', null, group.title),
         h('ul', { class: 'versions' }, group.games.map((g) =>

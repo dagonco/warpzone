@@ -762,6 +762,23 @@ class RefreshTests(ServeCase):
         self.assertEqual((last["ok"], last["message"]), (True, "1 system(s)"))
         self.assertEqual(self.call("POST", "/api/v1/catalog/refresh", {}).status, 202)
 
+    def test_a_finished_run_shows_in_the_next_read_not_after_the_cache_interval(self) -> None:
+        # The page reloads the moment `running` turns false; the server must not answer from a
+        # catalog it read before the run, even when it checked a moment ago.
+        root = self.tmp / "fresh"
+        (root / "library" / ".stfolder").mkdir(parents=True)
+        (root / "library" / "roms" / "gba").mkdir(parents=True)
+        (root / "library" / "roms" / "gba" / "Tiny.gba").write_bytes(b"x")
+        files = serve.HubFiles(root, interval=3600, media_seconds=0)
+        job = serve.catalog_job(root, rahasher=None, ra_key=None, log=lambda text: None)
+        refresher = serve.Refresher(job, lambda text: None)
+        self.start(root=root, files=files, refresher=refresher)
+        self.assertEqual(self.get("/api/v1/systems").json, [])  # read once, before the run
+        self.assertFalse(self.get("/api/v1/catalog").json["ready"])
+        refresher.run_now()
+        self.assertEqual([s["system"] for s in self.get("/api/v1/systems").json], ["gba"])
+        self.assertTrue(self.get("/api/v1/catalog").json["ready"])
+
     def test_a_failing_run_is_recorded(self) -> None:
         done = threading.Event()
 

@@ -185,6 +185,11 @@ class HubFiles:
         except OSError:
             return []
 
+    def invalidate(self) -> None:
+        """Check the catalog files on the next read, whatever the interval says."""
+        with self._lock:
+            self._checked = float("-inf")
+
     def library(self) -> library_api.Library:
         with self._lock:
             if self._library is not None and self.clock() - self._checked < self.interval:
@@ -336,9 +341,17 @@ class Refresher:
     a run unless one is running; `schedule` is the loop that runs at start and then every six
     hours, with the RetroAchievements lists once a day."""
 
-    def __init__(self, job: Callable[[bool], str], log: Callable[[str], None]) -> None:
+    def __init__(
+        self,
+        job: Callable[[bool], str],
+        log: Callable[[str], None],
+        after: Callable[[], None] | None = None,
+    ) -> None:
         self._job = job
         self._log = log
+        # Called when a run ends, before `running` turns false: the server drops what it read
+        # of the catalog, so a client that reloads at that moment sees the run's result.
+        self.after = after
         self._busy = threading.Lock()
         self._state_lock = threading.Lock()
         self._last: dict[str, Any] | None = None
@@ -361,6 +374,8 @@ class Refresher:
             ok, message = False, str(exc)
         except Exception as exc:  # a background run must never take the server down
             ok, message = False, type(exc).__name__
+        if self.after is not None:
+            self.after()
         with self._state_lock:
             self._running = False
             self._last = {
@@ -461,6 +476,8 @@ class App:
         self._cookie = session_cookie(token)
         self._client_factory = client_factory
         self.refresher = refresher
+        if refresher is not None:
+            refresher.after = self.files.invalidate
         self.ui_dir = ui_dir
         self.login_delay = login_delay
         self.progress_seconds = progress_seconds
