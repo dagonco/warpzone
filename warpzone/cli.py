@@ -273,6 +273,28 @@ def _build_parser() -> argparse.ArgumentParser:
         type=Path,
         help="the hub root as mounted on this machine, holding library/ (default: [hub] root)",
     )
+    cat.add_argument(
+        "--ra-hash",
+        action="store_true",
+        help="run RAHasher on the games of the systems RetroAchievements knows that have no "
+        "RA hash yet (reads every such image once; can be stopped and run again)",
+    )
+    cat.add_argument(
+        "--rahasher",
+        metavar="PATH",
+        help="RAHasher for --ra-hash (default: [inbox] rahasher)",
+    )
+    cat.add_argument(
+        "--ra-lists",
+        action="store_true",
+        help="download the RetroAchievements game list of each console the library has "
+        "(key from RA_API_KEY), unless the cached one is under 7 days old",
+    )
+    cat.add_argument(
+        "--force",
+        action="store_true",
+        help="with --ra-lists, download the lists again whatever their age",
+    )
 
     st_dry_run = argparse.ArgumentParser(add_help=False)
     st_dry_run.add_argument(
@@ -487,13 +509,36 @@ def _bios(args: argparse.Namespace, rep: Reporter) -> int:
 
 
 def _catalog(args: argparse.Namespace, rep: Reporter) -> int:
-    from warpzone import catalog_store
+    from warpzone import catalog_store, ra
+    from warpzone.catalog_store import CatalogError
 
+    if args.rahasher and not args.ra_hash:
+        raise CatalogError("--rahasher only works together with --ra-hash")
+    if args.force and not args.ra_lists:
+        raise CatalogError("--force only works together with --ra-lists")
     root = args.root
     if root is None:
         root = Path(_load(args)[0].hub.root)
-    results = catalog_store.run_catalog(root, dry_run=args.dry_run, out=rep.out)
-    return EXIT_RUNTIME if any(r.failed for r in results) else EXIT_OK
+    hasher = None
+    if args.ra_hash:
+        configured = args.rahasher or load_inbox_settings(_config_path(args)).rahasher
+        hasher = catalog_store.rahasher_runner(catalog_store.resolve_rahasher(configured))
+    key = os.environ.get(ra.KEY_ENV) or None
+    if args.ra_lists and not key:  # before the scan, so a missing key costs nothing
+        raise CatalogError(f"no RetroAchievements key: set {ra.KEY_ENV} in the environment")
+    results = catalog_store.run_catalog(root, dry_run=args.dry_run, out=rep.out, ra_hasher=hasher)
+    failed = any(r.failed for r in results)
+    if args.ra_lists:
+        lists = catalog_store.run_ra_lists(
+            root,
+            key=key,
+            force=args.force,
+            dry_run=args.dry_run,
+            out=rep.out,
+            warn=rep.warn,
+        )
+        failed = failed or any(r.failed for r in lists)
+    return EXIT_RUNTIME if failed else EXIT_OK
 
 
 def _inbox(args: argparse.Namespace, rep: Reporter) -> int:
