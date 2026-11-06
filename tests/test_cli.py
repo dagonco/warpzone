@@ -511,7 +511,14 @@ class ExitCodeTests(unittest.TestCase):
         import warpzone
         from warpzone.errors import EXIT_RUNTIME, EXIT_USAGE, WarpzoneError
 
-        usage = {"BiosError", "ConfigError", "InboxError", "ModelError", "ProfileError"}
+        usage = {
+            "BiosError",
+            "CatalogError",
+            "ConfigError",
+            "InboxError",
+            "ModelError",
+            "ProfileError",
+        }
         seen = set()
         for info in pkgutil.iter_modules(warpzone.__path__):
             if info.name == "__main__":

@@ -258,6 +258,22 @@ def _build_parser() -> argparse.ArgumentParser:
         "else the system temp folder)",
     )
 
+    cat = sub.add_parser(
+        "catalog",
+        parents=[common],
+        help="build and update the catalog index in catalog/ from library/",
+    )
+    cat.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="say what it would change per system and write nothing",
+    )
+    cat.add_argument(
+        "--root",
+        type=Path,
+        help="the hub root as mounted on this machine, holding library/ (default: [hub] root)",
+    )
+
     st_dry_run = argparse.ArgumentParser(add_help=False)
     st_dry_run.add_argument(
         "--dry-run", action="store_true", help="print what it would do and change nothing"
@@ -468,6 +484,16 @@ def _bios(args: argparse.Namespace, rep: Reporter) -> int:
     for line in bios.render(report, show_all=args.list_all):
         rep.out(line)
     return EXIT_RUNTIME if report.problems else EXIT_OK
+
+
+def _catalog(args: argparse.Namespace, rep: Reporter) -> int:
+    from warpzone import catalog_store
+
+    root = args.root
+    if root is None:
+        root = Path(_load(args)[0].hub.root)
+    results = catalog_store.run_catalog(root, dry_run=args.dry_run, out=rep.out)
+    return EXIT_RUNTIME if any(r.failed for r in results) else EXIT_OK
 
 
 def _inbox(args: argparse.Namespace, rep: Reporter) -> int:
@@ -720,6 +746,8 @@ def _run(args: argparse.Namespace) -> int:
         return _bios(args, rep)
     if args.command == "inbox":  # needs at most the [inbox] table
         return _inbox(args, rep)
+    if args.command == "catalog":  # needs the config only for the hub root
+        return _catalog(args, rep)
     cfg, profiles = _load(args)
 
     if args.command == "check":

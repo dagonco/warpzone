@@ -373,10 +373,25 @@ class UnitResult:
     reason: str = ""
     folder: str = ""  # library folder when it is not roms/<system> (Switch updates, PS4 games)
     lines: list[str] = field(default_factory=list)  # whitelist lines, when `whitelist` is not it
+    dat: str | None = None  # the DAT game name, when the unit is one DAT-identified file
 
     @property
     def path(self) -> str:
         return f"library/{self.folder or 'roms/' + self.system}/{self.entry}"
+
+    @property
+    def library_folder(self) -> str:
+        """The folder of `library/` the entry is in."""
+        return self.folder or f"roms/{self.system}"
+
+    @property
+    def catalog_system(self) -> str:
+        """The system folder of `library/roms/` the catalog entry of the unit lives in (a
+        Switch update or DLC belongs to `switch`)."""
+        folder = self.library_folder
+        if folder.startswith("extras/switch"):
+            return "switch"
+        return folder.removeprefix("roms/").split("/", 1)[0]
 
     @property
     def whitelist(self) -> str:

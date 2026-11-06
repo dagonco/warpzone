@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ## [Unreleased]
 
+### Added
+
+- `warpzone catalog [--root PATH] [--dry-run]` builds the catalog index of the library, the foundation of the planned library UI: one `catalog/systems/<system>.json` per system folder of `library/roms/` at the hub root (outside every Syncthing folder, so no console receives it), listing each game, the library paths it needs (a PS4 game folder and its shortcut, a Vita app with its licence and launcher, a Switch game with its updates and DLC, the discs of an `.m3u` folder), its size, its SHA-1 and a title key that groups the versions of a title across systems. It is incremental (after the first run it only stats), writes only under `catalog/` with a guarded atomic write, and accepts `--dry-run`. `warpzone inbox --apply` now updates the index for the systems it placed games in, with the DAT name and the filing date; a failure there is a warning, never a review.
+
 ## [0.3.0rc6] - 2026-11-05
 
 Sixth release candidate of 0.3.0: Nintendo DS saves travel between the Anbernic's DraStic and melonDS on the Steam Deck and Steam Machine, `warpzone settings` covers Xenia, the Anbernic's Warpzone menu shows install progress and keeps looking for releases, and `provision` no longer times out while a folder is downloading.

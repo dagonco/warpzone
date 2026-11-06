@@ -25,7 +25,7 @@ import zipfile
 import zlib
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import date
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 from warpzone import dat as datmod
@@ -477,6 +477,8 @@ def process_unit(
     ctx: Context, unit: Unit, staged: Mapping[str, Staged], scratch: Path
 ) -> UnitResult:
     res = UnitResult(unit.system, unit.entry, "planned" if not ctx.opts.apply else "placed")
+    if len(unit.matches) == 1 and not unit.entry.endswith(".m3u"):
+        res.dat = unit.matches[0].game.name
     sysdir = ctx.roms / unit.system
     dest = sysdir / unit.entry
     try:
@@ -810,7 +812,32 @@ def _run(opts: Options, rep: Reporter, inbox: Path, library: DatLibrary) -> int:
             )
     if purged:
         rep.out(f"{DONE_DIR}: deleted {len(purged)} folder(s) older than {DONE_KEEP_DAYS} days")
+    if opts.apply:
+        _update_catalog(opts, rep, results)
     return _summary(rep, results, opts.apply)
+
+
+def _update_catalog(opts: Options, rep: Reporter, results: Sequence[ItemResult]) -> None:
+    """Bring the catalog index up to date for the systems this run placed something in.
+    A failure is a warning, never a review: the next `warpzone catalog` picks the game up."""
+    from warpzone import catalog_store
+
+    placed = [u for r in results for u in r.units if u.outcome == "placed"]
+    systems = {u.catalog_system for u in placed}
+    if not systems:
+        return
+    dat = {f"{u.library_folder}/{u.entry}": u.dat for u in placed if u.dat}
+    try:
+        catalog_store.update_after_inbox(
+            opts.root,
+            systems,
+            dat=dat,
+            out=rep.out,
+            warn=rep.warn,
+            now=datetime.fromtimestamp(opts.now(), UTC),
+        )
+    except Exception as exc:  # the files are filed; the index can be rebuilt
+        rep.warn(f"catalog: not updated ({type(exc).__name__}: {exc}); run `warpzone catalog`")
 
 
 def _file_away(inbox: Path, item: Path, result: ItemResult, today: date) -> None:
