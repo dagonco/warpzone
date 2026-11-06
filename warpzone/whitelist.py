@@ -76,8 +76,8 @@ def covers(parent: str, path: str) -> bool:
 def system_roots(system: str) -> tuple[str, ...]:
     """The paths a whole system is whitelisted by, in the order the file lists them.
 
-    The same rule as `catalog.system_roots`: `roms/<system>`, `roms/<system>/roms` for the
-    systems of `SUBROOT_SYSTEMS`, and for `switch` the three paths of its games, updates and DLC.
+    `roms/<system>`, `roms/<system>/roms` for the systems of `SUBROOT_SYSTEMS`, and for
+    `switch` the three paths of its games, updates and DLC. `catalog.system_roots` uses this.
     """
     if system == "switch":
         return ("roms/switch", "extras/switch/updates", "extras/switch/dlc")
