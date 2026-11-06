@@ -437,10 +437,17 @@ def place_file(src: Path, dest: Path) -> None:
         part.unlink(missing_ok=True)
 
 
-def _file_one(ctx: Context, path: Path, rel: str, found: Detected, result: ItemResult) -> None:
+def _file_one(
+    ctx: Context,
+    path: Path,
+    rel: str,
+    found: Detected,
+    result: ItemResult,
+    item_title: str | None = None,
+) -> None:
     tool = ctx.tools.orbis_pkg_util
     if found.kind == PS4 and tool:
-        unit = inbox_ps4.install(ctx, path, rel, found.title_id, tool)
+        unit = inbox_ps4.install(ctx, path, rel, found.title_id, tool, item_title)
     else:
         unit = place_image(ctx, path, rel, found)
         if found.kind == PS4:
@@ -494,16 +501,19 @@ class ConsoleIsoHandler:
             result.reasons.extend(failures)
             return
         others: list[str] = []
+        item_title = inbox_ps4.item_title_id(item.name, item.is_dir())
         for s in staged:
             if sniffable_name(s.path.name):
-                self._one(ctx, s, result)
+                self._one(ctx, s, result, item_title)
             elif s.path.suffix.lower() not in inbox_core.SIDECAR_EXTENSIONS:
                 others.append(s.rel)
         if others:
             shown = ", ".join(others[:5]) + (", ..." if len(others) > 5 else "")
             result.reasons.append(f"not a console disc image, drop it as its own item: {shown}")
 
-    def _one(self, ctx: Context, s: Staged, result: ItemResult) -> None:
+    def _one(
+        self, ctx: Context, s: Staged, result: ItemResult, item_title: str | None = None
+    ) -> None:
         try:
             found = detect_path(s.path)
         except OSError as exc:
@@ -525,7 +535,7 @@ class ConsoleIsoHandler:
                 "PS3_GAME/PARAM.SFO), an Xbox XISO or an Xbox 360 disc image"
             )
             return
-        _file_one(ctx, s.path, s.rel, found, result)
+        _file_one(ctx, s.path, s.rel, found, result, item_title)
 
     def adopt(
         self,

@@ -58,6 +58,8 @@ warpzone prune --list     # every file
 
 Show the report and wait for the user's OK, then `warpzone prune --apply`. It deletes only files that Syncthing ignores and the hub still has unchanged, refuses more than `--max-gib` (default 50) without `--force`, and keeps anything that exists only on the console. Never pass `--force` without a separate OK.
 
+A console that lists `library` also prunes by itself: its `warpzone-prune` timer runs `prune --apply --unattended` every hour (unless `auto_prune = false`), with no size cap, so a removal is done within about an hour and five minutes of the edit. It deletes nothing when a folder would lose more than half of what the device holds; that run exits `1` and the removal waits for the manual `prune --apply` above. Do not run `--unattended` by hand to get around that.
+
 If the line was removed first and the hub copy was deleted afterwards, the console copy stays and prune keeps it too (it deletes only files the hub still has). Tell the user; deleting it on the console by hand needs their explicit OK per path.
 
 ## Never

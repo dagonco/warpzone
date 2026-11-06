@@ -78,3 +78,9 @@ It asks Syncthing which files it ignores (after a full rescan) instead of guessi
 | `--notify-url URL` | POSTs a JSON summary (`device`, `folder`, `files`, `bytes`, `applied`) to a webhook, for example a Home Assistant automation. |
 
 The algorithm and its safety rules are in [the design document](/warpzone/development/design/prune/).
+
+### Automatic pruning
+
+A device that lists `library` prunes by itself. `provision device` installs a `warpzone-prune` timer (a systemd user timer, 15 minutes after boot and then every hour) that runs `warpzone prune <device> --apply --unattended`. It applies every rule above, with the re-check right before each delete, but has no size cap, because one game can be larger than `--max-gib`. Instead it refuses to delete anything, in any folder, when a folder would lose more than half of what the device holds in it. That is what stops a whitelist emptied by mistake from wiping a console. The run prints why and exits `1`, the unit shows as failed, and the files stay until you run `prune --apply` by hand (where `--max-gib` and `--force` apply). A device that holds a single game can only lose it that way. A folder that is still downloading is skipped without failing, and the next run tries again.
+
+Set `auto_prune = false` on the device in the config to remove the timer and prune by hand only. The design is in [Unattended runs](/warpzone/development/design/prune/#unattended-runs).
