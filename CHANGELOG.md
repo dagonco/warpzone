@@ -6,6 +6,44 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-06
+
+Consoles now keep themselves on a working release, the inbox takes in many more systems, warpzone supports a second device profile (the Anbernic RG351MP), and favourites, play statistics and Nintendo DS saves travel between devices. This section sums up the six release candidates; each of them, below, has the full detail.
+
+**Upgrading from 0.2.0 needs a reinstall of each device** with `sh <clone>/warpzone/data/updater.sh install <device>`: `pipx` and wheel installs are no longer supported and are not migrated. See [Installing a device](https://dagonco.github.io/warpzone/operation/self-update/#installing-a-device).
+
+### Added
+
+- Autonomous updates. A systemd user timer fetches new releases (every hour on the `rc` channel, every 12 hours on `stable`), checks each one (it imports, `provision device --unattended` works, `warpzone health` passes) and goes back to the previous release when a check fails. It honours release channels, a `pin`, withdrawn releases (`retired/vX.Y.Z` tags) and signed tags, and waits while the frontend is open. `warpzone self-update` runs it by hand (`--now` installs at once, `--channel stable|rc` switches channel), and a profile can set `[updater] install = "manual"` so the timer only notes a release. See [Updating a device](https://dagonco.github.io/warpzone/operation/self-update/).
+- `warpzone health [device]` checks that a version works on a device, and `provision device --unattended` is the provisioning run nobody watches.
+- `warpzone inbox` takes in PS4 `.pkg` games (with `orbis-pkg-util`), PS Vita dumps, licences and `.pkg` games (with Vita3K and a zRIF file), decrypted 3DS images, Wii U `.wua` files and Wii and GameCube `.rvz`/`.wia` images (read from their header, with no tool). Games reach shadPS4 and Vita3K with no manual step (`[shadps4]`, `[links.<id>]`, `warpzone links sync`). `inbox --apply` takes a lock so two runs cannot work on one inbox. See [Adding games](https://dagonco.github.io/warpzone/setup/inbox/).
+- A second shipped profile, `anbernic-rg351mp`, with scraped covers and descriptions converted for its frontend (`warpzone frontend refresh`) and a Warpzone entry in its Options menu that shows the status, runs doctor, installs updates and switches channel. See [the Anbernic guide](https://dagonco.github.io/warpzone/guides/anbernic/).
+- Favourites and play statistics travel between frontends and devices through the two-way `wz-play-state` folder (`warpzone play-state sync`). See [Favourites and play statistics](https://dagonco.github.io/warpzone/guides/anbernic/#favourites-and-play-statistics).
+- Nintendo DS saves travel between DraStic on the Anbernic and melonDS on SteamOS: `warpzone saves convert` runs around each DraStic session and on the frontend timer. See [Save conversion](https://dagonco.github.io/warpzone/development/design/save-conversion/).
+- `auto_hub = true` under a device, and `warpzone provision hub --additive`, create on the hub the folders a device needs and the hub lacks, and never change existing ones.
+- `warpzone settings` covers Xenia Canary, its console language included.
+- A documentation website at <https://dagonco.github.io/warpzone>, and agent skills in `.claude/skills/` for the common tasks.
+
+### Changed
+
+- **Breaking:** a device is installed only from a clone, with `updater.sh install`, and `provision device` installs the updater and its timer unless `self_update = false`. Run `provision device` again on each existing device after reinstalling.
+- `warpzone doctor` has many new checks (updater, artwork, play state, links, shadPS4, RetroArch, Cemu paths, save conversion, Vita3K), so it can warn about a device that was fine on 0.2.0 until it is provisioned again.
+
+### Fixed
+
+- PS4 games no longer crash when started from ES-DE: `provision device` starts them through shadPS4's SDL emulator.
+- On SteamOS, `provision device` sets Cemu's MLC and game paths, so Wii U saves land in the synced folder, and the files RetroArch cores write into the BIOS folder are ignored instead of showing up as local changes.
+- `provision` no longer times out while a folder is downloading, and `prune` stops on a busy folder instead of deleting anything.
+- Many updater fixes around signatures, retirements, rollbacks and stale bytecode, so a bad release or a fake tag cannot keep a device on the wrong version.
+
+### Removed
+
+- Installing a device with `pipx` or the release wheel.
+
+### Security
+
+- `warpzone/data/allowed_signers` lists the maintainer's release key: devices accept only release, candidate, pin and `retired/` tags signed with it.
+
 ## [0.3.0rc6] - 2026-11-05
 
 Sixth release candidate of 0.3.0: Nintendo DS saves travel between the Anbernic's DraStic and melonDS on the Steam Deck and Steam Machine, `warpzone settings` covers Xenia, the Anbernic's Warpzone menu shows install progress and keeps looking for releases, and `provision` no longer times out while a folder is downloading.
@@ -193,7 +231,8 @@ First public release. warpzone keeps one game library on a home server and deliv
 - `warpzone doctor` checks the tools, config, Syncthing, DATs and hub folder of a machine and prints the fix for each problem.
 - `warpzone status`, `check` and `render-ignores` to inspect folder state, validate the config and preview a device's ignore lines. `provision` supports `--dry-run`.
 
-[Unreleased]: https://github.com/dagonco/warpzone/compare/v0.3.0rc6...HEAD
+[Unreleased]: https://github.com/dagonco/warpzone/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/dagonco/warpzone/compare/v0.2.0...v0.3.0
 [0.3.0rc6]: https://github.com/dagonco/warpzone/compare/v0.3.0rc5...v0.3.0rc6
 [0.3.0rc5]: https://github.com/dagonco/warpzone/compare/v0.3.0rc4...v0.3.0rc5
 [0.3.0rc4]: https://github.com/dagonco/warpzone/compare/v0.3.0rc3...v0.3.0rc4
