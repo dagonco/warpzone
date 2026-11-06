@@ -137,6 +137,9 @@ templates/
   patterns-device.example.stignore
 examples/config.example.toml
 examples/bios.example.toml
+examples/compose.example.yaml  the hub's container, as Compose runs it
+docker/Dockerfile    the hub's container image: RAHasher built in one stage, warpzone from the checkout
+.dockerignore        keeps everything but the package out of the image's build context
 tests/               unittest; unit tests + e2e (two real Syncthing instances)
 website/             documentation site (Starlight); the design pages are
                      website/src/content/docs/development/design/
@@ -147,13 +150,11 @@ I/O sits in `syncthing.py`, `localst.py` and the `provision_*` modules, so the d
 logic is unit-tested without a network.
 
 The [library UI](/warpzone/development/design/library-ui/) has no file left to add: its
-modules and its `data/ui/` files are all in the block above. The hub's container image and its
-compose example are the only planned files:
-
-```
-docker/Dockerfile    the hub's container image
-examples/compose.example.yaml
-```
+modules and its `data/ui/` files are all in the block above, and so are the hub's container image
+and its compose example. `tests/test_container_files.py` reads them: the base images pinned by
+digest, RALibretro by commit, a health check, `pip` touching only the local wheel, no build tools
+in the last stage, and no secret-looking value in the compose example. The image is not built in
+CI, which has no Docker step.
 
 ## Testing
 

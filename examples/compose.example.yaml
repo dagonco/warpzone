@@ -1,0 +1,67 @@
+# warpzone on the hub: the library UI (`warpzone serve`) in one small container.
+# Copy this file next to the folders it names, change the values marked CHANGE, and see
+# https://dagonco.github.io/warpzone/setup/hub-container/ for the steps. All values are fake.
+#
+# Build the image first, from a checkout of warpzone:
+#   docker build -f docker/Dockerfile -t warpzone:local .
+#
+# Put next to this file:
+#   config/config.toml   the config from examples/config.example.toml, with in the tables:
+#                          [hub]    root = "/volume1/games"        (the same path as the mount below)
+#                                   api_url = "http://192.168.1.10:8384"   (see "Network" below)
+#                                   api_key_file = "/config/hub.key"
+#                          [inbox]  rahasher = "/usr/local/bin/RAHasher"   (optional, RA hashes)
+#                          [serve]  token_file = "/config/ui.token"
+#   config/hub.key       the hub Syncthing's API key
+#   config/ui.token      one line: the token the UI asks for (a long random string)
+#   warpzone.env         create it even if you have no key (compose refuses a missing file); one line,
+#                        RA_API_KEY=<your RetroAchievements web API key>
+# The files in config/ must be readable by the uid below (chmod 640 with the share's group, or 644
+# if nobody else uses the NAS).
+
+name: warpzone
+
+services:
+  warpzone:
+    image: warpzone:local
+    container_name: warpzone
+    restart: unless-stopped
+
+    # CHANGE: the uid and gid that own the games share (`id -u` and `id -g` of that user on the
+    # NAS). The container writes library/patterns-*.stignore and catalog/ as this user.
+    user: "1000:1000"
+
+    # Light and locked down: one process, a small memory limit, nothing writable but the share and
+    # /tmp. If `catalog --ra-hash` is killed (exit 137), raise the limit and run it again.
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 512m
+
+    # The UI and its API. Change the left number to publish another port; the right one is fixed
+    # by the image's health check.
+    ports:
+      - "8780:8780"
+
+    volumes:
+      # The hub root, at the same path as `[hub] root` in the config, so one config is right
+      # inside and outside the container. Read-write: the UI writes the whitelists and catalog/.
+      - /volume1/games:/volume1/games
+      # config.toml, hub.key and ui.token. Read-only.
+      - ./config:/config:ro
+
+    # Without RA_API_KEY in this file the RetroAchievements game lists are not downloaded.
+    env_file:
+      - ./warpzone.env
+
+    # Network. With the default (bridge) network the container reaches the hub's Syncthing at
+    # `[hub] api_url`, which must be a LAN address of the NAS, not 127.0.0.1 (and Syncthing's GUI
+    # must listen on it). If Syncthing's GUI listens only on 127.0.0.1, the container has to share
+    # the host's network instead: remove `ports:` above, uncomment the next line, and set
+    # `api_url = "http://127.0.0.1:8384"`. The UI is then on port 8780 of the NAS.
+    # network_mode: host

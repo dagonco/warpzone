@@ -629,9 +629,14 @@ device's whitelist (`whitelist.decide`), and per-game progress comes with it.
 
 warpzone runs on the hub in a container, because a NAS's own Python is often older than 3.11. The
 image (`docker/Dockerfile`) is a slim official Python image pinned by digest, with warpzone
-installed from a release and RAHasher built in a separate stage (the "inbox on the hub" work will
-add its tools to the same image). It runs `warpzone serve` as the user that owns the games share.
-An example Compose file is `examples/compose.example.yaml`.
+installed from the checkout the image is built from (a release tag, as a wheel, with no index
+access) and RAHasher built with CHD support in a separate stage from RALibretro, pinned by tag and
+commit; only its binary reaches the last stage, at `/usr/local/bin/RAHasher` (the "inbox on the
+hub" work will add its tools to the same image). The entry point is `warpzone` and the default
+command `serve`, so `docker compose run --rm warpzone catalog ...` runs the other commands. The
+image runs as a non-root user and the Compose file sets `user:` to the uid and gid that own the
+games share. An example Compose file is `examples/compose.example.yaml`, and the steps are in
+[the hub container guide](/warpzone/setup/hub-container/).
 
 | What | Where in the container | Why |
 |---|---|---|
@@ -646,7 +651,7 @@ outside the container. `serve` refuses to start (exit `2`) when `[hub] root` has
 `library/.stfolder`, so an unmounted share never looks like an empty library. The hub's
 Syncthing API must be reachable at `[hub] api_url` from the container: a LAN address works from
 a bridge network; when Syncthing listens only on loopback, the container uses the host network.
-The image has a health check on `GET /healthz`.
+The image has a health check on `GET /healthz` (Python's standard library, port 8780 inside the container).
 
 ## Pure decisions and I/O
 

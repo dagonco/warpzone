@@ -1,0 +1,10 @@
+# The build context is only what the wheel needs: the package and its metadata. Everything else
+# (the website and its node_modules, the tests, the docs, .git) stays out, so the context is small
+# and a change to a page does not invalidate the build cache.
+*
+!pyproject.toml
+!README.md
+!LICENSE
+!warpzone
+**/__pycache__
+**/*.pyc
