@@ -53,6 +53,7 @@ One table per console. The table name is the device's name, used in commands (`w
 | `pin` | string | none | no | A release tag such as `v0.3.0` or `v0.3.0rc1` (`v0.3.0-rc1` is rejected). The device stays on this tag, whatever the channel. |
 | `auto_prune` | boolean | `true` | no | Whether `provision device` installs the `warpzone-prune` timer, which runs `prune --apply --unattended` every hour so that what leaves the device's whitelist is deleted by itself. Only for a device that lists `library`. `false` removes the units if they exist. See [Automatic pruning](/warpzone/setup/whitelists/#automatic-pruning). |
 | `auto_hub` | boolean | `false` | no | Whether `provision device` first creates on the hub the folders this device needs and the hub lacks, using the hub's API key from this config. It never creates a whitelisted folder (`library`, `songs`) and never changes a folder the hub already has. See [Hub folders from a console](/warpzone/development/design/autonomous-updates/#hub-folders-from-a-console-auto_hub). |
+| `exclude_systems` | array of strings | `[]` | no | Systems (folder names below `library/roms/`) the device does not run: plain names of lower-case letters, digits, `-` and `_`, no repeats. The default is empty, so the device runs every system the hub holds. The [library UI](/warpzone/development/design/library-ui/#supported-systems) never turns one of them on for the device, and `warpzone check` reports a whitelist that names one. |
 
 Folder groups for `folders`:
 
@@ -121,6 +122,7 @@ auto_hub = false
 auto_prune = true
 channel = "stable"
 # pin = "v0.3.0"
+# exclude_systems = ["ps4", "switch"]
 
 [devices.handheld]
 device_id = "CCCCCCC-CCCCCCC-CCCCCCC-CCCCCCC-CCCCCCC-CCCCCCC-CCCCCCC-CCCCCCC"  # gitleaks:allow

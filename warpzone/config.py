@@ -31,6 +31,7 @@ FOLDER_GROUPS = (
 )
 _DEVICE_ID_RE = re.compile(r"^[A-Z2-7]{7}(-[A-Z2-7]{7}){7}$")
 _NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
+_SYSTEM_RE = re.compile(r"^[a-z0-9_-]+$")
 
 
 class ConfigError(UsageError):
@@ -67,6 +68,9 @@ class Device:
     # Whether `provision device` installs the timer that runs `prune --apply --unattended`.
     # It only applies to a device that lists `library`; see `prunes_unattended`.
     auto_prune: bool = True
+    # Systems (folder names below library/roms/) the device does not run. The library UI never
+    # turns one on for it and `check` reports a whitelist that names one. Empty: it runs all.
+    exclude_systems: tuple[str, ...] = ()
 
     @property
     def prunes_unattended(self) -> bool:
@@ -174,6 +178,24 @@ def _addresses(table: dict[str, Any], where: str, errors: list[str]) -> tuple[st
         errors.append(f"{where}.addresses: must be a non-empty list of strings")
         return ("dynamic",)
     return tuple(raw)
+
+
+def _exclude_systems(table: dict[str, Any], where: str, errors: list[str]) -> tuple[str, ...]:
+    raw = table.get("exclude_systems", [])
+    key = f"{where}.exclude_systems"
+    if not isinstance(raw, list) or not all(isinstance(s, str) for s in raw):
+        errors.append(f"{key}: must be a list of system names")
+        return ()
+    bad = [s for s in raw if not _SYSTEM_RE.match(s)]
+    if bad:
+        errors.append(
+            f"{key}: not a plain system name: {', '.join(repr(s) for s in bad)} "
+            "(lower-case letters, digits, '-' and '_' only)"
+        )
+    repeated = sorted({s for s in raw if raw.count(s) > 1})
+    if repeated:
+        errors.append(f"{key}: listed more than once: {', '.join(repr(s) for s in repeated)}")
+    return tuple(raw) if not bad and not repeated else ()
 
 
 def _read_api_key(hub: dict[str, Any], errors: list[str]) -> str:
@@ -293,6 +315,7 @@ def parse_config(data: dict[str, Any], known_profiles: set[str] | None = None) -
                 "pin",
                 "auto_hub",
                 "auto_prune",
+                "exclude_systems",
             },
             where,
             errors,
@@ -347,6 +370,7 @@ def parse_config(data: dict[str, Any], known_profiles: set[str] | None = None) -
         if not isinstance(auto_prune, bool):
             errors.append(f"{where}.auto_prune: must be true or false")
             auto_prune = True
+        exclude_systems = _exclude_systems(entry, where, errors)
         devices[dev_name] = Device(
             dev_name,
             device_id,
@@ -359,6 +383,7 @@ def parse_config(data: dict[str, Any], known_profiles: set[str] | None = None) -
             pin,
             auto_hub,
             auto_prune,
+            exclude_systems,
         )
 
     if errors:
