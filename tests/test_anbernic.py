@@ -51,7 +51,12 @@ RETROARCH = (
 def ark_config(folders=("library", "saves")):
     data = config_data()
     data["devices"] = {
-        "ark": {"device_id": ARK_ID, "profile": "anbernic-rg351mp", "folders": list(folders)}
+        "ark": {
+            "device_id": ARK_ID,
+            "profile": "anbernic-rg351mp",
+            "folders": list(folders),
+            "auto_prune": False,  # the prune timer has its own tests (test_prune_timer.py)
+        }
     }
     return parse_config(data)
 

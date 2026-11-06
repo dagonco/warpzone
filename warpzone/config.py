@@ -65,9 +65,18 @@ class Device:
     # Whether `provision device` creates on the hub the folders this device needs and the hub
     # lacks (never a whitelisted one, and never a change to a folder the hub has).
     auto_hub: bool = False
+    # Whether `provision device` installs the timer that runs `prune --apply --unattended`.
+    # It only applies to a device that lists `library`; see `prunes_unattended`.
+    auto_prune: bool = True
     # Systems (folder names below library/roms/) the device does not run. The library UI never
     # turns one on for it and `check` reports a whitelist that names one. Empty: it runs all.
     exclude_systems: tuple[str, ...] = ()
+
+    @property
+    def prunes_unattended(self) -> bool:
+        """Whether the device gets the unattended prune timer: it lists `library` and
+        `auto_prune` is not false."""
+        return self.auto_prune and "library" in self.folders
 
 
 INBOX_KEYS = (
@@ -305,6 +314,7 @@ def parse_config(data: dict[str, Any], known_profiles: set[str] | None = None) -
                 "channel",
                 "pin",
                 "auto_hub",
+                "auto_prune",
                 "exclude_systems",
             },
             where,
@@ -356,6 +366,10 @@ def parse_config(data: dict[str, Any], known_profiles: set[str] | None = None) -
         if not isinstance(auto_hub, bool):
             errors.append(f"{where}.auto_hub: must be true or false")
             auto_hub = False
+        auto_prune = entry.get("auto_prune", True)
+        if not isinstance(auto_prune, bool):
+            errors.append(f"{where}.auto_prune: must be true or false")
+            auto_prune = True
         exclude_systems = _exclude_systems(entry, where, errors)
         devices[dev_name] = Device(
             dev_name,
@@ -368,6 +382,7 @@ def parse_config(data: dict[str, Any], known_profiles: set[str] | None = None) -
             channel,
             pin,
             auto_hub,
+            auto_prune,
             exclude_systems,
         )
 

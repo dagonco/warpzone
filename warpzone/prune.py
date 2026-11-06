@@ -18,14 +18,14 @@ import re
 import urllib.error
 import urllib.parse
 import urllib.request
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from warpzone.config import DEFAULT_MAX_GIB, DEFAULT_RESCAN_TIMEOUT, Config
-from warpzone.errors import WarpzoneError
+from warpzone.errors import UsageError, WarpzoneError
 from warpzone.model import FolderSpec, device_specs
 from warpzone.paths import expand_home
 from warpzone.probes import REAL_PROBES, DeviceProbes
@@ -54,6 +54,10 @@ class PruneError(WarpzoneError):
     pass
 
 
+class PruneBusy(PruneError):
+    """The full scan got no answer in time: the folder is still pulling."""
+
+
 class Verdict(enum.Enum):
     UNTRACKED = "untracked"  # Syncthing has no record: ignored or created since the rescan
     WANTED = "wanted"  # Syncthing syncs it
@@ -77,6 +81,7 @@ class FolderReport:
     leftovers: list[Entry] = field(default_factory=list)
     kept: list[tuple[str, str]] = field(default_factory=list)  # (path, reason)
     untracked: int = 0
+    held_bytes: int = 0  # the regular files the walk found: what the device holds here
     deleted_files: int = 0
     deleted_bytes: int = 0
     removed_dirs: int = 0
@@ -121,6 +126,16 @@ def classify(entry: Entry, info: dict[str, Any] | None) -> tuple[Verdict, str]:
         if synced is None or abs(synced - entry.mtime) > MTIME_TOLERANCE_S:
             return Verdict.DIFFERS, "it changed after it was synced"
     return Verdict.LEFTOVER, ""
+
+
+def guard(totals: Mapping[str, tuple[int, int]]) -> list[str]:
+    """The folders an unattended run must not touch: those that would lose more than half.
+
+    `totals` maps a folder id to (bytes the run would delete, bytes the device holds in it).
+    Exactly half passes; one byte over fails. A single name returned means the whole run
+    deletes nothing, in any folder (the caller decides that, this only names the folders).
+    """
+    return [folder for folder, (delete, held) in totals.items() if 2 * delete > held]
 
 
 def _protected(rel: str, marker: str) -> bool:
@@ -175,7 +190,7 @@ def rescan(
     """Full rescan, then wait for it. Ignore flags are only refreshed by a full scan."""
     before = client.db_status(folder_id).get("stateChanged")
     if not client.scan(folder_id):
-        raise PruneError(
+        raise PruneBusy(
             "the folder is busy: Syncthing runs the scan only once it finishes pulling; "
             "run prune again when the folder is idle"
         )
@@ -250,6 +265,8 @@ def inspect_folder(
     }
     report = FolderReport(spec.id, root)
     for entry in walk(root, skip, marker):
+        if entry.kind == "file":
+            report.held_bytes += entry.size
         verdict, reason = classify(entry, client.db_file(spec.id, entry.path))
         if verdict is Verdict.LEFTOVER:
             report.leftovers.append(entry)
@@ -323,9 +340,23 @@ def _group(path: str) -> str:
     return "/".join(parts[:2]) if len(parts) > 2 else (parts[0] if len(parts) > 1 else ".")
 
 
-def print_report(report: FolderReport, rep: Reporter, *, list_all: bool) -> None:
+def print_report(
+    report: FolderReport, rep: Reporter, *, list_all: bool, summary_only: bool = False
+) -> None:
     n = len(report.leftovers)
     rep.out(f"{report.folder_id}: {n} leftover file(s), {human(report.bytes)}")
+    if summary_only:
+        # An unattended run writes to a journal: the counts, no file or folder names.
+        if report.kept:
+            rep.out(
+                f"{report.folder_id}: kept {len(report.kept)} ignored file(s) "
+                "the hub cannot restore"
+            )
+        if report.untracked:
+            rep.out(
+                f"{report.folder_id}: {report.untracked} file(s) not known to Syncthing, left alone"
+            )
+        return
     if list_all:
         for entry in report.leftovers:
             rep.out(f"  {entry.path}")
@@ -389,8 +420,17 @@ def prune_device(
     poll: float = 1.0,
     grace: float = 5.0,
     probes: DeviceProbes = REAL_PROBES,
+    unattended: bool = False,
 ) -> int:
-    """Report (default) or delete leftovers in every whitelisted folder. Returns problems."""
+    """Report (default) or delete leftovers in every whitelisted folder. Returns problems.
+
+    `unattended` is what the prune timer runs (development/design/prune.md, "Unattended
+    runs"): it has no size cap (`max_gib` and `force` do not apply), refuses to delete anything
+    when a folder would lose more than half of what the device holds in it, and treats a
+    folder that is still pulling as "try again later", not as a problem.
+    """
+    if unattended and not apply:
+        raise UsageError("--unattended needs --apply")
     device = cfg.devices[name]
     actual = local.my_id()
     if actual != device.device_id:
@@ -409,6 +449,7 @@ def prune_device(
 
     configured = {f["id"]: f for f in local.folders()}
     problems = 0
+    busy: list[str] = []
     reports: list[FolderReport] = []
     for spec in specs:
         try:
@@ -422,11 +463,19 @@ def prune_device(
                 grace=grace,
                 probes=probes,
             )
+        except PruneBusy as exc:
+            if not unattended:
+                rep.warn(f"{spec.id}: skipped, {exc}")
+                problems += 1
+                continue
+            busy.append(spec.id)
+            rep.out(f"{spec.id}: busy, still pulling; not pruned this time")
+            continue
         except PruneError as exc:
             rep.warn(f"{spec.id}: skipped, {exc}")
             problems += 1
             continue
-        print_report(report, rep, list_all=list_all)
+        print_report(report, rep, list_all=list_all and not unattended, summary_only=unattended)
         reports.append(report)
 
     total_files = sum(len(r.leftovers) for r in reports)
@@ -434,7 +483,29 @@ def prune_device(
     rep.out(f"total: {total_files} leftover file(s), {human(total_bytes)}")
 
     deleting = apply and total_files > 0
-    if deleting and total_bytes > max_gib * GIB and not force:
+    if deleting and unattended:
+        # A device that is still pulling in one folder deletes nothing in any: what the
+        # index says is not settled, and the next tick tries again.
+        if busy:
+            rep.out("not deleting anything while a folder is busy; the next run tries again")
+            deleting = False
+        else:
+            over = guard({r.folder_id: (r.bytes, r.held_bytes) for r in reports})
+            if over:
+                rep.warn(
+                    "refusing to delete anything: "
+                    + ", ".join(
+                        f"{r.folder_id} would lose {human(r.bytes)} of the {human(r.held_bytes)} "
+                        "it holds"
+                        for r in reports
+                        if r.folder_id in over
+                    )
+                    + ", more than half. Check the whitelist, then run `warpzone prune --apply` "
+                    "by hand"
+                )
+                problems += 1
+                deleting = False
+    elif deleting and total_bytes > max_gib * GIB and not force:
         rep.warn(
             f"refusing to delete {human(total_bytes)}: more than --max-gib {max_gib:g}. "
             "Check the report, then raise --max-gib or pass --force"

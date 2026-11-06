@@ -23,7 +23,14 @@ from warpzone.config import (
     load_config,
     load_inbox_settings,
 )
-from warpzone.errors import EXIT_DEFERRED, EXIT_OK, EXIT_RUNTIME, EXIT_USAGE, WarpzoneError
+from warpzone.errors import (
+    EXIT_DEFERRED,
+    EXIT_OK,
+    EXIT_RUNTIME,
+    EXIT_USAGE,
+    UsageError,
+    WarpzoneError,
+)
 from warpzone.model import ModelError
 from warpzone.profiles import Profile, ProfileError, available_profiles, load_profile
 
@@ -128,10 +135,16 @@ def _build_parser() -> argparse.ArgumentParser:
     pr.add_argument(
         "--max-gib",
         type=float,
-        default=DEFAULT_MAX_GIB,
-        help="refuse to delete more than this in one run (default: %(default)s)",
+        help=f"refuse to delete more than this in one run (default: {DEFAULT_MAX_GIB:g})",
     )
     pr.add_argument("--force", action="store_true", help="ignore --max-gib")
+    pr.add_argument(
+        "--unattended",
+        action="store_true",
+        help="for the prune timer (needs --apply; not with --max-gib or --force): no size cap, "
+        "but delete nothing when a folder would lose more than half of what the device holds "
+        "in it; a folder that is still pulling is skipped without failing",
+    )
     pr.add_argument("--list", action="store_true", dest="list_all", help="list every file")
     pr.add_argument(
         "--notify-url",
@@ -892,6 +905,8 @@ def _run(args: argparse.Namespace) -> int:
         return _frontend(args, cfg, profiles)
 
     if args.command == "prune":
+        if args.unattended and (not args.apply or args.max_gib is not None or args.force):
+            raise UsageError("prune --unattended needs --apply and takes no --max-gib or --force")
         local = localst.parse_config(localst.find_config(args.syncthing_config))
         client = _client(local.base_url, local.api_key, label="local")
         name = args.name or _this_device(cfg, client)
@@ -903,11 +918,12 @@ def _run(args: argparse.Namespace) -> int:
             rep,
             home=Path.home(),
             apply=args.apply,
-            max_gib=args.max_gib,
+            max_gib=DEFAULT_MAX_GIB if args.max_gib is None else args.max_gib,
             force=args.force,
             list_all=args.list_all,
             notify_url=args.notify_url,
             rescan_timeout=args.timeout,
+            unattended=args.unattended,
         )
         return EXIT_RUNTIME if problems else EXIT_OK
 

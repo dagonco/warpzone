@@ -550,6 +550,7 @@ class ProvisionDeviceTests(FakeSource):
                 "profile": profile,
                 "folders": ["library"],
                 "self_update": self_update,
+                "auto_prune": False,  # tests/test_prune_timer.py covers the prune timer
             }
         }
         cfg = parse_config(data)

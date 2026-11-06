@@ -480,7 +480,7 @@ def _unit_arg(arg: str) -> str:
 
 
 def _units(
-    command: list[str], config_path: Path | None, interval: str, what: str
+    command: list[str], config_path: Path | None, interval: str, what: str, boot: str = "5min"
 ) -> tuple[str, str]:
     if config_path is not None:
         command = [*command, "--config", str(config_path)]
@@ -498,7 +498,7 @@ def _units(
         f"Description=warpzone: {what} regularly\n"
         "\n"
         "[Timer]\n"
-        "OnBootSec=5min\n"
+        f"OnBootSec={boot}\n"
         f"OnUnitActiveSec={interval}\n"
         "\n"
         "[Install]\n"
@@ -523,8 +523,23 @@ def render_play_state_units(
     return _units(command, config_path, interval, "merge favourites and play statistics")
 
 
+def render_prune_units(python: str, name: str, config_path: Path | None) -> tuple[str, str]:
+    """The text of the `systemd --user` service and timer that run `prune --apply --unattended`."""
+    command = [python, "-m", "warpzone", "prune", name, "--apply", "--unattended"]
+    return _units(
+        command,
+        config_path,
+        PRUNE_INTERVAL,
+        "delete the files this device no longer whitelists",
+        boot=PRUNE_BOOT,
+    )
+
+
 UNIT_NAME = "warpzone-artwork"
 PLAY_STATE_UNIT = "warpzone-play-state"
+PRUNE_UNIT = "warpzone-prune"
+PRUNE_BOOT = "15min"
+PRUNE_INTERVAL = "1h"
 
 
 # ------------------------------------------------------------------ formats

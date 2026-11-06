@@ -178,7 +178,8 @@ warpzone render-ignores deck
 
 ```
 warpzone prune [NAME] [--config PATH] [--syncthing-config PATH] [--apply]
-               [--max-gib GIB] [--force] [--list] [--notify-url URL] [--timeout SECONDS]
+               [--max-gib GIB] [--force] [--unattended] [--list] [--notify-url URL]
+               [--timeout SECONDS]
 ```
 
 On a console, lists the files in its whitelisted folders (library and songs) that the device's whitelist no longer lets through, and with `--apply` deletes them and the folders that end up empty. Without `--apply` it is a report and deletes nothing. It rescans first, reads Syncthing's own record of each file, and checks every file again right before deleting it; a file that changed meanwhile is left alone.
@@ -191,11 +192,12 @@ On a console, lists the files in its whitelisted folders (library and songs) tha
 | `--apply` | off | Delete the leftovers. |
 | `--max-gib GIB` | `50` | Refuse to delete more than this in one run. |
 | `--force` | off | Ignore `--max-gib`. |
+| `--unattended` | off | For the [prune timer](/warpzone/setup/whitelists/#automatic-pruning). Needs `--apply`; with `--max-gib` or `--force` it is a usage error. No size cap, but nothing is deleted, in any folder, when a folder would lose more than half of what the device holds in it. A folder that is still pulling is skipped without failing the run. Prints only the summary, and ignores `--list`. |
 | `--list` | off | List every file (otherwise the report shows a sample). |
 | `--notify-url URL` | none | `POST` a JSON summary (`device`, `folder`, `files`, `bytes`, `applied`) to this `http://` or `https://` URL. The URL is never printed, because it can hold a secret. |
 | `--timeout SECONDS` | `600` | How long to wait for the rescan. |
 
-There is no `--dry-run`: the default already is one. Exit `0` when it finished cleanly (a report that lists leftovers is still `0`); `1` when a folder was skipped, the `--max-gib` limit refused the deletion, or some files could not be deleted; `2` for a config error.
+There is no `--dry-run`: the default already is one. Exit `0` when it finished cleanly (a report that lists leftovers is still `0`); `1` when a folder was skipped, the `--max-gib` limit (or, with `--unattended`, the half-of-the-folder guard) refused the deletion, or some files could not be deleted; `2` for a config error or a bad combination of options. With `--unattended`, a folder that is still pulling is not a failure: nothing is deleted and the exit is `0`.
 
 ```bash
 warpzone prune deck --list

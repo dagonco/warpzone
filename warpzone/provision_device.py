@@ -48,7 +48,11 @@ from warpzone.provision_scripts import (
     ensure_options_menu,
     ensure_play_state_script,
 )
-from warpzone.provision_timers import ensure_artwork_timer, ensure_play_state_timer
+from warpzone.provision_timers import (
+    ensure_artwork_timer,
+    ensure_play_state_timer,
+    ensure_prune_timer,
+)
 from warpzone.provision_updater import UPDATER_SOURCE, ensure_self_update
 from warpzone.report import Reporter
 from warpzone.syncthing import Client, SyncthingError
@@ -512,6 +516,17 @@ def provision_device(
             config_path=config_path,
             probes=probes,
         )
+
+    ensure_prune_timer(
+        name,
+        device,
+        home,
+        rep,
+        dry_run=local.dry_run,
+        python=python,
+        config_path=config_path,
+        probes=probes,
+    )
 
     ensure_options_menu(profile, home, rep, dry_run=local.dry_run)
 
