@@ -121,6 +121,11 @@ warpzone/
   progress.py        per-device progress states from the hub's completion (pure)
   serve.py           `warpzone serve`: http.server, sessions, the write lock, caches, background runs
   localst.py         find and parse the local Syncthing config.xml
+  data/ui/api.js     its API client: requests, error messages, title key port
+  data/ui/app.js     its views: home, system, search, the game sheet, changes
+  data/ui/style.css
+  data/ui/placeholder.svg  the cover of a game with no scrape
+  data/ui/favicon.svg
   data/updater.sh    the updater (POSIX sh): choose a release, verify it, roll it back
   data/ui/index.html the library UI page (static, no build step)
   data/bios.toml     BIOS manifest (names, sizes, hashes, signatures only)
@@ -141,15 +146,11 @@ website/             documentation site (Starlight); the design pages are
 I/O sits in `syncthing.py`, `localst.py` and the `provision_*` modules, so the diffing
 logic is unit-tested without a network.
 
-The [library UI](/warpzone/development/design/library-ui/) adds these files. They join the
-block above in the pull request that creates each one (the test compares that block with the
-package, so it cannot list files that do not exist yet):
+The [library UI](/warpzone/development/design/library-ui/) has no file left to add: its
+modules and its `data/ui/` files are all in the block above. The hub's container image and its
+compose example are the only planned files:
 
 ```
-warpzone/
-  data/ui/app.js
-  data/ui/style.css
-  data/ui/placeholder.svg  the cover of a game with no scrape
 docker/Dockerfile    the hub's container image
 examples/compose.example.yaml
 ```
