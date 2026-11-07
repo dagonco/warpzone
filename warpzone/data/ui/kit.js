@@ -159,12 +159,13 @@
 
   // ---- consoles ------------------------------------------------------------------------------
 
-  // Up to four characters of a device name for the places a whole name does not fit: the last
-  // part of a hyphenated name when it is long ("anbernic-rg351mp" is "RG35").
+  // The name of a device for the places a whole name does not fit, up to eight characters: a
+  // short name stays whole ("machine", "deck") and a long hyphenated one gives its last part
+  // whole ("anbernic-rg351mp" is "RG351MP"). The full name goes in a title where there is one.
   function consoleCode(name) {
+    if (name.length <= 8) return name.toUpperCase();
     const parts = name.split(/[-_ ]+/).filter(Boolean);
-    const word = name.length <= 5 ? name : parts[parts.length - 1] || name;
-    return word.slice(0, 4).toUpperCase();
+    return (parts[parts.length - 1] || name).slice(0, 8).toUpperCase();
   }
 
   // ---- titles --------------------------------------------------------------------------------

@@ -251,7 +251,7 @@
     const unmanaged = !store.isManaged(deviceKey);
     const unknown = cov.state === 'unknown';
     return {
-      sys, key: deviceKey, label: deviceKey, title: deviceKey, state: unsup || unknown ? 'none' : cov.state, whole: cov.whole,
+      sys, key: deviceKey, label: consoleCode(deviceKey), title: deviceKey, state: unsup || unknown ? 'none' : cov.state, whole: cov.whole,
       n: cov.n, total: cov.total, size: cov.size, of: cov.of,
       disabled: unsup || unmanaged || unknown,
       note: unsup ? 'Not offered to this console' : unmanaged ? 'Needs "warpzone whitelist migrate"' : unknown ? 'State unknown' : '',
@@ -296,7 +296,8 @@
     },
     h('div', { class: 'lv-h' },
       h('span', { class: 'dot' }),
-      h('span', { class: 'lv-n', title: o.compact ? systemName(sys) : m.title }, name),
+      h('span', { class: 'lv-n', title: o.compact ? systemName(sys) : m.title },
+        o.compact ? [h('span', { class: 'lv-full' }, name), h('span', { class: 'lv-code' }, systemCode(sys))] : name),
       count),
     h('div', { class: 'lv-s' },
       h('span', { class: 'lv-st' }, stateLine(m)),
