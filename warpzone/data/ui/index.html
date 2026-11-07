@@ -4,64 +4,90 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="color-scheme" content="dark">
-  <meta name="theme-color" content="#0d1117">
+  <meta name="theme-color" content="#06050e">
   <title>warpzone library</title>
   <link rel="icon" href="favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="style.css">
   <!--
     No inline script or style anywhere: the server sends Content-Security-Policy: default-src 'self'.
-    The page is built by app.js from the JSON API (development/design/library-ui.md).
+    The page is built by the scripts below from the JSON API (development/design/library-ui.md).
   -->
   <script src="api.js" defer></script>
+  <script src="kit.js" defer></script>
+  <script src="store.js" defer></script>
+  <script src="components.js" defer></script>
+  <script src="views.js" defer></script>
   <script src="app.js" defer></script>
 </head>
-<body>
+<body class="crt" data-route="home">
   <a class="skip" href="#main">Skip to the content</a>
 
-  <header class="topbar">
-    <a class="brand" href="#/" data-fk="brand" aria-label="warpzone library, home">
-      <span class="brand-mark" aria-hidden="true"></span>
-      <span class="brand-name">warpzone</span>
-    </a>
+  <div class="app">
+    <header class="top">
+      <a class="brand" href="#/" aria-label="warpzone library, home">
+        <svg viewBox="0 0 16 16" width="26" height="26" shape-rendering="crispEdges" aria-hidden="true"><path fill="#38f9ff" d="M1 1h14v14H1z"/><path fill="#06050e" d="M3 3h10v10H3z"/><path fill="#ff3df2" d="M4 4h8v8H4z"/><path fill="#06050e" d="M6 6h4v4H6z"/><path fill="#ffd23f" d="M7 7h2v2H7z"/></svg>
+        <span class="brand-t">WARP<b>ZONE</b></span>
+      </a>
 
-    <form class="search" role="search" id="search-form" autocomplete="off">
-      <label class="sr-only" for="search">Search the library</label>
-      <svg class="search-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5 21 21"/></svg>
-      <input id="search" type="search" placeholder="Search every system   ( / )" enterkeyhint="search"
-             spellcheck="false" autocapitalize="off" data-fk="search">
-    </form>
+      <form class="search" role="search" id="search-form" autocomplete="off">
+        <span class="s-ic" aria-hidden="true"></span>
+        <label class="sr-only" for="search">Search the library</label>
+        <input id="search" type="search" placeholder="Search every system" enterkeyhint="search"
+               spellcheck="false" autocapitalize="off">
+        <kbd aria-hidden="true">/</kbd>
+      </form>
 
-    <ul class="consoles" id="consoles" aria-label="Consoles"></ul>
-  </header>
+      <ul class="leds" id="leds" aria-label="Console status"></ul>
 
-  <div id="banner" class="banner" role="status" hidden></div>
+      <button class="chip crt-toggle" type="button" data-crt aria-pressed="true" title="Show or hide the CRT scanline overlay">
+        <span class="lamp-dot"></span><span class="crt-t">CRT</span>
+      </button>
+    </header>
 
-  <main id="main" tabindex="-1" aria-busy="true">
-    <p class="loading-note">Loading the library...</p>
-  </main>
+    <nav class="rail" id="rail" aria-label="Library"></nav>
 
-  <!-- A game: the side sheet. Escape or a click outside closes it. -->
-  <dialog id="detail" class="sheet" aria-labelledby="detail-title"></dialog>
+    <div class="stage">
+      <div id="banner" class="banner" role="status" hidden></div>
+      <main id="main" tabindex="-1" aria-busy="true">
+        <p class="loading-note">Loading the library...</p>
+      </main>
+      <footer class="hints" aria-label="Keyboard and gamepad">
+        <span><kbd>&larr;</kbd><kbd>&uarr;</kbd><kbd>&darr;</kbd><kbd>&rarr;</kbd> move</span>
+        <span><kbd>Enter</kbd> select</span>
+        <span><kbd>Esc</kbd> back</span>
+        <span><kbd>/</kbd> search</span>
+        <span class="hint-pad">gamepad: D-pad, A select, B back, Start search</span>
+      </footer>
+    </div>
+  </div>
+
+  <!-- The console buttons of a game, at the bottom of a phone where the thumb is. -->
+  <div class="consolebar" id="consolebar" aria-label="Consoles for this game"></div>
+  <nav class="bnav" id="bnav" aria-label="Main"></nav>
 
   <!-- Confirmation of a whole-system change, filled from the dry run. -->
   <dialog id="confirm" class="modal" aria-labelledby="confirm-title"></dialog>
 
   <!-- The token form. It cannot be dismissed: nothing works without a session. -->
-  <dialog id="login" class="modal" aria-labelledby="login-title">
+  <dialog id="login" class="modal login" aria-labelledby="login-title">
     <form method="dialog" id="login-form" autocomplete="off">
-      <h2 id="login-title">Sign in</h2>
-      <p class="muted">Enter the access token of this server (WARPZONE_UI_TOKEN). It is sent once to open a session and is not kept by the page.</p>
-      <label class="field">
-        <span>Access token</span>
-        <input id="login-token" type="password" required autocomplete="current-password" spellcheck="false">
-      </label>
-      <p id="login-error" class="error-text" role="alert" hidden></p>
-      <div class="actions">
+      <div class="mh"><i></i>Access</div>
+      <div class="mb">
+        <h2 id="login-title">Sign in</h2>
+        <p class="mute">Enter the access token of this server (WARPZONE_UI_TOKEN). It is sent once to open a session and is not kept by the page.</p>
+        <label class="field">
+          <span>Access token</span>
+          <input id="login-token" type="password" required autocomplete="current-password" spellcheck="false">
+        </label>
+        <p id="login-error" class="error-text" role="alert" hidden></p>
+      </div>
+      <div class="macts">
         <button type="submit" class="btn primary">Sign in</button>
       </div>
     </form>
   </dialog>
 
   <div id="toasts" class="toasts" popover="manual" aria-live="polite"></div>
+  <div class="crt-fx" aria-hidden="true"></div>
 </body>
 </html>

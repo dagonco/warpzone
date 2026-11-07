@@ -246,11 +246,14 @@ class ReadAnswerTests(unittest.TestCase):
             {
                 "covers": ["A.jpg", "A.png", "B.gif", "sub/C.JPEG", "noext", ".png"],
                 "marquees": ["A.jpg"],
+                "physicalmedia": ["A.png", "sub/C.png"],
                 "other": ["A.png"],
             }
         )
-        self.assertEqual(found["A"], {"covers": "A.png", "marquees": "A.jpg"})
-        self.assertEqual(found["sub/C"], {"covers": "sub/C.JPEG"})
+        self.assertEqual(
+            found["A"], {"covers": "A.png", "marquees": "A.jpg", "physicalmedia": "A.png"}
+        )
+        self.assertEqual(found["sub/C"], {"covers": "sub/C.JPEG", "physicalmedia": "sub/C.png"})
         self.assertNotIn("B", found)
 
 
