@@ -122,8 +122,12 @@ warpzone/
   serve.py           `warpzone serve`: http.server, sessions, the write lock, caches, background runs
   localst.py         find and parse the local Syncthing config.xml
   data/ui/index.html the library UI page (static, no build step)
+  data/ui/kit.js     its DOM builder, pixel icons, system names, codes and colours, title parsing
   data/ui/api.js     its API client: requests, error messages, title key port
-  data/ui/app.js     its views: home, system, search, the game sheet, changes
+  data/ui/store.js   its state: catalog, coverage per console, progress poll, changes
+  data/ui/components.js  its shared pieces: art, tiles, console slots, the system lever
+  data/ui/views.js   its pages: home, system, search, the game page, consoles
+  data/ui/app.js     its frame: router, search, confirmation dialog, keyboard and gamepad, login
   data/ui/style.css
   data/ui/placeholder.svg  the cover of a game with no scrape
   data/ui/favicon.svg

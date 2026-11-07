@@ -22,7 +22,15 @@ from warpzone.config import Config, Device
 MAX_BODY = 64 * 1024
 MAX_CHANGES = 1000
 SEARCH_LIMIT = 100
-MEDIA_KINDS = ("covers", "miximages", "screenshots", "titlescreens", "marquees", "3dboxes")
+MEDIA_KINDS = (
+    "covers",
+    "miximages",
+    "screenshots",
+    "titlescreens",
+    "marquees",
+    "3dboxes",
+    "physicalmedia",
+)
 MEDIA_EXTENSIONS = ("png", "jpg", "jpeg")
 META_FIELDS = (
     "name",

@@ -399,6 +399,16 @@ class MediaTests(ServeCase):
         self.assertEqual(reply.headers["Content-Type"], "image/png")
         self.assertEqual(reply.headers["X-Content-Type-Options"], "nosniff")
 
+    def test_the_physical_media_scan_is_served_and_listed(self) -> None:
+        folder = self.root / "frontend" / "media" / "psx" / "physicalmedia"
+        folder.mkdir()
+        (folder / "Example Game (Europe).png").write_bytes(PNG)
+        found = self.get(f"/api/v1/games/{EXAMPLE.id}").json
+        self.assertEqual(found["media"], ["covers", "physicalmedia"])
+        reply = self.get(f"/api/v1/games/{EXAMPLE.id}/media/physicalmedia")
+        self.assertEqual((reply.status, reply.body), (200, PNG))
+        self.assertEqual(reply.headers["Content-Type"], "image/png")
+
     def test_media_needs_auth(self) -> None:
         self.assertEqual(
             self.get(f"/api/v1/games/{EXAMPLE.id}/media/covers", auth=False).status, 401
