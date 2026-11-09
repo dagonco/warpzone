@@ -47,6 +47,19 @@ def utc_now() -> datetime:
 # --------------------------------------------------------------------------- reading
 
 
+class WhitelistIOError(WarpzoneError):
+    """A whitelist, or its backup, could not be read or written (permissions, a full disk).
+
+    The message names the file and the cause. `strerror` is the cause alone, for an answer
+    that must not carry the hub's paths (the UI's).
+    """
+
+    def __init__(self, action: str, path: Path, cause: OSError) -> None:
+        self.path = path
+        self.strerror = cause.strerror or type(cause).__name__
+        super().__init__(f"cannot {action} {path}: {self.strerror}")
+
+
 @dataclass(frozen=True)
 class Snapshot:
     """A whitelist file as read: its bytes and the stamp a write compares against."""
@@ -69,6 +82,8 @@ def read(path: Path) -> Snapshot:
             data = fh.read()
     except FileNotFoundError:
         return Snapshot(path, None, None)
+    except OSError as exc:
+        raise WhitelistIOError("read", path, exc) from exc
     return Snapshot(path, data, safefile.FileStamp(st.st_size, st.st_mtime_ns, _sha(data)))
 
 
@@ -121,14 +136,21 @@ def write(
     if snapshot.stamp is None:
         _require_library(snapshot.path)
     saved: list[Path] = []
+    failing = snapshot.path  # the file the OSError of the step in progress is about
 
     def save() -> None:
+        nonlocal failing
         if snapshot.data is not None:
+            failing = backups_dir(root, device)
             saved.append(backup(root, device, snapshot.data, now or utc_now()))
+            failing = snapshot.path
 
-    edit = safefile.guarded_edit(
-        snapshot.path, data, expect=snapshot.stamp, busy=lambda: False, backup=save
-    )
+    try:
+        edit = safefile.guarded_edit(
+            snapshot.path, data, expect=snapshot.stamp, busy=lambda: False, backup=save
+        )
+    except OSError as exc:
+        raise WhitelistIOError("write", failing, exc) from exc
     return Written(edit, saved[0] if saved else None)
 
 
@@ -366,7 +388,11 @@ def excluded_system_report(
         library = profiles[device.profile].paths.get("library")
         if library:
             candidates.append(Path(expand_home(library, home)) / ignores.device_file(name))
-        snapshot = next((s for s in map(read, candidates) if s.data is not None), None)
+        try:
+            snapshot = next((s for s in map(read, candidates) if s.data is not None), None)
+        except WhitelistIOError as exc:
+            notes.append(f"{name}: {exc} (its whitelist was not checked for excluded systems)")
+            continue
         if snapshot is None:
             continue
         model = read_model(snapshot)

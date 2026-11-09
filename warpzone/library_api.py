@@ -66,6 +66,7 @@ STATUS = {
     "unsupported": 422,
     "expect-missing": 428,
     "write-failed": 500,
+    "read-failed": 500,
     "internal": 500,
     "hub-unreachable": 503,
 }
