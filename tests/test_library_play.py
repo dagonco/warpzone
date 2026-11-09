@@ -279,7 +279,7 @@ class ServeTests(test_serve.ServeCase):
         self.assertEqual(len(self.get("/api/v1/recent?limit=1").json["games"]), 1)
 
     def test_recent_validates_limit_and_needs_auth(self) -> None:
-        for query in ("limit=0", "limit=101", "limit=x"):
+        for query in ("limit=0", "limit=101", "limit=x", "limit=", "limit=&x=1"):
             reply = self.get(f"/api/v1/recent?{query}")
             self.assertEqual((reply.status, self.error(reply)["code"]), (400, "bad-request"), query)
         self.assertEqual(self.get("/api/v1/recent", auth=False).status, 401)

@@ -184,7 +184,10 @@ class Request:
 
     @property
     def query(self) -> dict[str, str]:
-        parsed = urllib.parse.parse_qs(urllib.parse.urlsplit(self.target).query)
+        # Blank values are kept: `?limit=` is a value that is not a number, not a missing one.
+        parsed = urllib.parse.parse_qs(
+            urllib.parse.urlsplit(self.target).query, keep_blank_values=True
+        )
         return {k: v[0] for k, v in parsed.items()}
 
 
@@ -812,7 +815,7 @@ class App:
                 return self._media(request, game_id, kind)
             case ["search"]:
                 query = request.query.get("q")
-                if query is None:
+                if not query:
                     raise ApiError("bad-request", "the `q` parameter is missing")
                 lib = self.files.library()
                 return json_response(
