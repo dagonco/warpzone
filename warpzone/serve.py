@@ -28,7 +28,17 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
-from warpzone import __version__, artwork, catalog, catalog_store, library_api, progress, ra
+from warpzone import (
+    __version__,
+    artwork,
+    catalog,
+    catalog_store,
+    library_api,
+    progress,
+    ra,
+    ra_data,
+    ra_store,
+)
 from warpzone import whitelist_store as store
 from warpzone.config import Config, ServeSettings, split_listen
 from warpzone.errors import EXIT_OK, UsageError, WarpzoneError
@@ -217,6 +227,7 @@ class HubFiles:
         self._stamps: dict[Path, tuple[int, int]] = {}
         self._docs: dict[Path, catalog.SystemDoc] = {}
         self._ra: dict[Path, catalog.RaList] = {}
+        self._ra_files: dict[Path, tuple[str, Any]] = {}  # games, user progress, unlock dates
         self._meta: dict[str, tuple[tuple[int, int] | None, float, dict[str, artwork.Entry]]] = {}
         self._media: dict[str, tuple[float, dict[str, dict[str, str]]]] = {}
         self._unclaimed: dict[str, tuple[float, tuple[str, ...]]] = {}
@@ -250,33 +261,47 @@ class HubFiles:
             base = self.root / catalog_store.CATALOG_DIR
             seen: dict[Path, tuple[int, int]] = {}
             changed = self._library is None
-            for path in [*self._files(base / "systems"), *self._files(base / "ra")]:
+            ra_base = base / "ra"
+            for path in [
+                *self._files(base / "systems"),
+                *self._files(ra_base),
+                *self._files(ra_base / "games"),
+                *self._files(ra_base / "user"),
+                *self._files(ra_base / "user" / "games"),
+            ]:
                 stamp = self._stat(path)
                 if stamp is None:
                     continue
                 seen[path] = stamp
                 if self._stamps.get(path) != stamp:
                     changed = True
-                    self._load(path, path.parent.name == "ra")
+                    self._load(path)
             if set(seen) != set(self._stamps):
                 changed = True
             if changed:
                 for gone in set(self._stamps) - set(seen):
                     self._docs.pop(gone, None)
                     self._ra.pop(gone, None)
+                    self._ra_files.pop(gone, None)
                 self._stamps = seen
                 self._library = self._build()
             assert self._library is not None
             return self._library
 
-    def _load(self, path: Path, is_ra: bool) -> None:
+    def _load(self, path: Path) -> None:
         self._docs.pop(path, None)
         self._ra.pop(path, None)
+        self._ra_files.pop(path, None)
+        kind = ra_store.kind_of(path)
         try:
-            if is_ra:
+            if kind == "list":
                 found, _ = catalog_store.read_ra_list(path)
                 if found is not None:
                     self._ra[path] = found
+            elif kind is not None:
+                loaded = ra_store.read_file(kind, path)
+                if loaded is not None:
+                    self._ra_files[path] = (kind, loaded)
             else:
                 doc, _ = catalog_store.read_state(path)
                 if doc is not None:
@@ -288,7 +313,27 @@ class HubFiles:
         systems = {doc.system: doc.games for doc in self._docs.values()}
         lists = {ra_list.console: ra_list for ra_list in self._ra.values()}
         updated = max((d.updated for d in self._docs.values()), default="")
-        return library_api.Library(dict(sorted(systems.items())), lists, updated)
+        return library_api.Library(dict(sorted(systems.items())), lists, updated, self._ra_data())
+
+    def _ra_data(self) -> ra_data.RaData:
+        games: dict[int, ra_data.CachedGame] = {}
+        unlocks: dict[int, ra_data.CachedUnlocks] = {}
+        user: ra_data.UserSummary | None = None
+        for kind, loaded in self._ra_files.values():
+            if kind == "game":
+                games[loaded.detail.id] = loaded
+            elif kind == "unlocks":
+                unlocks[loaded.game_id] = loaded
+            elif kind == "user":
+                user = loaded
+        return ra_data.RaData(games, user, unlocks)
+
+    def badge_path(self, name: str, variant: str) -> Path | None:
+        """The cached image of a badge (`unlocked` or `locked`), or None when it is not there."""
+        if variant not in ("unlocked", "locked"):
+            return None
+        path = ra_store.badge_path(self.root, name, locked=variant == "locked")
+        return path if path is not None and path.is_file() and not path.is_symlink() else None
 
     # ------------------------------------------------------------- gamelists and media
 
@@ -479,10 +524,16 @@ def _utc(when: datetime) -> str:
 
 
 def catalog_job(
-    root: Path, *, rahasher: str | None, ra_key: str | None, log: Callable[[str], None]
+    root: Path,
+    *,
+    rahasher: str | None,
+    ra_key: str | None,
+    log: Callable[[str], None],
+    ra_user: str | None = None,
 ) -> Callable[[bool], str]:
     """The work of one background run: `catalog` (with RAHasher when one is set) and, when
-    asked and a key is set, `catalog --ra-lists`."""
+    asked and a key is set, `catalog --ra-lists`. With a key, every run also does a bounded
+    share of `catalog --ra-achievements` (what is fresh costs no call)."""
     hasher = catalog_store.rahasher_runner(rahasher) if rahasher else None
 
     def job(ra_lists: bool) -> str:
@@ -494,6 +545,19 @@ def catalog_job(
                 root, key=ra_key, force=False, dry_run=False, out=log, warn=log
             )
             message += f"; {len(lists)} RA list(s)"
+        if ra_key:
+            found = ra_store.run_ra_achievements(
+                root,
+                key=ra_key,
+                user=ra_user,
+                force=False,
+                dry_run=False,
+                out=log,
+                warn=log,
+                call_limit=ra_store.CALL_BATCH,
+                badge_limit=ra_store.BADGE_BATCH,
+            )
+            message += f"; RA achievements: {found.details_left} game(s) left"
         return message
 
     return job
@@ -680,6 +744,12 @@ class App:
                 return json_response(
                     200, library_api.search_response(lib, cfg, self.files.views(cfg), query)
                 )
+            case ["ra", "summary"]:
+                return json_response(
+                    200, library_api.ra_summary_response(self.files.library(), cfg)
+                )
+            case ["ra", "badges", name, variant]:
+                return self._badge(name, variant)
             case ["progress"]:
                 return json_response(200, self._progress_entries())
             case ["catalog"]:
@@ -726,6 +796,16 @@ class App:
             CONTENT_TYPES.get(path.suffix.lower(), "application/octet-stream"),
             [("Cache-Control", "private, max-age=3600")],
         )
+
+    def _badge(self, name: str, variant: str) -> Response:
+        path = self.files.badge_path(name, variant)
+        if path is None:
+            raise ApiError("not-found", "the badge is not available")
+        try:
+            data = path.read_bytes()
+        except OSError:
+            raise ApiError("not-found", "the badge is not available") from None
+        return Response(200, data, "image/png", [("Cache-Control", "private, max-age=86400")])
 
     def _static(self, request: Request, path: str) -> Response:
         if request.method not in ("GET", "HEAD"):
@@ -1006,7 +1086,9 @@ def run(
         except UsageError as exc:
             log(f"warning: {exc}; the catalog runs without RA hashing")
     ra_key = env.get(ra.KEY_ENV) or None
-    refresher = Refresher(catalog_job(root, rahasher=rahasher, ra_key=ra_key, log=log), log)
+    refresher = Refresher(
+        catalog_job(root, rahasher=rahasher, ra_key=ra_key, log=log, ra_user=cfg.ra.user), log
+    )
     app = App(cfg, token, root=root, client_factory=client_factory, refresher=refresher, log=log)
     try:
         server = UiServer(address, app)

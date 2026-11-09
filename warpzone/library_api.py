@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from functools import cached_property
 from typing import Any
 
-from warpzone import artwork, catalog
+from warpzone import artwork, catalog, ra_data
 from warpzone import whitelist as wl
 from warpzone.config import Config, Device
 
@@ -99,6 +99,7 @@ class Library:
     systems: Mapping[str, Mapping[str, catalog.Game]]
     ra_lists: Mapping[int, catalog.RaList] = field(default_factory=dict)
     updated: str = ""
+    ra_cache: ra_data.RaData = field(default_factory=ra_data.RaData)
 
     @cached_property
     def by_id(self) -> dict[str, tuple[str, catalog.Game]]:
@@ -397,6 +398,7 @@ def game_response(
                 "points": state.points,
                 "url": state.url,
             },
+            "achievements": _achievements(lib, system, game, cfg),
             "versions": [
                 {"id": g.id, "system": s, "title": g.title}
                 for s, g in sorted(lib.by_key.get(game.key, ()), key=lambda sg: (sg[0], sg[1].id))
@@ -405,6 +407,19 @@ def game_response(
         }
     )
     return out
+
+
+def _achievements(lib: Library, system: str, game: catalog.Game, cfg: Config) -> Any:
+    """`achievements` of a game: null unless RetroAchievements has some for it."""
+    found = ra_data.ra_game(system, game.ra, lib.ra_lists)
+    if found is None:
+        return None
+    return ra_data.game_view(found, lib.ra_cache, cfg.ra.user)
+
+
+def ra_summary_response(lib: Library, cfg: Config) -> dict[str, Any]:
+    """`GET /api/v1/ra/summary`: the RA games of the library and the user's progress in them."""
+    return ra_data.summary_view(lib.systems, lib.ra_lists, lib.ra_cache, cfg.ra.user)
 
 
 def search_response(

@@ -152,12 +152,25 @@ def split_listen(value: str) -> tuple[str, int] | None:
     return host, int(port)
 
 
+RA_KEYS = ("user",)
+RA_USER = re.compile(r"^[A-Za-z0-9_.-]{1,40}$")
+
+
+@dataclass(frozen=True)
+class RaSettings:
+    """The optional `[ra]` table: the RetroAchievements user whose progress the library UI
+    shows. The user name is public on RA and is not a secret; the API key is (`RA_API_KEY`)."""
+
+    user: str | None = None
+
+
 @dataclass(frozen=True)
 class Config:
     hub: Hub
     devices: dict[str, Device]
     inbox: InboxSettings = field(default_factory=InboxSettings)
     serve: ServeSettings = field(default_factory=ServeSettings)
+    ra: RaSettings = field(default_factory=RaSettings)
 
 
 # Defaults of the command line, kept here so that building the parser imports no command.
@@ -285,6 +298,41 @@ def parse_serve(raw: object, errors: list[str]) -> ServeSettings:
     )
 
 
+def parse_ra(raw: object, errors: list[str]) -> RaSettings:
+    if raw is None:
+        return RaSettings()
+    if not isinstance(raw, dict):
+        errors.append("[ra]: must be a table")
+        return RaSettings()
+    _check_keys(raw, set(RA_KEYS), "ra", errors)
+    user = raw.get("user")
+    if "user" not in raw:
+        return RaSettings()
+    if not isinstance(user, str) or not RA_USER.match(user.strip()):
+        errors.append(
+            "ra.user: must be a RetroAchievements user name "
+            "(letters, digits, `_`, `-` and `.`, at most 40)"
+        )
+        return RaSettings()
+    return RaSettings(user.strip())
+
+
+def load_ra_settings(path: Path) -> RaSettings:
+    """Only the `[ra]` table of the config, so `catalog` works on a machine with no Syncthing
+    devices configured. A missing file means no user."""
+    try:
+        data = tomllib.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return RaSettings()
+    except (OSError, tomllib.TOMLDecodeError) as exc:
+        raise ConfigError(f"{path}: {exc}") from exc
+    errors: list[str] = []
+    settings = parse_ra(data.get("ra"), errors)
+    if errors:
+        raise ConfigError(f"{path}:\n" + "\n".join(errors))
+    return settings
+
+
 def load_inbox_settings(path: Path) -> InboxSettings:
     """Only the `[inbox]` table of the config, so `inbox` works on a machine that has no
     Syncthing devices configured. A missing file means all defaults."""
@@ -304,9 +352,10 @@ def load_inbox_settings(path: Path) -> InboxSettings:
 def parse_config(data: dict[str, Any], known_profiles: set[str] | None = None) -> Config:
     """Validate a decoded config. `known_profiles` enables the profile-name check."""
     errors: list[str] = []
-    _check_keys(data, {"hub", "devices", "inbox", "serve"}, "config", errors)
+    _check_keys(data, {"hub", "devices", "inbox", "serve", "ra"}, "config", errors)
     inbox = parse_inbox(data.get("inbox"), errors)
     serve = parse_serve(data.get("serve"), errors)
+    ra_settings = parse_ra(data.get("ra"), errors)
 
     raw_hub = data.get("hub")
     hub: Hub | None = None
@@ -433,7 +482,7 @@ def parse_config(data: dict[str, Any], known_profiles: set[str] | None = None) -
     if errors:
         raise ConfigError("\n".join(errors))
     assert hub is not None
-    return Config(hub, devices, inbox, serve)
+    return Config(hub, devices, inbox, serve, ra_settings)
 
 
 def load_config(path: Path, known_profiles: set[str] | None = None) -> Config:

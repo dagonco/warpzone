@@ -19,7 +19,7 @@ Every table rejects unknown keys, so a typo is an error and not a silently ignor
 
 Copy [`examples/config.example.toml`](https://github.com/dagonco/warpzone/blob/main/examples/config.example.toml) to the path above and fill it in. It holds the hub's API key and device IDs, so keep it out of any repository. The file is found in this order: the `--config PATH` option, the `WARPZONE_CONFIG` environment variable, then `$XDG_CONFIG_HOME/warpzone/config.toml`, then `~/.config/warpzone/config.toml`. A missing file is an error, except that `warpzone inbox` treats a missing file as "all defaults" for its `[inbox]` table.
 
-Top-level tables: `[hub]` (required), `[devices.<name>]` (at least one), `[inbox]` (optional) and `[serve]` (optional). Anything else is an unknown key.
+Top-level tables: `[hub]` (required), `[devices.<name>]` (at least one), `[inbox]` (optional), `[serve]` (optional) and `[ra]` (optional). Anything else is an unknown key.
 
 ### `[hub]`
 
@@ -108,6 +108,14 @@ Optional. Only `warpzone serve` reads it (together with `[hub]`, `[devices.*]` a
 
 `serve` refuses to start (exit `2`) without a token. The token is never printed or logged. See [`warpzone serve`](/warpzone/reference/commands/#warpzone-serve).
 
+### `[ra]`
+
+Optional. Read by `warpzone serve` and `warpzone catalog --ra-achievements`.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `user` | none | Your RetroAchievements user name, 1 to 40 letters, digits, `_`, `-` or `.`. With it (and `RA_API_KEY`) the hub downloads your unlocked achievements and awards for the games of the library, and the library UI shows your progress. Without it, achievements are listed with no progress. It is your public RA name, not a secret; the API key is, and stays in the environment. |
+
 ### A complete example
 
 Every ID, address, path and key below is fake.
@@ -151,6 +159,9 @@ nsz = "~/.local/bin/nsz"
 titledb_dir = "~/dats/titledb"
 switch_keys = "~/.switch/prod.keys"
 mame_dat = "~/dats/mame0282lx.zip"
+
+[ra]
+user = "ExampleUser"
 ```
 
 ## Device profiles

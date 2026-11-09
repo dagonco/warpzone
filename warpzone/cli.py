@@ -22,6 +22,7 @@ from warpzone.config import (
     default_config_path,
     load_config,
     load_inbox_settings,
+    load_ra_settings,
 )
 from warpzone.errors import (
     EXIT_DEFERRED,
@@ -311,9 +312,16 @@ def _build_parser() -> argparse.ArgumentParser:
         "(key from RA_API_KEY), unless the cached one is under 7 days old",
     )
     cat.add_argument(
+        "--ra-achievements",
+        action="store_true",
+        help="download the achievements of the library's RetroAchievements games, the badge "
+        "images and, with [ra] user in the config, that user's progress (key from RA_API_KEY; "
+        "run --ra-lists first)",
+    )
+    cat.add_argument(
         "--force",
         action="store_true",
-        help="with --ra-lists, download the lists again whatever their age",
+        help="with --ra-lists or --ra-achievements, download again whatever the age",
     )
 
     wlst = sub.add_parser("whitelist", help="the device whitelists on the hub")
@@ -566,13 +574,13 @@ def _bios(args: argparse.Namespace, rep: Reporter) -> int:
 
 
 def _catalog(args: argparse.Namespace, rep: Reporter) -> int:
-    from warpzone import catalog_store, ra
+    from warpzone import catalog_store, ra, ra_store
     from warpzone.catalog_store import CatalogError
 
     if args.rahasher and not args.ra_hash:
         raise CatalogError("--rahasher only works together with --ra-hash")
-    if args.force and not args.ra_lists:
-        raise CatalogError("--force only works together with --ra-lists")
+    if args.force and not (args.ra_lists or args.ra_achievements):
+        raise CatalogError("--force only works together with --ra-lists or --ra-achievements")
     root = args.root
     if root is None:
         root = Path(_load(args)[0].hub.root)
@@ -581,7 +589,7 @@ def _catalog(args: argparse.Namespace, rep: Reporter) -> int:
         configured = args.rahasher or load_inbox_settings(_config_path(args)).rahasher
         hasher = catalog_store.rahasher_runner(catalog_store.resolve_rahasher(configured))
     key = os.environ.get(ra.KEY_ENV) or None
-    if args.ra_lists and not key:  # before the scan, so a missing key costs nothing
+    if (args.ra_lists or args.ra_achievements) and not key:  # before the scan: costs nothing
         raise CatalogError(f"no RetroAchievements key: set {ra.KEY_ENV} in the environment")
     results = catalog_store.run_catalog(root, dry_run=args.dry_run, out=rep.out, ra_hasher=hasher)
     failed = any(r.failed for r in results)
@@ -595,6 +603,17 @@ def _catalog(args: argparse.Namespace, rep: Reporter) -> int:
             warn=rep.warn,
         )
         failed = failed or any(r.failed for r in lists)
+    if args.ra_achievements:
+        found = ra_store.run_ra_achievements(
+            root,
+            key=key,
+            user=load_ra_settings(_config_path(args)).user,
+            force=args.force,
+            dry_run=args.dry_run,
+            out=rep.out,
+            warn=rep.warn,
+        )
+        failed = failed or found.failed
     return EXIT_RUNTIME if failed else EXIT_OK
 
 
