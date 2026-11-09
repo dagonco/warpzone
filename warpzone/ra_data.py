@@ -313,9 +313,22 @@ def _progress(data: RaData, user: str | None) -> UserSummary | None:
     return mine if mine is not None and same_user(mine.user, user) else None
 
 
-def _unlocks_of(data: RaData, user: str | None, game_id: int) -> CachedUnlocks | None:
+def _unlocks_of(
+    data: RaData, user: str | None, game_id: int, line: ra.UserGame | None
+) -> CachedUnlocks | None:
+    """The cached unlock dates of a game when they are usable: of this user, of the game as
+    its progress line says it is now, and with the game's achievements downloaded (without
+    them the dates have no points to add up)."""
     found = data.unlocks.get(game_id)
-    return found if found is not None and same_user(found.user, user) else None
+    if (
+        found is None
+        or line is None
+        or user is None
+        or game_id not in data.games
+        or not unlocks_current(found, user, line)
+    ):
+        return None
+    return found
 
 
 def _award(line: ra.UserGame | None) -> dict[str, str] | None:
@@ -330,7 +343,7 @@ def game_view(game: ra.RaGame, data: RaData, user: str | None) -> dict[str, Any]
     detail = cached.detail if cached else None
     summary = _progress(data, user)
     line = summary.games.get(game.id) if summary else None
-    mine = _unlocks_of(data, user, game.id) if summary else None
+    mine = _unlocks_of(data, user, game.id, line)
     items = []
     unlocked = hard = soft_points = hard_points = 0
     for a in detail.achievements if detail else ():
@@ -460,7 +473,7 @@ def summary_view(
             if line is None:
                 continue
             kind = line.award
-            mine = _unlocks_of(data, user, game_id)
+            mine = _unlocks_of(data, user, game_id, line)
             cached = data.games.get(game_id)
             points = hard_points = 0
             if mine is not None and cached is not None:

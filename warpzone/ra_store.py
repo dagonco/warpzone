@@ -22,6 +22,8 @@ from warpzone.catalog_store import CatalogError
 CALL_BATCH = 60  # API calls of one run of the server (a CLI pass has no limit)
 BADGE_BATCH = 300  # badge downloads of one run of the server
 STOP_AFTER = 3  # failures in a row after which a section gives up
+OUT_OF_BUDGET = "OutOfBudget"
+NOT_FOUND = "HTTP 404"  # a game or badge RA does not have; remembered, not a failure
 
 
 def ra_dir(root: Path) -> Path:
@@ -45,6 +47,15 @@ def badge_path(root: Path, name: str, *, locked: bool) -> Path | None:
     if ra.badge_url(name) is None:
         return None
     return ra_dir(root) / "badges" / f"{name}{'_lock' if locked else ''}.png"
+
+
+def missing_game_path(root: Path, game_id: int) -> Path:
+    """The note that RA answered 404 for a game, so the next pass does not ask at once."""
+    return ra_dir(root) / "games" / f"{game_id}.missing"
+
+
+def missing_badge_path(image: Path) -> Path:
+    return image.with_suffix(".missing")
 
 
 def kind_of(path: Path) -> str | None:
@@ -133,6 +144,8 @@ class AchievementsResult:
     unlocks_left: int = 0
     badges_fetched: int = 0
     badges_failed: int = 0
+    details_missing: int = 0  # games RA answered 404 for (asked again after 14 days)
+    badges_missing: int = 0  # images RA answered 404 for (not asked again)
     badges_left: int = 0
 
     @property
@@ -209,8 +222,8 @@ def run_ra_achievements(
     if not ids:
         out("RA achievements: no library game has achievements (are the game lists cached?)")
         return result
-    _details(run, ids, force, dry_run, result, out)
     summary = _user(run, user, force, dry_run, result, out) if user else None
+    _details(run, ids, force, dry_run, result, out)
     if user and summary is not None:
         _unlocks(run, ids, user, summary, dry_run, result, out)
     _badges(
@@ -239,6 +252,8 @@ def _details(
     missing, stale = [], []
     for game_id in ids:
         cached = read_game(run.root, game_id)
+        if cached is None and _recently_missing(run, game_id):
+            continue
         if cached is None:
             missing.append(game_id)
         elif force or not ra_data.fresh(
@@ -259,6 +274,12 @@ def _details(
         try:
             detail = ra.fetch_game_detail(game_id, run.key, run.fetch)
         except ra.FetchError as exc:
+            if str(exc) == NOT_FOUND:
+                result.details_missing += 1
+                result.details_left -= 1
+                run.warn(f"RA game {game_id}: RA has no such game (HTTP 404); not asked again soon")
+                _write(missing_game_path(run.root, game_id), run.time.encode())
+                continue
             result.details_failed += 1
             failures += 1
             run.warn(f"RA game {game_id}: download failed ({exc})")
@@ -278,6 +299,14 @@ def _details(
         f"RA achievements: {result.details_fetched} game(s) downloaded, "
         f"{result.details_left} left of {len(ids)}"
     )
+
+
+def _recently_missing(run: _Pass, game_id: int) -> bool:
+    try:
+        noted = missing_game_path(run.root, game_id).read_text(encoding="utf-8")
+    except OSError:
+        return False
+    return ra_data.fresh(noted.strip(), run.now, timedelta(days=ra_data.DETAIL_DAYS))
 
 
 def _user(
@@ -303,11 +332,22 @@ def _user(
         return cached
     if run.aborted or not run.has_budget():
         return cached
-    run.pause(ra.CALL_DELAY)
-    run.spend()
+
+    def charge(page: int) -> None:
+        """Every page is a call: one the budget cannot pay ends the download, and the
+        half-read progress is dropped (the cached one stays, the next run tries again)."""
+        if not run.has_budget():
+            raise ra.FetchError(OUT_OF_BUDGET)
+        if page == 0:  # the later pages are paused by `fetch_completion`
+            run.pause(ra.CALL_DELAY)
+        run.spend()
+
     try:
-        games = ra.fetch_completion(user, run.key, run.fetch, sleep=run.sleep)
+        games = ra.fetch_completion(user, run.key, run.fetch, sleep=run.sleep, before_page=charge)
     except ra.FetchError as exc:
+        if str(exc) == OUT_OF_BUDGET:
+            run.warn("RA progress: out of calls for this run; it goes on in the next one")
+            return cached
         result.user_failed = True
         run.warn(
             f"RA progress: download failed ({exc})" + ("; keeping the cache" if cached else "")
@@ -397,7 +437,12 @@ def _badges(
         for achievement in cached.detail.achievements if cached else ():
             for locked in (False, True):
                 path = badge_path(root, achievement.badge, locked=locked)
-                if path is not None and path not in seen and not path.is_file():
+                if (
+                    path is not None
+                    and path not in seen
+                    and not path.is_file()
+                    and not missing_badge_path(path).is_file()
+                ):
                     seen.add(path)
                     todo.append((achievement.badge, locked, path))
     result.badges_left = len(todo)
@@ -415,9 +460,16 @@ def _badges(
         try:
             data = ra.fetch_badge(name, locked=locked, fetch=fetch)
         except ra.FetchError as exc:
+            label = f"RA badge {name}{' (locked)' if locked else ''}"
+            if str(exc) == NOT_FOUND:  # RA does not have it: never ask again
+                result.badges_missing += 1
+                result.badges_left -= 1
+                warn(f"{label}: RA has no such image (HTTP 404); not asked again")
+                _write(missing_badge_path(path), b"404\n")
+                continue
             result.badges_failed += 1
             failures += 1
-            warn(f"RA badge {name}{' (locked)' if locked else ''}: download failed ({exc})")
+            warn(f"{label}: download failed ({exc})")
             if failures >= STOP_AFTER:
                 warn("RA badges: stopping after repeated failures")
                 break

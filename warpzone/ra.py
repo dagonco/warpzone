@@ -351,11 +351,17 @@ def fetch_completion(
     *,
     sleep: Sleep = time.sleep,
     delay: float = CALL_DELAY,
+    before_page: Callable[[int], None] | None = None,
 ) -> dict[int, UserGame]:
-    """Every game of a user's completion progress, `PAGE_SIZE` a call (game id -> line)."""
+    """Every game of a user's completion progress, `PAGE_SIZE` a call (game id -> line).
+
+    `before_page(n)` is called before the call of page `n` (from 0), so a caller can charge
+    each page to a budget; what it raises ends the download."""
     out: dict[int, UserGame] = {}
     offset = 0
     for page in range(MAX_PAGES):
+        if before_page is not None:
+            before_page(page)
         if page:
             sleep(delay)
         url = _url(COMPLETION_URL, u=user, c=PAGE_SIZE, o=offset, y=key)

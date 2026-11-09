@@ -391,6 +391,29 @@ class DataTests(unittest.TestCase):
         self.assertIsNone(view["totals"]["points_unlocked"])
         self.assertTrue(all(a["unlocked"] is None for a in view["list"]))
 
+    def test_unlock_dates_of_a_game_whose_download_failed_are_not_used(self) -> None:
+        data = replace(cached_data(), games={})
+        view = ra_data.game_view(ra.RaGame("Alpha Quest", 3, 77, 60), data, USER)
+        self.assertFalse(view["available"])
+        self.assertFalse(view["progress"]["dates"])
+        self.assertEqual(view["totals"]["unlocked"], 2)  # the line of the summary says so
+        self.assertEqual(view["totals"]["unlocked_hardcore"], 1)
+        self.assertIsNone(view["totals"]["points_unlocked"])
+
+    def test_unlock_dates_that_no_longer_match_the_progress_line_are_not_used(self) -> None:
+        data = cached_data()
+        assert data.user is not None
+        reset = ra.UserGame(77, 12, 3, 1, 0, "2026-11-08", "")  # progress was reset since
+        data = replace(data, user=replace(data.user, games={77: reset}))
+        view = ra_data.game_view(ra.RaGame("Alpha Quest", 3, 77, 60), data, USER)
+        self.assertFalse(view["progress"]["dates"])
+        self.assertEqual((view["totals"]["unlocked"], view["totals"]["unlocked_hardcore"]), (1, 0))
+        self.assertTrue(all(a["unlocked"] is None for a in view["list"]))
+        systems, lists = library_with_ra()
+        total = ra_data.summary_view(systems, lists, data, USER)["total"]
+        self.assertEqual(total["points_unlocked"], 0)  # the stale dates add no points
+        self.assertFalse(total["points_complete"])
+
     def test_a_game_whose_achievements_are_not_downloaded_yet(self) -> None:
         view = ra_data.game_view(ra.RaGame("Alpha Quest", 3, 78, 60), ra_data.RaData(), None)
         self.assertFalse(view["available"])
@@ -658,13 +681,37 @@ class PassTests(PassCase):
     def test_the_budgets_bound_a_run_and_the_next_one_goes_on(self) -> None:
         first = self.go(call_limit=2, badge_limit=3)
         self.assertEqual(len(self.urls), 2)
-        self.assertEqual(first.details_fetched, 2)
-        self.assertFalse(first.user_fetched)
+        self.assertEqual((first.user_fetched, first.details_fetched), (True, 1))
         self.assertEqual((first.badges_fetched, first.badges_left), (3, 3))
         second = self.go(call_limit=5, badge_limit=100)
         self.assertEqual(
-            (second.user_fetched, second.unlocks_fetched, second.badges_left), (True, 1, 0)
+            (second.details_fetched, second.unlocks_fetched, second.badges_left), (1, 1, 0)
         )
+
+    def test_every_page_of_the_progress_is_a_call_of_the_budget(self) -> None:
+        pages = {
+            0: completion(line(77, 2, 1), line(8), total=6),
+            2: completion(line(3), line(4), total=6),
+            4: completion(line(5), line(6), total=6),
+        }
+
+        def paged(url: str) -> bytes:
+            if "CompletionProgress" in url:
+                self.urls.append(url)
+                return pages[int(url.split("&o=")[1].split("&")[0])]
+            return self.fetch(url)
+
+        with mock.patch.object(ra, "PAGE_SIZE", 2):
+            first = self.go(fetch=paged, call_limit=2)
+            self.assertEqual(len(self.urls), 2)  # two pages paid, the third was not
+            self.assertEqual((first.user_fetched, first.user_failed), (False, False))
+            self.assertFalse((self.root / "catalog" / "ra" / "user" / "summary.json").exists())
+            self.assertTrue(any("out of calls" in w for w in self.warnings))
+            self.urls.clear()
+            second = self.go(fetch=paged, call_limit=3)
+        self.assertEqual(len(self.calls("CompletionProgress")), 3)
+        self.assertEqual(len(self.urls), 3)  # nothing left for the games
+        self.assertTrue(second.user_fetched)
 
     def test_a_failed_call_is_reported_by_kind_and_the_pass_goes_on(self) -> None:
         self.down = {"i=77"}
@@ -687,8 +734,8 @@ class PassTests(PassCase):
         with mock.patch.object(ra_store, "STOP_AFTER", 1):
             result = self.go()
         self.assertEqual(result.details_failed, 1)  # the second game was not even tried
-        self.assertEqual(len(self.urls), 1)
-        self.assertFalse(result.user_fetched)  # a key that fails once is not tried again
+        self.assertEqual(len(self.calls("GetGameExtended")), 1)
+        self.assertTrue(result.user_fetched)
         self.assertTrue(any("stopping after repeated failures" in w for w in self.warnings))
         self.assertNotIn(SECRET, "\n".join(self.warnings))
 
@@ -701,6 +748,44 @@ class PassTests(PassCase):
         self.assertEqual(
             (self.root / "catalog" / "ra" / "user" / "summary.json").read_bytes(), before
         )
+
+    def test_a_game_ra_does_not_have_is_remembered_and_does_not_stop_the_pass(self) -> None:
+        def fetch(url: str) -> bytes:
+            if "GetGameExtended" in url and "i=77" in url:
+                self.urls.append(url)
+                raise urllib.error.HTTPError(url, 404, "no", None, None)  # type: ignore[arg-type]
+            return self.fetch(url)
+
+        with mock.patch.object(ra_store, "STOP_AFTER", 1):
+            result = self.go(fetch=fetch)
+        self.assertEqual((result.details_missing, result.details_failed), (1, 0))
+        self.assertEqual(result.details_fetched, 1)  # game 8, tried after 77
+        self.assertFalse(result.failed)
+        self.assertTrue(ra_store.missing_game_path(self.root, 77).is_file())
+        self.urls.clear()
+        self.go(fetch=fetch, now=NOW + timedelta(days=1))
+        self.assertEqual(self.calls("GetGameExtended"), [])
+        self.go(fetch=fetch, now=NOW + timedelta(days=15))  # asked again after 14 days
+        self.assertEqual(len(self.calls("i=77")), 1)
+
+    def test_a_badge_ra_does_not_have_is_remembered_and_does_not_stop_the_pass(self) -> None:
+        def binary(url: str, limit: int) -> tuple[bytes, str]:
+            self.binary.append(url)
+            if "/200" in url:
+                raise urllib.error.HTTPError(url, 404, "no", None, None)  # type: ignore[arg-type]
+            return PNG_OK, "image/png"
+
+        with mock.patch.object(ra_store, "STOP_AFTER", 1):
+            result = self.go(fetch_binary=binary)
+        self.assertEqual((result.badges_missing, result.badges_failed), (2, 0))
+        self.assertEqual(result.badges_fetched, 4)
+        self.assertEqual(result.badges_left, 0)
+        badges = self.root / "catalog" / "ra" / "badges"
+        self.assertTrue((badges / "200.missing").is_file())
+        self.assertFalse((badges / "200.png").exists())
+        self.binary.clear()
+        self.go(fetch_binary=binary)
+        self.assertEqual(self.binary, [])
 
     def test_a_bad_badge_is_not_written(self) -> None:
         result = self.go(fetch_binary=lambda url, limit: (b"<html>", "text/html"))

@@ -249,7 +249,9 @@ itself). Every file is JSON with sorted keys, written with the guarded atomic wr
   highest award (`beaten-softcore`, `beaten-hardcore`, `completed`, `mastered`) with its date, so
   awards need no call of their own. A game's unlock dates are downloaded again only when its line
   changed (counts or last date), and only for games of the library that the user has played. A
-  cache of another user is ignored, not reused.
+  cache of another user is ignored, not reused, and so are unlock dates that do not match the
+  game's current progress line or whose game's achievements were not downloaded (the counts of
+  the progress line stand in).
 - Badges: the name must be letters and digits (at most 20), the URL is built from it and is
   https on `media.retroachievements.org` only, a redirect is an error, the body is at most 256
   KiB, the content type must be `image/png` and the body must start with the PNG signature. A
@@ -259,7 +261,13 @@ itself). Every file is JSON with sorted keys, written with the guarded atomic wr
   `N + ceil(G / 500) + P` calls (`G` is the number of games the user has on RA) plus two images
   per achievement. Later passes cost only what became stale: `serve` spends at most 60 API
   calls and 300 images per background run, so a large library fills in over a few days, and
-  `catalog --ra-achievements` on the command line has no limit.
+  `catalog --ra-achievements` on the command line has no limit. Every page of the completion
+  progress is one call of that budget. The progress goes first, then the achievements, then
+  the unlock dates; a progress download the budget cannot finish is dropped whole (the cached
+  one stays) and tried again by the next run.
+- Not found: a game or an image RA answers `404` for is not a failure and does not count
+  towards the three in a row. A game is noted in `ra/games/<game id>.missing` and asked again
+  after 14 days; an image is noted in `ra/badges/<name>[_lock].missing` and not asked again.
 
 Pure (`ra_data.py`, and the parsers of `ra.py`): the cache files' encoding, freshness,
 `ra_data.game_view` (the merge of a game's achievements with the user's unlocks, the rarity and
