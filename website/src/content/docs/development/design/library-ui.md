@@ -225,11 +225,38 @@ The UI reads the ES-DE scrape that is already on the hub, read-only:
   `rating`, `releasedate`, `developer`, `publisher`, `genre` and `players`.
 - `frontend/media/<system>/<kind>/<stem>.<ext>`, where `<stem>` is the gamelist path without
   `./` and without its extension (a folder entry keeps its whole name, as in `artwork.build`),
-  for the kinds `covers`, `miximages`, `screenshots`, `titlescreens`, `marquees` and `3dboxes`,
+  for the kinds `covers`, `miximages`, `screenshots`, `titlescreens`, `marquees`, `3dboxes` and
+  `physicalmedia` (the scan of the cartridge or disc),
   and the extensions `png`, `jpg` and `jpeg`.
 
 A game with no gamelist entry shows its catalog title, and a game with no cover shows
 `data/ui/placeholder.svg`. Unscraped games get nothing more in this phase.
+
+## The page
+
+The page is static HTML, CSS and JavaScript in `warpzone/data/ui/`, with no build step, and it
+only uses what the API above provides. A strict `Content-Security-Policy: default-src 'self'`
+applies, so there is no inline script, handler or style attribute, no external font and no
+request to another origin; dynamic styling sets CSS custom properties from script.
+
+- **Home:** a "Now showing" carousel of games that have art, the state and download progress of
+  each console (from `/api/v1/progress`), the systems with their coverage per console, and the
+  newest games.
+- **System:** the game grid with an insert or eject switch per console on each tile, and a
+  NONE, SOME or ALL lever per console for the whole system. A lever asks for confirmation with
+  the dry run of the change (games that change and size). Turning a system on overrides its
+  exclusions, and the dialog says so.
+- **Game:** the cover with the other media, the cartridge or disc scan (`physicalmedia`) and the
+  3D box when the scrape has them, the metadata, and a switch per console and for all of them.
+- **Search:** results grouped by title key across systems, with the same per-console switches.
+- **Consoles:** the state of each console and what it holds.
+
+What the API does not provide is not drawn, not even as a placeholder: no play history, play
+statistics, saves, achievement lists, records or video. Long system names are shortened to a code
+(for example GBA) with the full name in a `title` attribute. On a phone (390 px and up) the
+navigation is a bar at the bottom and the console switches sit within thumb reach. The page keeps
+keyboard and gamepad navigation, visible focus and `prefers-reduced-motion`, and a toggle turns
+the subtle CRT overlay off (kept in a cookie).
 
 ## The whitelist model
 

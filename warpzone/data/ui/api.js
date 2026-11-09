@@ -1,5 +1,5 @@
 /*
- * warpzone library UI: the API client and the small helpers app.js shares.
+ * warpzone library UI: the API client and the formatting helpers the other scripts share.
  *
  * Every request the page makes goes through this file, so the paths it calls can be checked
  * against the HTTP API table of development/design/library-ui.md (tests/test_ui_files.py does).
@@ -144,5 +144,5 @@
     return normalizeWords(s).replace(/^the /, '');
   }
 
-  window.WZ = { ApiError, api, humanError, formatBytes, formatDate, normalizeWords, titleKey };
+  window.WZ = Object.assign(window.WZ || {}, { ApiError, api, humanError, formatBytes, formatDate, normalizeWords, titleKey });
 })();
