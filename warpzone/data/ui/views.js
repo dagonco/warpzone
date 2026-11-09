@@ -11,8 +11,8 @@
   'use strict';
 
   const W = window.WZ;
-  const { api, formatBytes, formatDate, normalizeWords, titleKey, h, $, $$, plural, debounce, icon, tint,
-    systemName, systemCode, systemColor, consoleCode, parseTitle, store, ui } = W;
+  const { api, formatBytes, formatDate, formatDay, formatMoment, formatPlaytime, timeAgo, normalizeWords, titleKey, h, $, $$, plural,
+    debounce, icon, tint, systemName, systemCode, systemColor, consoleCode, parseTitle, languageName, store, ui } = W;
   const { S } = store;
   const REDUCED = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
@@ -196,7 +196,68 @@
         ? [h('b', null, hold.games.toLocaleString('en-US')), ` ${hold.games === 1 ? 'game' : 'games'} · `, h('b', null, formatBytes(hold.size))]
         : 'Counting games...',
       ui.pnode('span', d.name, 'left', 'left'),
-      none ? h('span', { class: 'tag', title: 'The console has no whitelist yet. The first change made here creates it.' }, 'No whitelist yet') : null));
+      none ? h('span', { class: 'tag', title: 'The console has no whitelist yet. The first change made here creates it.' }, 'No whitelist yet') : null),
+    ui.diskMeter(d));
+  }
+
+  // ----- the records at the end of the home page -------------------------------------------
+
+  // A small block of the records panel: a title and rows. Null when there is nothing to list.
+  function recBlock(title, ...rows) {
+    const kids = rows.flat(Infinity).filter(Boolean);
+    return kids.length ? h('div', { class: 'rec-b' }, h('h3', null, title), ...kids) : null;
+  }
+
+  const fmt = (n) => Number(n).toLocaleString('en-US');
+
+  // RetroAchievements: the points and the games beaten and mastered, from /ra/summary.
+  function raRecords(ra) {
+    const t = ra.total;
+    if (!t || !(t.games > 0) || t.unlocked == null) return null;
+    const points = t.points_unlocked == null ? null : fmt(t.points_unlocked) + (t.points_complete === false ? '+' : '');
+    const share = t.achievements > 0 ? Math.min(1, t.unlocked / t.achievements) : 0;
+    return recBlock('RetroAchievements',
+      h('p', { class: 'rec-user' }, ra.user),
+      points ? h('p', { class: 'rec-big', title: t.points_complete === false ? 'At least this many: the unlock dates of some played games are not downloaded yet.' : null },
+        h('b', null, points), ' points') : null,
+      h('dl', { class: 'rec-stats' },
+        h('div', null, h('dt', null, 'Played'), h('dd', null, `${fmt(t.played)} / ${fmt(t.games)}`)),
+        h('div', null, h('dt', null, 'Beaten'), h('dd', null, fmt(t.beaten))),
+        h('div', null, h('dt', null, 'Mastered'), h('dd', null, fmt(t.mastered)))),
+      h('div', { class: 'rec-line' }, h('span', { class: 'rec-bar', 'aria-hidden': 'true' }, h('i', { vars: { w: String(share) } })),
+        h('span', null, `${fmt(t.unlocked)} / ${fmt(t.achievements)} achievements`)));
+  }
+
+  // The share of each system's achievements the user has unlocked, systems with a game played.
+  function raSystems(ra) {
+    const rows = (ra.systems || []).filter((x) => x.played > 0 && x.achievements > 0 && x.unlocked != null)
+      .map((x) => ({ system: x.system, pct: Math.min(1, x.unlocked / x.achievements), unlocked: x.unlocked, of: x.achievements }))
+      .sort((a, b) => b.pct - a.pct || a.system.localeCompare(b.system)).slice(0, 6);
+    return recBlock('Achievements by system', rows.map((r) => h('div', { class: 'rec-row', vars: ui.systemTint(r.system), title: `${systemName(r.system)}: ${fmt(r.unlocked)} of ${fmt(r.of)}` },
+      h('b', null, systemCode(r.system)),
+      h('span', { class: 'rec-bar', 'aria-hidden': 'true' }, h('i', { vars: { w: String(r.pct) } })),
+      h('em', null, r.pct > 0 && r.pct < 0.01 ? '<1%' : `${Math.round(r.pct * 100)}%`))));
+  }
+
+  // The games played most, from the totals the system lists carry (the lists load in the
+  // background, so this grows while they arrive).
+  function playRecords() {
+    const played = allGames().filter((x) => x.game.play && x.game.play.plays > 0);
+    if (!played.length) return null;
+    const top = played.sort((a, b) => b.game.play.plays - a.game.play.plays || (b.game.play.playtime || 0) - (a.game.play.playtime || 0)
+      || (a.game.name || a.game.title).localeCompare(b.game.name || b.game.title)).slice(0, 5);
+    const total = played.reduce((n, x) => n + (x.game.play.playtime || 0), 0);
+    const plays = played.reduce((n, x) => n + x.game.play.plays, 0);
+    return recBlock('Most played',
+      top.map((x, i) => {
+        const t = parseTitle(x.game.name || x.game.title);
+        const time = formatPlaytime(x.game.play.playtime);
+        return h('a', { class: 'rec-row game', href: ui.gameHref(x.system, x.game.id), vars: ui.systemTint(x.system), title: `${t.full} (${systemName(x.system)})`, dataset: { fk: 'mp:' + x.game.id } },
+          h('b', null, String(i + 1)),
+          h('span', { class: 'rn' }, t.name),
+          h('em', null, [plural(x.game.play.plays, 'play'), time].filter(Boolean).join(' · ')));
+      }),
+      h('p', { class: 'rec-foot' }, `${plural(played.length, 'game')} played, ${plural(plays, 'play')}${total ? ' · ' + formatPlaytime(total) + ' in all' : ''}`));
   }
 
   function viewHome() {
@@ -210,8 +271,13 @@
     const sysSec = h('section', { class: 'sec', 'aria-label': 'Systems' },
       h('div', { class: 'sechead' }, h('h2', null, h('i'), 'Systems'), h('span', { class: 'rule' }), sysNote), sysHost);
     const shelves = h('div', { class: 'shelves' });
+    const resumeHost = h('div', { class: 'hrow' });
+    const resumeSec = h('section', { class: 'sec', 'aria-label': 'Continue playing', hidden: true }, sechead('Continue playing'), resumeHost);
+    const recordsHost = h('div', { class: 'rec-grid' });
+    const recordsSec = h('section', { class: 'sec records', 'aria-label': 'Records', hidden: true },
+      sechead('Records'), h('div', { class: 'panel rec' }, recordsHost));
     const rescan = h('button', { class: 'btn', type: 'button', onclick: store.refreshCatalog, dataset: { fk: 'rescan' } }, 'Rescan the library');
-    const root = h('div', { class: 'page home' }, introHost, hero.node, stripSec, sysSec, shelves,
+    const root = h('div', { class: 'page home' }, introHost, hero.node, stripSec, resumeSec, sysSec, shelves, recordsSec,
       h('div', { class: 'footer-actions' }, rescan,
         h('span', { class: 'mute' }, 'Runs the catalog scan on the hub now. It also runs by itself every few hours.')));
 
@@ -241,6 +307,29 @@
     }
 
     const paintStrip = () => stripHost.replaceChildren(...S.devices.map(consoleCard));
+
+    // "Continue playing" and the records come from their own endpoints and are optional: with
+    // no play history or no RetroAchievements user the section is simply not there.
+    function paintResume() {
+      const items = (S.recent || []).slice(0, 12);
+      resumeSec.hidden = !items.length;
+      resumeHost.replaceChildren(...items.map(ui.resumeCard));
+    }
+
+    function paintRecords() {
+      const blocks = [S.ra ? raRecords(S.ra) : null, S.ra ? raSystems(S.ra) : null, playRecords()].filter(Boolean);
+      recordsSec.hidden = !blocks.length;
+      recordsHost.replaceChildren(...blocks);
+    }
+
+    function loadExtras() {
+      store.loadHomeExtras().then((asked) => {
+        if (!asked || view.dead) return;
+        const fk = captureFocus();
+        paintResume(); paintRecords();
+        restoreFocus(fk);
+      });
+    }
     const paintSystems = () => sysHost.replaceChildren(...S.systems.map(ui.sysCard));
 
     function paintShelves() {
@@ -266,7 +355,8 @@
 
     function paintAll() {
       const fk = captureFocus();
-      paintIntro(); paintStrip(); paintSystems(); paintShelves();
+      paintIntro(); paintStrip(); paintResume(); paintSystems(); paintShelves(); paintRecords();
+      loadExtras();
       if (pickFeatured() || (featured && !view.heroStarted)) {
         view.heroStarted = true;
         hero.paint(false);
@@ -494,6 +584,7 @@
               ? [h('b', null, hold.games.toLocaleString('en-US')), ` ${hold.games === 1 ? 'game' : 'games'} selected`, h('span', { class: 'sep' }), h('b', null, formatBytes(hold.size))]
               : 'Counting games...',
             ui.pnode('span', d.name, 'left', 'left')),
+          ui.diskMeter(d),
           wl === 'missing' ? h('p', { class: 'note warn' }, 'This console has no whitelist yet. The first change made here creates it.') : null,
           wl === 'needs-migration' ? h('p', { class: 'note warn' }, `Its whitelist is not in the format the UI manages. On the hub run "warpzone whitelist migrate ${d.name}", then reload.`) : null,
           excluded.length ? h('p', { class: 'mute small' }, 'Does not run: ', excluded.map(systemName).join(', ')) : null),
@@ -616,10 +707,15 @@
   // ===== one game ==========================================================================
 
   const KIND_LABEL = {
-    covers: 'Cover', miximages: 'Mix image', screenshots: 'Screenshot', titlescreens: 'Title screen',
-    marquees: 'Marquee', '3dboxes': '3D box',
+    videos: 'Video', covers: 'Cover', miximages: 'Mix image', screenshots: 'Screenshot', titlescreens: 'Title screen',
+    backcovers: 'Back cover', marquees: 'Marquee', '3dboxes': '3D box',
   };
-  const GALLERY = ['covers', 'miximages', 'screenshots', 'titlescreens', 'marquees'];
+  // The images and the video of the switcher, in the order of its buttons; the first one of
+  // FIRST_KINDS that the game has is the one shown to begin with (the video, else a picture of
+  // the game itself rather than its box).
+  const GALLERY = ['videos', 'covers', 'miximages', 'screenshots', 'titlescreens', 'backcovers', 'marquees'];
+  const FIRST_KINDS = ['videos', 'miximages', 'screenshots', 'covers', 'titlescreens', 'backcovers', 'marquees'];
+  const POSTER_KINDS = ['screenshots', 'miximages', 'titlescreens', 'covers'];
   const DISC_SYSTEMS = new Set(['psx', 'ps2', 'ps3', 'ps4', 'psp', 'gc', 'wii', 'wiiu', 'dreamcast', 'saturn', 'segacd',
     'xbox', 'xbox360', '3do', 'cdi', 'pcenginecd', 'neogeocd', 'amigacd32', 'megacd']);
   const CART_SYSTEMS = new Set(['nes', 'famicom', 'snes', 'sfc', 'n64', 'gb', 'gbc', 'gba', 'nds', 'n3ds', '3ds', 'switch',
@@ -633,11 +729,240 @@
       h('span', { class: 'floor', 'aria-hidden': 'true' }));
   }
 
+  // The video of a game in the screen of the cabinet: muted, with controls, nothing downloaded
+  // until it is played (the poster is a picture of the game when the scrape has one). A video
+  // the browser cannot play calls `failed`, and the page shows a picture instead.
+  function videoScreen(d, media, title, failed) {
+    const posterKind = POSTER_KINDS.find((k) => media.includes(k));
+    const video = h('video', {
+      class: 'vid', controls: true, playsinline: true, preload: posterKind ? 'none' : 'metadata', loop: true,
+      poster: posterKind ? api.mediaUrl(d.id, posterKind) : null, 'aria-label': `Video of ${title}`,
+    });
+    video.muted = true;
+    video.addEventListener('error', failed);
+    video.src = api.mediaUrl(d.id, 'videos');
+    return h('div', { class: 'screen is-video' }, video);
+  }
+
+  // The label of an award and the mode that earned it.
+  const AWARDS = {
+    'beaten-softcore': ['Beaten', 'softcore'], 'beaten-hardcore': ['Beaten', 'hardcore'],
+    completed: ['Completed', 'softcore mastery'], mastered: ['Mastered', 'hardcore'],
+  };
+
+  // How rare an achievement is, from the share of the players who have it.
+  function rarityLabel(percent) {
+    return percent < 2 ? 'Ultra rare' : percent < 8 ? 'Rare' : percent < 25 ? 'Uncommon' : 'Common';
+  }
+
+  // One achievement of the wall. `state` is `unlocked`, `locked`, or `plain` when it is not known
+  // what the user has (no user, or the unlock dates are not downloaded yet). The badge image is
+  // the one the hub cached; without it (a 404) the tile keeps its plain glyph.
+  function achievementTile(a, state, players) {
+    const badge = h('span', { class: 'ab' }, icon('trophy'));
+    if (a.badge) {
+      const img = h('img', { src: api.badgeUrl(a.badge, state === 'locked' ? 'locked' : 'unlocked'), alt: '', loading: 'lazy', decoding: 'async' });
+      img.addEventListener('error', () => img.remove());
+      badge.append(img);
+    }
+    const when = a.unlocked ? a.unlocked.softcore || a.unlocked.hardcore : null;
+    const hard = !!(a.unlocked && a.unlocked.hardcore);
+    const rarity = a.rarity && players > 0 && typeof a.rarity.percent === 'number' ? a.rarity : null;
+    const status = state === 'unlocked' ? `Unlocked${hard ? ' in hardcore' : ''}${when ? ' ' + formatDay(when) : ''}` : state === 'locked' ? 'Locked' : '';
+    return h('li', { class: 'ach ' + state + (hard ? ' hc' : ''), title: a.description || null },
+      badge,
+      h('div', { class: 'ai' },
+        h('b', { class: 'at' }, a.title || 'Achievement'),
+        a.description ? h('span', { class: 'ad' }, a.description) : null,
+        h('span', { class: 'am' },
+          Number.isFinite(a.points) ? h('span', { class: 'pts' }, h('b', null, String(a.points)), ' pts') : null,
+          rarity ? h('span', { class: 'rar', title: `${rarity.percent}% of the players unlocked it; ${rarity.hardcore_percent}% of the hardcore players did in hardcore` },
+            `${rarity.percent}%`, h('i', null, ' ' + rarityLabel(rarity.percent))) : null,
+          hard ? h('span', { class: 'hcm', title: 'Unlocked in hardcore mode' }, 'HC') : null,
+          a.type ? h('span', { class: 'aty' }, a.type.replace('_', ' ')) : null),
+        status ? h('span', { class: 'astat', title: when ? formatMoment(when) : null }, status) : null));
+  }
+
+  // The achievements of a game: the progress bar and award, and the wall of badges. It says
+  // what is not known (no list downloaded, no user, no unlock dates) instead of guessing. The
+  // filter and how many are shown live in `st`, which the page keeps between repaints.
+  function achievementsPanel(d, st, repaint) {
+    const ach = d.achievements;
+    if (!ach || typeof ach !== 'object') return null;
+    const tot = ach.totals || {};
+    const list = Array.isArray(ach.list) ? ach.list : [];
+    const progress = ach.progress && typeof ach.progress === 'object' ? ach.progress : null;
+    const dates = !!(ach.available && progress && progress.dates);
+    const count = ach.available ? list.length : Number(tot.count) || 0;
+    const unlocked = progress && typeof tot.unlocked === 'number' ? tot.unlocked : null;
+    const hardcore = progress && typeof tot.unlocked_hardcore === 'number' ? tot.unlocked_hardcore : null;
+    const award = progress && progress.award && AWARDS[progress.award.kind] ? progress.award : null;
+
+    const head = [];
+    if (unlocked != null && count) {
+      head.push(h('div', { class: 'ach-sum' },
+        h('span', null, h('b', null, fmt(unlocked)), ` / ${fmt(count)} unlocked`),
+        typeof tot.points_unlocked === 'number' ? h('span', null, h('b', null, fmt(tot.points_unlocked)), ` / ${fmt(tot.points)} points`) : null,
+        hardcore ? h('span', null, h('b', null, fmt(hardcore)), ' in hardcore') : null,
+        progress.profile ? h('a', { class: 'ach-user', href: progress.profile, target: '_blank', rel: 'noopener noreferrer' }, progress.user) : null),
+      h('div', { class: 'ach-bar', 'aria-hidden': 'true' }, h('i', { vars: { w: String(Math.min(1, unlocked / count)) } })));
+    } else if (count) {
+      head.push(h('div', { class: 'ach-sum' },
+        h('span', null, h('b', null, fmt(count)), count === 1 ? ' achievement' : ' achievements'),
+        Number(tot.points) > 0 ? h('span', null, h('b', null, fmt(tot.points)), ' points') : null));
+    }
+    if (award) {
+      const [name, how] = AWARDS[progress.award.kind];
+      head.push(h('div', { class: 'ach-award ' + progress.award.kind },
+        icon('trophy'), h('span', null, h('b', null, name), h('small', null, [how, formatDay(award.date)].filter(Boolean).join(' · ')))));
+    }
+
+    const notes = [];
+    if (!ach.available) {
+      notes.push('The hub has not downloaded the achievements of this game yet. They arrive with its next RetroAchievements run.');
+    } else if (!progress) {
+      notes.push('No RetroAchievements user is set on the hub (the [ra] user setting), so what you unlocked is not shown.');
+    } else if (!dates) {
+      notes.push('The dates of your unlocks are not downloaded yet, so the badges below are not marked. The counts come from your RetroAchievements summary.');
+    }
+
+    let wall = null;
+    if (list.length) {
+      const state = (a) => (dates ? (a.unlocked ? 'unlocked' : 'locked') : 'plain');
+      const nUnlocked = dates ? list.filter((a) => a.unlocked).length : 0;
+      const filter = dates && st.filter !== 'all' ? st.filter : 'all';
+      const shown = list.filter((a) => filter === 'all' || state(a) === filter);
+      const visible = shown.slice(0, st.limit);
+      const tab = (key, label, n) => h('button', {
+        type: 'button', class: 'tog', 'aria-pressed': String(filter === key), dataset: { fk: 'af:' + key },
+        onclick: () => { st.filter = key; st.limit = 48; repaint('af:' + key); },
+      }, h('span', { class: 'tick' }), `${label} ${n}`);
+      wall = [
+        dates ? h('div', { class: 'ach-tabs seg', role: 'group', 'aria-label': 'Show achievements' },
+          tab('all', 'All', list.length), tab('unlocked', 'Unlocked', nUnlocked), tab('locked', 'Locked', list.length - nUnlocked)) : null,
+        h('ul', { class: 'ach-wall' }, visible.map((a) => achievementTile(a, state(a), ach.players))),
+        shown.length > visible.length
+          ? h('button', {
+            type: 'button', class: 'btn sm ach-more', dataset: { fk: 'ach-more' },
+            onclick: () => { st.limit = shown.length; repaint('ach-more'); },
+          }, `Show all ${fmt(shown.length)}`)
+          : null,
+      ];
+    }
+    return h('section', { class: 'panel ach-panel', 'aria-label': 'Achievements' },
+      h('h2', null, h('i'), 'Achievements', h('span', null, ach.available && count ? `${fmt(count)} to win` : '')),
+      h('div', { class: 'pbody' },
+        head,
+        ...notes.map((n) => h('p', { class: 'mute small ach-note' }, n)),
+        d.ra && d.ra.url ? h('a', { class: 'ach-link', href: d.ra.url, target: '_blank', rel: 'noopener noreferrer' }, 'Game page on RetroAchievements') : null,
+        wall));
+  }
+
+  // The play statistics of a game: what the totals say, then each console.
+  function playPanel(d) {
+    const play = d.play;
+    const tot = play && play.totals;
+    if (!tot) return null;
+    const devs = Object.entries(play.devices || {}).sort((a, b) => (b[1].last || 0) - (a[1].last || 0) || a[0].localeCompare(b[0]));
+    const plays = Number(tot.plays) > 0 ? Math.floor(Number(tot.plays)) : 0;
+    const time = formatPlaytime(tot.playtime);
+    if (!plays && !devs.length && !time) return null;
+    const stat = (label, value, title) => (value ? h('div', { class: 'ps', title: title || null }, h('dt', null, label), h('dd', null, value)) : null);
+    return h('section', { class: 'panel playp', 'aria-label': 'Play history' },
+      h('h2', null, h('i'), 'Play history', h('span', null, tot.fav ? 'Favourite' : '')),
+      h('dl', { class: 'pstats pbody' },
+        stat('Played', plays ? plural(plays, 'time') : ''),
+        stat('Last played', timeAgo(tot.last), formatMoment(tot.last)),
+        stat('Playtime', time)),
+      devs.length ? h('ul', { class: 'pdev pbody' }, devs.map(([name, x]) => {
+        const when = timeAgo(x.last);
+        const t = formatPlaytime(x.playtime);
+        return h('li', null,
+          h('span', { class: 'pf' + (x.fav === true ? ' on' : ''), title: x.fav === true ? 'Favourite on ' + name : null },
+            x.fav === true ? [icon('star'), h('span', { class: 'sr-only' }, 'Favourite')] : null),
+          h('b', { class: 'pn', title: name }, name),
+          h('span', { class: 'pp' }, Number(x.plays) > 0 ? plural(Math.floor(Number(x.plays)), 'play') : 'No plays'),
+          h('span', { class: 'pw', title: formatMoment(x.last) || null }, [when ? 'Last ' + when : '', t].filter(Boolean).join(' · ')));
+      })) : null);
+  }
+
+  // What the hub holds of the game's saves. Nothing when it found none: that says "not found",
+  // not "the game has no save".
+  function savesPanel(d) {
+    const sv = d.saves;
+    if (!sv || (!sv.data && !(sv.states > 0))) return null;
+    const rows = [];
+    const row = (k, v, title) => { if (v) rows.push(h('div', { class: 'fact', title: title || null }, h('dt', null, k), h('dd', null, v))); };
+    row('Battery save', sv.data ? 'Yes' : 'None');
+    row('Save states', sv.states > 0 ? String(sv.states) : 'None');
+    row('Last save', timeAgo(sv.newest), formatMoment(sv.newest));
+    row('Emulator', Array.isArray(sv.emulators) ? sv.emulators.join(', ') : '');
+    return h('section', { class: 'panel', 'aria-label': 'Saves' },
+      h('h2', null, h('i'), 'Saves', h('span', null, 'On the hub')),
+      h('dl', { class: 'facts pbody' }, rows));
+  }
+
+  // The chips under the title: system, regions, languages, the verified seal, achievements.
+  function gameBadges(d, sys, t, locked) {
+    const regions = Array.isArray(d.region) ? d.region.filter(Boolean) : [];
+    const langs = Array.isArray(d.languages) ? d.languages.filter(Boolean) : [];
+    return h('div', { class: 'badges' },
+      h('a', { class: 'badge', href: ui.systemHref(sys), title: systemName(sys) }, systemName(sys)),
+      regions.length ? regions.map((r) => h('span', { class: 'badge reg', title: 'Region' }, r)) : ui.regionChip(t.region),
+      langs.length ? h('span', { class: 'langs', role: 'group', 'aria-label': 'Languages' },
+        langs.map((l) => h('span', { class: 'badge reg lang', title: languageName(l) }, l.toUpperCase()))) : null,
+      d.verified === true ? h('span', { class: 'badge seal', title: 'Verified dump: matched to a DAT by its content when it was filed' + (d.dat ? ' (' + d.dat + ')' : '') },
+        icon('check'), 'Verified') : null,
+      d.play && d.play.totals && d.play.totals.fav === true ? h('span', { class: 'badge fav', title: 'Favourite' }, icon('star'), 'Favourite') : null,
+      d.ra ? ui.raBadge(d.ra) : null,
+      d.size ? h('span', { class: 'badge reg' }, formatBytes(d.size)) : null,
+      locked ? h('span', { class: 'badge warn' }, 'Cannot be changed from the UI') : null);
+  }
+
   function viewGame(system, id) {
     const view = { kind: 'game', dead: false, system, id };
     const root = h('div', { class: 'page detail', vars: ui.systemTint(system) });
+    const frame = {
+      crumbs: h('div', { class: 'crumbs-host' }),
+      dleft: h('div', { class: 'dleft' }),
+      dinfo: h('div', { class: 'dinfo' }),
+      rest: h('div', { class: 'drest' }),
+    };
+    let built = false;
     let kindSel = null;
     let more = false;
+    let videoFailed = false;
+    let mediaKey = '';
+    const wall = { filter: 'all', limit: 48 };
+
+    // The media column is rebuilt only when what it shows changes, so a refresh of the page (a
+    // console's progress, a catalog run) never stops a video that is playing.
+    function paintMedia(d, sys, t, gallery, media) {
+      const cards = [
+        media.includes('physicalmedia') ? ['physicalmedia', 'phys'] : null,
+        media.includes('3dboxes') ? ['3dboxes', 'box'] : null,
+      ].filter(Boolean);
+      const key = [d.id, kindSel, gallery.join(), cards.join()].join('|');
+      if (key === mediaKey) return;
+      mediaKey = key;
+      const isVideo = kindSel === 'videos';
+      const screen = isVideo
+        ? videoScreen(d, media, t.name, () => { videoFailed = true; paint(false); })
+        : h('div', { class: 'screen' },
+          ui.artBox({ id: d.id, system: sys, kind: kindSel || 'covers', has: !!kindSel, alt: `${KIND_LABEL[kindSel] || 'Cover'} of ${t.name}`, eager: true, cls: kindSel === 'screenshots' ? 'shot' : '' }),
+          h('span', { class: 'scan', 'aria-hidden': 'true' }));
+      const cab = h('div', { class: 'cab' },
+        h('div', { class: 'cab-h' }, h('span', null, kindSel ? KIND_LABEL[kindSel] : 'Art'), h('span', { class: 'ch' }, systemCode(sys))),
+        screen,
+        gallery.length > 1 ? h('div', { class: 'cab-f seg', role: 'group', 'aria-label': 'Images and video' }, gallery.map((k) => h('button', {
+          type: 'button', class: 'tog', 'aria-pressed': String(k === kindSel), dataset: { fk: 'kind:' + k },
+          onclick: () => { kindSel = k; paint(false); restoreFocus('kind:' + k); },
+        }, h('span', { class: 'tick' }), KIND_LABEL[k]))) : null);
+      const physLabel = DISC_SYSTEMS.has(sys) ? 'Disc' : CART_SYSTEMS.has(sys) ? 'Cartridge' : 'Physical media';
+      const shelf = cards.map(([kind, cls]) => (kind === 'physicalmedia'
+        ? mediaCard(d, kind, physLabel, systemName(sys), cls, sys) : mediaCard(d, kind, '3D box', 'Retail box', cls, sys)));
+      frame.dleft.replaceChildren(cab, ...(shelf.length ? [h('section', { class: 'shelf', 'aria-label': 'Physical media and box' }, shelf)] : []));
+    }
 
     function paint(first) {
       const d = S.detail && S.detail.id === id ? S.detail.data : null;
@@ -646,28 +971,14 @@
       const meta = d.meta || {};
       const t = parseTitle(meta.name || d.name || d.title);
       const media = d.media || [];
-      const gallery = GALLERY.filter((k) => media.includes(k));
-      if (!kindSel || !gallery.includes(kindSel)) kindSel = gallery[0] || null;
+      const gallery = GALLERY.filter((k) => media.includes(k) && !(k === 'videos' && videoFailed));
+      if (!kindSel || !gallery.includes(kindSel)) kindSel = FIRST_KINDS.find((k) => gallery.includes(k)) || null;
       const fk = captureFocus();
       const locked = (d.flags || []).includes('unlistable');
       const ref = { id: d.id, system: sys, title: t.name, locked };
+      if (!built) { built = true; root.replaceChildren(frame.crumbs, h('div', { class: 'dtop' }, frame.dleft, frame.dinfo), frame.rest); }
 
-      const screen = h('div', { class: 'screen' },
-        ui.artBox({ id: d.id, system: sys, kind: kindSel || 'covers', has: !!kindSel, alt: `${KIND_LABEL[kindSel] || 'Cover'} of ${t.name}`, eager: true, cls: kindSel === 'screenshots' ? 'shot' : '' }),
-        h('span', { class: 'scan', 'aria-hidden': 'true' }));
-      const cab = h('div', { class: 'cab' },
-        h('div', { class: 'cab-h' }, h('span', null, kindSel ? KIND_LABEL[kindSel] : 'Art'), h('span', { class: 'ch' }, systemCode(sys))),
-        screen,
-        gallery.length > 1 ? h('div', { class: 'cab-f seg', role: 'group', 'aria-label': 'Images' }, gallery.map((k) => h('button', {
-          type: 'button', class: 'tog', 'aria-pressed': String(k === kindSel), dataset: { fk: 'kind:' + k },
-          onclick: () => { kindSel = k; paint(false); restoreFocus('kind:' + k); },
-        }, h('span', { class: 'tick' }), KIND_LABEL[k]))) : null);
-
-      const physLabel = DISC_SYSTEMS.has(sys) ? 'Disc' : CART_SYSTEMS.has(sys) ? 'Cartridge' : 'Physical media';
-      const cards = [
-        media.includes('physicalmedia') ? mediaCard(d, 'physicalmedia', physLabel, systemName(sys), 'phys', sys) : null,
-        media.includes('3dboxes') ? mediaCard(d, '3dboxes', '3D box', 'Retail box', 'box', sys) : null,
-      ].filter(Boolean);
+      paintMedia(d, sys, t, gallery, media);
 
       const rating = parseFloat(meta.rating);
       const facts = [];
@@ -695,28 +1006,24 @@
 
       const parts = d.parts || [];
       const others = d.versions || [];
-      root.replaceChildren(
-        h('nav', { class: 'crumbs', 'aria-label': 'Breadcrumb' },
-          h('a', { href: '#/', dataset: { fk: 'crumb-home' } }, 'Library'), h('span', { class: 'sep' }),
-          h('a', { href: ui.systemHref(sys), dataset: { fk: 'crumb-sys' }, title: systemName(sys) }, systemName(sys)), h('span', { class: 'sep' }),
-          h('span', { 'aria-current': 'page' }, t.name)),
-        h('div', { class: 'dtop' },
-          h('div', { class: 'dleft' }, cab, cards.length ? h('section', { class: 'shelf', 'aria-label': 'Physical media and box' }, cards) : null),
-          h('div', { class: 'dinfo' },
-            h('h1', null, t.name),
-            t.full !== t.name ? h('p', { class: 'rom' }, t.full) : null,
-            h('div', { class: 'badges' },
-              h('a', { class: 'badge', href: ui.systemHref(sys), title: systemName(sys) }, systemName(sys)),
-              ui.regionChip(t.region),
-              d.ra ? ui.raBadge(d.ra) : null,
-              d.size ? h('span', { class: 'badge reg' }, formatBytes(d.size)) : null,
-              locked ? h('span', { class: 'badge warn' }, 'Cannot be changed from the UI') : null),
-            consolesPanel(d, ref))),
+      frame.crumbs.replaceChildren(h('nav', { class: 'crumbs', 'aria-label': 'Breadcrumb' },
+        h('a', { href: '#/', dataset: { fk: 'crumb-home' } }, 'Library'), h('span', { class: 'sep' }),
+        h('a', { href: ui.systemHref(sys), dataset: { fk: 'crumb-sys' }, title: systemName(sys) }, systemName(sys)), h('span', { class: 'sep' }),
+        h('span', { 'aria-current': 'page' }, t.name)));
+      frame.dinfo.replaceChildren(
+        h('h1', null, t.name),
+        ...(t.full !== t.name ? [h('p', { class: 'rom' }, t.full)] : []),
+        gameBadges(d, sys, t, locked),
+        consolesPanel(d, ref),
+        ...[playPanel(d)].filter(Boolean));
+      frame.rest.replaceChildren(
         h('div', { class: 'dgrid' },
           h('section', { class: 'panel brief', 'aria-label': 'Briefing' }, h('h2', null, h('i'), 'Briefing', h('span', null, systemCode(sys))), h('div', { class: 'pbody' }, desc)),
           facts.length ? h('section', { class: 'panel', 'aria-label': 'Game data' }, h('h2', null, h('i'), 'Game data'), h('dl', { class: 'facts pbody' }, facts)) : null,
+          savesPanel(d),
           parts.length ? h('section', { class: 'panel', 'aria-label': 'Files' }, h('h2', null, h('i'), 'Files', h('span', null, plural(parts.length, 'part'))),
             h('ul', { class: 'parts-list pbody' }, parts.map((p) => h('li', null, h('code', { title: p.path }, p.path), ' ', h('span', { class: 'mute' }, formatBytes(p.size)))))) : null),
+        ...[achievementsPanel(d, wall, (focus) => { paint(false); restoreFocus(focus); })].filter(Boolean),
         ...(others.length ? [h('section', { class: 'panel', 'aria-label': 'Other versions' }, h('h2', null, h('i'), 'Other versions', h('span', null, String(others.length))),
           h('div', { class: 'vlist pbody' }, others.map((v) => {
             const known = S.byId.get(v.id);

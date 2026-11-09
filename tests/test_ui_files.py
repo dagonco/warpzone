@@ -16,12 +16,6 @@ DESIGN = ROOT / "website" / "src" / "content" / "docs" / "development" / "design
 SVG_NAMESPACE = "http://www.w3.org/2000/svg"
 SCRIPTS = ["api.js", "kit.js", "store.js", "components.js", "views.js", "app.js"]
 FILES = ["index.html", *SCRIPTS, "style.css", "placeholder.svg", "favicon.svg"]
-# Endpoints the API has and the page does not paint yet (a later change draws them and takes
-# them out of this set): the RetroAchievements records and badge images.
-NOT_PAINTED_YET = {
-    ("GET", "/api/v1/ra/summary"),
-    ("GET", "/api/v1/ra/badges/{}/{}"),
-}
 
 
 def read(name: str) -> str:
@@ -49,11 +43,6 @@ def design_endpoints() -> set[tuple[str, str]]:
 def design_error_codes() -> set[str]:
     text = DESIGN.read_text(encoding="utf-8")
     return set(re.findall(r"^\| \d{3} \| `([a-z-]+)` \|", text, re.MULTILINE))
-
-
-# Endpoints the API has ahead of the page: a later change paints them and removes the entry, so
-# the check below keeps failing for any other endpoint the page forgets.
-AHEAD_OF_THE_UI = {("GET", "/api/v1/recent")}
 
 
 def js_requests() -> set[tuple[str, str]]:
@@ -125,12 +114,14 @@ class UiFilesTest(unittest.TestCase):
             self.assertLessEqual(found, paths, name)
 
     def test_the_ui_uses_every_endpoint_it_needs(self):
-        # /healthz is for the container's health check; the media route is an <img> URL.
-        endpoints = {e for e in design_endpoints() if e[1] != "/healthz"}
-        needed = endpoints - NOT_PAINTED_YET - AHEAD_OF_THE_UI
+        # /healthz is for the container's health check; the media and badge routes are <img> and
+        # <video> URLs, which the browser loads.
+        needed = {e for e in design_endpoints() if e[1] != "/healthz"}
         used = js_requests() | {
             ("GET", normalize(p))
-            for p in re.findall(r"`(/api/v1/games/\$\{[^`]*media/[^`]*)`", read("api.js"))
+            for p in re.findall(
+                r"`(/api/v1/(?:games/\$\{[^`]*media/|ra/badges/)[^`]*)`", read("api.js")
+            )
         }
         self.assertEqual(needed - used, set())
 
@@ -177,25 +168,14 @@ class UiFilesTest(unittest.TestCase):
         from warpzone import library_api
 
         text = read("views.js")
-        # The API serves these before the page paints them; the PR that draws them removes this.
-        not_painted_yet = {"videos", "backcovers"}
         for kind in library_api.MEDIA_KINDS:
-            if kind not in not_painted_yet:
-                self.assertIn(kind, text, kind)
+            self.assertIn(kind, text, kind)
 
     def test_nothing_the_api_does_not_provide_is_drawn(self):
-        # Play statistics, saves, achievement lists, records and video are later work: they must
-        # not appear, not even as placeholders.
+        # The page draws what the API serves (play history, saves, achievements, records, video)
+        # and nothing it does not: a high-score table or an attract mode have no data behind them.
         text = scripts().lower()
-        for banned in (
-            "continue playing",
-            "high score",
-            "most played",
-            "playtime",
-            "video",
-            "attract",
-            "save state",
-        ):
+        for banned in ("high score", "attract mode", "leaderboard"):
             self.assertNotIn(banned, text, banned)
 
     def test_the_placeholder_is_used_as_a_mask(self):

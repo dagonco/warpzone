@@ -376,20 +376,43 @@ applies, so there is no inline script, handler or style attribute, no external f
 request to another origin; dynamic styling sets CSS custom properties from script.
 
 - **Home:** a "Now showing" carousel of games that have art, the state and download progress of
-  each console (from `/api/v1/progress`), the systems with their coverage per console, and the
-  newest games.
-- **System:** the game grid with an insert or eject switch per console on each tile, and a
+  each console (from `/api/v1/progress`) with its disk as a bar of used and free space (from
+  `disk`; nothing for a console that reported none), a "Continue playing" row (from
+  `/api/v1/recent`: cover, name, the console that played it last and when), the systems with
+  their coverage per console, the newest games and, at the very end and with little weight, a
+  records panel: the RetroAchievements points, games played, beaten and mastered and the
+  achievements unlocked (from `/api/v1/ra/summary`), the share unlocked per system, and the most
+  played games (from the `play` totals of the system lists). Each part is absent when its data
+  is: no play history, no `[ra] user`, nothing downloaded yet.
+- **System:** the game grid with an insert or eject switch per console on each tile (and, from
+  the `play` totals and `region` of the list, a star for a favourite, a mark with the number of
+  plays and a region chip), and a
   NONE, SOME or ALL lever per console for the whole system. A lever asks for confirmation with
   the dry run of the change (games that change and size). Turning a system on overrides its
   exclusions, and the dialog says so.
-- **Game:** the cover with the other media, the cartridge or disc scan (`physicalmedia`) and the
-  3D box when the scrape has them, the metadata, and a switch per console and for all of them.
+- **Game:** the main art area plays the video (`videos`: muted, with controls, `preload="none"`
+  and a screenshot as poster, so nothing is downloaded until it is played) and falls back to a
+  screenshot or mix image when there is none, or when the browser cannot play it; the switcher
+  offers the video, the cover, the mix image, the screenshot, the title screen and the back
+  cover. A refresh of the page never rebuilds the media column, so a video keeps playing. Under
+  the title: the regions and language codes (`region`, `languages`) and a "Verified" seal when
+  `verified` is true. Then the cartridge or disc scan (`physicalmedia`) and the 3D box when the
+  scrape has them, a switch per console and for all of them, the play history (plays, last
+  played and playtime in all, and per console with its favourite star), the saves the hub holds
+  (battery save, number of states, last save, emulator; nothing when none was found), the
+  metadata, and the achievements wall. The wall draws the badges the API serves (the unlocked
+  image for an unlocked achievement, the locked one for the rest, and a plain tile where the
+  image answers `404`), with title, description, points, rarity, a hardcore mark and the unlock
+  date, a progress bar and the award (beaten, completed or mastered). It shows only what is
+  known: with `available: false` it says the list is not downloaded and shows the totals; with
+  `progress: null` it lists the achievements without marking any; with `dates: false` it shows
+  the counts from the summary and leaves the tiles unmarked. The filter (all, unlocked, locked)
+  exists only when the dates are known, and a long list shows the first 48 until asked.
 - **Search:** results grouped by title key across systems, with the same per-console switches.
 - **Consoles:** the state of each console and what it holds.
 
-What the page does not draw yet is not drawn, not even as a placeholder: no play history, play
-statistics, saves, achievement lists, records or video (the API serves video and the
-`backcovers`, but the page does not paint them yet). Long system names are shortened to a code
+What the API does not provide is not drawn, not even as a placeholder (no high-score table, no
+attract mode), and a piece whose data is missing is left out rather than shown empty. Long system names are shortened to a code
 (for example GBA) with the full name in a `title` attribute. On a phone (390 px and up) the
 navigation is a bar at the bottom and the console switches sit within thumb reach. The page keeps
 keyboard and gamepad navigation, visible focus and `prefers-reduced-motion`, and a toggle turns
