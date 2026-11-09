@@ -28,7 +28,16 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
-from warpzone import __version__, artwork, catalog, catalog_store, library_api, progress, ra
+from warpzone import (
+    __version__,
+    artwork,
+    catalog,
+    catalog_store,
+    library_api,
+    progress,
+    ra,
+    saves_index,
+)
 from warpzone import whitelist_store as store
 from warpzone.config import Config, ServeSettings, split_listen
 from warpzone.errors import EXIT_OK, UsageError, WarpzoneError
@@ -220,6 +229,9 @@ class HubFiles:
         self._meta: dict[str, tuple[tuple[int, int] | None, float, dict[str, artwork.Entry]]] = {}
         self._media: dict[str, tuple[float, dict[str, dict[str, str]]]] = {}
         self._unclaimed: dict[str, tuple[float, tuple[str, ...]]] = {}
+        self._saves = saves_index.SavesCache(
+            root / saves_index.SAVES_DIR, ttl=media_seconds, clock=clock
+        )
 
     # ------------------------------------------------------------- the catalog
 
@@ -348,6 +360,13 @@ class HubFiles:
                 found = ()
             self._unclaimed[system] = (self.clock(), found)
             return found
+
+    def game_saves(self, lib: library_api.Library, game_id: str) -> dict[str, Any]:
+        """The `saves` object of a game (an empty one for an unknown id)."""
+        found = lib.by_id.get(game_id)
+        if found is None:
+            return saves_index.saves_response(saves_index.GameSaves())
+        return self._saves.game(lib, found[0], found[1].primary)
 
     def media_path(self, system: str, kind: str, name: str) -> Path | None:
         """The image file, or None when it is not a regular file inside its kind's folder
@@ -664,12 +683,11 @@ class App:
                 )
             case ["games", game_id]:
                 lib = self.files.library()
-                return json_response(
-                    200,
-                    library_api.game_response(
-                        lib, game_id, cfg, self.files.views(cfg), self.files.extras
-                    ),
+                body = library_api.game_response(
+                    lib, game_id, cfg, self.files.views(cfg), self.files.extras
                 )
+                body["saves"] = self.files.game_saves(lib, game_id)
+                return json_response(200, body)
             case ["games", game_id, "media", kind]:
                 return self._media(game_id, kind)
             case ["search"]:
