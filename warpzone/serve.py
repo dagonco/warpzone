@@ -679,6 +679,10 @@ class App:
             response = self._route(request)
         except ApiError as exc:
             response = error_response(exc)
+        except store.WhitelistIOError as exc:  # the answer names the file, not the hub's path
+            self.log(f"error: {exc}")
+            message = f"{exc.path.name} could not be read ({exc.strerror})"
+            response = error_response(ApiError("read-failed", message))
         except Exception as exc:  # the answer says nothing; the log names the kind
             self.log(f"internal error: {type(exc).__name__}")
             response = error_response(ApiError("internal", "internal error"))

@@ -1,4 +1,5 @@
 import os
+import sys
 import tempfile
 import unittest
 from datetime import UTC, datetime
@@ -53,6 +54,18 @@ LIBRARY_FILES = [
 ]
 
 NOW = datetime(2026, 11, 6, 10, 0, 0, 123456, tzinfo=UTC)
+
+
+NOT_ROOT = unittest.skipIf(
+    sys.platform == "win32" or os.geteuid() == 0, "root reads a file without permissions"
+)
+
+
+def unreadable(case: unittest.TestCase, path: Path) -> None:
+    """Make `path` unreadable for this user (the Synology case: the file is there, and a
+    process without the share's ACL group gets EACCES)."""
+    path.chmod(0)
+    case.addCleanup(path.chmod, 0o644)
 
 
 class StoreCase(unittest.TestCase):
@@ -176,6 +189,34 @@ class SnapshotAndWriteTests(StoreCase):
         self.assertEqual(len(warnings), 1)
         self.assertIn("could not ask the hub to scan", warnings[0])
         self.assertNotIn(API_KEY, warnings[0])
+
+
+@NOT_ROOT
+class UnreadableTests(StoreCase):
+    def test_read_names_the_file_and_the_cause(self) -> None:
+        path = self.put("deck", HAND)
+        unreadable(self, path)
+        with self.assertRaises(whitelist_store.WhitelistIOError) as caught:
+            whitelist_store.read(path)
+        self.assertEqual(caught.exception.path, path)
+        self.assertIn(f"cannot read {path}: Permission denied", str(caught.exception))
+
+    def test_migrate_raises_the_error_for_the_command_to_report(self) -> None:
+        unreadable(self, self.put("deck", HAND))
+        with self.assertRaises(whitelist_store.WhitelistIOError):
+            self.migrate("deck", dry_run=True)
+
+    def test_a_failing_backup_or_write_names_the_file_and_the_cause(self) -> None:
+        path = self.put("deck", HAND)
+        snapshot = whitelist_store.read(path)
+        denied = PermissionError(13, "Permission denied")
+        with (
+            mock.patch.object(safefile, "write_file", side_effect=denied),
+            self.assertRaises(whitelist_store.WhitelistIOError) as caught,
+        ):
+            whitelist_store.write(self.root, "deck", b"x\n", snapshot, now=NOW)
+        self.assertIn("Permission denied", str(caught.exception))
+        self.assertEqual(path.read_text(), HAND)
 
 
 class MigrationTests(StoreCase):
@@ -384,6 +425,18 @@ class ExcludedSystemsTests(StoreCase):
         self.assertEqual(len(notes), 1)
         self.assertIn("whitelist migrate", notes[0])
 
+    @NOT_ROOT
+    def test_a_whitelist_that_cannot_be_read_is_a_note(self) -> None:
+        cfg, profiles = self.config(exclude_systems=["ps4"])
+        unreadable(self, self.put("deck", self.MANAGED))
+        problems, notes = whitelist_store.excluded_system_report(
+            cfg, profiles, root=self.root, home=Path("/nonexistent-home")
+        )
+        self.assertEqual(problems, [])
+        (note,) = notes
+        self.assertIn("deck: cannot read", note)
+        self.assertIn("Permission denied", note)
+
     def test_the_devices_own_library_folder_is_read_when_there_is_no_root(self) -> None:
         cfg, profiles = self.config(exclude_systems=["ps4"])
         home = self.root.parent / "home"
@@ -439,6 +492,16 @@ folders = ["saves"]
         self.assertNotIn(API_KEY, out + err)
         # The hub is not reachable here: the scan is a warning, never a failure.
         self.assertIn("warning: could not ask the hub to scan", err)
+
+    @NOT_ROOT
+    def test_an_unreadable_whitelist_is_an_error_not_a_traceback(self) -> None:
+        config = self.write_config()
+        path = self.put("deck", HAND)
+        unreadable(self, path)
+        code, out, err = run("whitelist", "migrate", "deck", "--dry-run", "--config", config)
+        self.assertEqual(code, 1)
+        self.assertEqual(out, "")
+        self.assertEqual(err, f"warpzone: error: cannot read {path}: Permission denied\n")
 
     def test_whitelist_migrate_dry_run_a_named_device_and_root(self) -> None:
         config = self.write_config()

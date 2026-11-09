@@ -6,6 +6,7 @@ import json
 import os
 import signal
 import socket
+import sys
 import tempfile
 import threading
 import unittest
@@ -527,6 +528,28 @@ class MediaTests(ServeCase):
         (outside / "x.png").write_bytes(b"x")
         (self.root / "frontend" / "media" / "psx" / "covers" / "dir").symlink_to(outside)
         self.assertIsNone(files.media_path("psx", "covers", "dir/x.png"))
+
+
+class UnreadableWhitelistTests(ServeCase):
+    """Synology ACLs: the file is there and the server's process cannot open it."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.path = self.library / "patterns-deck.stignore"
+        self.path.chmod(0)
+        self.addCleanup(self.path.chmod, 0o644)
+
+    @unittest.skipIf(sys.platform == "win32" or os.geteuid() == 0, "root reads any file")
+    def test_a_read_is_a_json_error_that_names_the_file_not_an_internal_one(self) -> None:
+        reply = self.get("/api/v1/devices")
+        self.assertEqual(reply.status, 500)
+        error = self.error(reply)
+        self.assertEqual(error["code"], "read-failed")
+        self.assertIn("patterns-deck.stignore", error["message"])
+        self.assertIn("Permission denied", error["message"])
+        self.assertNotIn(str(self.root), error["message"])
+        self.assertTrue(any("cannot read" in line and "Permission" in line for line in self.logs))
+        self.assertFalse([line for line in self.logs if "internal" in line])
 
 
 class ChangeTests(ServeCase):

@@ -98,6 +98,8 @@
         return 'A catalog scan is already running on the hub.';
       case 'write-failed':
         return `The server could not write the whitelist of ${dev || 'a console'}. Nothing of it was changed; check the hub's disk and try again.`;
+      case 'read-failed':
+        return `The server could not read a whitelist${where}. On the hub, check the permissions of the library folder for the user the server runs as.`;
       case 'hub-unreachable':
         return 'The hub could not reach its Syncthing, so progress is unknown for now.';
       case 'internal':

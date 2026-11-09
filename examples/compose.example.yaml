@@ -31,6 +31,14 @@ services:
     # NAS). The container writes library/patterns-*.stignore and catalog/ as this user.
     user: "1000:1000"
 
+    # Synology: the share often grants access through ACL entries to the `administrators` group
+    # (gid 101 on Synology) and not to the owner's uid, so a process with only its primary group
+    # cannot open the files although `ls -l` shows rwxrwxrwx ("Permission denied" reading
+    # library/patterns-*.stignore). Uncomment to add that group; check the gid with
+    # `getent group administrators` on the NAS.
+    # group_add:
+    #   - "101"
+
     # Light and locked down: one process, a small memory limit, nothing writable but the share and
     # /tmp. If `catalog --ra-hash` is killed (exit 137), raise the limit and run it again.
     init: true

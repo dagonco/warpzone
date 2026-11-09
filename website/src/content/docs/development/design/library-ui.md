@@ -936,6 +936,7 @@ last two when they apply):
 | 422 | `unsupported` | turning on a system in the device's `exclude_systems` |
 | 428 | `expect-missing` | a touched device has no `expect` |
 | 500 | `write-failed` | a whitelist could not be written (a disk error); the answer also lists the devices already written |
+| 500 | `read-failed` | a whitelist exists but could not be read (permissions on the share); the message names the file and the cause, the log has the full path |
 | 500 | `internal` | an unexpected failure of the server (the log has the exception name, never a token) |
 | 503 | `hub-unreachable` | only `progress`: the hub's API did not answer |
 
