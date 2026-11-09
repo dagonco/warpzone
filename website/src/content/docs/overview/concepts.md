@@ -56,8 +56,8 @@ Everything warpzone manages is a Syncthing folder with a stable ID prefixed `wz-
 | `wz-tools` | `tools` | receive-only | scripts and docs |
 | `wz-save-<emu>-<kind>` | `saves/<emu>/<kind>` | two-way | one emulator's saves or states |
 | `wz-bios-<emu>-<kind>` | `library/<path>` | receive-only | keys and firmware delivered into an emulator's own folder |
-| `wz-media`, `wz-esde` | `frontend/media`, `frontend/es-de` | two-way (receive-only for a profile with `[artwork]`, such as the Anbernic) | ES-DE media, gamelists and collections |
-| `wz-play-state` | `frontend/play-state` | two-way | favourites and play statistics, one file per device |
+| `wz-media`, `wz-esde` | `frontend/media`, `frontend/es-de` | two-way (receive-only for a profile with `[artwork]`, such as the Anbernic) | ES-DE media (not the `videos`, which stay on the hub), gamelists and collections |
+| `wz-play-state` | `frontend/play-state` | two-way | favourites and play statistics, one file per device, and the console's disk space for the library UI |
 | `wz-settings` | `settings` | two-way | emulator settings layers |
 
 The split is deliberate. The library is receive-only so a delete on a console never reaches the hub. Saves need two-way sync, so each kind has its own folder and that direction cannot leak into the library. The hub keeps 30 days of history of the save folders, `wz-settings` and `wz-play-state`, and nothing else is versioned, so turn on filesystem snapshots for the hub's share ([Safety](/warpzone/operation/safety/)). The full table is in [the design document](/warpzone/development/design/hub-and-folders/#folders).

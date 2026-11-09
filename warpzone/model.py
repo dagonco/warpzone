@@ -18,6 +18,9 @@ NO_VERSIONING: dict[str, Any] = {"type": ""}
 
 LIBRARY_ID = "wz-library"
 MEDIA_ID = "wz-media"
+# `frontend/media/<system>/videos` is only for the hub's UI (a video is tens of MiB); the
+# devices that get the whole folder ignore it, and the devices with `[artwork]` never list it.
+MEDIA_DEVICE_IGNORES = ("/*/videos",)
 ESDE_ID = "wz-esde"
 PLAY_STATE_ID = "wz-play-state"
 
@@ -84,6 +87,8 @@ class _Def:
     device_path: str | None = None  # save folders carry their own path
     whitelist: bool = False
     fixed_ignores: tuple[str, ...] = ()
+    # Ignores a device adds to `fixed_ignores`; the hub's folder never takes them.
+    device_ignores: tuple[str, ...] = ()
     save: bool = False
     # The hub keeps 30 days of history of this folder, as for save folders.
     history: bool = False
@@ -99,7 +104,15 @@ _STATIC: dict[str, tuple[_Def, ...]] = {
         _Def("wz-tools", "tools", "sendonly", "receiveonly", "tools", fixed_ignores=("/logs",)),
     ),
     "frontend": (
-        _Def(MEDIA_ID, "frontend/media", "sendreceive", "sendreceive", "media"),
+        # Videos stay on the hub: a device that receives the whole folder ignores them.
+        _Def(
+            MEDIA_ID,
+            "frontend/media",
+            "sendreceive",
+            "sendreceive",
+            "media",
+            device_ignores=MEDIA_DEVICE_IGNORES,
+        ),
         _Def(
             ESDE_ID,
             "frontend/es-de",
@@ -244,7 +257,7 @@ def device_specs(
             bootstrap: tuple[str, ...] | None = ignores.BOOTSTRAP_LINES
             required: tuple[str, ...] = (ignores.COMMON_FILE, ignores.device_file(device.name))
         else:
-            final = ignores.inline(item.fixed_ignores)
+            final = ignores.inline(item.fixed_ignores + item.device_ignores)
             bootstrap = None
             required = ()
         specs.append(

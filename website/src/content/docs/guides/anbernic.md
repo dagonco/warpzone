@@ -106,6 +106,7 @@ Add it to every device that takes part, run `warpzone provision hub`, then `warp
 
 - **What you see.** A favourite follows the latest change on any device, and removing one sticks. The play count is the sum of this device and the ES-DE consoles. Last played is the latest, shown in this device's time zone.
 - **When.** Each `frontend refresh` publishes what EmulationStation saved (on exit) and merges the others, every 15 minutes while it is closed. While it is open only publishing happens, and the merge waits.
+- **Disk space.** The same folder carries a small `<device>.status.json` with the size and free space of the card that holds the library, which the library UI on the hub shows for this console. It is rewritten only when the free space moves by 1% or a day passes.
 - **Games that are not here.** Their state waits in the files and applies if the game arrives. `hidden` and `kidgame` stay on this device.
 
 See [the design document](/warpzone/development/design/play-state/) for the rules.

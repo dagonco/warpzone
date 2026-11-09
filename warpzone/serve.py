@@ -26,18 +26,21 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any
+from typing import Any, BinaryIO
 
 from warpzone import (
     __version__,
     artwork,
     catalog,
     catalog_store,
+    diskstatus_io,
     library_api,
+    playstate,
     progress,
     ra,
     ra_data,
     ra_store,
+    saves_index,
 )
 from warpzone import whitelist_store as store
 from warpzone.config import Config, ServeSettings, split_listen
@@ -60,6 +63,7 @@ CATALOG_PERIOD = 6 * 3600.0
 RA_LISTS_PERIOD = 24 * 3600.0
 UI_DIR = Path(__file__).resolve().parent / "data" / "ui"
 CSP = "default-src 'self'"
+CHUNK = 64 * 1024  # bytes of a media file read and sent at a time
 LIBRARY_FOLDER = "wz-library"
 CONTENT_TYPES = {
     ".html": "text/html; charset=utf-8",
@@ -72,6 +76,8 @@ CONTENT_TYPES = {
     ".jpg": "image/jpeg",
     ".jpeg": "image/jpeg",
     ".ico": "image/x-icon",
+    ".mp4": "video/mp4",
+    ".webm": "video/webm",
     ".woff2": "font/woff2",
     ".txt": "text/plain; charset=utf-8",
 }
@@ -188,6 +194,10 @@ class Response:
     body: bytes = b""
     content_type: str = "application/json; charset=utf-8"
     headers: list[tuple[str, str]] = field(default_factory=list)
+    # A file sent in chunks instead of `body`: `stream` is open and positioned at the first byte,
+    # `length` bytes of it are sent, and the server closes it (HEAD sends none).
+    stream: BinaryIO | None = None
+    length: int = 0
 
 
 def json_response(
@@ -231,6 +241,11 @@ class HubFiles:
         self._meta: dict[str, tuple[tuple[int, int] | None, float, dict[str, artwork.Entry]]] = {}
         self._media: dict[str, tuple[float, dict[str, dict[str, str]]]] = {}
         self._unclaimed: dict[str, tuple[float, tuple[str, ...]]] = {}
+        self._saves = saves_index.SavesCache(
+            root / saves_index.SAVES_DIR, ttl=media_seconds, clock=clock
+        )
+        self._ledgers: dict[Path, tuple[tuple[int, int], playstate.Ledger | None]] = {}
+        self._ledgers_checked = float("-inf")
 
     # ------------------------------------------------------------- the catalog
 
@@ -394,6 +409,13 @@ class HubFiles:
             self._unclaimed[system] = (self.clock(), found)
             return found
 
+    def game_saves(self, lib: library_api.Library, game_id: str) -> dict[str, Any]:
+        """The `saves` object of a game (an empty one for an unknown id)."""
+        found = lib.by_id.get(game_id)
+        if found is None:
+            return saves_index.saves_response(saves_index.GameSaves())
+        return self._saves.game(lib, found[0], found[1].primary)
+
     def media_path(self, system: str, kind: str, name: str) -> Path | None:
         """The image file, or None when it is not a regular file inside its kind's folder
         (a symlink pointing out of it is refused)."""
@@ -401,6 +423,48 @@ class HubFiles:
         if parts is None or not parts:
             return None
         return safe_file(self.root / "frontend" / "media" / system / kind, parts)
+
+    # ------------------------------------------------------------- play state
+
+    def play_ledgers(self) -> tuple[playstate.Ledger, ...]:
+        """The ledgers in `frontend/play-state/`, one per device, in device order. A file is
+        parsed again when its size or mtime changed (checked at most every `interval`
+        seconds); one that cannot be read, or trusted, is left out. Conflict copies are
+        ignored, and the devices that left the config still count: their plays happened."""
+        with self._lock:
+            if self.clock() - self._ledgers_checked >= self.interval:
+                self._ledgers_checked = self.clock()
+                self._read_ledgers()
+            return tuple(
+                sorted(
+                    (ledger for _, ledger in self._ledgers.values() if ledger is not None),
+                    key=lambda ledger: ledger.device,
+                )
+            )
+
+    def _read_ledgers(self) -> None:
+        base = self.root / "frontend" / "play-state"
+        try:
+            names = sorted(p for p in base.glob("*.jsonl") if ".sync-conflict-" not in p.name)
+        except OSError:
+            names = []
+        found: dict[Path, tuple[tuple[int, int], playstate.Ledger | None]] = {}
+        for path in names:
+            stamp = self._stat(path)
+            if stamp is None:
+                continue
+            held = self._ledgers.get(path)
+            if held is not None and held[0] == stamp:
+                found[path] = held
+                continue
+            try:
+                ledger: playstate.Ledger | None = playstate.parse_ledger(
+                    path.read_bytes().decode("utf-8"), path.stem
+                )
+            except (OSError, UnicodeDecodeError, playstate.LedgerError):
+                ledger = None
+            found[path] = (stamp, ledger)
+        self._ledgers = found
 
     # ------------------------------------------------------------- whitelists
 
@@ -712,7 +776,10 @@ class App:
         cfg = self.cfg
         match segments:
             case ["devices"]:
-                return json_response(200, library_api.devices_response(cfg, self.files.views(cfg)))
+                return json_response(
+                    200,
+                    library_api.devices_response(cfg, self.files.views(cfg), self._disks()),
+                )
             case ["systems"]:
                 lib = self.files.library()
                 return json_response(
@@ -720,22 +787,29 @@ class App:
                 )
             case ["systems", system, "games"]:
                 lib = self.files.library()
-                return json_response(
-                    200,
-                    library_api.games_response(
-                        lib, system, cfg, self.files.views(cfg), self.files.extras
-                    ),
+                games = library_api.games_response(
+                    lib, system, cfg, self.files.views(cfg), self.files.extras
                 )
+                library_api.attach_play(games["games"], lib, self._play_index())
+                return json_response(200, games)
             case ["games", game_id]:
                 lib = self.files.library()
+                game = library_api.game_response(
+                    lib, game_id, cfg, self.files.views(cfg), self.files.extras
+                )
+                game["play"] = library_api.game_play(self._play_index(), *lib.by_id[game_id])
+                game["saves"] = self.files.game_saves(lib, game_id)
+                return json_response(200, game)
+            case ["recent"]:
+                limit = library_api.parse_limit(request.query.get("limit"))
                 return json_response(
                     200,
-                    library_api.game_response(
-                        lib, game_id, cfg, self.files.views(cfg), self.files.extras
+                    library_api.recent_response(
+                        self.files.library(), self._play_index(), self.files.extras, limit
                     ),
                 )
             case ["games", game_id, "media", kind]:
-                return self._media(game_id, kind)
+                return self._media(request, game_id, kind)
             case ["search"]:
                 query = request.query.get("q")
                 if query is None:
@@ -767,6 +841,10 @@ class App:
                 return json_response(202, {"started": True})
         raise ApiError("not-found", "no such route")
 
+    def _play_index(self) -> library_api.PlayIndex:
+        horizon = int(self.now().timestamp()) + playstate.FUTURE_SLACK
+        return library_api.PlayIndex(self.files.play_ledgers(), horizon)
+
     def _catalog_status(self) -> dict[str, Any]:
         lib = self.files.library()
         status = self.refresher.status() if self.refresher else {"running": False, "last_run": None}
@@ -780,22 +858,34 @@ class App:
 
     # ------------------------------------------------------------- media and static files
 
-    def _media(self, game_id: str, kind: str) -> Response:
+    def _media(self, request: Request, game_id: str, kind: str) -> Response:
         lib = self.files.library()
         system, name = library_api.media_file(lib, game_id, kind, self.files.extras)
         path = self.files.media_path(system, kind, name)
         if path is None:
             raise ApiError("not-found", "the image is not available", game=game_id)
         try:
-            data = path.read_bytes()
+            handle = path.open("rb")
         except OSError:
             raise ApiError("not-found", "the image is not available", game=game_id) from None
-        return Response(
-            200,
-            data,
-            CONTENT_TYPES.get(path.suffix.lower(), "application/octet-stream"),
-            [("Cache-Control", "private, max-age=3600")],
-        )
+        try:
+            size = os.fstat(handle.fileno()).st_size
+            headers = [("Cache-Control", "private, max-age=3600"), ("Accept-Ranges", "bytes")]
+            ctype = CONTENT_TYPES.get(path.suffix.lower(), "application/octet-stream")
+            try:
+                span = library_api.parse_range(request.headers.get("range"), size)
+            except library_api.RangeNotSatisfiable:
+                handle.close()
+                return Response(416, b"", ctype, [("Content-Range", f"bytes */{size}"), *headers])
+            if span is None:
+                return Response(200, b"", ctype, headers, handle, size)
+            first, last = span
+            handle.seek(first)
+            headers.append(("Content-Range", f"bytes {first}-{last}/{size}"))
+            return Response(206, b"", ctype, headers, handle, last - first + 1)
+        except BaseException:
+            handle.close()
+            raise
 
     def _badge(self, name: str, variant: str) -> Response:
         path = self.files.badge_path(name, variant)
@@ -891,6 +981,15 @@ class App:
         except WarpzoneError as exc:
             self.log(f"warning: no client for the hub's Syncthing ({_reason(exc)})")
             return None
+
+    # ------------------------------------------------------------- disks
+
+    def _disks(self) -> dict[str, dict[str, Any]]:
+        """The disk each device reported through the play state folder (small files, read on
+        every request; a missing or stale one is null fields)."""
+        names = [d.name for d in library_api.library_devices(self.cfg)]
+        folder = self.root / "frontend" / "play-state"
+        return diskstatus_io.read_all(folder, names, int(self.now().timestamp()))
 
     # ------------------------------------------------------------- progress
 
@@ -1012,15 +1111,33 @@ class _Handler(BaseHTTPRequestHandler):
         self.send_response(response.status)
         if response.status != 204:
             self.send_header("Content-Type", response.content_type)
-        self.send_header("Content-Length", str(len(response.body)))
+        length = response.length if response.stream is not None else len(response.body)
+        self.send_header("Content-Length", str(length))
         for name, value in response.headers:
             self.send_header(name, value)
         if not response.headers or not any(n == "Cache-Control" for n, _ in response.headers):
             self.send_header("Cache-Control", "no-store")
         self.send_header("Connection", "close")
         self.end_headers()
-        if self.command != "HEAD":
-            self.wfile.write(response.body)
+        try:
+            if self.command == "HEAD":
+                return
+            if response.stream is None:
+                self.wfile.write(response.body)
+                return
+            left = response.length
+            while left > 0:
+                chunk = response.stream.read(min(CHUNK, left))
+                if not chunk:  # the file shrank: the length was promised, so drop the connection
+                    self.close_connection = True
+                    break
+                self.wfile.write(chunk)
+                left -= len(chunk)
+        except (BrokenPipeError, ConnectionResetError):
+            self.close_connection = True  # a player seeking drops the connection: not an error
+        finally:
+            if response.stream is not None:
+                response.stream.close()
 
     def _handle(self) -> None:
         length_text = self.headers.get("Content-Length")

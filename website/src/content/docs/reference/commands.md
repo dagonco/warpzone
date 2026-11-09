@@ -349,7 +349,7 @@ warpzone frontend refresh [NAME] [--config PATH] [--dry-run] [--syncthing-config
 
 On a console whose profile has an `[artwork]` table and whose device lists the `frontend` folder group: widens the artwork folders' ignores to the systems that have games on the device (when the local Syncthing is found) and rewrites the frontend's own gamelists from the synced ES-DE data. It writes the gamelists only while the frontend is closed; never run it while the frontend is open.
 
-On a console whose profile also has `[save_convert.*]` and whose device lists `saves`, it first runs [`saves convert`](#warpzone-saves-convert); such a device does not need the `frontend` folder group, and then only the conversion runs.
+On a console whose profile also has `[save_convert.*]` and whose device lists `saves`, it first runs [`saves convert`](#warpzone-saves-convert); such a device does not need the `frontend` folder group, and then only the conversion runs. On a device that lists `play-state` it also publishes the disk report described under [`play-state sync`](#warpzone-play-state-sync).
 
 | Option | Default | Meaning |
 |---|---|---|
@@ -370,7 +370,7 @@ warpzone frontend refresh rg351mp --dry-run
 warpzone play-state sync NAME [--config PATH] [--dry-run] [--quiet] [--frontend-starting]
 ```
 
-On a console that lists the `play-state` folder group: publishes this device's favourites and play statistics and merges the other devices' into ES-DE's gamelists. The gamelists wait until ES-DE is closed. ES-DE runs it at startup, and a timer (the profile's `[play_state] refresh`) runs it between starts. A device whose profile has `[artwork]` is refused: its `frontend refresh` does this work.
+On a console that lists the `play-state` folder group: publishes this device's favourites and play statistics and merges the other devices' into ES-DE's gamelists. The gamelists wait until ES-DE is closed. ES-DE runs it at startup, and a timer (the profile's `[play_state] refresh`) runs it between starts. A device whose profile has `[artwork]` is refused: its `frontend refresh` does this work. The same run publishes the size and free space of the disk that holds the library (`<device>.status.json` in the play state folder, for the library UI), only when the free space moved by 1% or more or the last report is a day old.
 
 | Option | Default | Meaning |
 |---|---|---|
