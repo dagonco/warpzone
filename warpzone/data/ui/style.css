@@ -693,7 +693,7 @@ dialog.modal[open] { animation: enter .2s ease-out both; }
 }
 @supports selector(:popover-open) { .toasts[popover]:not(:popover-open) { display: none; } }
 .toast {
-  pointer-events: auto; display: flex; align-items: flex-start; gap: 12px; max-width: 100%; padding: 10px 12px 10px 14px;
+  pointer-events: auto; display: flex; align-items: center; gap: 12px; max-width: 100%; padding: 10px 12px 10px 14px;
   background: #000; border: 2px solid var(--lime); box-shadow: 4px 4px 0 #000;
   font: 600 12px/1.45 var(--mono); animation: enter .25s ease-out both;
 }
