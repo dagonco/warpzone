@@ -447,8 +447,8 @@ charset=utf-8`) except the static files and the media. Every response carries
 CORS headers are sent: a Decky plugin calls the API from its Python backend, not from the
 Steam client's web view. A request body is JSON, at most 64 KiB.
 
-The server reads the catalog files, the gamelists, the RA lists and the whitelists from the hub
-root and keeps them in memory, reloading a file when its size or mtime changed (checked at most
+The server reads the catalog files, the gamelists, the RA lists, the whitelists and the
+[play-state ledgers](/warpzone/development/design/play-state/) from the hub root and keeps them in memory, reloading a file when its size or mtime changed (checked at most
 every 5 seconds). It runs `catalog` in a background thread at start and every 6 hours, and
 `catalog --ra-lists` once a day when `RA_API_KEY` is set (the 7-day age rule makes most of those
 runs no-ops).
@@ -501,6 +501,7 @@ outside the home goes through the user's own reverse proxy with TLS, which is ou
 | `GET /api/v1/games/{id}` | one game in full |
 | `GET /api/v1/games/{id}/media/{kind}` | the game's image of that kind, or `404` |
 | `GET /api/v1/search?q=...` | games whose title key matches, grouped by key |
+| `GET /api/v1/recent?limit=N` | the games played most recently on any device, newest first |
 | `GET /api/v1/progress` | the [progress state](#progress) of each device |
 | `GET /api/v1/catalog` | whether the catalog is built, and the state of the background run |
 | `POST /api/v1/changes` | turns games and systems on and off |
@@ -571,6 +572,44 @@ false}}}`, where `state` is `all`, `some` or `none` of the games turned on, `uns
 `GET /api/v1/games/{id}` adds `parts` (path, type, size), `dat`, `meta` (the gamelist fields
 above), `media` (the kinds that exist), `ra` (`{"state", "achievements", "points", "url"}` as
 known) and `versions` (the other games with the same title key: id, system, title).
+
+Play statistics come from the ledgers in `frontend/play-state/*.jsonl` (see [Play
+state](/warpzone/development/design/play-state/)), read again when a file changed (checked at
+most every 5 seconds); a ledger that cannot be read is left out, and the ledgers of devices that
+left the config still count. A ledger line is keyed by hub system and ROM path below it, and a
+catalog game is found under its `gamelist` path (what a frontend records), else under its
+primary path below `roms/<system>/`. Lines for a ROM the catalog does not hold are ignored.
+`GET /api/v1/games/{id}` adds `play`:
+
+```json
+{"devices": {"deck": {"replica": "wz-esde", "plays": 3, "last": 1793000000, "fav": true,
+                      "playtime": 5400},
+             "rg351mp": {"replica": "rg351mp", "plays": 1, "last": 1792000000, "fav": null,
+                         "playtime": 0}},
+ "totals": {"plays": 4, "last": 1793000000, "fav": true, "playtime": 5400}}
+```
+
+`last` is a UTC epoch (null: never, or a time more than a day ahead of the server, which comes
+from a wrong clock), `fav` the device's favourite (null: it says nothing) and `playtime` the
+seconds its frontend recorded (0: none, also for a frontend that records none). Devices that
+read one gamelist (Deck and Machine) share a `replica` and report the same counters, so
+`totals` counts a replica once (its highest value) and adds the replicas up; `totals.last` is
+the latest and `totals.fav` the favourite with the latest change, as the devices merge them. A
+game with no record has `"devices": {}` and `{"plays": 0, "last": null, "fav": null,
+"playtime": 0}`. Each entry of `GET /api/v1/systems/{system}/games` carries `play` too: the
+same `totals`, or `null` for a game with no record.
+
+`GET /api/v1/recent?limit=N` (`limit`: a whole number from 1 to 100, default 20; anything else
+is `400 bad-request`) answers the games with a last played time, newest first, ties by game id:
+
+```json
+{"games": [{"id": "5d0c1f3a9b2e7c48", "system": "psx", "title": "Example Game",
+            "name": "Example Game", "cover": true, "last": 1793000000, "device": "deck",
+            "plays": 4, "playtime": 5400}]}
+```
+
+`device` is the device whose ledger has that `last`; two devices of one replica share it, and
+the one whose name sorts last is named. `plays` and `playtime` are the totals above.
 
 `GET /api/v1/search?q=metal+gear`: the query goes through the same normalization as a title
 (without step 1); a game matches when each word of the query is a prefix of a word of its key.
@@ -750,8 +789,9 @@ network:
   `catalog.ra_state`, the catalog's JSON encoding and merge; `whitelist.escape`, `unescape`,
   `parse`, `parse_hand`, `render`, `normalize`, `apply`, `decide`, `decide_lines`, `effect`,
   `unsupported` and the migration's classification; `library_api.plan_changes` and every
-  response builder; `progress.state`; `prune.guard`; `diskstatus` (`measure`, `should_write`,
-  `render`, `parse`, `stale`, `api_disk`).
+  response builder (the play statistics included: `game_play`, `attach_play`, `recent_response`);
+  `progress.state`; `prune.guard`; `diskstatus` (`measure`, `should_write`, `render`, `parse`,
+  `stale`, `api_disk`).
 - **I/O:** `catalog_store` (the walk, hashing, RAHasher and the RA download through `ra.py`, the
   guarded writes), `diskstatus_io` (the disk report's write on a console and read on the hub),
   `whitelist_store` (reading with a stamp, backups, the guarded write, the hub

@@ -35,6 +35,7 @@ from warpzone import (
     catalog_store,
     diskstatus_io,
     library_api,
+    playstate,
     progress,
     ra,
 )
@@ -229,6 +230,8 @@ class HubFiles:
         self._meta: dict[str, tuple[tuple[int, int] | None, float, dict[str, artwork.Entry]]] = {}
         self._media: dict[str, tuple[float, dict[str, dict[str, str]]]] = {}
         self._unclaimed: dict[str, tuple[float, tuple[str, ...]]] = {}
+        self._ledgers: dict[Path, tuple[tuple[int, int], playstate.Ledger | None]] = {}
+        self._ledgers_checked = float("-inf")
 
     # ------------------------------------------------------------- the catalog
 
@@ -365,6 +368,48 @@ class HubFiles:
         if parts is None or not parts:
             return None
         return safe_file(self.root / "frontend" / "media" / system / kind, parts)
+
+    # ------------------------------------------------------------- play state
+
+    def play_ledgers(self) -> tuple[playstate.Ledger, ...]:
+        """The ledgers in `frontend/play-state/`, one per device, in device order. A file is
+        parsed again when its size or mtime changed (checked at most every `interval`
+        seconds); one that cannot be read, or trusted, is left out. Conflict copies are
+        ignored, and the devices that left the config still count: their plays happened."""
+        with self._lock:
+            if self.clock() - self._ledgers_checked >= self.interval:
+                self._ledgers_checked = self.clock()
+                self._read_ledgers()
+            return tuple(
+                sorted(
+                    (ledger for _, ledger in self._ledgers.values() if ledger is not None),
+                    key=lambda ledger: ledger.device,
+                )
+            )
+
+    def _read_ledgers(self) -> None:
+        base = self.root / "frontend" / "play-state"
+        try:
+            names = sorted(p for p in base.glob("*.jsonl") if ".sync-conflict-" not in p.name)
+        except OSError:
+            names = []
+        found: dict[Path, tuple[tuple[int, int], playstate.Ledger | None]] = {}
+        for path in names:
+            stamp = self._stat(path)
+            if stamp is None:
+                continue
+            held = self._ledgers.get(path)
+            if held is not None and held[0] == stamp:
+                found[path] = held
+                continue
+            try:
+                ledger: playstate.Ledger | None = playstate.parse_ledger(
+                    path.read_bytes().decode("utf-8"), path.stem
+                )
+            except (OSError, UnicodeDecodeError, playstate.LedgerError):
+                ledger = None
+            found[path] = (stamp, ledger)
+        self._ledgers = found
 
     # ------------------------------------------------------------- whitelists
 
@@ -668,18 +713,24 @@ class App:
                 )
             case ["systems", system, "games"]:
                 lib = self.files.library()
-                return json_response(
-                    200,
-                    library_api.games_response(
-                        lib, system, cfg, self.files.views(cfg), self.files.extras
-                    ),
+                games = library_api.games_response(
+                    lib, system, cfg, self.files.views(cfg), self.files.extras
                 )
+                library_api.attach_play(games["games"], lib, self._play_index())
+                return json_response(200, games)
             case ["games", game_id]:
                 lib = self.files.library()
+                game = library_api.game_response(
+                    lib, game_id, cfg, self.files.views(cfg), self.files.extras
+                )
+                game["play"] = library_api.game_play(self._play_index(), *lib.by_id[game_id])
+                return json_response(200, game)
+            case ["recent"]:
+                limit = library_api.parse_limit(request.query.get("limit"))
                 return json_response(
                     200,
-                    library_api.game_response(
-                        lib, game_id, cfg, self.files.views(cfg), self.files.extras
+                    library_api.recent_response(
+                        self.files.library(), self._play_index(), self.files.extras, limit
                     ),
                 )
             case ["games", game_id, "media", kind]:
@@ -708,6 +759,10 @@ class App:
                     raise ApiError("catalog-running", "a catalog run is already running")
                 return json_response(202, {"started": True})
         raise ApiError("not-found", "no such route")
+
+    def _play_index(self) -> library_api.PlayIndex:
+        horizon = int(self.now().timestamp()) + playstate.FUTURE_SLACK
+        return library_api.PlayIndex(self.files.play_ledgers(), horizon)
 
     def _catalog_status(self) -> dict[str, Any]:
         lib = self.files.library()
