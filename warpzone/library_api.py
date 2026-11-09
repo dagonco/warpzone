@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from functools import cached_property
 from typing import Any
 
-from warpzone import artwork, catalog, playstate
+from warpzone import artwork, catalog, diskstatus, playstate
 from warpzone import whitelist as wl
 from warpzone.config import Config, Device
 
@@ -310,13 +310,20 @@ def safe_parts(path: str) -> tuple[str, ...] | None:
 # --------------------------------------------------------------------------- reads
 
 
-def devices_response(cfg: Config, views: Mapping[str, DeviceView]) -> list[dict[str, Any]]:
+def devices_response(
+    cfg: Config,
+    views: Mapping[str, DeviceView],
+    disks: Mapping[str, Mapping[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    """`disks` is the `disk` object of each device (`diskstatus.api_disk`); a device without
+    one gets null fields."""
     return [
         {
             "name": d.name,
             "profile": d.profile,
             "exclude_systems": list(d.exclude_systems),
             "whitelist": {"state": views[d.name].state, "etag": views[d.name].etag},
+            "disk": dict((disks or {}).get(d.name) or diskstatus.api_disk(None, 0)),
         }
         for d in library_devices(cfg)
     ]

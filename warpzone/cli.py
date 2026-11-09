@@ -711,7 +711,7 @@ def _frontend(args: argparse.Namespace, cfg: Config, profiles: dict[str, Profile
 
 
 def _play_state(args: argparse.Namespace, cfg: Config, profiles: dict[str, Profile]) -> int:
-    from warpzone import playstate_device
+    from warpzone import diskstatus_io, playstate_device
 
     name = _device(cfg, args.name)
     device, profile = cfg.devices[name], profiles[cfg.devices[name].profile]
@@ -738,6 +738,7 @@ def _play_state(args: argparse.Namespace, cfg: Config, profiles: dict[str, Profi
         dry_run=args.dry_run,
         starting=args.frontend_starting,
     )
+    diskstatus_io.publish(name, profile, Path.home(), say=say, warn=warn, dry_run=args.dry_run)
     return EXIT_OK
 
 

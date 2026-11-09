@@ -33,6 +33,7 @@ from warpzone import (
     artwork,
     catalog,
     catalog_store,
+    diskstatus_io,
     library_api,
     playstate,
     progress,
@@ -701,7 +702,10 @@ class App:
         cfg = self.cfg
         match segments:
             case ["devices"]:
-                return json_response(200, library_api.devices_response(cfg, self.files.views(cfg)))
+                return json_response(
+                    200,
+                    library_api.devices_response(cfg, self.files.views(cfg), self._disks()),
+                )
             case ["systems"]:
                 lib = self.files.library()
                 return json_response(
@@ -874,6 +878,15 @@ class App:
         except WarpzoneError as exc:
             self.log(f"warning: no client for the hub's Syncthing ({_reason(exc)})")
             return None
+
+    # ------------------------------------------------------------- disks
+
+    def _disks(self) -> dict[str, dict[str, Any]]:
+        """The disk each device reported through the play state folder (small files, read on
+        every request; a missing or stale one is null fields)."""
+        names = [d.name for d in library_api.library_devices(self.cfg)]
+        folder = self.root / "frontend" / "play-state"
+        return diskstatus_io.read_all(folder, names, int(self.now().timestamp()))
 
     # ------------------------------------------------------------- progress
 
