@@ -39,7 +39,7 @@ Subscribe to what you want:
 | `bios` | Keys and firmware delivered into each emulator's own folder (see [BIOS placements](/warpzone/guides/emudeck/#bios-placements)). |
 | `settings` | Emulator settings layers ([Emulator settings](/warpzone/setup/settings/)). |
 
-`play-state` is also available: it shares favourites and play statistics with your other frontends and needs `frontend`.
+`play-state` is also available: it shares favourites and play statistics with your other frontends and needs `frontend`. It also lets the console report its free disk space to the library UI.
 
 ## 2. Write its whitelists on the hub
 
