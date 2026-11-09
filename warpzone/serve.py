@@ -26,7 +26,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any
+from typing import Any, BinaryIO
 
 from warpzone import __version__, artwork, catalog, catalog_store, library_api, progress, ra
 from warpzone import whitelist_store as store
@@ -50,6 +50,7 @@ CATALOG_PERIOD = 6 * 3600.0
 RA_LISTS_PERIOD = 24 * 3600.0
 UI_DIR = Path(__file__).resolve().parent / "data" / "ui"
 CSP = "default-src 'self'"
+CHUNK = 64 * 1024  # bytes of a media file read and sent at a time
 LIBRARY_FOLDER = "wz-library"
 CONTENT_TYPES = {
     ".html": "text/html; charset=utf-8",
@@ -62,6 +63,8 @@ CONTENT_TYPES = {
     ".jpg": "image/jpeg",
     ".jpeg": "image/jpeg",
     ".ico": "image/x-icon",
+    ".mp4": "video/mp4",
+    ".webm": "video/webm",
     ".woff2": "font/woff2",
     ".txt": "text/plain; charset=utf-8",
 }
@@ -178,6 +181,10 @@ class Response:
     body: bytes = b""
     content_type: str = "application/json; charset=utf-8"
     headers: list[tuple[str, str]] = field(default_factory=list)
+    # A file sent in chunks instead of `body`: `stream` is open and positioned at the first byte,
+    # `length` bytes of it are sent, and the server closes it (HEAD sends none).
+    stream: BinaryIO | None = None
+    length: int = 0
 
 
 def json_response(
@@ -671,7 +678,7 @@ class App:
                     ),
                 )
             case ["games", game_id, "media", kind]:
-                return self._media(game_id, kind)
+                return self._media(request, game_id, kind)
             case ["search"]:
                 query = request.query.get("q")
                 if query is None:
@@ -710,22 +717,34 @@ class App:
 
     # ------------------------------------------------------------- media and static files
 
-    def _media(self, game_id: str, kind: str) -> Response:
+    def _media(self, request: Request, game_id: str, kind: str) -> Response:
         lib = self.files.library()
         system, name = library_api.media_file(lib, game_id, kind, self.files.extras)
         path = self.files.media_path(system, kind, name)
         if path is None:
             raise ApiError("not-found", "the image is not available", game=game_id)
         try:
-            data = path.read_bytes()
+            handle = path.open("rb")
         except OSError:
             raise ApiError("not-found", "the image is not available", game=game_id) from None
-        return Response(
-            200,
-            data,
-            CONTENT_TYPES.get(path.suffix.lower(), "application/octet-stream"),
-            [("Cache-Control", "private, max-age=3600")],
-        )
+        try:
+            size = os.fstat(handle.fileno()).st_size
+            headers = [("Cache-Control", "private, max-age=3600"), ("Accept-Ranges", "bytes")]
+            ctype = CONTENT_TYPES.get(path.suffix.lower(), "application/octet-stream")
+            try:
+                span = library_api.parse_range(request.headers.get("range"), size)
+            except library_api.RangeNotSatisfiable:
+                handle.close()
+                return Response(416, b"", ctype, [("Content-Range", f"bytes */{size}"), *headers])
+            if span is None:
+                return Response(200, b"", ctype, headers, handle, size)
+            first, last = span
+            handle.seek(first)
+            headers.append(("Content-Range", f"bytes {first}-{last}/{size}"))
+            return Response(206, b"", ctype, headers, handle, last - first + 1)
+        except BaseException:
+            handle.close()
+            raise
 
     def _static(self, request: Request, path: str) -> Response:
         if request.method not in ("GET", "HEAD"):
@@ -932,15 +951,33 @@ class _Handler(BaseHTTPRequestHandler):
         self.send_response(response.status)
         if response.status != 204:
             self.send_header("Content-Type", response.content_type)
-        self.send_header("Content-Length", str(len(response.body)))
+        length = response.length if response.stream is not None else len(response.body)
+        self.send_header("Content-Length", str(length))
         for name, value in response.headers:
             self.send_header(name, value)
         if not response.headers or not any(n == "Cache-Control" for n, _ in response.headers):
             self.send_header("Cache-Control", "no-store")
         self.send_header("Connection", "close")
         self.end_headers()
-        if self.command != "HEAD":
-            self.wfile.write(response.body)
+        try:
+            if self.command == "HEAD":
+                return
+            if response.stream is None:
+                self.wfile.write(response.body)
+                return
+            left = response.length
+            while left > 0:
+                chunk = response.stream.read(min(CHUNK, left))
+                if not chunk:  # the file shrank: the length was promised, so drop the connection
+                    self.close_connection = True
+                    break
+                self.wfile.write(chunk)
+                left -= len(chunk)
+        except (BrokenPipeError, ConnectionResetError):
+            self.close_connection = True  # a player seeking drops the connection: not an error
+        finally:
+            if response.stream is not None:
+                response.stream.close()
 
     def _handle(self) -> None:
         length_text = self.headers.get("Content-Length")

@@ -165,8 +165,11 @@ class UiFilesTest(unittest.TestCase):
         from warpzone import library_api
 
         text = read("views.js")
+        # The API serves these before the page paints them; the PR that draws them removes this.
+        not_painted_yet = {"videos", "backcovers"}
         for kind in library_api.MEDIA_KINDS:
-            self.assertIn(kind, text, kind)
+            if kind not in not_painted_yet:
+                self.assertIn(kind, text, kind)
 
     def test_nothing_the_api_does_not_provide_is_drawn(self):
         # Play statistics, saves, achievement lists, records and video are later work: they must

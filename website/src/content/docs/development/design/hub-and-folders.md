@@ -43,7 +43,7 @@ Every folder warpzone manages has a stable Syncthing folder ID prefixed `wz-`.
 | `wz-library` | `library` | sendonly | receiveonly | `library` | per-device whitelist |
 | `wz-songs` | `songs` | sendonly | receiveonly | `songs` | per-device whitelist |
 | `wz-tools` | `tools` | sendonly | receiveonly | `tools` | common only |
-| `wz-media` | `frontend/media` | sendreceive | sendreceive | `media` | common only |
+| `wz-media` | `frontend/media` | sendreceive | sendreceive | `media` | common, and on a device `/*/videos` |
 | `wz-esde` | `frontend/es-de` | sendreceive | sendreceive | `esde` | fixed whitelist: `gamelists`, `collections` |
 | `wz-play-state` | `frontend/play-state` | sendreceive | sendreceive | `play_state` | fixed `*.wz-tmp` |
 | `wz-save-<emu>-<kind>` | `saves/<emu>/<kind>` | sendreceive | sendreceive | from profile | common only |
@@ -54,6 +54,13 @@ The `wz-library` ignore lines differ from the other whitelisted folders in one
 way: fixed exclusions come before the `#include`, on both sides (see
 [Library exclusions](/warpzone/development/design/profiles/#library-exclusions-and-bios-placements)). Save and
 `wz-bios-*` entries may carry their own ignore list (a whitelist ending in `*`).
+
+The hub's `frontend/media/<system>/videos` (ES-DE's video previews, tens of MiB each) are for
+the library UI only, so a device that receives the whole `wz-media` ignores `/*/videos`. The line
+is in the device's ignores and not the hub's, since Syncthing ignores are local to each side and
+the hub must keep (and serve) the videos. `provision device` sets the ignores of an existing
+folder too, so a device converges on its next run; files already on the device are left where
+they are. A profile with `[artwork]` receives only the kinds it lists (never `videos`).
 
 "Common only" and "fixed whitelist" folders get their ignore lines inline
 through `POST /rest/db/ignores` (the common lines, then the fixed or

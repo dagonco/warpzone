@@ -225,9 +225,16 @@ The UI reads the ES-DE scrape that is already on the hub, read-only:
   `rating`, `releasedate`, `developer`, `publisher`, `genre` and `players`.
 - `frontend/media/<system>/<kind>/<stem>.<ext>`, where `<stem>` is the gamelist path without
   `./` and without its extension (a folder entry keeps its whole name, as in `artwork.build`),
-  for the kinds `covers`, `miximages`, `screenshots`, `titlescreens`, `marquees`, `3dboxes` and
-  `physicalmedia` (the scan of the cartridge or disc),
-  and the extensions `png`, `jpg` and `jpeg`.
+  for the kinds `covers`, `miximages`, `screenshots`, `titlescreens`, `marquees`, `3dboxes`,
+  `physicalmedia` (the scan of the cartridge or disc), `backcovers` and `videos`, and the
+  extensions `png`, `jpg` and `jpeg` (`mp4` and `webm` for `videos`; where a stem has more than
+  one extension the first in each list wins).
+
+The videos stay on the hub. `wz-media` reaches a device that receives the whole folder with
+`/*/videos` in its ignores, and a profile with `[artwork]` receives only the kinds it lists,
+none of which is `videos` (see [Hub and folders](/warpzone/development/design/hub-and-folders/)).
+A device that already held videos keeps the files it has (an ignored file is left alone) and
+gets no new ones.
 
 A game with no gamelist entry shows its catalog title, and a game with no cover shows
 `data/ui/placeholder.svg`. Unscraped games get nothing more in this phase.
@@ -251,8 +258,9 @@ request to another origin; dynamic styling sets CSS custom properties from scrip
 - **Search:** results grouped by title key across systems, with the same per-console switches.
 - **Consoles:** the state of each console and what it holds.
 
-What the API does not provide is not drawn, not even as a placeholder: no play history, play
-statistics, saves, achievement lists, records or video. Long system names are shortened to a code
+What the page does not draw yet is not drawn, not even as a placeholder: no play history, play
+statistics, saves, achievement lists, records or video (the API serves video and the
+`backcovers`, but the page does not paint them yet). Long system names are shortened to a code
 (for example GBA) with the full name in a `title` attribute. On a phone (390 px and up) the
 navigation is a bar at the bottom and the console switches sit within thumb reach. The page keeps
 keyboard and gamepad navigation, visible focus and `prefers-reduced-motion`, and a toggle turns
@@ -499,7 +507,7 @@ outside the home goes through the user's own reverse proxy with TLS, which is ou
 | `GET /api/v1/systems` | every system of the catalog, with its state per device |
 | `GET /api/v1/systems/{system}/games` | every game of a system, compact |
 | `GET /api/v1/games/{id}` | one game in full |
-| `GET /api/v1/games/{id}/media/{kind}` | the game's image of that kind, or `404` |
+| `GET /api/v1/games/{id}/media/{kind}` | the game's image or video of that kind (with [byte ranges](#media-and-byte-ranges)), or `404` |
 | `GET /api/v1/search?q=...` | games whose title key matches, grouped by key |
 | `GET /api/v1/progress` | the [progress state](#progress) of each device |
 | `GET /api/v1/catalog` | whether the catalog is built, and the state of the background run |
@@ -552,6 +560,17 @@ path that cannot be written as a whitelist line (the game cannot be changed from
 `unclaimed` lists the Switch update and DLC folders that no base game claims (empty for every
 other system).
 
+`region`, `languages` and `verified` are in each entry of the list and in the game's detail.
+`region` is the list of regions found in the parenthesised tags of the game's name, as No-Intro
+and Redump write them (`["USA", "Europe"]`), and `languages` the language codes of the tag that
+lists them, with the first subtag in lower case (`["en", "fr", "zh-Hant"]`). The name read is the
+DAT name when `inbox` recorded one (`dat`), else the file or folder name of the primary part.
+Tags that are neither (`Rev 1`, `Disc 2`, `Beta`) are skipped, and a name with none gives empty
+lists. `verified` is `true` only when `dat` is set, that is, when `inbox` matched the dump to a
+DAT by content and recorded the DAT's name in the catalog; the key is absent otherwise, never
+`false`, because a game filed before `inbox` kept the DAT name (or by hand) has not failed a
+check, it has not been checked.
+
 `name` is the gamelist's `<name>` when there is one, else the catalog title. `GET /api/v1/systems`
 gives per system `{"system", "games", "size", "devices": {"deck": {"state": "some", "whole":
 false}}}`, where `state` is `all`, `some` or `none` of the games turned on, `unsupported` or
@@ -601,6 +620,25 @@ Syncthing to scan the new file (the file is written anyway and the hub's watcher
 
 With `"dry_run": true` the server validates and computes the effect and writes nothing; the page
 uses it to show what a change does before the user confirms it.
+
+### Media and byte ranges
+
+The media endpoint answers `200` with `Content-Type` by extension (`image/png`, `image/jpeg`,
+`video/mp4`, `video/webm`), `Accept-Ranges: bytes` and the `Cache-Control` of the other media,
+after the same authentication and the same checks of the path as before (a symlink that leaves
+the kind's folder is `404`). A video does not play on Safari and iOS without byte ranges, so the
+endpoint takes a `Range` header with one range:
+
+| Request | Answer |
+|---|---|
+| none | `200`, the whole file |
+| `bytes=a-b`, `bytes=a-`, `bytes=-n` | `206` with `Content-Range: bytes first-last/size` and `Content-Length` of the part; a `b` past the end is cut to the end |
+| a range that starts at or past the end, `bytes=-0`, or any range of an empty file | `416` with `Content-Range: bytes */size` |
+| several ranges, another unit, or a header that is not a range | `200`, the whole file (a server may ignore a `Range`) |
+
+`library_api.parse_range` (pure) decides this. The server opens the file once, reads it in
+chunks of 64 KiB and never holds more than one chunk; `HEAD` sends the headers only. A client
+that closes the connection in the middle (a player seeking) is not an error.
 
 ### Validation and errors
 
