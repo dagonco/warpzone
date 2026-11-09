@@ -510,7 +510,9 @@ outside the home goes through the user's own reverse proxy with TLS, which is ou
 
 ```json
 [{"name": "deck", "profile": "steamos-emudeck", "exclude_systems": ["ps4"],
-  "whitelist": {"state": "managed", "etag": "sha256:…"}}]
+  "whitelist": {"state": "managed", "etag": "sha256:…"},
+  "disk": {"total": 512000000000, "free": 120000000000, "library": null,
+           "at": "2026-11-09T10:00:00Z"}}]
 ```
 
 `whitelist.state` is `managed` (the UI's format), `needs-migration` (a hand-written file, or one
@@ -518,6 +520,15 @@ that cannot be read: every write for the device is refused with `not-managed`) o
 file yet: a write creates it, inside an existing `library/`). `etag` is `sha256:<hex>` of the
 file's bytes, or `absent` for a missing file; a client echoes it exactly as it got it in
 `expect`.
+
+`disk` is what the console last reported about the filesystem that holds its library (see
+[Disk space](#disk-space)): `total` and `free` in bytes, `at` the time it was measured (UTC, ISO
+8601). `library` is the bytes the library folder uses and is `null` unless a report carries it
+(devices do not measure it today; a client that wants the figure sums the sizes of what the
+whitelist turns on, which the API already gives). A console that never reported, a report
+older than 7 days or dated more than a day ahead, and a file that cannot be read all give
+`{"total": null, "free": null, "library": null, "at": null}`; `disk` is always present and never
+an error.
 
 `GET /api/v1/catalog`:
 
@@ -665,6 +676,43 @@ must show how the hub counts files a device ignores: if a whitelisted device nev
 instead from `GET /rest/db/remoteneed?folder=wz-library&device=<id>` filtered through the
 device's whitelist (`whitelist.decide`), and per-game progress comes with it.
 
+## Disk space
+
+The hub cannot see a console's disk, only Syncthing's completion, so each console says it. A
+console that lists `play-state` writes `<device>.status.json` into the play state folder
+(`wz-play-state`, `frontend/play-state` on the hub) and the hub reads it for `disk` in
+`GET /api/v1/devices`.
+
+```json
+{"v":1,"device":"deck","at":1793000000,"total":512000000000,"free":120000000000}
+```
+
+- **Why that folder.** The library folders are receive-only on a console, so nothing a console
+  writes there reaches the hub; `wz-play-state` is the folder that is two-way for every
+  console, holds one file per writer (so there is no conflict) and nothing reads from it
+  but the ledger readers, which glob `*.jsonl` and so never see a `.status.json`; no frontend
+  looks into it. Its ignore `*.wz-tmp` already covers the atomic write's temporary file. The
+  hub keeps 30 days of versions of that folder, which is why the writer is sparing (below).
+  The cost is that a console without `play-state` reports no disk (`null` fields).
+- **What it measures.** `shutil.disk_usage` of the profile's `paths.library`, the filesystem the
+  library folder sits on, in whole MiB (rounded down). Nothing is written until the library
+  folder's `.stfolder` marker exists, so an unmounted card is not reported as the disk below
+  it. The bytes the library uses are not measured: walking a library of tens of thousands of
+  files on a card is not cheap, and the hub knows what a whitelist turns on.
+- **Who writes it, and when.** The job that already runs on the console: `play-state sync` (its
+  timer and ES-DE's startup script) and, for a profile with `[artwork]`, `frontend refresh`.
+  It writes only when there is no usable report yet, the size changed, the free space moved by
+  1% of the disk or more, or the report is a day old (a heartbeat, so the hub can tell a quiet
+  console from a silent one). It is atomic and refused when the file changed since it was
+  read. A failure to measure or write is a warning and never fails the job. With `--dry-run`
+  it says it would write and writes nothing.
+- **What the hub does with it.** It reads the files on each request (they are a few dozen bytes)
+  and serves them as `disk`. A file that is not UTF-8 JSON of version `1`, names another device,
+  has a missing or negative number, or has `free` above `total`, is the same as no file. A report
+  older than 7 days (a console that stopped) or more than a day ahead of the hub (a wrong
+  clock) is shown as null rather than as the last value, so the page never states a disk
+  that may be long gone.
+
 ## The container
 
 warpzone runs on the hub in a container, because a NAS's own Python is often older than 3.11. The
@@ -702,9 +750,11 @@ network:
   `catalog.ra_state`, the catalog's JSON encoding and merge; `whitelist.escape`, `unescape`,
   `parse`, `parse_hand`, `render`, `normalize`, `apply`, `decide`, `decide_lines`, `effect`,
   `unsupported` and the migration's classification; `library_api.plan_changes` and every
-  response builder; `progress.state`; `prune.guard`.
+  response builder; `progress.state`; `prune.guard`; `diskstatus` (`measure`, `should_write`,
+  `render`, `parse`, `stale`, `api_disk`).
 - **I/O:** `catalog_store` (the walk, hashing, RAHasher and the RA download through `ra.py`, the
-  guarded writes), `whitelist_store` (reading with a stamp, backups, the guarded write, the hub
+  guarded writes), `diskstatus_io` (the disk report's write on a console and read on the hub),
+  `whitelist_store` (reading with a stamp, backups, the guarded write, the hub
   scan, the migration's walk), `serve` (sockets, sessions, the lock, the background runs, the
   caches).
 
@@ -716,7 +766,9 @@ special character and refusal of unlistable names; the migration on hand-written
 (shadowed lines, redundant exclusions, a file refused for a wildcard, a file refused by the
 proof); the API against a fake hub root and the fake Syncthing (auth, origin, `stale`,
 `not-managed`, `unsupported`, dry runs, a `*` change with a skipped device); and the progress
-states. The e2e test adds the matcher check above and the completion check.
+states; the disk report (when to write, parsing damaged and foreign files, staleness, the writer
+on a fake disk and the two jobs that call it, the hub reader and the API with missing, stale and
+damaged files). The e2e test adds the matcher check above and the completion check.
 
 ## Out of scope
 

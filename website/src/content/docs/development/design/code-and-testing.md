@@ -108,6 +108,8 @@ warpzone/
                      system names, timer units (pure; the reads are passed in)
   playstate.py       play state: ledgers, merge rules, times, its tags in a gamelist (pure)
   playstate_device.py  play state on a device: files, ES-DE gamelists, generated gamelists
+  diskstatus.py      the disk a console reports to the hub: when to write, format, staleness (pure)
+  diskstatus_io.py   the disk report: written on a console beside the ledgers, read on the hub
   saveconvert.py     save conversion: the `.dsv` footer, size rules, the three-way decision (pure)
   saveconvert_device.py  save conversion on a device: files, state, backups, the running emulator
   tomlw.py           TOML scalar and key writer (tomllib only reads)

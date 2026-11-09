@@ -22,7 +22,10 @@ bytes and Syncthing sends nothing. The alternative was sending the Anbernic's da
 `wz-esde`, which would have meant changing that folder's type and ignores on the devices, and a
 single shared file would conflict in Syncthing as soon as two devices wrote it. With one writer
 per file there are no conflicts, and `wz-esde` and `wz-media` stay exactly as they are (a test
-compares their hub and device specs with and without the group). A device whose file cannot be
+compares their hub and device specs with and without the group). The folder carries one more
+file per device, `<device>.status.json`, the disk report of the library UI (see
+`development/design/library-ui.md`, "Disk space"); the ledger readers glob `*.jsonl`, so it is
+invisible to them and to the merge. A device whose file cannot be
 read is left out of the merge with a warning; a device whose own file cannot be read changes
 nothing. Conflict copies are ignored. Files of devices that left the config still count: their
 plays happened.

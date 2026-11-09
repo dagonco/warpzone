@@ -16,7 +16,7 @@ title: "Hub, folders and ignores"
 ├── frontend/
 │   ├── media/               ES-DE downloaded media     ⇄
 │   ├── es-de/               ES-DE gamelists, collections ⇄
-│   └── play-state/          one file per device: favourites and play statistics ⇄
+│   └── play-state/          per device: favourites and play statistics, disk report ⇄
 ├── songs/                   hub: send-only → opted-in devices, per-device whitelist
 ├── tools/                   hub: send-only → devices (scripts, docs)
 ├── settings/                hub: send-receive ⇄ devices: send-receive, emulator settings layers
