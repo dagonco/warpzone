@@ -290,7 +290,7 @@
   // Arrow keys (and a gamepad's d-pad) move focus to the nearest focusable element in that
   // direction, so a grid, a shelf and the levers can be crossed as well as with Tab. Enter
   // activates (links and buttons do that natively); Escape closes a dialog or goes back.
-  const NAVSEL = 'a[href]:not([tabindex="-1"]), button:not([disabled]):not([tabindex="-1"]), input:not([disabled]), select:not([disabled]), summary';
+  const NAVSEL = 'a[href]:not([tabindex="-1"]), button:not([disabled]):not([tabindex="-1"]), input:not([disabled]), select:not([disabled]), summary, video[controls]';
 
   function visible(el) {
     const r = el.getBoundingClientRect();

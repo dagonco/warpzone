@@ -59,8 +59,12 @@
     changes: (body) => request('POST', '/api/v1/changes', body),
     catalog: () => request('GET', '/api/v1/catalog'),
     refreshCatalog: () => request('POST', '/api/v1/catalog/refresh', {}),
+    recent: (limit) => request('GET', `/api/v1/recent?limit=${encodeURIComponent(limit)}`),
+    raSummary: () => request('GET', '/api/v1/ra/summary'),
     // An image URL, not a request: the browser loads it (lazily) through an <img>.
     mediaUrl: (id, kind) => `/api/v1/games/${encodeURIComponent(id)}/media/${kind}`,
+    // The same for a cached RetroAchievements badge; `variant` is 'unlocked' or 'locked'.
+    badgeUrl: (badge, variant) => `/api/v1/ra/badges/${encodeURIComponent(badge)}/${variant}`,
   };
 
   // One human sentence per error code of the design's table, plus the failures with no code.
@@ -117,7 +121,52 @@
     let i = 0;
     while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
     const digits = v >= 100 ? 0 : v >= 10 ? 1 : 2;
-    return `${v.toFixed(digits).replace(/\.?0+$/, '')} ${units[i]}`;
+    let text = v.toFixed(digits);
+    if (text.includes('.')) text = text.replace(/\.?0+$/, ''); // "1.50" is "1.5"; "100" stays "100"
+    return `${text} ${units[i]}`;
+  }
+
+  // A moment given as a UTC epoch (seconds, as the play ledgers have it) or as an ISO 8601 text
+  // (as RetroAchievements and the saves have it), as a Date, or null when it is neither.
+  function toDate(value) {
+    if (value == null || value === '' || value === false) return null;
+    const d = typeof value === 'number' ? new Date(value * 1000) : new Date(String(value));
+    return isNaN(d.getTime()) ? null : d;
+  }
+
+  // "35 min ago", "2 d ago": coarse on purpose. A moment ahead of the clock is "just now".
+  function timeAgo(value) {
+    const d = toDate(value);
+    if (!d) return '';
+    const sec = Math.floor((Date.now() - d.getTime()) / 1000);
+    if (sec < 60) return 'just now';
+    const mins = Math.floor(sec / 60);
+    if (mins < 60) return `${mins} min ago`;
+    const hours = Math.floor(mins / 60);
+    if (hours < 24) return `${hours} h ago`;
+    const days = Math.floor(hours / 24);
+    if (days < 30) return `${days} d ago`;
+    if (days < 365) return `${Math.floor(days / 30)} mo ago`;
+    return `${Math.floor(days / 365)} y ago`;
+  }
+
+  // The full date of a moment, for a title attribute; empty when there is none.
+  function formatMoment(value) {
+    const d = toDate(value);
+    return d ? d.toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' }) : '';
+  }
+
+  function formatDay(value) {
+    const d = toDate(value);
+    return d ? d.toLocaleDateString('en-GB', { dateStyle: 'medium' }) : '';
+  }
+
+  // Seconds of play as "17h 00m" (minutes alone below an hour); empty for none.
+  function formatPlaytime(seconds) {
+    if (typeof seconds !== 'number' || !(seconds > 0)) return '';
+    if (seconds < 60) return '<1m';
+    const m = Math.floor(seconds / 60);
+    return m < 60 ? `${m}m` : `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, '0')}m`;
   }
 
   // ES-DE writes dates as 19980903T000000.
@@ -144,5 +193,7 @@
     return normalizeWords(s).replace(/^the /, '');
   }
 
-  window.WZ = Object.assign(window.WZ || {}, { ApiError, api, humanError, formatBytes, formatDate, normalizeWords, titleKey });
+  window.WZ = Object.assign(window.WZ || {}, {
+    ApiError, api, humanError, formatBytes, formatDate, timeAgo, formatMoment, formatDay, formatPlaytime, normalizeWords, titleKey,
+  });
 })();

@@ -67,6 +67,9 @@
     right: ['#...', '##..', '.##.', '..##', '.##.', '##..', '#...'],
     play: ['#....', '##...', '###..', '####.', '#####', '####.', '###..', '##...', '#....'],
     pause: ['###.###', '###.###', '###.###', '###.###', '###.###', '###.###', '###.###'],
+    star: ['....#....', '...###...', '...###...', '#########', '.#######.', '..#####..', '..#####..', '.###.###.', '.##...##.'],
+    check: ['.......#', '......##', '#....##.', '##..##..', '.####...', '..##....'],
+    disc: ['..#####..', '.#######.', '###...###', '###.#.###', '###...###', '.#######.', '..#####..'],
   };
   const pathCache = new Map();
 
@@ -176,6 +179,26 @@
     Canada: 'CAN', Netherlands: 'NED', Sweden: 'SWE', Russia: 'RUS', Taiwan: 'TWN',
   };
 
+  // The short codes of the regions the API lists (`region`: ["USA", "Europe"]), joined for a chip.
+  // A region this file does not know keeps its first three letters.
+  function regionCodes(list, max) {
+    const codes = (Array.isArray(list) ? list : []).filter((r) => typeof r === 'string' && r)
+      .map((r) => REGION_CODES[r] || r.slice(0, 3).toUpperCase());
+    if (!codes.length) return '';
+    const cap = max || 2;
+    return codes.length > cap ? codes.slice(0, cap).join('/') + '+' : codes.join('/');
+  }
+
+  // The name of a language code (`en`, `zh-Hant`) in English, or the code itself where the
+  // browser cannot say.
+  let languageNames = null;
+  function languageName(code) {
+    try {
+      if (!languageNames) languageNames = new Intl.DisplayNames(['en'], { type: 'language' });
+      return languageNames.of(code) || code;
+    } catch (_) { return code; }
+  }
+
   // "Legend of Zelda, The - A Link to the Past (USA) (Rev 1)" becomes the name shown, the
   // region and the other tags: the title keeps the tags apart so two discs never look alike.
   function parseTitle(raw) {
@@ -194,6 +217,6 @@
 
   window.WZ = Object.assign(window.WZ || {}, {
     h, $, $$, plural, debounce, throttle, icon, tint,
-    systemName, systemCode, systemColor, consoleCode, parseTitle,
+    systemName, systemCode, systemColor, consoleCode, parseTitle, regionCodes, languageName,
   });
 })();

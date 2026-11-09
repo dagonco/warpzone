@@ -368,8 +368,9 @@ class ReadTests(ServeCase):
         found = self.get("/api/v1/search?q=metal+gear").json
         self.assertEqual(found["groups"][0]["key"], "metal gear solid")
         self.assertEqual(len(found["groups"][0]["games"]), 2)
-        reply = self.get("/api/v1/search")
-        self.assertEqual((reply.status, self.error(reply)["code"]), (400, "bad-request"))
+        for path in ("/api/v1/search", "/api/v1/search?q="):
+            reply = self.get(path)
+            self.assertEqual((reply.status, self.error(reply)["code"]), (400, "bad-request"), path)
 
     def test_changes_to_the_catalog_are_picked_up(self) -> None:
         self.assertEqual(len(self.get("/api/v1/systems").json), 4)

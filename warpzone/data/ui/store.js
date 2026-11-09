@@ -24,6 +24,8 @@
     progress: {},           // device -> progress entry
     progressError: false,   // false, 'hub' or 'server'
     catalog: null,          // {ready, running, last_run, systems, games, updated} from /catalog
+    recent: null,           // the games played most recently (/recent), or null when there are none
+    ra: null,               // the RetroAchievements records (/ra/summary), or null when there are none
     searchResult: null,     // {q, groups} from the API
     detail: null,           // {id, data}: the game page being shown
     busy: false,
@@ -89,6 +91,23 @@
   // (or an error) leaves S.catalog null and the page behaves as if the catalog were ready.
   async function loadCatalog() {
     try { S.catalog = await api.catalog(); } catch (err) { if (err.code === 'unauthorized') throw err; S.catalog = null; }
+  }
+
+  // What the home page shows beyond the catalog: the recently played games and the records. Both
+  // are optional (no ledgers, no RetroAchievements user): a failure or an empty answer leaves the
+  // field null and the page shows nothing for it. Asked again at most every 30 seconds; resolves
+  // true when it asked.
+  let homeAskedAt = 0;
+  const orNull = (promise) => promise.catch(() => null);
+
+  async function loadHomeExtras(force) {
+    if (!force && Date.now() - homeAskedAt < 30000) return false;
+    homeAskedAt = Date.now();
+    const [recent, summary] = await Promise.all([orNull(api.recent(12)), orNull(api.raSummary())]);
+    const games = recent && Array.isArray(recent.games) ? recent.games.filter((g) => g && g.id && g.system) : [];
+    S.recent = games.length ? games : null;
+    S.ra = summary && summary.total && summary.user && summary.fetched ? summary : null;
+    return true;
   }
 
   async function loadSystems() {
@@ -376,7 +395,7 @@
 
   window.WZ.store = {
     S, hooks, toast, handleError, ensureArray,
-    loadDevices, loadCatalog, loadSystems, ensureList, preloadLists, reloadAll,
+    loadDevices, loadCatalog, loadSystems, loadHomeExtras, ensureList, preloadLists, reloadAll,
     device, system, excludes, isManaged, allBlocked, gameState, coverage, holdings, patchState,
     schedulePoll, pollProgress, progressSoon,
     changeGame, changeSystem, watchCatalog, refreshCatalog, plural,

@@ -9,7 +9,8 @@
   'use strict';
 
   const W = window.WZ;
-  const { api, formatBytes, h, $, $$, plural, icon, tint, systemName, systemCode, systemColor, consoleCode, parseTitle, store } = W;
+  const { api, formatBytes, formatMoment, timeAgo, formatPlaytime, h, $, $$, plural, icon, tint, systemName, systemCode, systemColor,
+    consoleCode, parseTitle, regionCodes, store } = W;
   const { S } = store;
 
   const gameHref = (system, id) => `#/game/${encodeURIComponent(system)}/${encodeURIComponent(id)}`;
@@ -36,8 +37,27 @@
     return box;
   }
 
+  // The chip of a region: from the API's list of regions (["USA", "Europe"]) or, for a place
+  // that only has the code parsed from a title, from that code. Nothing without either.
   function regionChip(region) {
-    return region ? h('span', { class: 'rg', title: 'Region: ' + region }, region) : null;
+    const list = Array.isArray(region) ? region.filter(Boolean) : null;
+    const text = list ? regionCodes(list) : region;
+    if (!text) return null;
+    return h('span', { class: 'rg', title: 'Region: ' + (list ? list.join(', ') : text) }, text);
+  }
+
+  // What a system's tile says of the play statistics: a star for a favourite and a play mark
+  // with the number of plays. `play` is the game's totals or null (nobody played it).
+  function playMarks(play) {
+    if (!play || typeof play !== 'object') return null;
+    const plays = Number(play.plays) > 0 ? Math.floor(Number(play.plays)) : 0;
+    const fav = play.fav === true;
+    if (!plays && !fav) return null;
+    const when = timeAgo(play.last);
+    return h('span', { class: 'b-play' },
+      fav ? h('span', { class: 'fav', title: 'Favourite' }, icon('star'), h('span', { class: 'sr-only' }, 'Favourite')) : null,
+      plays ? h('span', { class: 'pl', title: `Played ${plural(plays, 'time')}${when ? ', last ' + when : ''}` },
+        icon('play'), h('span', { 'aria-hidden': 'true' }, plays.toLocaleString('en-US')), h('span', { class: 'sr-only' }, `Played ${plural(plays, 'time')}`)) : null);
   }
 
   // The RetroAchievements badge. Text only, by design (no RA images are fetched or shipped).
@@ -216,11 +236,50 @@
         h('span', { class: 'artw' },
           artBox({ id: g.id, system, has: g.cover }),
           g.ra === 'supported' ? h('span', { class: 'b-ra', title: RA_TEXT.supported }, icon('trophy'), 'RA') : null,
-          regionChip(t.region),
+          playMarks(g.play),
+          regionChip(g.region && g.region.length ? g.region : t.region),
           o.sys ? h('span', { class: 'b-sys', title: systemName(system) }, systemCode(system)) : null),
         h('span', { class: 't' }, t.name),
         h('span', { class: 's' }, sub || ' ')),
       slots(ref));
+  }
+
+  // A card of the "Continue playing" row: the game, the console that played it last, and when.
+  // `r` is an entry of the recent games answer.
+  function resumeCard(r) {
+    const t = parseTitle(r.name || r.title);
+    const known = S.byId.get(r.id);
+    const has = r.cover != null ? !!r.cover : known ? !!known.game.cover : false;
+    const when = timeAgo(r.last);
+    const plays = Number(r.plays) > 0 ? plural(Math.floor(Number(r.plays)), 'play') : '';
+    const time = formatPlaytime(r.playtime);
+    return h('article', { class: 'tile resume', vars: systemTint(r.system) },
+      h('a', { class: 'tl', href: gameHref(r.system, r.id), dataset: { fk: 'rc:' + r.id }, title: `${t.full} (${systemName(r.system)})` },
+        h('span', { class: 'artw' },
+          artBox({ id: r.id, system: r.system, has }),
+          h('span', { class: 'b-sys', title: systemName(r.system) }, systemCode(r.system))),
+        h('span', { class: 't' }, t.name),
+        h('span', { class: 's when', title: formatMoment(r.last) },
+          r.device ? h('b', { title: r.device }, consoleCode(r.device)) : null, r.device && when ? ' · ' : '', when || (r.device ? '' : ' ')),
+        h('span', { class: 's' }, [plays, time].filter(Boolean).join(' · ') || ' ')));
+  }
+
+  // The disk of a console as its last report says (see "Disk space" in the design): a bar of the
+  // space used and the figures. Nothing when the console never reported (the API sends nulls).
+  function diskMeter(d) {
+    const disk = d && d.disk;
+    if (!disk || typeof disk.total !== 'number' || typeof disk.free !== 'number') return null;
+    if (!(disk.total > 0) || disk.free < 0) return null;
+    const free = Math.min(disk.free, disk.total);
+    const used = disk.total - free;
+    const frac = used / disk.total;
+    const level = frac >= 0.95 ? 'full' : frac >= 0.85 ? 'high' : 'ok';
+    const library = typeof disk.library === 'number' && disk.library >= 0 ? `, the library takes ${formatBytes(disk.library)}` : '';
+    const seen = disk.at ? `, reported ${timeAgo(disk.at)}` : '';
+    return h('span', { class: 'disk ' + level, title: `${formatBytes(used)} used of ${formatBytes(disk.total)}, ${formatBytes(free)} free${library}${seen}` },
+      h('span', { class: 'dk-l' }, 'Disk'),
+      h('span', { class: 'dk-bar', 'aria-hidden': 'true' }, h('i', { vars: { w: String(frac) } })),
+      h('span', { class: 'dk-t' }, h('b', null, formatBytes(used)), ` / ${formatBytes(disk.total)}`, h('em', null, `${formatBytes(free)} free`)));
   }
 
   function skeletonTiles(n) {
@@ -337,7 +396,7 @@
   W.ui = {
     gameHref, systemHref, systemTint, artBox, regionChip, raBadge, RA_TEXT,
     statusOf, paintProgress, pnode, segs, led,
-    devicesOf, paintSlot, paintSlots, slotBtn, slots, tile, skeletonTiles,
+    devicesOf, paintSlot, paintSlots, slotBtn, slots, tile, resumeCard, diskMeter, playMarks, skeletonTiles,
     leverModel, lever, sysCard,
   };
 })();
