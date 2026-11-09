@@ -399,6 +399,99 @@ class MediaTests(ServeCase):
         self.assertEqual(reply.headers["Content-Type"], "image/png")
         self.assertEqual(reply.headers["X-Content-Type-Options"], "nosniff")
 
+    def test_the_physical_media_scan_is_served_and_listed(self) -> None:
+        folder = self.root / "frontend" / "media" / "psx" / "physicalmedia"
+        folder.mkdir()
+        (folder / "Example Game (Europe).png").write_bytes(PNG)
+        found = self.get(f"/api/v1/games/{EXAMPLE.id}").json
+        self.assertEqual(found["media"], ["covers", "physicalmedia"])
+        reply = self.get(f"/api/v1/games/{EXAMPLE.id}/media/physicalmedia")
+        self.assertEqual((reply.status, reply.body), (200, PNG))
+        self.assertEqual(reply.headers["Content-Type"], "image/png")
+
+    def video(self, data: bytes = bytes(range(256)) * 4, name: str = "mp4") -> bytes:
+        folder = self.root / "frontend" / "media" / "psx" / "videos"
+        folder.mkdir(exist_ok=True)
+        (folder / f"Example Game (Europe).{name}").write_bytes(data)
+        return data
+
+    def test_a_video_is_listed_and_served_whole_with_its_type(self) -> None:
+        data = self.video()
+        self.assertIn("videos", self.get(f"/api/v1/games/{EXAMPLE.id}").json["media"])
+        reply = self.get(f"/api/v1/games/{EXAMPLE.id}/media/videos")
+        self.assertEqual((reply.status, reply.body), (200, data))
+        self.assertEqual(reply.headers["Content-Type"], "video/mp4")
+        self.assertEqual(reply.headers["Accept-Ranges"], "bytes")
+        self.assertEqual(reply.headers["Content-Length"], str(len(data)))
+        self.assertNotIn("Content-Range", reply.headers)
+
+    def test_a_webm_video_has_its_type_and_the_other_kinds_are_served(self) -> None:
+        self.video(b"webm", "webm")
+        reply = self.get(f"/api/v1/games/{EXAMPLE.id}/media/videos")
+        self.assertEqual(reply.headers["Content-Type"], "video/webm")
+        for kind in ("backcovers", "titlescreens"):
+            folder = self.root / "frontend" / "media" / "psx" / kind
+            folder.mkdir()
+            (folder / "Example Game (Europe).jpg").write_bytes(b"jpg")
+            reply = self.get(f"/api/v1/games/{EXAMPLE.id}/media/{kind}")
+            self.assertEqual((reply.status, reply.body), (200, b"jpg"), kind)
+            self.assertEqual(reply.headers["Content-Type"], "image/jpeg")
+
+    def test_a_range_answers_206_with_the_bytes_asked_for(self) -> None:
+        data = self.video()
+        path = f"/api/v1/games/{EXAMPLE.id}/media/videos"
+        size = len(data)
+        for header, first, last in (
+            ("bytes=0-9", 0, 9),
+            ("bytes=1000-", 1000, size - 1),
+            ("bytes=-24", size - 24, size - 1),
+            ("bytes=1020-99999", 1020, size - 1),
+        ):
+            reply = self.get(path, headers={"Range": header})
+            self.assertEqual(reply.status, 206, header)
+            self.assertEqual(reply.body, data[first : last + 1], header)
+            self.assertEqual(reply.headers["Content-Range"], f"bytes {first}-{last}/{size}")
+            self.assertEqual(reply.headers["Content-Length"], str(last - first + 1))
+            self.assertEqual(reply.headers["Accept-Ranges"], "bytes")
+            self.assertEqual(reply.headers["Content-Type"], "video/mp4")
+            self.assertEqual(reply.headers["X-Content-Type-Options"], "nosniff")
+
+    def test_a_range_past_the_end_answers_416(self) -> None:
+        data = self.video()
+        reply = self.get(
+            f"/api/v1/games/{EXAMPLE.id}/media/videos", headers={"Range": f"bytes={len(data)}-"}
+        )
+        self.assertEqual(reply.status, 416)
+        self.assertEqual(reply.headers["Content-Range"], f"bytes */{len(data)}")
+        self.assertEqual(reply.body, b"")
+
+    def test_a_range_that_is_ignored_answers_the_whole_file(self) -> None:
+        data = self.video()
+        for header in ("bytes=0-1,5-9", "items=0-1", "bytes=9-1"):
+            reply = self.get(f"/api/v1/games/{EXAMPLE.id}/media/videos", headers={"Range": header})
+            self.assertEqual((reply.status, reply.body), (200, data), header)
+
+    def test_head_has_the_headers_and_no_body_and_images_take_ranges_too(self) -> None:
+        data = self.video()
+        reply = self.call("HEAD", f"/api/v1/games/{EXAMPLE.id}/media/videos")
+        self.assertEqual((reply.status, reply.body), (200, b""))
+        self.assertEqual(reply.headers["Content-Length"], str(len(data)))
+        reply = self.get(f"/api/v1/games/{EXAMPLE.id}/media/covers", headers={"Range": "bytes=0-3"})
+        self.assertEqual((reply.status, reply.body), (206, PNG[:4]))
+
+    def test_a_video_is_sent_in_chunks_and_needs_auth(self) -> None:
+        data = self.video(os.urandom(serve.CHUNK * 3 + 17))
+        reply = self.get(f"/api/v1/games/{EXAMPLE.id}/media/videos")
+        self.assertEqual(reply.body, data)
+        reply = self.get(
+            f"/api/v1/games/{EXAMPLE.id}/media/videos",
+            headers={"Range": f"bytes={serve.CHUNK - 5}-{serve.CHUNK * 2 + 4}"},
+        )
+        self.assertEqual(reply.body, data[serve.CHUNK - 5 : serve.CHUNK * 2 + 5])
+        self.assertEqual(
+            self.get(f"/api/v1/games/{EXAMPLE.id}/media/videos", auth=False).status, 401
+        )
+
     def test_media_needs_auth(self) -> None:
         self.assertEqual(
             self.get(f"/api/v1/games/{EXAMPLE.id}/media/covers", auth=False).status, 401

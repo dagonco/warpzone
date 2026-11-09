@@ -89,6 +89,17 @@ class ModelTests(unittest.TestCase):
         self.assertEqual(save.ignores[-3:], ("!/save", "!/saveMeta", "*"))
         self.assertEqual(save.versioning, {"type": ""})
 
+    def test_videos_stay_on_the_hub(self) -> None:
+        # A device that receives the whole media folder ignores each system's `videos`...
+        device = self.by_id(device_specs(self.cfg, "deck", self.profile))["wz-media"]
+        self.assertEqual(device.ignores, ignores.inline(("/*/videos",)))
+        # ...and the hub folder, shared with the other devices, does not.
+        hub = self.by_id(hub_specs(self.cfg, self.profiles))["wz-media"]
+        self.assertEqual(hub.ignores, ignores.inline())
+        # The ES-DE folder next to it is not touched.
+        esde = self.by_id(device_specs(self.cfg, "deck", self.profile))["wz-esde"]
+        self.assertNotIn("/*/videos", esde.ignores)
+
     def test_hub_folders(self) -> None:
         specs = self.by_id(hub_specs(self.cfg, self.profiles))
         library = specs["wz-library"]

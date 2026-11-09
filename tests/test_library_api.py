@@ -10,14 +10,18 @@ from warpzone import whitelist as wl
 from warpzone.library_api import (
     ApiError,
     DeviceView,
+    RangeNotSatisfiable,
     SystemExtras,
     api_etag,
     changes_response,
     devices_response,
+    game_facts,
     game_response,
     games_response,
     media_file,
     media_index,
+    name_tags,
+    parse_range,
     plan_changes,
     safe_parts,
     search_response,
@@ -148,6 +152,8 @@ class ReadAnswerTests(unittest.TestCase):
                 "ra": "no-list",
                 "flags": [],
                 "devices": {"deck": "on", "machine": "off"},
+                "region": ["Europe"],
+                "languages": [],
             },
         )
         self.assertEqual(found["unclaimed"], [])
@@ -246,12 +252,115 @@ class ReadAnswerTests(unittest.TestCase):
             {
                 "covers": ["A.jpg", "A.png", "B.gif", "sub/C.JPEG", "noext", ".png"],
                 "marquees": ["A.jpg"],
+                "physicalmedia": ["A.png", "sub/C.png"],
                 "other": ["A.png"],
             }
         )
-        self.assertEqual(found["A"], {"covers": "A.png", "marquees": "A.jpg"})
-        self.assertEqual(found["sub/C"], {"covers": "sub/C.JPEG"})
+        self.assertEqual(
+            found["A"], {"covers": "A.png", "marquees": "A.jpg", "physicalmedia": "A.png"}
+        )
+        self.assertEqual(found["sub/C"], {"covers": "sub/C.JPEG", "physicalmedia": "sub/C.png"})
         self.assertNotIn("B", found)
+
+
+class MediaKindTests(unittest.TestCase):
+    def test_videos_are_mp4_or_webm_and_images_are_not_videos(self) -> None:
+        found = media_index(
+            {
+                "videos": ["A.webm", "A.mp4", "B.png", "C.mkv", "sub/D.MP4"],
+                "backcovers": ["A.png", "B.mp4"],
+                "titlescreens": ["A.jpg"],
+            }
+        )
+        self.assertEqual(
+            found["A"], {"videos": "A.mp4", "backcovers": "A.png", "titlescreens": "A.jpg"}
+        )
+        self.assertEqual(found["sub/D"], {"videos": "sub/D.MP4"})
+        self.assertNotIn("B", found)
+        self.assertNotIn("C", found)
+
+
+class RangeTests(unittest.TestCase):
+    def test_the_three_forms(self) -> None:
+        self.assertEqual(parse_range("bytes=0-99", 1000), (0, 99))
+        self.assertEqual(parse_range("bytes=500-", 1000), (500, 999))
+        self.assertEqual(parse_range("bytes=-100", 1000), (900, 999))
+        self.assertEqual(parse_range("bytes=0-0", 1000), (0, 0))
+        self.assertEqual(parse_range(" Bytes = 10 - 19 ", 1000), (10, 19))
+
+    def test_the_end_is_cut_to_the_file(self) -> None:
+        self.assertEqual(parse_range("bytes=900-5000", 1000), (900, 999))
+        self.assertEqual(parse_range("bytes=-5000", 1000), (0, 999))
+
+    def test_a_range_past_the_end_is_not_satisfiable(self) -> None:
+        for header, size in (
+            ("bytes=1000-", 1000),
+            ("bytes=1000-1999", 1000),
+            ("bytes=-0", 1000),
+            ("bytes=0-", 0),
+            ("bytes=-5", 0),
+        ):
+            with self.assertRaises(RangeNotSatisfiable, msg=header):
+                parse_range(header, size)
+
+    def test_what_cannot_be_served_as_a_range_is_ignored(self) -> None:
+        for header in (
+            None,
+            "",
+            "bytes=0-1,5-9",
+            "items=0-1",
+            "bytes=",
+            "bytes=-",
+            "bytes=a-b",
+            "bytes=9-1",
+            "bytes=1",
+            "bytes=-1-2",
+            "bytes=+1-2",
+            "0-1",
+        ):
+            self.assertIsNone(parse_range(header, 1000), header)
+
+
+class NameTagTests(unittest.TestCase):
+    def test_regions_and_languages(self) -> None:
+        self.assertEqual(
+            name_tags("Example Game (Europe) (En,Fr,De,Es)"),
+            (["Europe"], ["en", "fr", "de", "es"]),
+        )
+        self.assertEqual(
+            name_tags("Example (USA, Europe) (Rev 1) (En,Ja)"), (["USA", "Europe"], ["en", "ja"])
+        )
+        self.assertEqual(name_tags("Example (Japan) (En)"), (["Japan"], ["en"]))
+        self.assertEqual(name_tags("Example (Hong Kong) (Zh-Hant)"), (["Hong Kong"], ["zh-Hant"]))
+
+    def test_other_tags_are_not_regions_or_languages(self) -> None:
+        for name in (
+            "Example Game",
+            "Example (Rev 1) (Beta) (Disc 2) (Proto)",
+            "Example (Europe-ish) (Hack) (Eng)",
+            "Example [!] (Unl)",
+        ):
+            self.assertEqual(name_tags(name), ([], []), name)
+
+    def test_the_game_facts_use_the_dat_name_first_and_verified_only_when_recorded(self) -> None:
+        plain = by_title("psx", "Example Game (Europe)")
+        self.assertEqual(game_facts(plain), {"region": ["Europe"], "languages": []})
+        checked = catalog.Game(**{**plain.__dict__, "dat": "Example Game (USA) (En,Fr)"})
+        self.assertEqual(
+            game_facts(checked),
+            {"region": ["USA"], "languages": ["en", "fr"], "verified": True},
+        )
+
+    def test_the_answers_carry_the_facts(self) -> None:
+        views_ = {"deck": view_of(None), "machine": view_of(None)}
+        listed = games_response(LIB, "psx", CFG, views_, lambda s: SystemExtras())
+        entry = next(g for g in listed["games"] if g["id"] == EXAMPLE.id)
+        self.assertEqual(entry["region"], ["Europe"])
+        self.assertEqual(entry["languages"], [])
+        self.assertNotIn("verified", entry)
+        one = game_response(LIB, EXAMPLE.id, CFG, views_, lambda s: SystemExtras())
+        self.assertEqual(one["region"], ["Europe"])
+        self.assertNotIn("verified", one)
 
 
 class ShapeTests(unittest.TestCase):

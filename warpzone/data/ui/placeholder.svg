@@ -1,9 +1,5 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 160" role="img" aria-label="No cover">
-  <!-- The cover of a game with no scrape. White at low opacity: the page tints it per system. -->
-  <g fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" opacity="0.22">
-    <rect x="14" y="12" width="92" height="136" rx="10"/>
-    <rect x="26" y="26" width="68" height="56" rx="5"/>
-    <circle cx="60" cy="116" r="14"/>
-    <path d="M26 96h12M82 96h12"/>
-  </g>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" shape-rendering="crispEdges">
+  <!-- The cover of a game with no scrape: a pixel cartridge. Only its shape matters, the page uses
+       the file as a mask and tints it with the accent colour of the system. -->
+  <path fill="#000" fill-rule="evenodd" d="M2 1h12v14H2z M4 3h8v6H4z M6 5h4v2H6z M5 11h6v2H5z"/>
 </svg>

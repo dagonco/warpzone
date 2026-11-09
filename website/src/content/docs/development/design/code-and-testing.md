@@ -108,6 +108,8 @@ warpzone/
                      system names, timer units (pure; the reads are passed in)
   playstate.py       play state: ledgers, merge rules, times, its tags in a gamelist (pure)
   playstate_device.py  play state on a device: files, ES-DE gamelists, generated gamelists
+  diskstatus.py      the disk a console reports to the hub: when to write, format, staleness (pure)
+  diskstatus_io.py   the disk report: written on a console beside the ledgers, read on the hub
   saveconvert.py     save conversion: the `.dsv` footer, size rules, the three-way decision (pure)
   saveconvert_device.py  save conversion on a device: files, state, backups, the running emulator
   tomlw.py           TOML scalar and key writer (tomllib only reads)
@@ -117,13 +119,21 @@ warpzone/
   catalog.py         catalog index: derivation of games and parts, system roots, title keys,
                      search, RA badge state, JSON encoding and merge (pure)
   catalog_store.py   `warpzone catalog`: the walk, hashing, RAHasher and RA list runs, guarded writes
+  ra_data.py         RA achievements, the user's progress and their JSON cache files; the merge and totals (pure)
+  ra_store.py        `catalog --ra-achievements`: achievements, progress and badge downloads, cache reads
   library_api.py     the library UI's API as pure functions: validation, `plan_changes`, responses
   progress.py        per-device progress states from the hub's completion (pure)
+  saves_index.py     saves per game for the library API: exact matching of the hub's `saves/` to games
+                     (pure), the listing and its short cache
   serve.py           `warpzone serve`: http.server, sessions, the write lock, caches, background runs
   localst.py         find and parse the local Syncthing config.xml
   data/ui/index.html the library UI page (static, no build step)
+  data/ui/kit.js     its DOM builder, pixel icons, system names, codes and colours, title parsing
   data/ui/api.js     its API client: requests, error messages, title key port
-  data/ui/app.js     its views: home, system, search, the game sheet, changes
+  data/ui/store.js   its state: catalog, coverage per console, progress poll, changes
+  data/ui/components.js  its shared pieces: art, tiles, console slots, the system lever
+  data/ui/views.js   its pages: home, system, search, the game page, consoles
+  data/ui/app.js     its frame: router, search, confirmation dialog, keyboard and gamepad, login
   data/ui/style.css
   data/ui/placeholder.svg  the cover of a game with no scrape
   data/ui/favicon.svg

@@ -51,12 +51,15 @@ gamelist_ps3 = "/Volumes/hub/frontend/es-de/gamelists/ps3/gamelist.xml"  # optio
 [serve]                                      # optional, read only by `warpzone serve`
 listen = "0.0.0.0:8780"                      # optional, the default
 token_file = "/config/ui.token"              # optional; else WARPZONE_UI_TOKEN
+
+[ra]                                         # optional, read by `serve` and `catalog --ra-achievements`
+user = "ExampleUser"                         # optional; the RA user whose progress is shown
 ```
 
 `warpzone inbox` reads only the `[inbox]` table, so a desktop that only files games
 needs no `[hub]` or `[devices]`. API keys are never printed, logged or included in
 error messages; the RetroAchievements key is read from `RA_API_KEY`, never from a file.
-`warpzone serve` reads `[hub]`, `[devices.*]`, `[serve]` and `[inbox] rahasher`; its token
+`warpzone serve` reads `[hub]`, `[devices.*]`, `[serve]`, `[ra]` and `[inbox] rahasher`; its token
 comes from `WARPZONE_UI_TOKEN` or `[serve] token_file` and is never printed either (see
 [Library UI](/warpzone/development/design/library-ui/#authentication)).
 

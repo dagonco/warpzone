@@ -13,7 +13,7 @@ history), holds one JSON Lines file per device, `<device>.jsonl`, written by tha
 
 ```
 {"v":1,"device":"rg351mp","replica":"rg351mp"}
-{"system":"gba","path":"Hacks/Beta.gba","plays":3,"included":2,"last":1793000000,"fav":false,"fav_at":1793000100}
+{"system":"gba","path":"Hacks/Beta.gba","plays":3,"included":2,"last":1793000000,"fav":false,"fav_at":1793000100,"playtime":5400}
 ```
 
 Lines are keyed by hub system and ROM path below it, so a frontend's own system names
@@ -22,10 +22,20 @@ bytes and Syncthing sends nothing. The alternative was sending the Anbernic's da
 `wz-esde`, which would have meant changing that folder's type and ignores on the devices, and a
 single shared file would conflict in Syncthing as soon as two devices wrote it. With one writer
 per file there are no conflicts, and `wz-esde` and `wz-media` stay exactly as they are (a test
-compares their hub and device specs with and without the group). A device whose file cannot be
+compares their hub and device specs with and without the group). The folder carries one more
+file per device, `<device>.status.json`, the disk report of the library UI (see
+`development/design/library-ui.md`, "Disk space"); the ledger readers glob `*.jsonl`, so it is
+invisible to them and to the merge. A device whose file cannot be
 read is left out of the merge with a warning; a device whose own file cannot be read changes
 nothing. Conflict copies are ignored. Files of devices that left the config still count: their
 plays happened.
+
+**Compatibility.** `playtime` is an optional field of a record and the version stays `1`: a
+reader takes only the keys it knows, so an older warpzone ignores `playtime` and a ledger
+written before it reads as zero. Nothing is migrated, and no device has to update before
+another. A device publishes playtime from its next run on its new version; until then its
+ledger simply lacks it. A version number would have made every older device refuse the ledgers
+of the newer ones, which is a worse failure than a missing statistic.
 
 **Replicas.** The trap is that Deck and Machine share one gamelist. A count that rises in the
 shared file may be a play on this device or one Syncthing delivered, and each device claiming
@@ -59,6 +69,16 @@ always were.
   device already had at its first run is stamped `1`, older than any real change: first runs
   join their favourites and undo no recorded unset.
 - *Last played.* The latest instant wins.
+- *Playtime.* The seconds ES-DE records in `<playtime>` of its gamelist, published as `playtime`.
+  It is a grow-only value per replica, like the count: `max(playtime, gamelist value)`, so an
+  older gamelist takes nothing back. It is **not** merged into other replicas' gamelists: a
+  frontend that records no playtime (the RetroPie lineage's EmulationStation, so the Anbernic)
+  has nothing to receive it in, and ES-DE adds to its own value as the player plays, which
+  would race a value written from outside. Readers add it up instead: the library UI's API
+  sums the playtime of a game across replicas (the highest value within a replica, because
+  Deck and Machine read the same gamelist), and shows each device's own value beside the total.
+  A frontend whose `state_tags` name no `playtime` tag publishes none, and the field is absent
+  from its records (`artwork.ESDE_STATE_TAGS` has it, `STATE_TAGS` does not).
 - `hidden` and `kidgame` stay per device. Scraped fields and media are not touched.
 
 **Clocks.** Gamelists hold naive local time, and consoles differ (one reported EST while the

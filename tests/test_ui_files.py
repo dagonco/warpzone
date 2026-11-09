@@ -13,11 +13,24 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 UI = ROOT / "warpzone" / "data" / "ui"
 DESIGN = ROOT / "website" / "src" / "content" / "docs" / "development" / "design" / "library-ui.md"
-FILES = ["index.html", "api.js", "app.js", "style.css", "placeholder.svg", "favicon.svg"]
+SVG_NAMESPACE = "http://www.w3.org/2000/svg"
+SCRIPTS = ["api.js", "kit.js", "store.js", "components.js", "views.js", "app.js"]
+FILES = ["index.html", *SCRIPTS, "style.css", "placeholder.svg", "favicon.svg"]
+# Endpoints the API has and the page does not paint yet (a later change draws them and takes
+# them out of this set): the RetroAchievements records and badge images.
+NOT_PAINTED_YET = {
+    ("GET", "/api/v1/ra/summary"),
+    ("GET", "/api/v1/ra/badges/{}/{}"),
+}
 
 
 def read(name: str) -> str:
     return (UI / name).read_text(encoding="utf-8")
+
+
+def scripts() -> str:
+    """Every script of the page as one text, for the checks that do not care which file."""
+    return "\n".join(read(name) for name in SCRIPTS)
 
 
 def normalize(path: str) -> str:
@@ -38,6 +51,11 @@ def design_error_codes() -> set[str]:
     return set(re.findall(r"^\| \d{3} \| `([a-z-]+)` \|", text, re.MULTILINE))
 
 
+# Endpoints the API has ahead of the page: a later change paints them and removes the entry, so
+# the check below keeps failing for any other endpoint the page forgets.
+AHEAD_OF_THE_UI = {("GET", "/api/v1/recent")}
+
+
 def js_requests() -> set[tuple[str, str]]:
     """(method, path) of every `request('METHOD', '/api/v1/...')` call in api.js."""
     pattern = r"request\(\s*'(GET|POST)',\s*[`'](/api/v1/[^`']*)[`']"
@@ -51,9 +69,16 @@ class UiFilesTest(unittest.TestCase):
 
     def test_page_loads_its_own_files_only(self):
         html = read("index.html")
-        for name in ("style.css", "api.js", "app.js"):
+        for name in ("style.css", *SCRIPTS):
             self.assertIn(name, html)
         self.assertNotRegex(html, r"https?://", "no external resource")
+
+    def test_every_file_of_the_folder_is_known(self):
+        # A script that is not in the page never runs; a file that is not listed is not tested.
+        self.assertEqual(sorted(p.name for p in UI.iterdir()), sorted(FILES))
+        html = read("index.html")
+        order = [html.index(f'src="{name}"') for name in SCRIPTS]
+        self.assertEqual(order, sorted(order), "scripts load in dependency order")
 
     def test_page_is_clean_under_the_content_security_policy(self):
         # The server sends Content-Security-Policy: default-src 'self': no inline script, no
@@ -63,23 +88,26 @@ class UiFilesTest(unittest.TestCase):
         self.assertNotRegex(html, r"<style")
         self.assertNotRegex(html, r"\sstyle=")
         self.assertNotRegex(html, r"\son[a-z]+=")
-        for name in ("index.html", "app.js", "api.js", "style.css"):
+        for name in ("index.html", "style.css", *SCRIPTS):
             self.assertNotRegex(read(name), r"""["'(]data:""", name)
-        self.assertNotRegex(read("app.js"), r"setAttribute\(\s*'style'")
+        for name in SCRIPTS:
+            self.assertNotRegex(read(name), r"setAttribute\(\s*'style'", name)
+            self.assertNotIn("cssText", read(name), name)
 
     def test_nothing_external_is_fetched(self):
-        for name in ("app.js", "api.js", "style.css"):
-            self.assertNotRegex(read(name), r"https?://", name)
+        for name in ("style.css", *SCRIPTS):
+            # The SVG namespace is an identifier for createElementNS, not an address to fetch.
+            self.assertNotRegex(read(name).replace(SVG_NAMESPACE, ""), r"https?://", name)
 
     def test_token_is_not_stored(self):
-        for name in ("app.js", "api.js"):
+        for name in SCRIPTS:
             text = read(name)
             self.assertNotIn("localStorage", text, name)
             self.assertNotIn("sessionStorage", text, name)
 
     def test_no_html_injection(self):
         # The page builds nodes; it never parses strings that carry catalog or scrape text.
-        for name in ("app.js", "api.js"):
+        for name in SCRIPTS:
             text = read(name)
             for bad in ("innerHTML", "outerHTML", "insertAdjacentHTML", "document.write", "eval("):
                 self.assertNotIn(bad, text, name)
@@ -90,7 +118,7 @@ class UiFilesTest(unittest.TestCase):
 
     def test_every_path_in_the_scripts_is_a_design_path(self):
         paths = {path for _, path in design_endpoints()}
-        for name in ("app.js", "api.js"):
+        for name in SCRIPTS:
             found = {
                 normalize(p) for p in re.findall(r"/api/v1/(?:\$\{[^}]*\}|[^`'\"\s$])*", read(name))
             }
@@ -98,7 +126,8 @@ class UiFilesTest(unittest.TestCase):
 
     def test_the_ui_uses_every_endpoint_it_needs(self):
         # /healthz is for the container's health check; the media route is an <img> URL.
-        needed = {e for e in design_endpoints() if e[1] != "/healthz"}
+        endpoints = {e for e in design_endpoints() if e[1] != "/healthz"}
+        needed = endpoints - NOT_PAINTED_YET - AHEAD_OF_THE_UI
         used = js_requests() | {
             ("GET", normalize(p))
             for p in re.findall(r"`(/api/v1/games/\$\{[^`]*media/[^`]*)`", read("api.js"))
@@ -114,7 +143,7 @@ class UiFilesTest(unittest.TestCase):
 
     def test_every_state_the_api_can_send_has_a_display(self):
         # The states of "HTTP API" and "Progress" in the design: the page must name each one.
-        text = read("app.js")
+        text = scripts()
         states = [
             "unknown",
             "unsupported",
@@ -135,12 +164,42 @@ class UiFilesTest(unittest.TestCase):
 
     def test_replace_children_is_never_given_a_null(self):
         # `replaceChildren(null)` inserts the text "null"; an optional node goes in as a spread.
-        self.assertNotRegex(read("app.js"), r"replaceChildren\([^;]*:\s*null\)")
+        for name in SCRIPTS:
+            self.assertNotRegex(read(name), r"replaceChildren\([^;()]*\?[^;()]*:\s*null\)", name)
 
     def test_the_page_reads_the_catalog_state(self):
-        text = read("app.js")
+        text = scripts()
         self.assertIn("api.catalog()", text)
         self.assertIn("has not been built yet", text)
+
+    def test_every_media_kind_the_api_serves_is_shown(self):
+        # A kind the API lists but the page never draws would be dead weight on the hub.
+        from warpzone import library_api
+
+        text = read("views.js")
+        # The API serves these before the page paints them; the PR that draws them removes this.
+        not_painted_yet = {"videos", "backcovers"}
+        for kind in library_api.MEDIA_KINDS:
+            if kind not in not_painted_yet:
+                self.assertIn(kind, text, kind)
+
+    def test_nothing_the_api_does_not_provide_is_drawn(self):
+        # Play statistics, saves, achievement lists, records and video are later work: they must
+        # not appear, not even as placeholders.
+        text = scripts().lower()
+        for banned in (
+            "continue playing",
+            "high score",
+            "most played",
+            "playtime",
+            "video",
+            "attract",
+            "save state",
+        ):
+            self.assertNotIn(banned, text, banned)
+
+    def test_the_placeholder_is_used_as_a_mask(self):
+        self.assertIn("placeholder.svg", read("style.css"))
 
     def test_package_data_includes_the_ui(self):
         pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
