@@ -58,6 +58,10 @@ Syncthing folder, so no console receives it and the hub's filesystem snapshots c
 <hub root>/catalog/
 ├── systems/<system>.json      one file per system folder of library/roms/
 ├── ra/<console id>.json       RetroAchievements game lists, cached
+├── ra/games/<game id>.json    the achievements of one RA game, cached
+├── ra/user/summary.json       the user's completion progress, cached
+├── ra/user/games/<id>.json    when the user unlocked each achievement of one game, cached
+├── ra/badges/<name>[_lock].png  badge images, cached
 └── whitelists/<device>/       backups of the whitelists the UI and the migration replaced
 ```
 
@@ -213,8 +217,62 @@ and mtime that part had when it was hashed. A part that changed since is hashed 
 The badge state of a game (`catalog.ra_state`, pure, from `ra` and the cached list) is one of:
 `no-hash`, `no-list` (the console is not in `ra.CONSOLE_IDS` or no list is cached), `not-linked`,
 `linked` (the hash is RA's but the game has no achievements yet) and `supported` (with the count
-and points, and the link `https://retroachievements.org/game/<id>`). The page shows text only;
-no RA image or logo is fetched or shipped.
+and points, and the link `https://retroachievements.org/game/<id>`). The page never loads an
+image from RA's servers (its policy forbids it); the badge images it shows are cached on the hub
+and served by the API (see below). No RA logo is shipped.
+
+### Achievements and progress
+
+`warpzone catalog --ra-achievements` (and every background run of `serve` that has the key) goes
+on from the cached game lists. It is separate from `--ra-lists` so each cache has its own
+refresh period, and it never runs on a page load. The web API is called one request at a time
+with a pause of half a second, from `ra.py`, through the same injectable fetch as the lists; the
+key is never printed, logged or put in an error (a failed call is reported by its kind only, and
+three failures in a row stop the section, since a wrong key or a rate limit will not mend
+itself). Every file is JSON with sorted keys, written with the guarded atomic write.
+
+| What | Call | Cache | Fresh for |
+|---|---|---|---|
+| achievements of a game | `API_GetGameExtended` (`i=<game id>`), one per library game with achievements | `ra/games/<game id>.json` | 14 days |
+| completion progress | `API_GetUserCompletionProgress` (`u=<user>`, `c=500`, paged), one call per 500 games the user has on RA | `ra/user/summary.json` | 5 hours |
+| unlock dates | `API_GetGameInfoAndUserProgress` (`g=<game id>`, `u=<user>`), one per library game the user has played | `ra/user/games/<game id>.json` | until the progress line of the game changes |
+| badge images | `https://media.retroachievements.org/Badge/<badge>.png` and `<badge>_lock.png`, two per achievement | `ra/badges/` | for good |
+
+- Achievements: per game `players` and `players_hardcore` (distinct players) and, per
+  achievement, `id`, `title`, `description`, `points`, `true_points` (RA's TrueRatio), `badge`,
+  the number of players who unlocked it in any mode and in hardcore, `type` (`progression`,
+  `win_condition`, `missable`, or null when RA gives none) and RA's display order. The rarity
+  shown is those counts over the game's players, computed when answering.
+- Progress: the user is `[ra] user` (see [configuration](/warpzone/reference/configuration/#ra)).
+  Without it nothing is asked about a user and every other answer is the same. The summary line
+  of a game has the unlock counts (any mode and hardcore), the date of the last unlock and the
+  highest award (`beaten-softcore`, `beaten-hardcore`, `completed`, `mastered`) with its date, so
+  awards need no call of their own. A game's unlock dates are downloaded again only when its line
+  changed (counts or last date), and only for games of the library that the user has played. A
+  cache of another user is ignored, not reused, and so are unlock dates that do not match the
+  game's current progress line or whose game's achievements were not downloaded (the counts of
+  the progress line stand in).
+- Badges: the name must be letters and digits (at most 20), the URL is built from it and is
+  https on `media.retroachievements.org` only, a redirect is an error, the body is at most 256
+  KiB, the content type must be `image/png` and the body must start with the PNG signature. A
+  file is written only when all of that holds. The badges of the games the user has played come
+  first.
+- Budget: a first pass over a library with N RA games that has P played games costs
+  `N + ceil(G / 500) + P` calls (`G` is the number of games the user has on RA) plus two images
+  per achievement. Later passes cost only what became stale: `serve` spends at most 60 API
+  calls and 300 images per background run, so a large library fills in over a few days, and
+  `catalog --ra-achievements` on the command line has no limit. Every page of the completion
+  progress is one call of that budget. The progress goes first, then the achievements, then
+  the unlock dates; a progress download the budget cannot finish is dropped whole (the cached
+  one stays) and tried again by the next run.
+- Not found: a game or an image RA answers `404` for is not a failure and does not count
+  towards the three in a row. A game is noted in `ra/games/<game id>.missing` and asked again
+  after 14 days; an image is noted in `ra/badges/<name>[_lock].missing` and not asked again.
+
+Pure (`ra_data.py`, and the parsers of `ra.py`): the cache files' encoding, freshness,
+`ra_data.game_view` (the merge of a game's achievements with the user's unlocks, the rarity and
+the totals) and `ra_data.summary_view` (the records). I/O (`ra_store.py`, `serve`): the calls,
+the pauses, the downloads and the guarded writes.
 
 ## Metadata and media
 
@@ -530,7 +588,8 @@ The server reads the catalog files, the gamelists, the RA lists, the whitelists 
 [play-state ledgers](/warpzone/development/design/play-state/) from the hub root and keeps them in memory, reloading a file when its size or mtime changed (checked at most
 every 5 seconds). It runs `catalog` in a background thread at start and every 6 hours, and
 `catalog --ra-lists` once a day when `RA_API_KEY` is set (the 7-day age rule makes most of those
-runs no-ops).
+runs no-ops). With the key, every run also does a bounded share of `catalog --ra-achievements`
+(see [Achievements and progress](#achievements-and-progress)).
 
 ### Authentication
 
@@ -580,6 +639,8 @@ outside the home goes through the user's own reverse proxy with TLS, which is ou
 | `GET /api/v1/games/{id}` | one game in full |
 | `GET /api/v1/games/{id}/media/{kind}` | the game's image or video of that kind (with [byte ranges](#media-and-byte-ranges)), or `404` |
 | `GET /api/v1/search?q=...` | games whose title key matches, grouped by key |
+| `GET /api/v1/ra/summary` | the library's RetroAchievements games and the user's [progress](#achievements) in them, per system and in all |
+| `GET /api/v1/ra/badges/{badge}/{variant}` | a cached RA badge image (`variant` is `unlocked` or `locked`), or `404` |
 | `GET /api/v1/recent?limit=N` | the games played most recently on any device, newest first |
 | `GET /api/v1/progress` | the [progress state](#progress) of each device |
 | `GET /api/v1/catalog` | whether the catalog is built, and the state of the background run |
@@ -661,8 +722,8 @@ false}}}`, where `state` is `all`, `some` or `none` of the games turned on, `uns
 
 `GET /api/v1/games/{id}` adds `parts` (path, type, size), `dat`, `meta` (the gamelist fields
 above), `media` (the kinds that exist), `ra` (`{"state", "achievements", "points", "url"}` as
-known), `versions` (the other games with the same title key: id, system, title) and `saves`
-(see [Saves per game](#saves-per-game)).
+known), `achievements` ([below](#achievements)), `versions` (the other games with the same title
+key: id, system, title) and `saves` (see [Saves per game](#saves-per-game)).
 
 Play statistics come from the ledgers in `frontend/play-state/*.jsonl` (see [Play
 state](/warpzone/development/design/play-state/)), read again when a file changed (checked at
@@ -701,6 +762,65 @@ is `400 bad-request`) answers the games with a last played time, newest first, t
 
 `device` is the device whose ledger has that `last`; two devices of one replica share it, and
 the one whose name sorts last is named. `plays` and `playtime` are the totals above.
+
+#### Achievements
+
+`achievements` of a game is `null` unless RetroAchievements has achievements for it (the `ra`
+state is `supported`). Otherwise:
+
+```json
+{"available": true, "fetched": "2026-11-09T10:00:00Z",
+ "players": 12000, "players_hardcore": 9000,
+ "totals": {"count": 40, "points": 400, "unlocked": 12, "unlocked_hardcore": 10,
+            "points_unlocked": 120, "points_unlocked_hardcore": 100},
+ "progress": {"user": "ExampleUser", "fetched": "2026-11-09T09:00:00Z", "dates": true,
+              "award": {"kind": "beaten-hardcore", "date": "2026-10-01T20:00:00+00:00"},
+              "profile": "https://retroachievements.org/user/ExampleUser"},
+ "list": [
+   {"id": 1234, "title": "First Steps", "description": "Finish the first stage.",
+    "points": 5, "true_points": 8, "badge": "250336", "type": "progression", "order": 1,
+    "rarity": {"players": 11000, "hardcore_players": 8000,
+               "percent": 91.7, "hardcore_percent": 88.9},
+    "unlocked": {"softcore": "2026-09-30T20:00:00+00:00", "hardcore": null}}]}
+```
+
+- `available` is false until the achievement list has been downloaded: `list` is empty,
+  `players` is 0 and `totals.count` and `totals.points` come from RA's game list.
+- `percent` is the share of the game's players who unlocked the achievement in any mode, and
+  `hardcore_percent` the share of its hardcore players who did so in hardcore, with one decimal.
+- `unlocked` is `null` for an achievement the user does not have. `progress` is `null` without
+  `[ra] user` or before the user's progress was downloaded; `progress.dates` is false while the
+  unlock dates of this game are not downloaded yet (every `unlocked` is then `null`, and the
+  `totals` unlocked counts come from the summary line, with the points `null`). `award` is `null`
+  or `{"kind", "date"}` with `kind` one of `beaten-softcore`, `beaten-hardcore`, `completed`
+  (softcore mastery) and `mastered` (hardcore mastery).
+- A badge's image is `/api/v1/ra/badges/{badge}/unlocked` or `.../locked`; it answers `404`
+  until the image has been downloaded, and a page falls back to a plain tile.
+
+`GET /api/v1/ra/summary`:
+
+```json
+{"user": "ExampleUser", "fetched": "2026-11-09T09:00:00Z",
+ "total": {"games": 120, "achievements": 3200, "points": 31000, "played": 40, "beaten": 12,
+           "mastered": 3, "unlocked": 900, "unlocked_hardcore": 700, "points_unlocked": 8800,
+           "points_unlocked_hardcore": 7000, "points_complete": true},
+ "systems": [{"system": "psx", "games": 30, "achievements": 800, "points": 8000, "played": 10,
+              "beaten": 4, "mastered": 1, "unlocked": 200, "unlocked_hardcore": 150,
+              "points_unlocked": 2000, "points_unlocked_hardcore": 1500,
+              "points_complete": true}]}
+```
+
+It counts the games of the library that RA has achievements for (`games`, `achievements` and
+`points` are what could be won). `played` are those with an unlock; `beaten` and `mastered` are
+the games whose highest award is that kind (a mastered game is not also counted as beaten).
+Without a user, or before the progress was downloaded, `user` may still be set but `fetched` and
+every progress field (`played` to `points_complete`) are `null`. `points_unlocked*` add up the
+games whose unlock dates are downloaded and `points_complete` says whether all the played games
+are. The systems are in name order, and only systems with such games appear.
+
+`GET /api/v1/ra/badges/{badge}/{variant}` answers `image/png` with `Cache-Control: private,
+max-age=86400`, under the same authentication as the rest, or `404 not-found` for a name that is
+not a badge name, another variant or an image not downloaded.
 
 `GET /api/v1/search?q=metal+gear`: the query goes through the same normalization as a title
 (without step 1); a game matches when each word of the query is a prefix of a word of its key.
@@ -880,7 +1000,7 @@ games share. An example Compose file is `examples/compose.example.yaml`, and the
 | the hub root | the same path as `[hub] root`, read-write | the whitelists in `library/`, `catalog/`; reads `library/` and `frontend/` |
 | the config folder | `/config`, read-only, with `WARPZONE_CONFIG=/config/config.toml` | `[hub]`, `[devices.*]`, `[serve]`, `[inbox] rahasher`, the hub API key file |
 | `WARPZONE_UI_TOKEN` | environment (or `[serve] token_file` in `/config`) | the UI token |
-| `RA_API_KEY` | environment, optional | the RA game lists |
+| `RA_API_KEY` | environment, optional | the RA game lists, achievements, progress and badges |
 | port 8780 | published on the LAN | the page and the API |
 
 Mounting the hub root at the path the config already names keeps one config valid inside and
@@ -896,7 +1016,8 @@ As everywhere in warpzone, a pure function decides and a thin layer touches the 
 network:
 
 - **Pure:** `catalog.derive`, `catalog.system_roots`, `catalog.title_key`, `catalog.search`,
-  `catalog.ra_state`, the catalog's JSON encoding and merge; `whitelist.escape`, `unescape`,
+  `catalog.ra_state`, the catalog's JSON encoding and merge; `ra_data` (the achievement
+  cache's encoding, `game_view`, `summary_view`) and the parsers of `ra.py`; `whitelist.escape`, `unescape`,
   `parse`, `parse_hand`, `render`, `normalize`, `apply`, `decide`, `decide_lines`, `effect`,
   `unsupported` and the migration's classification; `library_api.plan_changes` and every
   response builder (the play statistics included: `game_play`, `attach_play`, `recent_response`);

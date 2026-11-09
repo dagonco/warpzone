@@ -103,7 +103,7 @@ Do these once, in this order. `docker compose run --rm warpzone ...` starts a se
    ```
 
    With `[inbox] rahasher` set, the server's own background catalog run hashes the games that lack a hash too, so you can also skip this step and let the server do it over time. Do not run both at once. If the container is killed with exit `137`, it ran out of memory: raise `mem_limit` and run it again.
-5. **Optional: the RA game lists.** With `RA_API_KEY` set, the server downloads them once a day. To get them now: `docker compose run --rm warpzone catalog --ra-lists`.
+5. **Optional: the RA game lists, achievements and your progress.** With `RA_API_KEY` set, the server downloads the lists once a day, and the achievements and badge images little by little on every background run. To get them now: `docker compose run --rm warpzone catalog --ra-lists` and then `docker compose run --rm warpzone catalog --ra-achievements`. To see your own progress, add `[ra]` with `user = "<your RA name>"` to the config.
 6. **Start the server.**
 
    ```bash

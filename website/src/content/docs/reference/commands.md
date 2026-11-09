@@ -295,9 +295,10 @@ Builds and updates the catalog index: one `catalog/systems/<system>.json` per sy
 | `--ra-hash` | off | Run RAHasher on every game of a system RetroAchievements knows (the ones that have a console id in the code) that has no RA hash yet, or whose hashed file changed. See below. |
 | `--rahasher PATH` | `[inbox] rahasher` | The RAHasher for `--ra-hash` (built with CHD support). Only valid with `--ra-hash`. |
 | `--ra-lists` | off | Download the RetroAchievements game list of each console the library has into `catalog/ra/<console id>.json`. Needs `RA_API_KEY` in the environment. |
-| `--force` | off | With `--ra-lists`, download the lists again even if the cached ones are under 7 days old. |
+| `--ra-achievements` | off | Download the achievements of the library's RA games, the badge images and, with `[ra] user` in the config, that user's progress, into `catalog/ra/`. Needs `RA_API_KEY` and the lists from `--ra-lists`. |
+| `--force` | off | With `--ra-lists` or `--ra-achievements`, download again even if the cached copy is recent. |
 
-Exit `0` when it finished; `1` when a system file could not be read or written, or kept changing under it (the other systems are still written), or when a RetroAchievements list could not be downloaded and none was cached; `2` when the hub root has no `library/roms/` folder, `--ra-hash` has no usable RAHasher, `--ra-lists` has no `RA_API_KEY`, or `--rahasher` or `--force` is used without the option it belongs to.
+Exit `0` when it finished; `1` when a system file could not be read or written, or kept changing under it (the other systems are still written), or when a RetroAchievements list could not be downloaded and none was cached; `2` when the hub root has no `library/roms/` folder, `--ra-hash` has no usable RAHasher, `--ra-lists` or `--ra-achievements` has no `RA_API_KEY`, or `--rahasher` or `--force` is used without the option it belongs to.
 
 ### RetroAchievements
 
@@ -305,12 +306,15 @@ Each game can carry the RetroAchievements (RA) hash of its main file (for a `.m3
 
 `--ra-lists` keeps a copy of RA's game list for each console the library has, so a game's RA state (no hash, not linked, linked, or supported with its achievements and points) can be told without asking RA again. A list younger than 7 days is not downloaded again unless you pass `--force`. If a download fails the cached list is kept and a warning names the kind of failure (`HTTP 401`, `URLError`, ...); the API key is never printed, logged or put in a message. Both options also run the normal scan of the library first, and both honour `--dry-run`: it says how many games would be hashed and which lists would be downloaded.
 
+`--ra-achievements` works from the cached lists. For each library game RA has achievements for it downloads the achievement list (kept 14 days), then the images of every badge, locked and unlocked. With `[ra] user` set it also downloads your completion progress (kept 5 hours) and, for each game you have played, the dates you unlocked each achievement (again only when the progress says something changed). It calls RA one request at a time with a pause between two; a failed call is reported by its kind and the pass goes on, and three failures in a row stop it. A first pass over a large library takes a while and can be stopped and run again; `warpzone serve` does a bounded share of it on every background run, so it also catches up by itself.
+
 ```bash
 warpzone catalog --dry-run
 warpzone catalog
 warpzone catalog --ra-hash --dry-run
 warpzone catalog --ra-hash
 RA_API_KEY=... warpzone catalog --ra-lists
+RA_API_KEY=... warpzone catalog --ra-achievements
 ```
 
 ## `warpzone serve`
