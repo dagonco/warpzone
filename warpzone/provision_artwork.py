@@ -5,7 +5,7 @@ from __future__ import annotations
 import dataclasses
 from pathlib import Path
 
-from warpzone import artwork, playstate_device, safefile, saveconvert_device
+from warpzone import artwork, diskstatus_io, playstate_device, safefile, saveconvert_device
 from warpzone.config import Config
 from warpzone.model import ESDE_ID, MEDIA_ID, device_specs
 from warpzone.paths import expand_home
@@ -253,3 +253,5 @@ def refresh_artwork(
         probes=probes,
         play_state="play-state" in folders,
     )
+    if "play-state" in folders:
+        diskstatus_io.publish(name, profile, home, say=rep.out, warn=rep.warn, dry_run=dry_run)

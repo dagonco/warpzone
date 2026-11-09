@@ -108,6 +108,8 @@ warpzone/
                      system names, timer units (pure; the reads are passed in)
   playstate.py       play state: ledgers, merge rules, times, its tags in a gamelist (pure)
   playstate_device.py  play state on a device: files, ES-DE gamelists, generated gamelists
+  diskstatus.py      the disk a console reports to the hub: when to write, format, staleness (pure)
+  diskstatus_io.py   the disk report: written on a console beside the ledgers, read on the hub
   saveconvert.py     save conversion: the `.dsv` footer, size rules, the three-way decision (pure)
   saveconvert_device.py  save conversion on a device: files, state, backups, the running emulator
   tomlw.py           TOML scalar and key writer (tomllib only reads)
@@ -119,6 +121,8 @@ warpzone/
   catalog_store.py   `warpzone catalog`: the walk, hashing, RAHasher and RA list runs, guarded writes
   library_api.py     the library UI's API as pure functions: validation, `plan_changes`, responses
   progress.py        per-device progress states from the hub's completion (pure)
+  saves_index.py     saves per game for the library API: exact matching of the hub's `saves/` to games
+                     (pure), the listing and its short cache
   serve.py           `warpzone serve`: http.server, sessions, the write lock, caches, background runs
   localst.py         find and parse the local Syncthing config.xml
   data/ui/index.html the library UI page (static, no build step)

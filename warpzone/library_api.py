@@ -15,12 +15,14 @@ from dataclasses import dataclass, field
 from functools import cached_property
 from typing import Any
 
-from warpzone import artwork, catalog
+from warpzone import artwork, catalog, diskstatus, playstate
 from warpzone import whitelist as wl
 from warpzone.config import Config, Device
 
 MAX_BODY = 64 * 1024
 MAX_CHANGES = 1000
+RECENT_DEFAULT = 20
+RECENT_MAX = 100
 SEARCH_LIMIT = 100
 MEDIA_KINDS = (
     "covers",
@@ -445,13 +447,20 @@ def safe_parts(path: str) -> tuple[str, ...] | None:
 # --------------------------------------------------------------------------- reads
 
 
-def devices_response(cfg: Config, views: Mapping[str, DeviceView]) -> list[dict[str, Any]]:
+def devices_response(
+    cfg: Config,
+    views: Mapping[str, DeviceView],
+    disks: Mapping[str, Mapping[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    """`disks` is the `disk` object of each device (`diskstatus.api_disk`); a device without
+    one gets null fields."""
     return [
         {
             "name": d.name,
             "profile": d.profile,
             "exclude_systems": list(d.exclude_systems),
             "whitelist": {"state": views[d.name].state, "etag": views[d.name].etag},
+            "disk": dict((disks or {}).get(d.name) or diskstatus.api_disk(None, 0)),
         }
         for d in library_devices(cfg)
     ]
@@ -795,3 +804,151 @@ def changes_response(
             item["warnings"] = list(notes[dp.device])
         devices.append(item)
     return {"dry_run": plan.dry_run, "devices": devices, "skipped": list(plan.skipped)}
+
+
+# --------------------------------------------------------------------------- play statistics
+
+
+@dataclass(frozen=True)
+class PlayIndex:
+    """The play-state ledgers of every device, as read, and the instant the reader trusts
+    `last` times up to (`playstate.merge`'s horizon: later ones come from a wrong clock)."""
+
+    ledgers: tuple[playstate.Ledger, ...] = ()
+    horizon: int = 0
+
+    @cached_property
+    def keys(self) -> frozenset[playstate.Key]:
+        return frozenset(k for ledger in self.ledgers for k in ledger.records)
+
+
+def play_keys(system: str, game: catalog.Game) -> list[playstate.Key]:
+    """The ledger keys (hub system, ROM path below it) a game's state may be under: its
+    gamelist path, which is what a frontend records, then its primary path below the system's
+    folder (they differ for a game with a shortcut, such as PS4)."""
+    found: list[playstate.Key] = []
+    base = f"roms/{system}/"
+    primary = game.primary[len(base) :] if game.primary.startswith(base) else game.primary
+    for path in (game.gamelist, primary):
+        rel = artwork.relative(path)
+        if rel is not None and (system, rel) not in found:
+            found.append((system, rel))
+    return found
+
+
+def _key_of(index: PlayIndex, system: str, game: catalog.Game) -> playstate.Key | None:
+    return next((k for k in play_keys(system, game) if k in index.keys), None)
+
+
+def _seen_at(record: playstate.Record, index: PlayIndex) -> int | None:
+    return record.last if record.last is not None and record.last <= index.horizon else None
+
+
+def _totals(index: PlayIndex, key: playstate.Key) -> dict[str, Any]:
+    """Plays, last played, favourite and playtime of a game across devices.
+
+    Devices that share a gamelist report one counter, so a replica counts once (its highest
+    value) and replicas add up: the rule of `playstate.merge`, which gives the plays, the last
+    played time and the favourite. The same goes for the playtime."""
+    merged = playstate.merge(index.ledgers, key, "", horizon=index.horizon)
+    time: dict[str, int] = {}
+    for ledger in index.ledgers:
+        record = ledger.records.get(key)
+        if record is not None:
+            time[ledger.replica] = max(time.get(ledger.replica, 0), record.playtime)
+    return {
+        "plays": merged.total,
+        "last": merged.last,
+        "fav": merged.fav,
+        "playtime": sum(time.values()),
+    }
+
+
+def game_totals(index: PlayIndex, system: str, game: catalog.Game) -> dict[str, Any] | None:
+    """`{"plays", "last", "fav", "playtime"}`, or None when no device has a record of it."""
+    key = _key_of(index, system, game)
+    return None if key is None else _totals(index, key)
+
+
+def game_play(index: PlayIndex, system: str, game: catalog.Game) -> dict[str, Any]:
+    """The `play` object of a game: what each device says (`devices`, by device name) and the
+    `totals`. A game nobody has played has no devices and zero totals."""
+    key = _key_of(index, system, game)
+    if key is None:
+        return {
+            "devices": {},
+            "totals": {"plays": 0, "last": None, "fav": None, "playtime": 0},
+        }
+    devices = {
+        ledger.device: {
+            "replica": ledger.replica,
+            "plays": record.plays,
+            "last": _seen_at(record, index),
+            "fav": record.fav,
+            "playtime": record.playtime,
+        }
+        for ledger in sorted(index.ledgers, key=lambda ledger: ledger.device)
+        if (record := ledger.records.get(key)) is not None
+    }
+    return {"devices": devices, "totals": _totals(index, key)}
+
+
+def attach_play(
+    entries: Sequence[dict[str, Any]], lib: Library, index: PlayIndex
+) -> list[dict[str, Any]]:
+    """Adds `play` (the totals, or null) to the compact game entries of a list, by their `id`."""
+    for entry in entries:
+        found = lib.by_id.get(entry["id"])
+        entry["play"] = None if found is None else game_totals(index, *found)
+    return list(entries)
+
+
+def parse_limit(raw: str | None) -> int:
+    """The `limit` parameter of `recent`: a whole number from 1 to `RECENT_MAX`."""
+    if raw is None:
+        return RECENT_DEFAULT
+    if not raw.isascii() or not raw.isdigit() or not 1 <= int(raw) <= RECENT_MAX:
+        raise _bad(f"`limit` must be a whole number from 1 to {RECENT_MAX}")
+    return int(raw)
+
+
+def recent_response(
+    lib: Library, index: PlayIndex, extras: Extras, limit: int = RECENT_DEFAULT
+) -> dict[str, Any]:
+    """The games played most recently on any device, newest first, with the device that played
+    each and when. Records for a ROM the catalog does not have are left out."""
+    found: list[tuple[int, str, str, catalog.Game, str, playstate.Key]] = []
+    for system, games in lib.systems.items():
+        for game in games.values():
+            key = _key_of(index, system, game)
+            if key is None:
+                continue
+            latest = [
+                (seen, ledger.device)
+                for ledger in index.ledgers
+                if (record := ledger.records.get(key)) is not None
+                and (seen := _seen_at(record, index)) is not None
+            ]
+            if latest:
+                last, device = max(latest, key=lambda item: (item[0], item[1]))
+                found.append((last, game.id, system, game, device, key))
+    found.sort(key=lambda item: (-item[0], item[1]))
+    out = []
+    for last, _, system, game, device, key in found[:limit]:
+        extra = extras(system)
+        entry = extra.meta.get(game.gamelist)
+        totals = _totals(index, key)
+        out.append(
+            {
+                "id": game.id,
+                "system": system,
+                "title": game.title,
+                "name": (entry.fields.get("name") if entry else None) or game.title,
+                "cover": "covers" in game_media(game, extra),
+                "last": last,
+                "device": device,
+                "plays": totals["plays"],
+                "playtime": totals["playtime"],
+            }
+        )
+    return {"games": out}

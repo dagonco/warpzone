@@ -49,7 +49,9 @@ class Record:
 
     `plays` is the replica's own counter as this device knows it, `included` how many plays
     of other replicas the count it left in its gamelist holds, `last` a UTC epoch.
-    `fav` is None until the device has something to say.
+    `fav` is None until the device has something to say. `playtime` is the seconds the
+    frontend recorded on this replica (0: none, or a frontend that records none); it is not
+    merged into any gamelist.
     """
 
     plays: int = 0
@@ -57,6 +59,7 @@ class Record:
     last: int | None = None
     fav: bool | None = None
     fav_at: int = 0
+    playtime: int = 0
 
 
 EMPTY = Record()
@@ -82,6 +85,7 @@ class Seen:
     fav: bool = False
     clock: int = 0
     included: int | None = None
+    playtime: int = 0
 
 
 @dataclass(frozen=True)
@@ -177,7 +181,8 @@ def _observe(mine: Record, look: Seen | None, before: Merged) -> Record:
             fav, fav_at = before.fav, before.fav_at
         else:
             fav, fav_at = look.fav, max(look.clock, max(mine.fav_at, before.fav_at) + 1)
-    return Record(plays, included, last, fav, fav_at)
+    # Like the count, the playtime only grows: an older gamelist takes nothing back.
+    return Record(plays, included, last, fav, fav_at, max(mine.playtime, look.playtime))
 
 
 def plan(
@@ -276,11 +281,14 @@ def _record(line: dict[str, object]) -> tuple[Key, Record]:
         raise LedgerError("a line has no valid path")
     plays, included = line.get("plays", 0), line.get("included", 0)
     last, fav, fav_at = line.get("last"), line.get("fav"), line.get("fav_at", 0)
-    if not (_natural(plays) and _natural(included) and _natural(fav_at)):
+    # Optional, so a ledger written before it existed reads the same (and, the other way round,
+    # an older warpzone ignores the field: it reads only the keys it knows).
+    playtime = line.get("playtime", 0)
+    if not (_natural(plays) and _natural(included) and _natural(fav_at) and _natural(playtime)):
         raise LedgerError("a line has a value that is not a count")
     if not (last is None or _natural(last)) or not (fav is None or isinstance(fav, bool)):
         raise LedgerError("a line has a value of the wrong type")
-    return (system, path), Record(plays, included, last, fav, fav_at)  # type: ignore[arg-type]
+    return (system, path), Record(plays, included, last, fav, fav_at, playtime)  # type: ignore[arg-type]
 
 
 def parse_ledger(text: str, device: str) -> Ledger:
@@ -319,6 +327,8 @@ def render_ledger(ledger: Ledger) -> str:
         if record.fav is not None:
             row["fav"] = record.fav
             row["fav_at"] = record.fav_at
+        if record.playtime:
+            row["playtime"] = record.playtime
         lines.append(dumps(row))
     return "\n".join(lines) + "\n"
 
@@ -340,7 +350,7 @@ def seen_games(
     included: Mapping[Key, int] | None,
     clock: int,
     zone: tzinfo | None,
-    tags: Mapping[str, str] = artwork.STATE_TAGS,
+    tags: Mapping[str, str] = artwork.ESDE_STATE_TAGS,
 ) -> dict[Key, Seen]:
     """The games of a gamelist of hub `system`; `base` is its folder below the hub's one."""
     seen: dict[Key, Seen] = {}
@@ -357,6 +367,7 @@ def seen_games(
                 entry.fields.get(tags["favorite"]) == "true",
                 clock,
                 None if included is None else included.get(key, 0),
+                _count(entry.fields.get(tags["playtime"])) if "playtime" in tags else 0,
             ),
         )
     return seen
