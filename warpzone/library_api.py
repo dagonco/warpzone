@@ -32,8 +32,13 @@ MEDIA_KINDS = (
     "marquees",
     "3dboxes",
     "physicalmedia",
+    "backcovers",
+    "videos",
 )
 MEDIA_EXTENSIONS = ("png", "jpg", "jpeg")
+VIDEO_EXTENSIONS = ("mp4", "webm")
+# The media kinds that are videos (served with `Range`); every other kind is an image.
+VIDEO_KINDS = ("videos",)
 META_FIELDS = (
     "name",
     "desc",
@@ -249,6 +254,92 @@ def game_media(game: catalog.Game, extras: SystemExtras) -> dict[str, str]:
     return dict(extras.media.get(stem, {})) if stem is not None else {}
 
 
+# The regions No-Intro and Redump put in a file name tag, as written there.
+REGIONS = frozenset(
+    [
+        "Argentina",
+        "Asia",
+        "Australia",
+        "Austria",
+        "Belgium",
+        "Brazil",
+        "Canada",
+        "Chile",
+        "China",
+        "Croatia",
+        "Czech",
+        "Denmark",
+        "Europe",
+        "Finland",
+        "France",
+        "Germany",
+        "Greece",
+        "Hong Kong",
+        "Hungary",
+        "India",
+        "Ireland",
+        "Israel",
+        "Italy",
+        "Japan",
+        "Korea",
+        "Latin America",
+        "Mexico",
+        "Netherlands",
+        "New Zealand",
+        "Norway",
+        "Poland",
+        "Portugal",
+        "Russia",
+        "Scandinavia",
+        "South Africa",
+        "Spain",
+        "Sweden",
+        "Switzerland",
+        "Taiwan",
+        "Turkey",
+        "UK",
+        "Ukraine",
+        "United Arab Emirates",
+        "USA",
+        "World",
+    ]
+)
+_TAGS = re.compile(r"\(([^()]*)\)")
+_LANGUAGES = re.compile(r"[A-Z][a-z](?:-[A-Za-z]+)?(?:,[A-Z][a-z](?:-[A-Za-z]+)?)*")
+
+
+def name_tags(name: str) -> tuple[list[str], list[str]]:
+    """(regions, languages) from the parenthesised tags of a No-Intro or Redump name, as in
+    `Example Game (USA, Europe) (En,Fr,De,Es)`: regions as written (`USA`, `Europe`), language
+    codes with the first subtag in lower case (`en`, `fr`, `zh-Hant`). Tags that are neither
+    (`Rev 1`, `Disc 2`, `Beta`) are skipped; a name with no such tag gives empty lists."""
+    regions: list[str] = []
+    languages: list[str] = []
+    for tag in _TAGS.findall(name):
+        parts = [p.strip() for p in tag.split(",")]
+        if all(p in REGIONS for p in parts):
+            regions.extend(p for p in parts if p not in regions)
+        elif _LANGUAGES.fullmatch(tag.strip()):
+            for code in tag.strip().split(","):
+                lang = code[:2].lower() + code[2:]
+                if lang not in languages:
+                    languages.append(lang)
+    return regions, languages
+
+
+def game_facts(game: catalog.Game) -> dict[str, Any]:
+    """`region` and `languages` from the name tags (the DAT's name when `inbox` recorded one,
+    else the file name of the primary), and `verified: true` when `inbox` matched the dump to
+    a DAT by content (`dat` is set). `verified` is left out otherwise, not false: a game filed
+    before `inbox` kept the DAT name, or by hand, was not checked, which is not the same as
+    failing the check."""
+    regions, languages = name_tags(game.dat or posixpath.basename(game.primary))
+    out: dict[str, Any] = {"region": regions, "languages": languages}
+    if game.dat:
+        out["verified"] = True
+    return out
+
+
 def game_meta(game: catalog.Game, extras: SystemExtras) -> dict[str, str]:
     entry = extras.meta.get(game.gamelist)
     if entry is None:
@@ -271,6 +362,12 @@ def media_file(lib: Library, game_id: str, kind: str, extras: Extras) -> tuple[s
     return system, name
 
 
+def kind_extensions(kind: str) -> tuple[str, ...]:
+    """The file extensions that count for a media kind, best first (`videos` are `mp4` and
+    `webm`, the other kinds are images)."""
+    return VIDEO_EXTENSIONS if kind in VIDEO_KINDS else MEDIA_EXTENSIONS
+
+
 def media_index(listing: Mapping[str, Sequence[str]]) -> dict[str, dict[str, str]]:
     """Stem -> kind -> file, from the file names found below each kind's folder (relative
     paths with `/`). Only the kinds and extensions the UI knows count; where a stem has more
@@ -280,14 +377,54 @@ def media_index(listing: Mapping[str, Sequence[str]]) -> dict[str, dict[str, str
         best: dict[str, tuple[int, str]] = {}
         for name in listing.get(kind, ()):
             stem, dot, ext = name.rpartition(".")
-            if not dot or not stem or ext.lower() not in MEDIA_EXTENSIONS:
+            allowed = kind_extensions(kind)
+            if not dot or not stem or ext.lower() not in allowed:
                 continue
-            rank = MEDIA_EXTENSIONS.index(ext.lower())
+            rank = allowed.index(ext.lower())
             if stem not in best or rank < best[stem][0]:
                 best[stem] = (rank, name)
         for stem, (_, name) in best.items():
             index.setdefault(stem, {})[kind] = name
     return index
+
+
+# --------------------------------------------------------------------------- byte ranges
+
+
+class RangeNotSatisfiable(Exception):
+    """A `Range` header that asks for bytes the file does not have (HTTP `416`)."""
+
+
+def parse_range(header: str | None, size: int) -> tuple[int, int] | None:
+    """The `(first, last)` bytes (both inclusive) that a `Range` header asks of a file of
+    `size` bytes, or None to answer the whole file (no header, another unit, several ranges or
+    a header that is not a range: all of those are allowed to be ignored). One range only:
+    `bytes=a-b`, `bytes=a-` and `bytes=-n` (the last n bytes). A `last` past the end is cut to
+    the end. Raises `RangeNotSatisfiable` when the range starts at or past the end, or asks for
+    the last 0 bytes, or the file is empty."""
+    if header is None:
+        return None
+    unit, eq, spec = header.strip().partition("=")
+    if unit.strip().lower() != "bytes" or not eq or "," in spec:
+        return None
+    first_text, dash, last_text = spec.strip().partition("-")
+    first_text, last_text = first_text.strip(), last_text.strip()
+    if not dash or not (first_text or last_text):
+        return None
+    if not all(t.isascii() and (t.isdigit() or t == "") for t in (first_text, last_text)):
+        return None
+    if not first_text:  # the last n bytes
+        count = int(last_text)
+        if count == 0 or size == 0:
+            raise RangeNotSatisfiable
+        return max(0, size - count), size - 1
+    first = int(first_text)
+    last = int(last_text) if last_text else size - 1
+    if last_text and last < first:
+        return None  # an invalid range is ignored (RFC 9110, 14.1.2)
+    if first >= size:
+        raise RangeNotSatisfiable
+    return first, min(last, size - 1)
 
 
 # --------------------------------------------------------------------------- paths
@@ -362,6 +499,7 @@ def _compact(
         "ra": catalog.ra_state(system, game.ra, lib.ra_lists).state,
         "flags": list(game.flags),
         "devices": _devices_of(cfg, views, system, game),
+        **game_facts(game),
     }
 
 

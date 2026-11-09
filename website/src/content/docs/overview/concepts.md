@@ -56,7 +56,7 @@ Everything warpzone manages is a Syncthing folder with a stable ID prefixed `wz-
 | `wz-tools` | `tools` | receive-only | scripts and docs |
 | `wz-save-<emu>-<kind>` | `saves/<emu>/<kind>` | two-way | one emulator's saves or states |
 | `wz-bios-<emu>-<kind>` | `library/<path>` | receive-only | keys and firmware delivered into an emulator's own folder |
-| `wz-media`, `wz-esde` | `frontend/media`, `frontend/es-de` | two-way (receive-only for a profile with `[artwork]`, such as the Anbernic) | ES-DE media, gamelists and collections |
+| `wz-media`, `wz-esde` | `frontend/media`, `frontend/es-de` | two-way (receive-only for a profile with `[artwork]`, such as the Anbernic) | ES-DE media (not the `videos`, which stay on the hub), gamelists and collections |
 | `wz-play-state` | `frontend/play-state` | two-way | favourites and play statistics, one file per device, and the console's disk space for the library UI |
 | `wz-settings` | `settings` | two-way | emulator settings layers |
 
