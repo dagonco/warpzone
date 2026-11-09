@@ -25,6 +25,11 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends build-essential git bash ca-certificates \
  && rm -rf /var/lib/apt/lists/*
 
+# libchdr's bundled zlib is built without its configure step, so its zconf.h does not include
+# <unistd.h> and gzlib.c calls lseek undeclared, which GCC 14 (Debian trixie) refuses. Say that
+# the header exists, and let GCC 14 treat the old C idioms of these vendored sources as warnings.
+ARG RAHASHER_CFLAGS="-DHAVE_UNISTD_H -DZ_HAVE_UNISTD_H -fpermissive"
+
 WORKDIR /src
 # The tag is only a name: the build stops unless it is the pinned commit. Of the submodules only
 # the ones RAHasher compiles (and MakeBuildVer.sh, which lives in RAInterface) are fetched, each
@@ -35,7 +40,7 @@ RUN git clone --branch "${RALIBRETRO_TAG}" --depth 1 \
  && test "$(git rev-parse HEAD)" = "${RALIBRETRO_COMMIT}" \
  && git submodule update --init --depth 1 --recursive \
         src/RAInterface src/libchdr src/miniz src/rcheevos \
- && make -f Makefile.RAHasher HAVE_CHD=1 -j"$(nproc)" \
+ && make -f Makefile.RAHasher HAVE_CHD=1 CC="gcc ${RAHASHER_CFLAGS}" -j"$(nproc)" \
  && install -D -m 0755 bin64/RAHasher /out/RAHasher \
  && /out/RAHasher 2>&1 | head -n 3
 
