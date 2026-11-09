@@ -27,6 +27,9 @@ _ILLEGAL = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f\ud800-\udfff￾￿]")
 
 
 STATE_TAGS = {"favorite": "favorite", "playcount": "playcount", "lastplayed": "lastplayed"}
+# ES-DE also records the seconds played in `<playtime>`. A frontend whose tags name no `playtime`
+# records none, and its ledger says nothing about it.
+ESDE_STATE_TAGS = {**STATE_TAGS, "playtime": "playtime"}
 
 
 class ArtworkError(WarpzoneError):
@@ -59,8 +62,10 @@ class Format:
     render: Callable[[Sequence[Entry]], str]
     order: tuple[str, ...] = ()
     # The tags that hold the favourite, the play count and the last played time, for
-    # `playstate`, which needs `true`, a number and `YYYYMMDDTHHMMSS` in local time.
-    state_tags: Mapping[str, str] = field(default_factory=lambda: dict(STATE_TAGS))
+    # `playstate`, which needs `true`, a number and `YYYYMMDDTHHMMSS` in local time. An optional
+    # `playtime` key names the tag with the seconds played (a number); without it the format
+    # records no playtime.
+    state_tags: Mapping[str, str] = field(default_factory=lambda: dict(ESDE_STATE_TAGS))
 
     def image_tags(self) -> tuple[str, ...]:
         return tuple(dict.fromkeys(self.media_tags.values()))
@@ -615,6 +620,7 @@ EMULATIONSTATION = Format(
     },
     render=_render_emulationstation,
     order=_ES_ORDER,
+    state_tags=STATE_TAGS,  # RetroPie's EmulationStation has no playtime
 )
 
 FORMATS: dict[str, Format] = {EMULATIONSTATION.name: EMULATIONSTATION}

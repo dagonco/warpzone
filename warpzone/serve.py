@@ -33,7 +33,9 @@ from warpzone import (
     artwork,
     catalog,
     catalog_store,
+    diskstatus_io,
     library_api,
+    playstate,
     progress,
     ra,
     saves_index,
@@ -232,6 +234,8 @@ class HubFiles:
         self._saves = saves_index.SavesCache(
             root / saves_index.SAVES_DIR, ttl=media_seconds, clock=clock
         )
+        self._ledgers: dict[Path, tuple[tuple[int, int], playstate.Ledger | None]] = {}
+        self._ledgers_checked = float("-inf")
 
     # ------------------------------------------------------------- the catalog
 
@@ -375,6 +379,48 @@ class HubFiles:
         if parts is None or not parts:
             return None
         return safe_file(self.root / "frontend" / "media" / system / kind, parts)
+
+    # ------------------------------------------------------------- play state
+
+    def play_ledgers(self) -> tuple[playstate.Ledger, ...]:
+        """The ledgers in `frontend/play-state/`, one per device, in device order. A file is
+        parsed again when its size or mtime changed (checked at most every `interval`
+        seconds); one that cannot be read, or trusted, is left out. Conflict copies are
+        ignored, and the devices that left the config still count: their plays happened."""
+        with self._lock:
+            if self.clock() - self._ledgers_checked >= self.interval:
+                self._ledgers_checked = self.clock()
+                self._read_ledgers()
+            return tuple(
+                sorted(
+                    (ledger for _, ledger in self._ledgers.values() if ledger is not None),
+                    key=lambda ledger: ledger.device,
+                )
+            )
+
+    def _read_ledgers(self) -> None:
+        base = self.root / "frontend" / "play-state"
+        try:
+            names = sorted(p for p in base.glob("*.jsonl") if ".sync-conflict-" not in p.name)
+        except OSError:
+            names = []
+        found: dict[Path, tuple[tuple[int, int], playstate.Ledger | None]] = {}
+        for path in names:
+            stamp = self._stat(path)
+            if stamp is None:
+                continue
+            held = self._ledgers.get(path)
+            if held is not None and held[0] == stamp:
+                found[path] = held
+                continue
+            try:
+                ledger: playstate.Ledger | None = playstate.parse_ledger(
+                    path.read_bytes().decode("utf-8"), path.stem
+                )
+            except (OSError, UnicodeDecodeError, playstate.LedgerError):
+                ledger = None
+            found[path] = (stamp, ledger)
+        self._ledgers = found
 
     # ------------------------------------------------------------- whitelists
 
@@ -667,7 +713,10 @@ class App:
         cfg = self.cfg
         match segments:
             case ["devices"]:
-                return json_response(200, library_api.devices_response(cfg, self.files.views(cfg)))
+                return json_response(
+                    200,
+                    library_api.devices_response(cfg, self.files.views(cfg), self._disks()),
+                )
             case ["systems"]:
                 lib = self.files.library()
                 return json_response(
@@ -675,19 +724,27 @@ class App:
                 )
             case ["systems", system, "games"]:
                 lib = self.files.library()
-                return json_response(
-                    200,
-                    library_api.games_response(
-                        lib, system, cfg, self.files.views(cfg), self.files.extras
-                    ),
+                games = library_api.games_response(
+                    lib, system, cfg, self.files.views(cfg), self.files.extras
                 )
+                library_api.attach_play(games["games"], lib, self._play_index())
+                return json_response(200, games)
             case ["games", game_id]:
                 lib = self.files.library()
-                body = library_api.game_response(
+                game = library_api.game_response(
                     lib, game_id, cfg, self.files.views(cfg), self.files.extras
                 )
-                body["saves"] = self.files.game_saves(lib, game_id)
-                return json_response(200, body)
+                game["play"] = library_api.game_play(self._play_index(), *lib.by_id[game_id])
+                game["saves"] = self.files.game_saves(lib, game_id)
+                return json_response(200, game)
+            case ["recent"]:
+                limit = library_api.parse_limit(request.query.get("limit"))
+                return json_response(
+                    200,
+                    library_api.recent_response(
+                        self.files.library(), self._play_index(), self.files.extras, limit
+                    ),
+                )
             case ["games", game_id, "media", kind]:
                 return self._media(game_id, kind)
             case ["search"]:
@@ -714,6 +771,10 @@ class App:
                     raise ApiError("catalog-running", "a catalog run is already running")
                 return json_response(202, {"started": True})
         raise ApiError("not-found", "no such route")
+
+    def _play_index(self) -> library_api.PlayIndex:
+        horizon = int(self.now().timestamp()) + playstate.FUTURE_SLACK
+        return library_api.PlayIndex(self.files.play_ledgers(), horizon)
 
     def _catalog_status(self) -> dict[str, Any]:
         lib = self.files.library()
@@ -829,6 +890,15 @@ class App:
         except WarpzoneError as exc:
             self.log(f"warning: no client for the hub's Syncthing ({_reason(exc)})")
             return None
+
+    # ------------------------------------------------------------- disks
+
+    def _disks(self) -> dict[str, dict[str, Any]]:
+        """The disk each device reported through the play state folder (small files, read on
+        every request; a missing or stale one is null fields)."""
+        names = [d.name for d in library_api.library_devices(self.cfg)]
+        folder = self.root / "frontend" / "play-state"
+        return diskstatus_io.read_all(folder, names, int(self.now().timestamp()))
 
     # ------------------------------------------------------------- progress
 
