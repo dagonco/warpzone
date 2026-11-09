@@ -45,6 +45,11 @@ def design_error_codes() -> set[str]:
     return set(re.findall(r"^\| \d{3} \| `([a-z-]+)` \|", text, re.MULTILINE))
 
 
+# Endpoints the API has ahead of the page: a later change paints them and removes the entry, so
+# the check below keeps failing for any other endpoint the page forgets.
+AHEAD_OF_THE_UI = {("GET", "/api/v1/recent")}
+
+
 def js_requests() -> set[tuple[str, str]]:
     """(method, path) of every `request('METHOD', '/api/v1/...')` call in api.js."""
     pattern = r"request\(\s*'(GET|POST)',\s*[`'](/api/v1/[^`']*)[`']"
@@ -115,7 +120,7 @@ class UiFilesTest(unittest.TestCase):
 
     def test_the_ui_uses_every_endpoint_it_needs(self):
         # /healthz is for the container's health check; the media route is an <img> URL.
-        needed = {e for e in design_endpoints() if e[1] != "/healthz"}
+        needed = {e for e in design_endpoints() if e[1] != "/healthz"} - AHEAD_OF_THE_UI
         used = js_requests() | {
             ("GET", normalize(p))
             for p in re.findall(r"`(/api/v1/games/\$\{[^`]*media/[^`]*)`", read("api.js"))

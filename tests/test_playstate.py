@@ -520,6 +520,77 @@ class LedgerTests(unittest.TestCase):
             playstate.parse_ledger("", "ark")
 
 
+class PlaytimeTests(unittest.TestCase):
+    HEADER = '{"v":1,"device":"ark","replica":"ark"}\n'
+
+    def test_a_record_without_playtime_reads_as_zero(self) -> None:
+        old = self.HEADER + '{"system":"gba","path":"A.zip","plays":2,"last":5}\n'
+        record = playstate.parse_ledger(old, "ark").records[("gba", "A.zip")]
+        self.assertEqual((record.plays, record.playtime), (2, 0))
+
+    def test_playtime_round_trips_and_a_zero_is_not_written(self) -> None:
+        ledger = Ledger("ark", "ark", {KEY: Record(plays=1, playtime=5400), OTHER: Record(plays=1)})
+        text = playstate.render_ledger(ledger)
+        self.assertIn('"playtime":5400', text)
+        self.assertEqual(text.count("playtime"), 1)  # so an old ledger keeps its bytes
+        self.assertEqual(playstate.parse_ledger(text, "ark"), ledger)
+
+    def test_an_older_reader_only_looks_at_the_keys_it_knows(self) -> None:
+        # The version stays 1 and `_record` takes the keys it knows: nothing else decides.
+        self.assertEqual(playstate.VERSION, 1)
+        text = self.HEADER + '{"system":"gba","path":"A.zip","plays":2,"playtime":9,"future":1}\n'
+        self.assertEqual(playstate.parse_ledger(text, "ark").records[("gba", "A.zip")].plays, 2)
+
+    def test_a_playtime_that_is_not_a_count_is_refused(self) -> None:
+        for bad in ("-1", "true", '"9"', "1.5"):
+            text = self.HEADER + '{"system":"gba","path":"A.zip","playtime":' + bad + "}\n"
+            with self.subTest(bad=bad), self.assertRaises(LedgerError):
+                playstate.parse_ledger(text, "ark")
+
+    def test_it_is_read_from_the_gamelist_when_the_format_names_the_tag(self) -> None:
+        entry = artwork.Entry("game", "./A.zip", {"playtime": "3600", "playcount": "2"})
+        look = playstate.seen_games([entry], "gba", "", None, 1, CET)[("gba", "A.zip")]
+        self.assertEqual((look.plays, look.playtime), (2, 3600))
+        bad = artwork.Entry("game", "./B.zip", {"playtime": "soon"})
+        found = playstate.seen_games([bad], "gba", "", None, 1, CET)
+        self.assertEqual(found[("gba", "B.zip")].playtime, 0)
+
+    def test_a_format_without_the_tag_records_no_playtime(self) -> None:
+        tags = artwork.EMULATIONSTATION.state_tags
+        self.assertNotIn("playtime", tags)
+        entry = artwork.Entry("game", "./A.zip", {"playtime": "3600"})
+        look = playstate.seen_games([entry], "gba", "", None, 1, CET, tags)[("gba", "A.zip")]
+        self.assertEqual(look.playtime, 0)
+
+    def test_the_device_publishes_the_highest_playtime_it_has_seen(self) -> None:
+        def run(mine: Record, seen: Seen) -> Record:
+            result = playstate.plan(
+                Ledger("deck", "wz-esde", {KEY: mine}),
+                [],
+                {KEY: seen},
+                lambda key: True,
+                horizon=NOW,
+            )
+            return result.observed.records[KEY]
+
+        self.assertEqual(run(Record(), Seen(playtime=60)).playtime, 60)
+        self.assertEqual(run(Record(playtime=90), Seen(playtime=60)).playtime, 90)
+        self.assertEqual(run(Record(playtime=90), Seen(playtime=120)).playtime, 120)
+
+    def test_playtime_is_not_merged_into_a_gamelist(self) -> None:
+        peer = Ledger("ark", "ark", {KEY: Record(plays=1, playtime=500)})
+        result = playstate.plan(
+            Ledger("deck", "wz-esde"),
+            [peer],
+            {KEY: Seen(plays=1, playtime=60)},
+            lambda key: True,
+            horizon=NOW,
+        )
+        self.assertEqual(result.wanted[KEY].plays, 2)
+        self.assertEqual(result.applied.records[KEY].playtime, 60)
+        self.assertFalse(hasattr(result.wanted[KEY], "playtime"))
+
+
 class GamelistEditTests(unittest.TestCase):
     TEXT = (
         '<?xml version="1.0"?>\n'
