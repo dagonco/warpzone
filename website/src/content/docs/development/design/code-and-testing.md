@@ -121,6 +121,8 @@ warpzone/
   catalog_store.py   `warpzone catalog`: the walk, hashing, RAHasher and RA list runs, guarded writes
   library_api.py     the library UI's API as pure functions: validation, `plan_changes`, responses
   progress.py        per-device progress states from the hub's completion (pure)
+  saves_index.py     saves per game for the library API: exact matching of the hub's `saves/` to games
+                     (pure), the listing and its short cache
   serve.py           `warpzone serve`: http.server, sessions, the write lock, caches, background runs
   localst.py         find and parse the local Syncthing config.xml
   data/ui/index.html the library UI page (static, no build step)

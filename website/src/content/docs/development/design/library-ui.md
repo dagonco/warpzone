@@ -232,6 +232,77 @@ The UI reads the ES-DE scrape that is already on the hub, read-only:
 A game with no gamelist entry shows its catalog title, and a game with no cover shows
 `data/ui/placeholder.svg`. Unscraped games get nothing more in this phase.
 
+## Saves per game
+
+The game answer says whether the hub holds emulator saves for the game. The hub keeps them in
+`saves/<emulator>/<kind>/` (see [Hub, folders and ignores](/warpzone/development/design/hub-and-folders/)),
+and the server only reads them: it never writes below `saves/` and never follows a symlink (a link
+is skipped, so nothing outside the hub is listed).
+
+`GET /api/v1/games/{id}` adds a `saves` object, always present:
+
+```json
+{"data": true, "states": 2, "newest": "2026-11-08T21:14:03Z", "emulators": ["retroarch"]}
+```
+
+`data` is true when a battery or memory save was found, `states` counts the save states, `newest`
+is the latest modification time of everything found (UTC, `null` when nothing was) and `emulators`
+names the hub folders (`saves/<emulator>`) it came from, sorted. A game with nothing found has
+`{"data": false, "states": 0, "newest": null, "emulators": []}`; that also covers a hub with no
+`saves/` folder. The compact entries of a system's games do not carry it.
+
+Matching is exact and never guesses: no fuzzy or case-insensitive comparison, no partial names.
+What cannot be attributed to one game is left out, so `data: false` means "not found", not "the
+game has no save".
+
+### What is matched
+
+`saves_index.match_game` (pure) takes the index of the listing, the system and the primary path of
+the game. The catalog records no game IDs beyond what the paths carry, so only these are matched:
+
+| Emulator folder | Matched by | Counts as |
+|---|---|---|
+| `retroarch/saves` | the stem of the primary part (`Game.chd`, `Game.cue` and the `Game.m3u` folder of a multi-disc game all give `Game`, the name RetroArch loads) plus `.srm`, `.rtc`, `.sav`, `.mcr`, `.mcd`, `.eep`, `.fla`, `.sra`, `.mpk`, `.nv` or `.dsv` | save data |
+| `retroarch/states` | the stem plus `.state`, `.state<N>` or `.state.auto` (the `.png` thumbnails are not counted) | one state each |
+| `melonds/saves`, `melonds/states` | the stem of a `nds` game plus `.sav`; plus `.ml<N>` | data; states |
+| `flycast/saves` | the stem of a `dreamcast`, `naomi`, `naomi2` or `atomiswave` game: `<stem>_vmu_save_<A-D><1-4>.bin` (per-game VMU) or `<stem>.nvmem`, `<stem>.nvmem2` (arcade flash) | data |
+| `vita3k/saves` | the folder `<TITLEID>` equals the folder name of `roms/psvita/app/<TITLEID>` | data |
+| `shadps4/saves` | the folder `<user>/<CUSAnnnnn>` equals the name of `roms/ps4/games/<CUSAnnnnn>` (also its `-UPDATE` folder) | data |
+| `eden/saves` | the folder `<account>/<profile>/<TitleID>` equals the `[<TitleID>]` of the Switch game's file name (hex, any case) | data |
+
+RetroArch's save files can sit in a subfolder of the hub folder when the player sorts them by core
+or by content folder; two levels are looked into. Two rules keep a stem from being taken for
+another game's: a file in a folder named after a system belongs to a game of that system only, and
+a file in any other folder (or none) is left out when the same stem is a game of another system
+RetroArch runs, so `Same Name.srm` is nobody's when `gb` and `gbc` both have `Same Name`.
+RetroArch matching does not apply to `switch`, `ps4`, `psvita`, `ps3`, `wiiu`, `xbox`, `xbox360`,
+`model2` and `n3ds`, which standalone emulators run. For the title-ID emulators `newest` is the
+latest file below the title's folder (at most 2000 files are looked at); a folder with no file
+below it is not a save.
+
+### What is not matched
+
+- **Shared memory cards:** PCSX2 (`Mcd001.ps2`), DuckStation (`shared_card_*.mcd`), Dolphin's GC
+  memory cards, Flycast's shared `vmu_save_*.bin` and `dc_nvmem.bin`, and RetroArch cores that
+  share one card between games. A card holds many games.
+- **Emulators that name saves by an ID the catalog does not record:** Dolphin (game ID and Wii
+  title), PCSX2 and DuckStation states and per-game cards (serial), PPSSPP (disc ID), RPCS3 (PS3
+  title ID), Azahar (3DS title ID), Cemu (Wii U title ID) and Xenia (title ID). They can be added
+  when the catalog records the ID.
+- **Ryujinx** (numbered save folders that map to a title through a metadata file), **MAME**,
+  **ScummVM**, **RMG** and **PrimeHack** (whose folders are Dolphin's).
+
+### The index and its cost
+
+Listing `saves/` for every request would cost a walk per game on a library of 1,000+ games. The
+server lists only the folders in the table above (the RetroArch folders two levels down, the
+title-ID emulators down to the title folder) and keeps the result as an index: stem to hits, and
+emulator and title ID to hits. The index is listed again when it is more than 60 seconds old (the
+media listing's interval), under a lock, so concurrent requests share one listing; a request
+inside that time is a dictionary lookup, and a change in `saves/` shows within a minute. No file is
+opened or read, only listed and `stat`ed. The catalog's stems are kept per catalog load, not per
+request.
+
 ## The page
 
 The page is static HTML, CSS and JavaScript in `warpzone/data/ui/`, with no build step, and it
@@ -571,7 +642,8 @@ false}}}`, where `state` is `all`, `some` or `none` of the games turned on, `uns
 
 `GET /api/v1/games/{id}` adds `parts` (path, type, size), `dat`, `meta` (the gamelist fields
 above), `media` (the kinds that exist), `ra` (`{"state", "achievements", "points", "url"}` as
-known) and `versions` (the other games with the same title key: id, system, title).
+known), `versions` (the other games with the same title key: id, system, title) and `saves`
+(see [Saves per game](#saves-per-game)).
 
 Play statistics come from the ledgers in `frontend/play-state/*.jsonl` (see [Play
 state](/warpzone/development/design/play-state/)), read again when a file changed (checked at
@@ -790,12 +862,13 @@ network:
   `parse`, `parse_hand`, `render`, `normalize`, `apply`, `decide`, `decide_lines`, `effect`,
   `unsupported` and the migration's classification; `library_api.plan_changes` and every
   response builder (the play statistics included: `game_play`, `attach_play`, `recent_response`);
-  `progress.state`; `prune.guard`; `diskstatus` (`measure`, `should_write`, `render`, `parse`,
-  `stale`, `api_disk`).
+  `saves_index.build_index`, `match_game` and `saves_response`; `progress.state`; `prune.guard`;
+  `diskstatus` (`measure`, `should_write`, `render`, `parse`, `stale`, `api_disk`).
 - **I/O:** `catalog_store` (the walk, hashing, RAHasher and the RA download through `ra.py`, the
   guarded writes), `diskstatus_io` (the disk report's write on a console and read on the hub),
   `whitelist_store` (reading with a stamp, backups, the guarded write, the hub
-  scan, the migration's walk), `serve` (sockets, sessions, the lock, the background runs, the
+  scan, the migration's walk), `saves_index.scan` and `SavesCache` (the listing of `saves/` and its
+  60-second cache), `serve` (sockets, sessions, the lock, the background runs, the
   caches).
 
 Tests: the derivation on listings of each layout (PS4 with and without its shortcut, Vita with

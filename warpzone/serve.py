@@ -38,6 +38,7 @@ from warpzone import (
     playstate,
     progress,
     ra,
+    saves_index,
 )
 from warpzone import whitelist_store as store
 from warpzone.config import Config, ServeSettings, split_listen
@@ -230,6 +231,9 @@ class HubFiles:
         self._meta: dict[str, tuple[tuple[int, int] | None, float, dict[str, artwork.Entry]]] = {}
         self._media: dict[str, tuple[float, dict[str, dict[str, str]]]] = {}
         self._unclaimed: dict[str, tuple[float, tuple[str, ...]]] = {}
+        self._saves = saves_index.SavesCache(
+            root / saves_index.SAVES_DIR, ttl=media_seconds, clock=clock
+        )
         self._ledgers: dict[Path, tuple[tuple[int, int], playstate.Ledger | None]] = {}
         self._ledgers_checked = float("-inf")
 
@@ -360,6 +364,13 @@ class HubFiles:
                 found = ()
             self._unclaimed[system] = (self.clock(), found)
             return found
+
+    def game_saves(self, lib: library_api.Library, game_id: str) -> dict[str, Any]:
+        """The `saves` object of a game (an empty one for an unknown id)."""
+        found = lib.by_id.get(game_id)
+        if found is None:
+            return saves_index.saves_response(saves_index.GameSaves())
+        return self._saves.game(lib, found[0], found[1].primary)
 
     def media_path(self, system: str, kind: str, name: str) -> Path | None:
         """The image file, or None when it is not a regular file inside its kind's folder
@@ -724,6 +735,7 @@ class App:
                     lib, game_id, cfg, self.files.views(cfg), self.files.extras
                 )
                 game["play"] = library_api.game_play(self._play_index(), *lib.by_id[game_id])
+                game["saves"] = self.files.game_saves(lib, game_id)
                 return json_response(200, game)
             case ["recent"]:
                 limit = library_api.parse_limit(request.query.get("limit"))
