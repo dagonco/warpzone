@@ -72,7 +72,7 @@ A device that lists `play-state` without `frontend` is refused, and so is one th
 
 ### `[inbox]`
 
-Optional. Only `warpzone inbox` and `warpzone doctor` read it. `inbox` works with just this table, with no `[hub]` or `[devices]`, on a computer that mounts the hub's games share, and it also runs in the hub container, where every path below is a path inside the container ([the two ways](/warpzone/setup/inbox/#where-inbox-runs)). Every key is a non-empty string, and `~` is expanded. A tool path that is set (`chdman`, `bsdtar`, `rahasher`, `dolphin_tool`, `nsz`, `orbis_pkg_util`) must be an executable file, `vita3k` must be an app bundle with its binary or an executable file, and `vita_zrif` must be a file, or `inbox` stops.
+Optional. Only `warpzone inbox` and `warpzone doctor` read it. `inbox` works with just this table, with no `[hub]` or `[devices]`, on a computer that mounts the hub's games share, and it also runs in the hub container, where every path below is a path inside the container ([the two ways](/warpzone/setup/inbox/#where-inbox-runs)). Every key is a non-empty string, and `~` is expanded, except `tool_timeout_minutes`, which is a whole number. A tool path that is set (`chdman`, `bsdtar`, `rahasher`, `dolphin_tool`, `nsz`, `orbis_pkg_util`) must be an executable file, `vita3k` must be an app bundle with its binary or an executable file, and `vita_zrif` must be a file, or `inbox` stops.
 
 | Key | Default | Meaning |
 |---|---|---|
@@ -94,6 +94,7 @@ Optional. Only `warpzone inbox` and `warpzone doctor` read it. `inbox` works wit
 | `mame2003plus_dat` | none | `metadata/mame2003-plus.xml` of MAME 2003-Plus. |
 | `gamelist_mame` | `<root>/frontend/es-de/gamelists/mame/gamelist.xml` | The ES-DE gamelist that holds per-game emulator overrides for arcade sets. |
 | `gamelist_ps3` | `<root>/frontend/es-de/gamelists/ps3/gamelist.xml` | The ES-DE gamelist that records the alternative emulator for PS3 games. |
+| `tool_timeout_minutes` | `240` | How long one call of any external tool (`chdman`, `bsdtar`, `RAHasher`, `dolphin-tool`, `nsz`, `orbis-pkg-util`) may run, as a whole number of minutes, at least 1. A tool that runs longer is killed and only its item goes to review ("chdman did not finish within 240 minutes"); the run goes on with the next item and the inbox lock is released. The default is generous for converting several GB. Vita3K keeps its own limits. |
 
 The environment variable `RA_API_KEY`, when set, is used for RetroAchievements lookups; it is not a config key. See [Adding games](/warpzone/setup/inbox/) for how each tool is used.
 

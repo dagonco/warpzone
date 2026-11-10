@@ -295,6 +295,25 @@ class InboxSettingsTests(unittest.TestCase):
                 parse_config(data)
             self.assertIn(needle, str(ctx.exception))
 
+    def test_tool_timeout_defaults_to_240_minutes_and_must_be_a_whole_number_of_minutes(
+        self,
+    ) -> None:
+        self.assertEqual(parse_config(config_data()).inbox.tool_timeout_minutes, 240)
+        data = config_data()
+        data["inbox"] = {"root": "/hub"}
+        self.assertEqual(parse_config(data).inbox.tool_timeout_minutes, 240)
+        for value in (1, 90, 1440):
+            data["inbox"] = {"tool_timeout_minutes": value}
+            self.assertEqual(parse_config(data).inbox.tool_timeout_minutes, value)
+        for bad in (0, -5, 1.5, "30", True, None):
+            data["inbox"] = {"tool_timeout_minutes": bad}
+            with self.assertRaises(ConfigError, msg=repr(bad)) as ctx:
+                parse_config(data)
+            self.assertIn(
+                "inbox.tool_timeout_minutes: must be a whole number of minutes, at least 1",
+                str(ctx.exception),
+            )
+
     def test_only_the_inbox_table_is_needed_to_run_inbox(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "config.toml"

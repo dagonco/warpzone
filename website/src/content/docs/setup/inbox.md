@@ -122,7 +122,7 @@ mame2003plus_dat = "~/dats/mame2003-plus.xml"
 vita_zrif = "~/keys/PSV_GAMES.tsv"            # optional: zRIF keys for PS Vita .pkg files
 ```
 
-`bsdtar`, `dolphin_tool`, `nsz`, `orbis_pkg_util`, `vita3k` and `switch_keys` work the same way, and `work_dir` moves the temporary files (they can take several GiB). Run `warpzone doctor` to see what is missing ([the doctor guide](/warpzone/operation/doctor/)). Details in [the design document](/warpzone/development/design/inbox/).
+`bsdtar`, `dolphin_tool`, `nsz`, `orbis_pkg_util`, `vita3k` and `switch_keys` work the same way, and `work_dir` moves the temporary files (they can take several GiB). A tool that hangs is killed after `tool_timeout_minutes` (default 240) and only its item goes to review, so an unattended run does not stay stuck. Run `warpzone doctor` to see what is missing ([the doctor guide](/warpzone/operation/doctor/)). Details in [the design document](/warpzone/development/design/inbox/).
 
 ## What it does for each item
 
