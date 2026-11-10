@@ -370,6 +370,22 @@ class _NullLog:
         pass
 
 
+class _DeferredLog:
+    """Holds the lines of a run until it is known that the run did something worth a trace."""
+
+    def __init__(self, log: state.Log) -> None:
+        self.log = log
+        self.lines: list[str] = []
+
+    def line(self, msg: str) -> None:
+        self.lines.append(msg)
+
+    def flush(self) -> None:
+        for msg in self.lines:
+            self.log.line(msg)
+        self.lines = []
+
+
 def _quiet(_: str) -> None:
     pass
 
@@ -445,7 +461,7 @@ class _Apply:
         *,
         dry_run: bool,
         overwrite_local: bool,
-        log: state.Log | _NullLog,
+        log: state.Log | _NullLog | _DeferredLog,
         say: Callable[[str], None],
         err: Callable[[str], None],
     ) -> None:
@@ -636,22 +652,44 @@ def apply(
     dry_run: bool = False,
     quiet: bool = False,
     overwrite_local: bool = False,
+    when_idle: bool = False,
     out: Callable[[str], None] = print,
     err: Callable[[str], None] = print,
 ) -> int:
     """Write the layered keys into the emulators' files. Exit code: 0 ok, 1 on an invalid layer
-    or a file that could not be read, parsed or written."""
+    or a file that could not be read, parsed or written.
+
+    `when_idle` is the unattended run of the timer: the emulators that are running are left out
+    before anything is read, a run that writes nothing and fails nowhere leaves no trace (no
+    log line, no `last-apply.json`), and the exit code is 0 whatever happened (failures are in
+    the log and in `last-apply.json`, where `doctor` reads them), so the timer never shows as
+    failed.
+    """
     selected = select_emulators(ctx.profile, emulators)
     say, complain = (_quiet, _quiet) if quiet else (out, err)
+    if when_idle:
+        require_proc(ctx.env)
+        selected = [e for e in selected if not is_running(ctx.env, e.process)]
+        if not selected:
+            return 0
     if dry_run:
         return _apply_locked(ctx, selected, _NullLog(), say, complain, dry_run, overwrite_local)
     with state.lock(root=ctx.env.state) as got:
-        log = state.Log(ctx.env.state / "log", clock=ctx.env.clock)
+        real = state.Log(ctx.env.state / "log", clock=ctx.env.clock)
         if not got:
-            log.line("apply: another run holds the lock, nothing done")
+            if when_idle:
+                return 0
+            real.line("apply: another run holds the lock, nothing done")
             say("settings: another run is in progress, nothing done")
             return 0
-        return _apply_locked(ctx, selected, log, say, complain, dry_run, overwrite_local)
+        if not when_idle:
+            return _apply_locked(ctx, selected, real, say, complain, dry_run, overwrite_local)
+        deferred = _DeferredLog(real)
+        code = _apply_locked(
+            ctx, selected, deferred, say, complain, dry_run, overwrite_local, idle=True
+        )
+        deferred.flush()
+        return 0 if code == 1 else code
 
 
 def unlayerable(profile: Profile, cand: plan.Candidate) -> str | None:
@@ -689,21 +727,31 @@ def record_refused_apply(
 def _apply_locked(
     ctx: Context,
     selected: list[EmulatorSettings],
-    log: state.Log | _NullLog,
+    log: state.Log | _NullLog | _DeferredLog,
     say: Callable[[str], None],
     err: Callable[[str], None],
     dry_run: bool,
     overwrite_local: bool,
+    *,
+    idle: bool = False,
 ) -> int:
     env = ctx.env
     if not settings_folder_ready(ctx):
-        log.line("apply: no settings folder")
-        say("settings: no settings folder, nothing to do")
+        if not idle:
+            log.line("apply: no settings folder")
+            say("settings: no settings folder, nothing to do")
         return 0
     require_proc(env)
     log.line(f"apply: device {ctx.device}")
 
     def finish(code: int, counts: _Counts) -> int:
+        if idle and not (counts.written or counts.errors):
+            # Nothing was changed and nothing failed (held and unwritable keys are
+            # reported by the startup run and `audit`): keep the log and `last-apply.json`
+            # of the last real run.
+            if isinstance(log, _DeferredLog):
+                log.lines = []
+            return code
         if not dry_run:
             state.write_last_apply(
                 counts.info(time=env.clock().isoformat(timespec="seconds"), exit=code),
@@ -1004,7 +1052,7 @@ class _Capture:
         seed: bool,
         key_patterns: tuple[str, ...],
         include_new: bool,
-        log: state.Log | _NullLog,
+        log: state.Log | _NullLog | _DeferredLog,
         say: Callable[[str], None],
         err: Callable[[str], None],
     ) -> None:
@@ -1284,7 +1332,7 @@ def _capture_locked(
     ctx: Context,
     client: SyncClient | None,
     selected: list[EmulatorSettings],
-    log: state.Log | _NullLog,
+    log: state.Log | _NullLog | _DeferredLog,
     out: Callable[[str], None],
     err: Callable[[str], None],
     *,

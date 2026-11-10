@@ -48,6 +48,7 @@ EXPECTED_FILES = {
     ("xemu", "config"): ("~/.var/app/app.xemu.xemu/data/xemu/xemu/xemu.toml", "toml"),
     ("ryujinx", "config"): ("~/.config/Ryujinx/Config.json", "json"),
     ("xenia", "config"): ("~/Emulation/roms/xbox360/xenia-canary.config.toml", "toml"),
+    ("esde", "es-settings"): ("~/ES-DE/settings/es_settings.xml", "esde-xml"),
     ("shadps4", "config"): ("~/.local/share/shadPS4/config.json", "json"),
     ("shadps4", "launcher"): ("~/.local/share/shadPS4QtLauncher/qt_ui.ini", "ini"),
 }
@@ -629,6 +630,55 @@ FIXTURES: dict[tuple[str, str], tuple[str, dict[str, str | set[str]]]] = {
             "enable_ptc": "plain",
         },
     ),
+    ("esde", "es-settings"): (
+        '<?xml version="1.0"?>\n'
+        '<bool name="ScrapeVideos" value="true" />\n'
+        '<bool name="ScrapeCovers" value="true" />\n'
+        '<bool name="ScrapeScreenshots" value="true" />\n'
+        '<bool name="ScrapeTitleScreens" value="true" />\n'
+        '<bool name="Scrape3DBoxes" value="true" />\n'
+        '<bool name="ScrapePhysicalMedia" value="true" />\n'
+        '<bool name="ScrapeMarquees" value="true" />\n'
+        '<bool name="ScrapeBackCovers" value="true" />\n'
+        '<bool name="ScrapeFanArt" value="true" />\n'
+        '<bool name="ScrapeManuals" value="true" />\n'
+        '<string name="ScraperRegion" value="eu" />\n'
+        '<string name="ScraperLanguage" value="en" />\n'
+        '<int name="ScraperConnectionTimeout" value="30" />\n'
+        '<string name="ScraperUsernameScreenScraper" value="fake" />\n'
+        '<string name="ScraperPasswordScreenScraper" value="fake" />\n'  # gitleaks:allow
+        '<string name="ROMDirectory" value="/fake/roms" />\n'
+        '<string name="MediaDirectory" value="/fake/media" />\n'
+        '<string name="UserThemeDirectory" value="" />\n'
+        '<bool name="CustomEventScripts" value="true" />\n'
+        '<int name="ScreenWidth" value="0" />\n'
+        '<string name="WindowMode" value="fullscreen" />\n'
+        '<string name="ThemeSet" value="fake" />\n',
+        {
+            "ScrapeVideos": "known",
+            "ScrapeCovers": "known",
+            "ScrapeScreenshots": "known",
+            "ScrapeTitleScreens": "known",
+            "Scrape3DBoxes": "known",
+            "ScrapePhysicalMedia": "known",
+            "ScrapeMarquees": "known",
+            "ScrapeBackCovers": "known",
+            "ScrapeFanArt": "known",
+            "ScrapeManuals": "known",
+            "ScraperRegion": "known",
+            "ScraperLanguage": "known",
+            "ScraperConnectionTimeout": "plain",
+            "ScraperUsernameScreenScraper": "secret",
+            "ScraperPasswordScreenScraper": "secret",
+            "ROMDirectory": "noise",
+            "MediaDirectory": "noise",
+            "UserThemeDirectory": "noise",
+            "CustomEventScripts": "noise",
+            "ScreenWidth": "noise",
+            "WindowMode": "noise",
+            "ThemeSet": "plain",
+        },
+    ),
     ("shadps4", "config"): (
         SHADPS4_CONFIG,
         {
@@ -673,7 +723,7 @@ class ShippedSettingsTests(unittest.TestCase):
         cls.profile = load_profile("steamos-emudeck")
         cls.settings = cls.profile.settings
 
-    def test_thirteen_emulators(self) -> None:
+    def test_the_emulators_and_es_de(self) -> None:
         self.assertEqual(
             sorted(self.settings),
             sorted(
@@ -690,6 +740,7 @@ class ShippedSettingsTests(unittest.TestCase):
                     "xemu",
                     "ryujinx",
                     "xenia",
+                    "esde",
                     "shadps4",
                 ]
             ),

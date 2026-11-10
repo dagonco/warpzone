@@ -18,7 +18,7 @@ from warpzone.shadps4 import kind_of
 
 PATH_KEYS = ("library", "songs", "tools", "media", "esde", "settings", "play_state")
 # The handlers of the settings layer (`settings_formats.handler`); keep in step.
-SETTINGS_FORMATS = ("ini", "qt-ini", "retroarch-cfg", "yaml-flat", "json", "toml")
+SETTINGS_FORMATS = ("ini", "qt-ini", "retroarch-cfg", "yaml-flat", "json", "toml", "esde-xml")
 _NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 # `<emu>-<kind>`: both halves are single words so the hub path stays unambiguous.
 _SAVE_KEY_RE = re.compile(r"^([a-z0-9]+)-([a-z0-9]+)$")

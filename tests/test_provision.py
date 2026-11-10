@@ -1594,7 +1594,11 @@ class EsdeScriptTests(unittest.TestCase):
         cfg = parse_config(data)
         rep, lines = reporter()
         kw.setdefault("probes", self.probes())
-        with FakeSyncthing(DECK_ID) as local:
+        # The settings timer has its own tests (test_settings_timer.py).
+        with (
+            mock.patch("warpzone.provision_device.ensure_settings_timer"),
+            FakeSyncthing(DECK_ID) as local,
+        ):
             client = Client(local.url, API_KEY, label="local", dry_run=dry_run, sink=lines.append)
             provision_device(
                 cfg,

@@ -430,6 +430,12 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="also write keys changed in an emulator and not captured yet",
     )
+    st_apply.add_argument(
+        "--when-idle",
+        action="store_true",
+        help="unattended run (the timer): leave out the emulators that are running, leave no "
+        "trace when nothing was written, and exit 0 even when a file could not be written",
+    )
     st_capture = st_sub.add_parser(
         "capture",
         parents=[common, st_common, st_dry_run],
@@ -760,6 +766,7 @@ def _settings(args: argparse.Namespace, cfg: Config, profiles: dict[str, Profile
         dry_run=args.dry_run,
         quiet=args.quiet,
         overwrite_local=args.overwrite_local,
+        when_idle=args.when_idle,
         out=print,
         err=_eprint,
     )

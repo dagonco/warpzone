@@ -540,9 +540,28 @@ def render_prune_units(python: str, name: str, config_path: Path | None) -> tupl
     )
 
 
+def render_settings_units(python: str, name: str, config_path: Path | None) -> tuple[str, str]:
+    """The text of the `systemd --user` service and timer that run `settings apply` for ES-DE."""
+    command = [
+        python, "-m", "warpzone", "settings", "apply", "--device", name,
+        "--emulator", SETTINGS_EMULATOR, "--when-idle", "--quiet",
+    ]  # fmt: skip
+    return _units(
+        command,
+        config_path,
+        SETTINGS_INTERVAL,
+        "apply the shared ES-DE settings while ES-DE is closed",
+        boot=SETTINGS_BOOT,
+    )
+
+
 UNIT_NAME = "warpzone-artwork"
 PLAY_STATE_UNIT = "warpzone-play-state"
 PRUNE_UNIT = "warpzone-prune"
+SETTINGS_UNIT = "warpzone-settings"
+SETTINGS_EMULATOR = "esde"
+SETTINGS_BOOT = "5min"
+SETTINGS_INTERVAL = "15min"
 PRUNE_BOOT = "15min"
 PRUNE_INTERVAL = "1h"
 

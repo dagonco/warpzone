@@ -21,7 +21,7 @@ LINKS_SCRIPT = "warpzone-links.sh"
 SETTING = "CustomEventScripts"
 MENU_PATH = "Main menu > Other settings > Enable custom event scripts"
 # What the process list shows for ES-DE: `comm` of the unpacked binary, and `argv[0]` of the
-# AppImage. To be confirmed on a device.
+# AppImage (seen on a Steam Machine: comm `es-de` for the unpacked binary and `ES-DE.AppImage`).
 ESDE_PROCESSES = ("es-de", "ES-DE.AppImage")
 
 _ELEMENT = f'<bool name="{SETTING}" value="true" />'
@@ -107,7 +107,7 @@ def script_interpreter(text: str) -> str | None:
     return None
 
 
-def _elements(text: str) -> list[Element]:
+def parse_elements(text: str) -> list[Element]:
     """Every element of the file as (tag, sorted attributes).
 
     ES-DE writes a list of elements after the XML declaration, with no root element, so
@@ -128,7 +128,7 @@ def _is_setting(element: Element) -> bool:
 def event_scripts_enabled(xml_text: str) -> bool | None:
     """Whether `CustomEventScripts` is on; None when it is absent, odd or the file is unreadable."""
     try:
-        elements = _elements(xml_text)
+        elements = parse_elements(xml_text)
     except EsdeError:
         return None
     found: bool | None = None
@@ -186,7 +186,7 @@ def enable_event_scripts(text: str) -> str:
     `<bool .../>` line with its indentation and line ending. Raises EsdeError when the file
     does not parse, or when the result would not be the same settings plus that one.
     """
-    before = _elements(text)
+    before = parse_elements(text)
     if event_scripts_enabled(text) is True:
         return text
     new, count = _set_existing(text)
@@ -196,6 +196,6 @@ def enable_event_scripts(text: str) -> str:
     expected = [("bool", on) if _is_setting(e) else e for e in before]
     if not count:
         expected.append(("bool", on))
-    if sorted(_elements(new)) != sorted(expected):
+    if sorted(parse_elements(new)) != sorted(expected):
         raise EsdeError("the edit would change something else in es_settings.xml")
     return new

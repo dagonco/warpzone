@@ -34,6 +34,16 @@ The folder is two-way (unlike `tools`, which is receive-only on devices), becaus
 
 Thirteen emulators are covered by the `steamos-emudeck` profile: Eden, RetroArch (and its core options), DuckStation, PCSX2, Dolphin, Azahar, melonDS, PPSSPP, Vita3K, xemu, Ryujinx, Xenia (the Proton build of Canary) and shadPS4. For shadPS4 the shared keys are the PS4 system language, `[shadps4.config]` `General.console_language` (1 is English US, 3 is Spanish), and the launcher's interface language, `[shadps4.launcher]` `"[general_settings]guiLanguage"` (for example `es_ES`). Version 0.21 and later read `config.json`; the old `config.toml` is only a leftover that is read once to migrate, so changing it does nothing. Xenia's console language is not in its config file: set it in Xenia (Console > Open console settings) and capture its `xconfig.settings`, a system data file (below).
 
+ES-DE's own `es_settings.xml` is covered too, for the scraper options only (which media to download, region and language), so one choice reaches every console:
+
+```toml
+# settings/common.toml
+[esde.es-settings]
+ScrapeVideos = false
+```
+
+Each value must have the kind of the setting in the file (`true`/`false` for an on/off option, a number for a number, quoted text for text). Logins, paths and the *Enable custom event scripts* option are never shared. ES-DE rewrites the file when it quits, so it cannot be changed while ES-DE runs, and the startup script runs while it does. `provision device` therefore installs a user timer, `warpzone-settings` (5 minutes after boot and then every 15), that applies the ES-DE keys only when no ES-DE process is running, makes no noise when there is nothing to change, and never shows as failed. A setting from the hub reaches a console within about 15 minutes of Syncthing delivering it while ES-DE is closed, or at the first tick after you quit ES-DE, and ES-DE uses it from its next start. To get it at once, close ES-DE and run `warpzone settings apply --emulator esde`.
+
 ## Set up
 
 1. Add `"settings"` to `folders` for each device in the config (see [`examples/config.example.toml`](https://github.com/dagonco/warpzone/blob/main/examples/config.example.toml)).

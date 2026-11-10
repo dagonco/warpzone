@@ -22,7 +22,7 @@ LAYER_FORMAT = 1
 HEADER = "# Written by warpzone settings capture. Edit on the hub only; comments are not kept."
 
 # Formats whose values keep their type; the others hold raw strings.
-_TYPED_FORMATS = ("json", "toml")
+_TYPED_FORMATS = ("json", "toml", "esde-xml")
 _CONFLICT_MARK = ".sync-conflict-"
 
 EntryKey = tuple[str, str]

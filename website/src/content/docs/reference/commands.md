@@ -128,7 +128,7 @@ warpzone provision device NAME [--config PATH] [--dry-run] [--syncthing-config P
                                [--timeout SECONDS] [--unattended]
 ```
 
-Run on the console named `NAME` in the config. It reads the local Syncthing's API key from its `config.xml`, adds the hub, and creates the folders the device subscribes to, starting each whitelisted folder on bootstrap ignores until its whitelist has arrived. When the device has `auto_hub = true` it first creates on the hub the folders of this device that the hub lacks (the same as `provision hub --additive`, limited to this device's folders); a failure there is a warning, not an error. Depending on the device's folders and profile it also installs the ES-DE startup scripts, writes the frontend's system list and pins RetroArch's paths, adds shadPS4 install directories, sets Cemu's MLC path and game folder, links title folders, writes artwork gamelists, installs the user timers, and installs the live copy of the updater with its settings. It refuses to run when the local Syncthing is a different device than `devices.NAME.device_id`. Idempotent.
+Run on the console named `NAME` in the config. It reads the local Syncthing's API key from its `config.xml`, adds the hub, and creates the folders the device subscribes to, starting each whitelisted folder on bootstrap ignores until its whitelist has arrived. When the device has `auto_hub = true` it first creates on the hub the folders of this device that the hub lacks (the same as `provision hub --additive`, limited to this device's folders); a failure there is a warning, not an error. Depending on the device's folders and profile it also installs the ES-DE startup scripts, writes the frontend's system list and pins RetroArch's paths, adds shadPS4 install directories, sets Cemu's MLC path and game folder, links title folders, writes artwork gamelists, installs the user timers (including `warpzone-settings` for a device that subscribes to `settings`, which applies ES-DE's layered settings while ES-DE is closed), and installs the live copy of the updater with its settings. It refuses to run when the local Syncthing is a different device than `devices.NAME.device_id`. Idempotent.
 
 | Option | Default | Meaning |
 |---|---|---|
@@ -477,10 +477,10 @@ warpzone saves convert rg351mp --dry-run
 
 ```
 warpzone settings apply [--config PATH] [--device NAME] [--emulator ID ...] [--dry-run]
-                        [--quiet] [--overwrite-local]
+                        [--quiet] [--overwrite-local] [--when-idle]
 ```
 
-Writes the keys of the hub's settings layers (`common.toml`, then the device's own layer) into the emulators' files: only the layered keys, with a backup, and never while the emulator runs. ES-DE runs it at every start. See [Emulator settings](/warpzone/setup/settings/).
+Writes the keys of the hub's settings layers (`common.toml`, then the device's own layer) into the emulators' files: only the layered keys, with a backup, and never while the emulator runs. ES-DE runs it at every start (without touching its own file, which it rewrites on quit), and the `warpzone-settings` timer runs it for ES-DE's settings while ES-DE is closed. See [Emulator settings](/warpzone/setup/settings/).
 
 | Option | Default | Meaning |
 |---|---|---|
@@ -490,6 +490,7 @@ Writes the keys of the hub's settings layers (`common.toml`, then the device's o
 | `--dry-run` | off | Print the plan; write nothing. |
 | `--quiet` | off | Print nothing. |
 | `--overwrite-local` | off | Also write keys changed in an emulator and not captured yet (normally held back). |
+| `--when-idle` | off | The timer's unattended run: leave out the emulators that are running before anything is read, leave no log line or `last-apply.json` when nothing was written and nothing failed, and exit `0` whatever happened (failures are logged). |
 
 Exit `0` when it finished (also when another run holds the lock, or nothing was layered); `1` for an invalid layer or a file that could not be read, parsed or written; `2` for a config error. A refused real run (exit `2`) is recorded in the device's settings log.
 

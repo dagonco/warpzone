@@ -49,6 +49,9 @@ system_language = "AmericanEnglish"
 
 [xemu.config]
 "general.show_welcome" = false
+
+[esde.es-settings]
+ScrapeVideos = false
 ```
 
 ```toml
@@ -69,7 +72,7 @@ res_scale = 1
   templated file is `<file>:<name>`, as in `"opt:Flycast"`), and each entry a key in the
   file's canonical form (see [Format handlers](#format-handlers)) with its value.
 - **Values** are TOML scalars: strings, integers, floats and booleans. Line-oriented
-  formats hold raw strings; `json` and `toml` keep the type they read. Arrays, tables and
+  formats hold raw strings; `json`, `toml` and `esde-xml` keep the type they read. Arrays, tables and
   null are never captured or written.
 - **Merge.** The effective value of a key is the device layer's when it has the key, else
   common's. A device cannot unset a common key, only give it another value. Removing a key
@@ -134,7 +137,7 @@ create_when = "~/Emulation/storage/xemu"
 - Patterns match the canonical key. `*` matches any run of characters and `?` one
   character; nothing else is special, so `[` is literal. Ids are `[a-z0-9-]+`.
 
-The shipped `steamos-emudeck` profile declares thirteen emulators:
+The shipped `steamos-emudeck` profile declares thirteen emulators and ES-DE's own settings file (`esde`, see [ES-DE settings](#es-de-settings)):
 
 | Emulator | File ids | Path | Format |
 |---|---|---|---|
@@ -151,6 +154,7 @@ The shipped `steamos-emudeck` profile declares thirteen emulators:
 | `ryujinx` | `config` | `~/.config/Ryujinx/Config.json` | `json` |
 | `xenia` | `config` | `~/Emulation/roms/xbox360/xenia-canary.config.toml` | `toml` |
 | `shadps4` | `config`, `launcher` | `~/.local/share/shadPS4/config.json`, `~/.local/share/shadPS4QtLauncher/qt_ui.ini` | `json`, `ini` |
+| `esde` | `es-settings` | `~/ES-DE/settings/es_settings.xml` | `esde-xml` |
 
 Files that hold only a login (Dolphin's `RetroAchievements.ini`, PPSSPP's achievements
 token) are not declared at all.
@@ -215,6 +219,7 @@ The contract, tested for every handler:
 | `yaml-flat` | Vita3K | `key` | raw text after `: ` on a top-level `key: scalar` line | no |
 | `json` | Ryujinx, shadPS4 | dotted path of objects, `hotkeys.screenshot` | typed scalar | no |
 | `toml` | melonDS, xemu | dotted path of tables and key, `Instance0.Firmware.Language` | typed scalar | after the table's last key; a missing table at the end |
+| `esde-xml` | ES-DE (`es_settings.xml`) | the `name` attribute, `ScrapeVideos` | typed by the element: `<bool>`, `<int>`, `<float>` or `<string>` | no |
 
 - `ini`: a key that appears twice in a section is `fixed` (PCSX2 writes `[Folders]SaveStates`
   twice; DuckStation repeats a hotkey that has several bindings). A section that appears
@@ -239,6 +244,23 @@ The contract, tested for every handler:
   tables, arrays, arrays of tables and multi-line values are `fixed` (xemu's
   `input.gamepad_mappings` spans several lines). The result must parse with `tomllib` to the
   expected values; scalars are written by `tomlw.py`, since `tomllib` only reads.
+
+- `esde-xml`: ES-DE's file is a flat list of `<bool name="Key" value="true" />`,
+  `<int ...>`, `<float ...>` and `<string ...>` elements after an XML declaration, with no
+  root element (`esde.parse_elements` checks it is well-formed). The key is the `name`
+  attribute; the value is the `value` attribute read as the tag says (`true` and `false`, an
+  integer, a finite number, the unescaped text). A write replaces only the text inside the
+  quotes of that attribute, escaped for the quote the element uses, so every other byte stays.
+  A layer value must have the kind of the element (a TOML boolean for `<bool>`, an integer for
+  `<int>`, a float for `<float>`, a string without control characters for `<string>`);
+  anything else is refused for that key, never coerced. The key is `fixed` when it is
+  repeated, its element has no `value` or one its tag does not allow, when it is
+  `CustomEventScripts` (provision owns it, see [ES-DE startup script](#es-de-startup-script)),
+  or when its name ends in `Directory`, `Dir`, `Path` or `Paths` (a place on this machine,
+  such as `ROMDirectory` and `MediaDirectory`): a layer that names one is reported as
+  "cannot write" and never applied. Comments and CDATA are not elements. Keys are not added:
+  ES-DE writes every setting it knows when it quits, so a key the file lacks is a typo or
+  belongs to a newer ES-DE, and adding it would only keep the typo in the file.
 
 Equality is typed (`1`, `1.0`, `true` and `"1"` all differ), which is exact for the raw
 formats and safe for the typed ones, since a value is always read back from the same
@@ -268,7 +290,7 @@ value still equals the snapshot).
 ## Apply
 
 `warpzone settings apply [--device NAME] [--emulator ID ...] [--dry-run] [--quiet]
-[--overwrite-local]` runs on the device, offline: it reads the local copy of `wz-settings`
+[--overwrite-local] [--when-idle]` runs on the device, offline: it reads the local copy of `wz-settings`
 and never calls Syncthing. Without `--device` the device is the configured one whose ID
 matches the local Syncthing, as for `prune`; the startup script always passes it.
 
@@ -369,8 +391,8 @@ find the config. Provisioning again with another config rewrites the script.
   not `true` (`event_scripts_enabled`, pure), it sets it, only while ES-DE is not running:
   ES-DE keeps its settings in memory and rewrites the file when it quits, so an edit made
   while it runs would be lost. ES-DE is detected as `apply` detects an emulator (`comm` and
-  the base name of `argv[0]`, names in `esde.ESDE_PROCESSES`: `es-de` and `ES-DE.AppImage`,
-  to be confirmed on a device). The edit (`enable_event_scripts`, pure) changes only the
+  the base name of `argv[0]`, names in `esde.ESDE_PROCESSES`: `es-de` and `ES-DE.AppImage`).
+  The edit (`enable_event_scripts`, pure) changes only the
   `value` of the existing `<bool name="CustomEventScripts" .../>` element, or adds that one
   line after the last `<bool .../>` line with its indentation and line ending; every other
   byte stays as it was, and the result must still parse as the same settings plus that one.
@@ -387,6 +409,70 @@ find the config. Provisioning again with another config rewrites the script.
 - The same mechanism installs `warpzone-links.sh` (for a device that lists `library` and whose profile has `[links.*]`), which runs `links sync` and so links the games that arrived since the last start before ES-DE lists them (see [Title links](/warpzone/development/design/title-links/)).
 - Apply runs once per ES-DE start, possibly before Syncthing has pulled the newest layers.
   What arrives later applies at the next start, or at once with `warpzone settings apply`.
+  ES-DE's own settings are not applied by this script, which runs while ES-DE is open, but by
+  the timer in [ES-DE settings](#es-de-settings).
+
+## ES-DE settings
+
+ES-DE's `es_settings.xml` is a settings file like the emulators' (profile emulator `esde`,
+file `es-settings`, handler `esde-xml`), so a choice such as *Scrape videos* can be shared
+from `common.toml`:
+
+```toml
+[esde.es-settings]
+ScrapeVideos = false
+```
+
+The profile marks as `known` the scraper's media toggles (`ScrapeVideos`, `ScrapeCovers`,
+`ScrapeScreenshots`, `ScrapeTitleScreens`, `Scrape3DBoxes`, `ScrapePhysicalMedia`,
+`ScrapeMarquees`, `ScrapeBackCovers`, `ScrapeFanArt`, `ScrapeManuals`), `ScraperRegion` and
+`ScraperLanguage`. Credentials (`Scraper*Username*`, `Scraper*Password*`) are `secret`: never
+captured, never applied, rejected in a layer. Paths (`*Directory`, `*Dir`, `*Path`, `*Paths`),
+window and screen settings and `CustomEventScripts` are `noise`, and the first and the last
+are also `fixed` by the handler, so no layer can move them. `CustomEventScripts` stays
+owned by `provision device`, which turns it on; a layered value for it is "cannot write".
+
+**Order.** ES-DE reads `es_settings.xml` once at startup and rewrites the whole file when it
+quits, so a key written while it runs is neither used in that session nor kept. `apply`
+therefore treats ES-DE like any other emulator: its `process` names are those of
+`esde.ESDE_PROCESSES` (`es-de`, `ES-DE.AppImage`), the same check `provision` uses before it
+touches the file, and a running ES-DE is skipped before the file is read and again right
+before the replace. The startup script runs `apply` while ES-DE is already running, so the
+`esde` entry is always skipped there (logged as running) and the other emulators go on as
+before. `capture` skips ES-DE while it runs for the same reason (its file may not hold its
+latest changes).
+
+**The timer.** ES-DE is a Steam app that is closed most of the time, so its keys are applied
+by a `systemd --user` timer, not by hand. `provision device` installs `warpzone-settings`
+(`OnBootSec=5min`, `OnUnitActiveSec=15min`, `Nice=10`) for a device that subscribes to
+`settings` and whose profile declares `esde`, and removes it for any other. The service runs
+
+```
+python -m warpzone settings apply --device NAME --emulator esde --when-idle --quiet
+```
+
+(plus `--config` when the config is not the default one). No existing timer exists on every
+device that has the `settings` group (the play state, artwork and prune timers each depend on
+their own folder or profile rule), so this one is its own. `--when-idle` is the unattended
+mode of `apply`:
+
+- The selected emulators that are running (ES-DE by `esde.ESDE_PROCESSES`, as above) are
+  left out before the lock is taken or any file is read. When none is left it ends with exit
+  0 and no trace at all. The guard is the same one every `apply` run has, and the write still
+  re-checks right before the replace.
+- A run that writes no key and finds no error leaves no log line, no backup and no
+  `last-apply.json`, so the log and the doctor's "last settings apply" keep describing the
+  last run that did something (the startup script's). Keys held or not writable are not a
+  trace either: the startup run and `audit` report them. A run that writes a key logs it
+  (emulator, file and key name, never a value) and records `last-apply.json` as usual, and an
+  invalid layer or a file that could not be written is logged and recorded.
+- The exit code is 0 whatever happened (a failure is in the log and `last-apply.json`, where
+  `doctor` reads it), so the unit never shows as failed; a usage or config error is still 2.
+  A run that finds the lock taken ends silently.
+
+A new key in the layers therefore reaches a console within about 15 minutes of Syncthing
+delivering it, if ES-DE is closed, or at the first tick after ES-DE quits; ES-DE reads it at
+its next start. Run `warpzone settings apply --emulator esde` for it to happen at once.
 
 ## Capture
 
