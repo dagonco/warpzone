@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, TypeVar
 
-from warpzone import __version__
+from warpzone import __version__, runners
 
 # RetroAchievements console ids (rcheevos `rc_consoles.h`, the numbers RAHasher and the web API
 # use), by the ES-DE system folder name under `library/roms/`. Only consoles RAHasher can hash
@@ -149,13 +149,7 @@ def hash_image(rahasher: str, system: str, path: Path, *, timeout: float = 3600)
     if console is None:
         return None
     try:
-        proc = subprocess.run(
-            [rahasher, str(console), str(path)],
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            check=False,
-        )
+        proc = runners.run_tool([rahasher, str(console), str(path)], timeout)
     except (OSError, subprocess.SubprocessError):
         return None
     lines = proc.stdout.strip().splitlines()

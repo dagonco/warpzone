@@ -18,7 +18,7 @@ from unittest import mock
 
 from inbox_support import CHDMAN, RAHASHER, age, make_hub, make_stub, stub_md5, write_dat
 from test_cli import run
-from warpzone import dat, inbox, inbox_core, ra
+from warpzone import dat, inbox, inbox_core, ra, runners
 from warpzone.config import InboxSettings
 from warpzone.dat import DiscGroup, Game, GameMatch, Rom
 from warpzone.inbox import (
@@ -732,13 +732,64 @@ class RunProcessGroupTests(unittest.TestCase):
         self.assertIs(ctx.exception, boom)
         self.assert_gone(self.child_pid())
 
+    @staticmethod
+    def killpg_then_eperm() -> mock.Mock:
+        """A `killpg` that kills the group and then fails as macOS does for a group that holds
+        only a zombie, so the stand-in tool still dies and the code sees the error."""
+        real = os.killpg
+
+        def killpg(pgid: int, sig: int) -> None:
+            real(pgid, sig)
+            raise PermissionError
+
+        return mock.Mock(side_effect=killpg)
+
+    def test_the_tool_has_a_session_of_its_own_and_no_controlling_terminal(self) -> None:
+        # Otherwise a tool that prompts on the terminal would be stopped for the whole limit.
+        proc = inbox_core.run_process(
+            [sys.executable, "-c", "import os; print(os.getsid(0))"], 10.0
+        )
+        self.assertNotEqual(int(proc.stdout), os.getsid(0))
+
+    def test_a_group_that_cannot_be_signalled_still_ends_in_the_timeout(self) -> None:
+        cmd = ["sh", "-c", SPAWNER, "sh", str(self.pidfile)]
+        with (
+            mock.patch.object(os, "killpg", self.killpg_then_eperm()),
+            self.assertRaises(inbox_core.ToolTimeout),
+        ):
+            inbox_core.run_process(cmd, 0.5)
+        self.assert_gone(self.child_pid())
+
+    def test_a_group_that_cannot_be_signalled_keeps_the_original_interruption(self) -> None:
+        cmd = ["sh", "-c", SPAWNER, "sh", str(self.pidfile)]
+
+        def interrupted(*args: object, **kwargs: object) -> tuple[str, str]:
+            self.child_pid()
+            raise KeyboardInterrupt
+
+        with (
+            mock.patch.object(subprocess.Popen, "communicate", interrupted),
+            mock.patch.object(os, "killpg", self.killpg_then_eperm()),
+            self.assertRaises(KeyboardInterrupt),
+        ):
+            inbox_core.run_process(cmd, 30.0)
+        self.assert_gone(self.child_pid())
+
+    def test_rahasher_is_killed_with_the_processes_it_started_and_gives_no_hash(self) -> None:
+        tool = Path(self._tmp.name) / "rahasher"
+        tool.write_text('#!/bin/sh\nsleep 60 & echo $! > "$2.tmp" && mv "$2.tmp" "$2"; wait\n')
+        tool.chmod(0o755)
+        # The path argument is where the stand-in writes the PID of its child.
+        self.assertIsNone(ra.hash_image(str(tool), "nes", self.pidfile, timeout=0.5))
+        self.assert_gone(self.child_pid())
+
     def test_a_process_outside_the_group_that_keeps_the_pipes_does_not_block_the_run(self) -> None:
         script = Path(self._tmp.name) / "escaper.py"
         script.write_text(ESCAPER)
         cmd = [sys.executable, str(script), str(self.pidfile)]
         started = time.monotonic()
         with (
-            mock.patch.object(inbox_core, "PIPE_DRAIN_SECONDS", 0.2),
+            mock.patch.object(runners, "PIPE_DRAIN_SECONDS", 0.2),
             self.assertRaises(inbox_core.ToolTimeout),
         ):
             inbox_core.run_process(cmd, 1.0)

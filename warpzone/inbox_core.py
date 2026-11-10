@@ -14,12 +14,10 @@ development/design/inbox.md.
 
 from __future__ import annotations
 
-import contextlib
 import hashlib
 import os
 import re
 import shutil
-import signal
 import subprocess
 import sys
 import time
@@ -31,7 +29,7 @@ from datetime import date
 from pathlib import Path
 from typing import Protocol
 
-from warpzone import ra, whitelist
+from warpzone import ra, runners, whitelist
 from warpzone.config import DEFAULT_TOOL_TIMEOUT_MINUTES, InboxSettings
 from warpzone.dat import DatLibrary, FileInfo
 from warpzone.errors import UsageError
@@ -336,56 +334,17 @@ def extract_zip(archive: Path, dest: Path) -> None:
         raise ItemFailure(f"{archive.name}: cannot unpack ({exc})") from exc
 
 
-PIPE_DRAIN_SECONDS = 2.0  # most a killed tool's pipes are read for; tests shorten it
-
-
-def kill_group(proc: subprocess.Popen[str], *, drain: bool) -> None:
-    """Kill the tool's whole process group, reap the tool and close its pipes (reading first
-    what is left in them when `drain`). Used for a tool that started in a group of its own,
-    so its pid is the id of the group."""
-    with contextlib.suppress(ProcessLookupError):  # the group is already gone
-        os.killpg(proc.pid, signal.SIGKILL)
-    try:
-        if drain:  # for no longer than a process outside the group may hold the pipes open
-            proc.communicate(timeout=PIPE_DRAIN_SECONDS)
-    except subprocess.TimeoutExpired:
-        pass
-    finally:
-        for pipe in (proc.stdout, proc.stderr):
-            if pipe is not None:
-                pipe.close()
-        proc.wait()
-
-
 def run_process(
     cmd: Sequence[str], timeout: float, *, stdin: int | None = None
 ) -> subprocess.CompletedProcess[str]:
     """Run a tool, capturing its output as text, for at most `timeout` seconds. A tool that
-    runs longer is killed together with every process it started (its process group) and
+    runs longer is killed together with every process it started (`runners.run_tool`) and
     `ToolTimeout` is raised, so a hung tool fails its item and the run (and the inbox lock)
-    goes on without anything still writing in the work folder. The group is killed too when
-    the wait is interrupted (Ctrl-C included), because a group of its own no longer gets the
-    terminal's signals."""
-    # process_group=0 only calls setpgid in the child; start_new_session would also drop the
-    # controlling terminal and make the tool a session leader, which it does not need.
-    proc = subprocess.Popen(
-        list(cmd),
-        stdin=stdin,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        errors="replace",
-        process_group=0,
-    )
+    goes on without anything still writing in the work folder."""
     try:
-        stdout, stderr = proc.communicate(timeout=timeout)
+        return runners.run_tool(cmd, timeout, stdin=stdin)
     except subprocess.TimeoutExpired as exc:
-        kill_group(proc, drain=True)
         raise ToolTimeout(timeout_reason(cmd[0], timeout)) from exc
-    except BaseException:
-        kill_group(proc, drain=False)
-        raise
-    return subprocess.CompletedProcess(proc.args, proc.returncode, stdout, stderr)
 
 
 def bsdtar_unpacked_size(bsdtar: str, archive: Path, timeout: float) -> int:
