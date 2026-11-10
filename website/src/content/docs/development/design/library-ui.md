@@ -36,8 +36,7 @@ These were decided before the design and are not reopened here:
    whitelist that names one.
 5. The progress of each console is read on the hub from `GET /rest/db/completion`; no console
    API key is needed.
-6. warpzone runs on the hub in a container (the same image planned for running `inbox` on the
-   hub).
+6. warpzone runs on the hub in a container (the same image `inbox` can run in on the hub).
 7. The catalog stores the RetroAchievements hash of each game and a cached copy of RA's game
    lists per console.
 8. A catalog index built by `warpzone catalog`, and updated by `inbox` when it files a game, is
@@ -1012,8 +1011,8 @@ warpzone runs on the hub in a container, because a NAS's own Python is often old
 image (`docker/Dockerfile`) is a slim official Python image pinned by digest, with warpzone
 installed from the checkout the image is built from (a release tag, as a wheel, with no index
 access) and RAHasher built with CHD support in a separate stage from RALibretro, pinned by tag and
-commit; only its binary reaches the last stage, at `/usr/local/bin/RAHasher` (the "inbox on the
-hub" work will add its tools to the same image). The entry point is `warpzone` and the default
+commit; only its binary reaches the last stage, at `/usr/local/bin/RAHasher` (the other tools of `inbox` are not in the image; see
+[where inbox runs](/warpzone/setup/inbox/#where-inbox-runs)). The entry point is `warpzone` and the default
 command `serve`, so `docker compose run --rm warpzone catalog ...` runs the other commands. The
 image runs as a non-root user and the Compose file sets `user:` to the uid and gid that own the
 games share. An example Compose file is `examples/compose.example.yaml`, and the steps are in

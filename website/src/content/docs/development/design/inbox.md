@@ -3,9 +3,23 @@ title: "Inbox"
 ---
 
 `warpzone inbox [--root PATH] [--dats PATH] [--work-dir PATH] [--apply]` files new
-games dropped in `inbox/` into `library/roms/<system>/`. It runs on a desktop that
-mounts the hub's share, because conversions are too heavy for a NAS, and it reads no
-Syncthing state. The contract:
+games dropped in `inbox/` into `library/roms/<system>/`. It reads no Syncthing state. It
+runs in one of two places, with the same code and the same contract:
+
+- **On a computer that mounts the hub's share** (the usual way, because conversions are
+  heavy for a NAS). The tools are installed there and found on `PATH` or at the `[inbox]`
+  paths; `--root` is the mount point on that computer.
+- **In the hub container** (`docker/Dockerfile`, see
+  [the container](/warpzone/development/design/library-ui/#the-container)). The tools are the
+  image's: RAHasher at `/usr/local/bin/RAHasher` (used only when `[inbox] rahasher` is set,
+  as everywhere) and, when the image gains them, others on its `PATH`. The hub root is
+  mounted at the same path as `[hub] root`, so `--root` is that path; the DATs and a work
+  folder are volumes (the container's `/tmp` is memory, and `HOME`, so the DAT cache, is
+  there too unless `XDG_CACHE_HOME` is moved). Nothing in `inbox` tells the two apart; only
+  `warpzone doctor` does, to check the right things (see
+  [Doctor](/warpzone/development/design/doctor/)).
+
+The contract:
 
 - **Layout.** `--root` (or `[inbox] root`) is the hub root as mounted on this machine:
   it must hold `inbox/` and `library/roms/`. Items are the top-level files and folders

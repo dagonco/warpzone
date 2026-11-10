@@ -109,8 +109,18 @@ G_FRONTEND = "Frontend"
 G_RA = "RetroAchievements"
 G_UPDATE = "Updates"
 G_INBOX = "Inbox"
-# The groups whose items only matter to the desktop that runs `warpzone inbox`.
-INBOX_GROUPS = (G_TOOLS, G_SWITCH, G_DATS, G_HUB, G_RA)
+G_WAY = "Where inbox runs"
+# The groups whose items only matter to the machine that runs `warpzone inbox`.
+INBOX_GROUPS = (G_WAY, G_TOOLS, G_SWITCH, G_DATS, G_HUB, G_RA)
+
+# `warpzone inbox` runs in one of two places: on a computer that mounts the hub's share (its
+# tools installed there) or in the hub container, whose image ships its own tools. Doctor tells
+# them apart by the files a container runtime leaves in the root of the container (Docker and
+# Podman), never by asking. See "Where inbox runs" in development/design/doctor.md.
+CONTAINER_MARKERS = ("/.dockerenv", "/run/.containerenv")
+# Where the hub image puts the tools it ships, by `ToolSpec.key` (docker/Dockerfile). Any other
+# tool the image gets is on its PATH.
+IMAGE_TOOL_PATHS: Mapping[str, str] = {"RAHasher": "/usr/local/bin/RAHasher"}
 
 # ------------------------------------------------------------------ install hints
 #
@@ -127,10 +137,17 @@ STEAMOS_ROOT = (
 )
 
 REPO_URL_LIBRETRO = "https://github.com/libretro/libretro-database"
-DAT_CLONE_HINT = (
+DAT_CLONE_COMMAND = (
     f"git clone --depth 1 --filter=blob:none --sparse {REPO_URL_LIBRETRO} && "
-    "git -C libretro-database sparse-checkout set metadat/redump metadat/no-intro; "
-    "then set dats_dir in [inbox] to the metadat folder of that clone"
+    "git -C libretro-database sparse-checkout set metadat/redump metadat/no-intro"
+)
+DAT_CLONE_HINT = (
+    f"{DAT_CLONE_COMMAND}; then set dats_dir in [inbox] to the metadat folder of that clone"
+)
+DAT_MOUNT_HINT = (
+    f"the image holds no DATs: run `{DAT_CLONE_COMMAND}` next to compose.yaml, mount that "
+    "folder into the container as a volume, and set dats_dir in [inbox] to its metadat "
+    "folder as the container sees it"
 )
 RAHASHER_BUILD = (
     "build it from https://github.com/RetroAchievements/RALibretro with CHD support: "
@@ -140,6 +157,14 @@ RAHASHER_BUILD = (
 )
 
 HintTable = Mapping[str, str]
+
+# The fix for a tool the hub image does not have: the install commands of the platform families
+# are for a computer, and a container's root is read-only and rebuilt from the image.
+IMAGE_MISSING_TOOL = (
+    "this hub image does not ship it: run `warpzone inbox` on a computer that mounts the "
+    "hub's share (install the tool there), or build the image with it "
+    "(https://dagonco.github.io/warpzone/setup/inbox/#where-inbox-runs)"
+)
 
 CHDMAN_HINTS: HintTable = {
     "macos": "brew install rom-tools",
@@ -623,6 +648,11 @@ def _list_tree(path: Path) -> list[str]:
     return sorted(found)
 
 
+def _in_container() -> bool:
+    """Whether this process runs in a container (a runtime marker in the root)."""
+    return any(os.path.exists(marker) for marker in CONTAINER_MARKERS)
+
+
 def _disk_free(path: Path) -> tuple[int, int]:
     """(total, free) bytes of the volume holding `path`."""
     usage = shutil.disk_usage(path)
@@ -653,6 +683,7 @@ class Probes:
     read_text: Callable[[Path], str] = _read_text
     list_tree: Callable[[Path], list[str]] = _list_tree
     disk_free: Callable[[Path], tuple[int, int]] = _disk_free
+    in_container: Callable[[], bool] = _in_container
 
     @property
     def family(self) -> str:
@@ -2341,12 +2372,22 @@ def _configured_path(spec: ToolSpec, settings: InboxSettings) -> str | None:
     return getattr(settings, spec.setting) if spec.setting in INBOX_KEYS else None
 
 
+def known_tool_paths(spec: ToolSpec, container: bool) -> tuple[str, ...]:
+    """Where `spec` may sit without being on PATH: the places an installer uses on a computer,
+    and in the hub container the path the image puts it at. Pure."""
+    image = IMAGE_TOOL_PATHS.get(spec.key)
+    if container:
+        return (image, *spec.known_paths) if image else spec.known_paths
+    return spec.known_paths
+
+
 def check_tool(ctx: Context, spec: ToolSpec) -> Result:
     p = ctx.probes
     inbox = ctx.inbox_configured
     required = spec.required_for_inbox and inbox
     missing = FAIL if required else OPTIONAL
-    hint = hint_for(spec.hints, p.family)
+    container = p.in_container()
+    hint = IMAGE_MISSING_TOOL if container else hint_for(spec.hints, p.family)
     where = "required by inbox" if required else spec.purpose
     configured = _configured_path(spec, ctx.config.settings)
     program = spec.executable or (lambda path: path)
@@ -2377,7 +2418,7 @@ def check_tool(ctx: Context, spec: ToolSpec) -> Result:
                 f"found on PATH, but inbox only uses {spec.key} when [inbox] {spec.setting} is set"
             )
         if not path:
-            for raw in spec.known_paths:
+            for raw in known_tool_paths(spec, container):
                 known = expand_home(raw, p.home)
                 if p.is_executable(known):
                     return Result(
@@ -2404,7 +2445,10 @@ def check_tool(ctx: Context, spec: ToolSpec) -> Result:
             G_TOOLS,
             FAIL,
             f"{path} cannot be run ({reason})",
-            f"reinstall it for this machine ({p.machine or 'this architecture'}): {hint}",
+            "build the image again for this machine's architecture "
+            f"({p.machine or 'unknown'}), or run inbox on a computer"
+            if container
+            else f"reinstall it for this machine ({p.machine or 'this architecture'}): {hint}",
         )
     line = _first_line(out.output)
     if not _VERSION.search(line):
@@ -2414,7 +2458,7 @@ def check_tool(ctx: Context, spec: ToolSpec) -> Result:
             G_TOOLS,
             WARN,
             f"{path} ran but printed no recognizable version{shown}",
-            f"check that it is the right program; to reinstall: {hint}",
+            "check that it is the right program" + ("" if container else f"; to reinstall: {hint}"),
         )
     if note:
         return Result(
@@ -2440,7 +2484,7 @@ def check_dats(ctx: Context) -> list[Result]:
     dats_dir = ctx.config.settings.dats_dir
     inbox = ctx.inbox_configured
     missing = FAIL if inbox else OPTIONAL
-    clone = DAT_CLONE_HINT
+    clone = DAT_MOUNT_HINT if p.in_container() else DAT_CLONE_HINT
     if not dats_dir:
         return [
             Result(
@@ -2627,7 +2671,8 @@ def check_hub(ctx: Context) -> list[Result]:
     if not root:
         hub_root = ctx.config.hub_root
         if hub_root and p.is_dir(Path(hub_root)):
-            root, level, source = hub_root, WARN, "[hub] root (this machine looks like the hub)"
+            where = "mounted in this container" if p.in_container() else "this machine is the hub"
+            root, level, source = hub_root, WARN, f"[hub] root ({where})"
         else:
             return [
                 Result(
@@ -2684,6 +2729,75 @@ def check_hub(ctx: Context) -> list[Result]:
     return results
 
 
+def check_inbox_way(ctx: Context) -> list[Result]:
+    """Which way `inbox` would run here, and what that way needs besides the tools: in the hub
+    container the hub root is [hub] root, the DATs and the work folder have to be mounted, and
+    the work folder must not be the container's memory-backed /tmp. Only with an [inbox] table."""
+    if not ctx.inbox_configured:
+        return []
+    p = ctx.probes
+    settings = ctx.config.settings
+    if not p.in_container():
+        return [
+            Result(
+                "Where inbox runs",
+                G_WAY,
+                OK,
+                "on a computer: tools come from the [inbox] paths or PATH, the hub's share "
+                "must be mounted here",
+            )
+        ]
+    results = [
+        Result(
+            "Where inbox runs",
+            G_WAY,
+            OK,
+            "in the hub container: tools come from the image; paths in [inbox] are paths "
+            "inside the container",
+        )
+    ]
+    hub_root = ctx.config.hub_root
+    if not settings.root and hub_root:
+        results.append(
+            Result(
+                "Hub root for inbox",
+                G_WAY,
+                WARN,
+                "[inbox] root is not set; inbox needs it (or --root) even though the hub "
+                "root is mounted here",
+                f'set root = "{hub_root}" in the [inbox] table: the hub root is mounted at '
+                "the same path as [hub] root",
+            )
+        )
+    work = settings.work_dir
+    if not work:
+        results.append(
+            Result(
+                "Work folder",
+                G_WAY,
+                WARN,
+                "work_dir is not set; inbox would unpack and convert in /tmp, which is "
+                "memory in the container (a few GiB per game)",
+                "mount a folder with room (the compose file's volumes) and set work_dir in "
+                "[inbox] to it",
+            )
+        )
+    elif not p.is_dir(Path(work)):
+        results.append(
+            Result(
+                "Work folder",
+                G_WAY,
+                WARN,
+                f"{work} does not exist in this container",
+                "mount a folder at that path (the compose file's volumes), or point work_dir "
+                "at one that is mounted",
+            )
+        )
+    else:
+        results.append(Result("Work folder", G_WAY, OK, work))
+    return results
+
+
 def check_ra(ctx: Context) -> list[Result]:
     # The value is never read into a result: only whether it is there.
     if ctx.probes.env.get(ra.KEY_ENV):
@@ -2715,7 +2829,8 @@ def collapse_inbox(results: Sequence[Result]) -> list[Result]:
             G_INBOX,
             OK,
             f"not set up on this machine ({hidden} optional item(s) not listed): only the "
-            "desktop that runs `warpzone inbox` needs its tools, Switch titledb and keys, "
+            "machine that runs `warpzone inbox` (a computer or the hub container) needs its "
+            "tools, Switch titledb and keys, "
             "DATs, hub folder and RetroAchievements key",
             "add an [inbox] table to the config to check them here "
             "(see examples/config.example.toml)",
@@ -2737,6 +2852,7 @@ CHECKS: tuple[Callable[[Context], list[Result]], ...] = (
     check_play_state,
     check_update_timer,
     check_updater,
+    check_inbox_way,
     check_tools,
     check_switch,
     check_dats,
