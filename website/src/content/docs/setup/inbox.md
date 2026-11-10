@@ -73,7 +73,7 @@ Add a service for it to `compose.yaml`, next to `warpzone`. It repeats the mount
       - no-new-privileges:true
     mem_limit: 2g                   # more than the server: conversions and archives
     volumes:
-      - /volume1/games:/volume1/games     # the hub root, read-write, same path as [hub] root
+      - /volume1/games:/volume1/games     # the hub root (a Synology path as an example), read-write, same path as [hub] root
       - ./config:/config:ro
       - ./dats:/dats:ro                   # a clone of libretro-database (see below)
       - ./work:/work                      # unpacked archives and conversions: room for a few GiB
@@ -87,7 +87,7 @@ In the same `config.toml` the container reads (`/config/config.toml`):
 
 ```toml
 [inbox]
-root = "/volume1/games"                       # the hub root as mounted in the container
+root = "/volume1/games"                       # the hub root as mounted in the container (example path)
 dats_dir = "/dats/libretro-database/metadat"  # redump/ and no-intro/ inside
 work_dir = "/work/tmp"
 rahasher = "/usr/local/bin/RAHasher"          # optional
