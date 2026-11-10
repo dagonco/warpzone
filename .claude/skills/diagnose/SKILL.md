@@ -27,6 +27,7 @@ Never print API keys or the config's secrets. Show the commands you ran and the 
    |---|---|
    | Missing inbox tool or DATs | the install command printed under `fix:` |
    | ES-DE startup script, artwork timer, play-state timer, shadPS4 launcher missing or stale | `warpzone provision device <device>` with ES-DE closed |
+   | `shadPS4 version` warns or fails (no version in the Qt launcher) | not a warpzone command: ask the user to open the shadPS4 Qt launcher, Version Manager, download and select a version; failed launches are in `~/.local/state/warpzone/shadps4-launch.log` |
    | Vita3K links dangling or missing | `warpzone links sync <device>` with Vita3K closed |
    | Artwork gamelists stale | `warpzone frontend refresh <device>` with the frontend closed |
    | Unapplied or held-back emulator settings | `warpzone settings audit` (read only) first, then `settings apply` or `settings capture` |

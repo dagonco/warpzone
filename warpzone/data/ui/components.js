@@ -222,6 +222,28 @@
   const slots = (ref) => h('div', { class: 'slots' }, S.devices.map((d) => slotBtn(ref, d)));
   const paintSlots = (root) => { for (const b of $$('.slot', root)) paintSlot(b); };
 
+  // ===== the play queue's mark =============================================================
+
+  // A small "Queued" (or "Playing") mark for a game in the play queue. It is always built and
+  // hidden when the game is not queued, so paintQueueMarks can show and hide it in place when
+  // the queue changes.
+  function queueMark(id) {
+    const mark = h('span', { class: 'q-mark', dataset: { qid: id }, hidden: true });
+    paintQueueMark(mark);
+    return mark;
+  }
+
+  function paintQueueMark(el) {
+    const e = S.queueById.get(el.dataset.qid);
+    el.hidden = !e;
+    if (e) {
+      el.textContent = e.shown === 'playing' ? 'Playing' : 'Queued';
+      el.title = 'In your play queue';
+    }
+  }
+
+  const paintQueueMarks = (root) => { for (const el of $$('[data-qid]', root)) paintQueueMark(el); };
+
   // ===== tiles =============================================================================
 
   // `g` is a compact game of a system list. The title shows the name without its tags and the
@@ -238,6 +260,7 @@
           g.ra === 'supported' ? h('span', { class: 'b-ra', title: RA_TEXT.supported }, icon('trophy'), 'RA') : null,
           playMarks(g.play),
           regionChip(g.region && g.region.length ? g.region : t.region),
+          queueMark(g.id),
           o.sys ? h('span', { class: 'b-sys', title: systemName(system) }, systemCode(system)) : null),
         h('span', { class: 't' }, t.name),
         h('span', { class: 's' }, sub || ' ')),
@@ -425,6 +448,7 @@
   W.ui = {
     gameHref, systemHref, systemTint, artBox, regionChip, raBadge, RA_TEXT,
     statusOf, paintProgress, pnode, segs, led,
+    queueMark, paintQueueMarks,
     devicesOf, paintSlot, paintSlots, slotBtn, slots, tile, resumeCard, recCard, diskMeter, playMarks, skeletonTiles,
     leverModel, lever, sysCard,
   };

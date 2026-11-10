@@ -28,6 +28,12 @@
     ra: null,               // the RetroAchievements records (/ra/summary), or null when there are none
     recs: null,             // {unfinished: [...], similar: {to, games} | null} (/recommendations), or null when both are empty
     searchResult: null,     // {q, groups} from the API
+    queue: null,            // the play queue (/queue), or null until it loaded
+    queueError: false,      // the last load of the queue failed
+    queueAt: 0,             // when it loaded, in ms
+    queueHistory: 50,       // how many ended entries to ask for (the "show all" of the history raises it)
+    queueById: new Map(),   // game id -> its active entry
+    queueEnded: new Map(),  // game id -> its latest ended entry (of the history loaded)
     detail: null,           // {id, data}: the game page being shown
     busy: false,
   };
@@ -42,6 +48,7 @@
     confirmSystem() { return Promise.resolve(false); },
     openHistory(deviceName) {}, // the backups of a console's whitelist, with a restore
     reset() {},             // the whole catalog was loaded again: drop what was derived from it
+    queueChanged() {},      // the queue loaded or changed
   };
 
   const ensureArray = (x, key) => (Array.isArray(x) ? x : x && Array.isArray(x[key]) ? x[key] : []);
@@ -170,11 +177,50 @@
     S.byId.clear();
     S.listLoads.clear();
     try { await Promise.all([loadDevices(), loadSystems(), loadCatalog()]); } catch (err) { await handleError(err, true); return; }
+    loadQueue();
     hooks.reset();
     hooks.devicesChanged();
     hooks.refresh();
     preloadLists();
   }
+
+  // ===== the play queue ====================================================================
+
+  // The queue is the one piece of state the server keeps that is not a whitelist (see
+  // development/design/play-queue.md). The page loads it, shows it, and sends operations with the
+  // etag it saw; every decision (states, views, what a release does) is the server's.
+  function setQueue(q) {
+    S.queue = q;
+    S.queueError = false;
+    S.queueById = new Map(ensureArray(q, 'entries').map((e) => [e.id, e]));
+    S.queueEnded = new Map();
+    for (const e of ensureArray(q, 'history')) if (!S.queueEnded.has(e.id)) S.queueEnded.set(e.id, e);
+  }
+
+  let queueLoad = null;
+  let queueGen = 0; // bumped by a write, so a load that was already on its way cannot undo it
+
+  function loadQueue() {
+    if (queueLoad) return queueLoad;
+    const gen = queueGen;
+    queueLoad = api.queue(S.queueHistory).then((q) => { if (gen === queueGen) setQueue(q); }, (err) => {
+      if (err.code !== 'unauthorized') S.queueError = true;
+    }).then(() => {
+      queueLoad = null;
+      S.queueAt = Date.now();
+      hooks.queueChanged();
+    });
+    return queueLoad;
+  }
+
+  // Load the queue unless it was loaded less than `maxAgeMs` ago.
+  function ensureQueue(maxAgeMs) {
+    if (S.queue && !S.queueError && Date.now() - S.queueAt < maxAgeMs) return Promise.resolve();
+    return loadQueue();
+  }
+
+  // The queue can be changed only when its file is readable (a damaged or newer file is never overwritten).
+  const queueUsable = () => !!S.queue && (S.queue.state === 'ok' || S.queue.state === 'absent');
 
   // ===== what the data says ================================================================
 
@@ -318,6 +364,12 @@
     progressSoon();
   }
 
+  // A switch or a lever changes what the queue's claims look like (a game turned off by hand is
+  // "not on the console yet"), and the server works that out: ask for the queue again.
+  function afterSwitch() {
+    if (S.queue) loadQueue();
+  }
+
   function skippedNote(res) {
     const sk = (res && res.skipped) || [];
     if (!sk.length) return '';
@@ -333,6 +385,7 @@
         expect: expectFor(names), dry_run: false,
       });
       await afterWrite(res);
+      afterSwitch();
       const where = deviceName === '*' ? 'all consoles' : deviceName;
       toast(`${on ? 'Added' : 'Removed'} "${game.title}" ${on ? 'to' : 'from'} ${where}.` + skippedNote(res), 'ok');
       hooks.detailChanged(game.id);
@@ -351,10 +404,55 @@
       // The etags may have moved while the dialog was open: use the current ones.
       const res = await api.changes({ ...body, expect: expectFor(names), dry_run: false });
       await afterWrite(res);
+      afterSwitch();
       await ensureList(sys, true);
       S.searchResult = null;
       hooks.refresh();
       toast(`${systemName(sys)} is now ${on ? 'on' : 'off'} for ${deviceName === '*' ? 'all consoles' : deviceName}.` + skippedNote(res), 'ok');
+    });
+  }
+
+  // The consoles a list of queue operations reads or writes (a `keep` only ends a claim).
+  function queueTouched(ops) {
+    const names = new Set();
+    for (const op of ops) {
+      for (const n of [...(op.devices || []), ...(op.add || []), ...(op.release || []), op.device]) if (n) names.add(n);
+    }
+    return Array.from(names);
+  }
+
+  function queueBody(ops, dry) {
+    return { ops, expect_queue: S.queue.etag, expect: expectFor(queueTouched(ops)), dry_run: dry };
+  }
+
+  // A dry run of queue operations: {res} with what each console would do, or {error}.
+  async function queueDry(ops) {
+    if (!queueUsable()) return { error: new ApiError(409, 'queue-damaged', '') };
+    try { return { res: await api.queueChange(queueBody(ops, true)) }; } catch (err) { return { error: err }; }
+  }
+
+  // Apply queue operations in one request: the queue is written first, then the whitelists they
+  // imply. Resolves the server's answer, or null after an error (already shown, and the queue and
+  // the consoles loaded again; a failure after the queue was written leaves entries the page
+  // shows with their repair buttons).
+  function queueRun(ops) {
+    if (!queueUsable()) { toast('The queue is not available, so it cannot be changed.', 'error'); return Promise.resolve(null); }
+    return guarded(async () => {
+      let res;
+      try {
+        res = await api.queueChange(queueBody(ops, false));
+      } catch (err) {
+        await loadQueue();
+        throw err;
+      }
+      setQueue(res.queue);
+      queueGen++;
+      // The answer lists the ended entries by default; keep the longer history the user asked for.
+      if (S.queueHistory !== 50) await loadQueue();
+      if (res.devices && res.devices.length) await afterWrite(res);
+      else hooks.refresh();
+      hooks.queueChanged();
+      return res;
     });
   }
 
@@ -419,6 +517,7 @@
     loadDevices, loadCatalog, loadSystems, loadHomeExtras, ensureList, preloadLists, reloadAll,
     device, system, excludes, isManaged, allBlocked, gameState, coverage, holdings, patchState,
     schedulePoll, pollProgress, progressSoon,
+    loadQueue, ensureQueue, queueUsable, queueDry, queueRun, skippedNote,
     changeGame, changeSystem, restoreBackup, watchCatalog, refreshCatalog, plural,
   };
 })();

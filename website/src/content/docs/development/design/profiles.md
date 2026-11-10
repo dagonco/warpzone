@@ -319,6 +319,15 @@ write that fails if the file changed meanwhile. `doctor` compares the script wit
 `provision` would write and reads the rule. The ES-DE startup scripts do not depend on any of
 this: if EmuDeck puts its entry back, only PS4 launching goes back to the Qt launcher.
 
+ES-DE shows nothing of a script's stderr, so every error the script ends with (no version,
+no `Exec=` line, a shortcut it cannot read) is also appended, with a timestamp, to
+`~/.local/state/warpzone/shadps4-launch.log` (`$XDG_STATE_HOME/warpzone/` when that is an
+absolute path; a log that cannot be written is ignored) and shown in a dialog when
+`DISPLAY` or `WAYLAND_DISPLAY` is set: `zenity --error`, else `kdialog --error`, else
+`notify-send`, all under `timeout 60` where `timeout` exists, so the script never waits for
+ever. None of them is a dependency; with none the error stays on stderr. `shadps4.select_version`
+is the pure twin of the script's lookup, used by `doctor` (`shadPS4 version`).
+
 ## Cemu paths
 
 Cemu keeps its installs and saves below the MLC folder, `<mlc_path>` in

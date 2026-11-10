@@ -16,6 +16,7 @@
   <script src="kit.js" defer></script>
   <script src="store.js" defer></script>
   <script src="components.js" defer></script>
+  <script src="queue.js" defer></script>
   <script src="views.js" defer></script>
   <script src="app.js" defer></script>
 </head>
@@ -70,6 +71,9 @@
 
   <!-- The earlier versions of a console's whitelist, with the diff and a restore. -->
   <dialog id="history" class="modal history" aria-labelledby="history-title"></dialog>
+
+  <!-- The play queue's dialogs: which consoles to queue a game for, what to turn off when it ends, a relink. -->
+  <dialog id="queue-dialog" class="modal q-dialog" aria-labelledby="queue-dialog-title"></dialog>
 
   <!-- The token form. It cannot be dismissed: nothing works without a session. -->
   <dialog id="login" class="modal login" aria-labelledby="login-title">
