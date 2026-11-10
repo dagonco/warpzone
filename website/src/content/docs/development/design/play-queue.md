@@ -4,8 +4,8 @@ title: "Play queue"
 
 **Status: implemented: the file, the inferred states, the HTTP API and the page (the Queue
 panel of the game page, the Up next section).** This is the design of the play queue of the
-[library UI](/warpzone/development/design/library-ui/), with the maintainer's answers to the
-review's questions recorded in [Decisions](#decisions). It is the contract for the code in
+[library UI](/warpzone/development/design/library-ui/), with its choices recorded in
+[Decisions](#decisions). It is the contract for the code in
 `queue.py`, `queue_store.py`, the two routes of `serve.py` and `data/ui/queue.js`.
 [Implementation notes](#implementation-notes) lists the places where the code settled something
 the design left open, and [The page](#the-page) the same for the UI.
@@ -23,8 +23,7 @@ a rule for how a queue change and a whitelist change compose.
 
 ## Decisions
 
-These are the choices of this design. Items 1, 3, 6, 7, 10 and 11 were confirmed by the
-maintainer in review.
+These are the choices of this design.
 
 1. Every entry and every collection carries an `owner` from format `1`. The UI has one shared
    token and no users (see [Authentication](/warpzone/development/design/library-ui/#authentication)),
@@ -612,8 +611,8 @@ the data and the writes in `store.js` and the tile mark in `components.js`):
 
 - Users themselves (logins, roles, a token per person): the file carries owners from format `1`,
   but the server knows only `default` until users exist.
-- Editing collections, and any whitelist effect of a collection ("send this collection to the
-  deck"). The schema is reserved; the routes come later.
+- Editing collections, and any whitelist effect of a collection ("send this collection to a
+  console"). The schema is reserved; the routes come later.
 - Per-game download progress (see [Progress](/warpzone/development/design/library-ui/#progress)).
 - A command-line `warpzone queue`. The file can be read with any JSON tool; only `serve` writes
   it.

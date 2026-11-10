@@ -7,7 +7,7 @@ Short answers to common questions. For something that is not working, see [Troub
 
 ## Why Syncthing?
 
-warpzone is a thin layer of conventions and automation on top of [Syncthing](https://syncthing.net). It never moves game data itself: it only configures Syncthing and keeps each device's copy honest. Syncthing already gives what the design needs: folders that are receive-only on a console (so a delete there can never reach the hub), folders that sync both ways (saves, settings), ignore patterns that work as a per-device whitelist, and versioning on the hub. See [concepts](/warpzone/overview/concepts/).
+warpzone is a thin layer of conventions and automation on top of [Syncthing](https://syncthing.net). Syncthing does all the transfer between machines; warpzone configures it, files new games into the hub's library and removes from a device what its whitelist no longer allows. Syncthing already gives what the design needs: folders that are receive-only on a console (so a delete there can never reach the hub), folders that sync both ways (saves, settings), ignore patterns that work as a per-device whitelist, and versioning on the hub. See [concepts](/warpzone/overview/concepts/).
 
 ## Does warpzone download games or BIOS files?
 

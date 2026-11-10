@@ -85,7 +85,7 @@ export default defineConfig({
                 { label: 'BIOS check', slug: 'development/design/bios' },
                 { label: 'Inbox', slug: 'development/design/inbox' },
                 { label: 'Library UI', slug: 'development/design/library-ui' },
-                { label: 'Play queue (proposed)', slug: 'development/design/play-queue' },
+                { label: 'Play queue', slug: 'development/design/play-queue' },
                 { label: 'Emulator settings', slug: 'development/design/emulator-settings' },
                 { label: 'Doctor', slug: 'development/design/doctor' },
                 { label: 'Self-update', slug: 'development/design/self-update' },

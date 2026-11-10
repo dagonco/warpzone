@@ -134,7 +134,7 @@ It reads `~/.local/state/warpzone/updater/conf` and keeps its state in `state` a
 
 It only moves a checkout that is on a release tag or on a clean branch contained in `origin/main`. A branch with commits of its own, a loose commit or a tree with changes is left exactly as it is (the script never runs `reset`, `stash` or `clean`) and only gets `provision device --unattended` once per boot. An `index.lock` older than 10 minutes with no `git` running is removed.
 
-Without a key in the allowed-signers file (the repository ships it with comments only) no signature is required and the log says so; `warpzone doctor` warns about it.
+The `allowed_signers` file lists the project's release key. When the version a device runs has a file without a key (or none, as in a release that predates it), no signature is required and the log says so; `warpzone doctor` warns about it until the device has run a version that lists a key.
 
 ### Channel and pin
 
