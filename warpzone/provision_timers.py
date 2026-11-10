@@ -5,7 +5,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from warpzone import artwork, safefile
+from warpzone import safefile, timers
 from warpzone.config import Device
 from warpzone.probes import REAL_PROBES, DeviceProbes
 from warpzone.profiles import Profile
@@ -42,11 +42,11 @@ def ensure_artwork_timer(
             f"`updater.sh install {name}`, which provisions from a venv"
         )
         return
-    service, timer = artwork.render_units(
+    service, timer = timers.render_artwork_units(
         python, name, script_config(config_path, home), art.refresh
     )
     _install_timer(
-        artwork.UNIT_NAME,
+        timers.ARTWORK_UNIT,
         service,
         timer,
         art.refresh,
@@ -86,11 +86,11 @@ def ensure_play_state_timer(
             f"`updater.sh install {name}`, which provisions from a venv"
         )
         return
-    service, timer = artwork.render_play_state_units(
+    service, timer = timers.render_play_state_units(
         python, name, script_config(config_path, home), rule.refresh
     )
     _install_timer(
-        artwork.PLAY_STATE_UNIT,
+        timers.PLAY_STATE_UNIT,
         service,
         timer,
         rule.refresh,
@@ -122,7 +122,7 @@ def ensure_prune_timer(
     second run makes no systemctl call.
     """
     if not device.prunes_unattended:
-        _remove_timer(artwork.PRUNE_UNIT, "prune", home, rep, dry_run, probes.user_systemctl)
+        _remove_timer(timers.PRUNE_UNIT, "prune", home, rep, dry_run, probes.user_systemctl)
         return
     python = python or sys.executable
     if not probes.import_check(python):
@@ -132,12 +132,12 @@ def ensure_prune_timer(
             f"`updater.sh install {name}`, which provisions from a venv"
         )
         return
-    service, timer = artwork.render_prune_units(python, name, script_config(config_path, home))
+    service, timer = timers.render_prune_units(python, name, script_config(config_path, home))
     _install_timer(
-        artwork.PRUNE_UNIT,
+        timers.PRUNE_UNIT,
         service,
         timer,
-        artwork.PRUNE_INTERVAL,
+        timers.PRUNE_INTERVAL,
         "prune",
         home,
         rep,
@@ -169,8 +169,8 @@ def ensure_settings_timer(
     "ES-DE settings"). The units run the Python that runs this command, are rewritten only when
     their text differs, and a second run makes no systemctl call.
     """
-    if "settings" not in device.folders or artwork.SETTINGS_EMULATOR not in profile.settings:
-        _remove_timer(artwork.SETTINGS_UNIT, "settings", home, rep, dry_run, probes.user_systemctl)
+    if "settings" not in device.folders or timers.SETTINGS_EMULATOR not in profile.settings:
+        _remove_timer(timers.SETTINGS_UNIT, "settings", home, rep, dry_run, probes.user_systemctl)
         return
     python = python or sys.executable
     if not probes.import_check(python):
@@ -180,12 +180,12 @@ def ensure_settings_timer(
             f"`updater.sh install {name}`, which provisions from a venv"
         )
         return
-    service, timer = artwork.render_settings_units(python, name, script_config(config_path, home))
+    service, timer = timers.render_settings_units(python, name, script_config(config_path, home))
     _install_timer(
-        artwork.SETTINGS_UNIT,
+        timers.SETTINGS_UNIT,
         service,
         timer,
-        artwork.SETTINGS_INTERVAL,
+        timers.SETTINGS_INTERVAL,
         "settings",
         home,
         rep,

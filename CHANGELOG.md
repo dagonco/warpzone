@@ -9,6 +9,7 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 ### Fixed
 
 - `warpzone inbox` checks the free space before it unpacks or expands a big file, as it already did for a `.zip`. A `.7z` or `.rar` (the sizes come from `bsdtar -tvf`), a `.gcz` GameCube image (the size comes from its header) and a `.nsz` (at least its own size, as the exact one is not known) that does not fit in the work folder goes to review instead of filling the disk, which in the hub container can be the volume that holds the library. An archive with a member name that is not UTF-8 no longer stops the whole run with a traceback. See [Untrusted content](https://dagonco.github.io/warpzone/development/design/inbox/).
+- The background timers `provision device` installs (frontend refresh, play state, prune and ES-DE settings) no longer break on a path that holds a `$`. Their `ExecStart=` line doubled `%` but not `$`, which systemd expands (`$NAME`, `${NAME}`), so a Python or `--config` path with a `$` in it did not reach the command as written; all four now quote like the updater's unit does. Their services also run with `IOSchedulingClass=idle` (they already had `Nice=10`), so a background run does not compete with a game for the disk on schedulers that honour it. The next `provision device` rewrites the units of a console that has the old ones. See [Frontend artwork](https://dagonco.github.io/warpzone/development/design/frontend-artwork/).
 
 ### Security
 
