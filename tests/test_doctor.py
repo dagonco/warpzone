@@ -13,7 +13,7 @@ from unittest import mock
 
 from support import API_KEY, DECK_ID, HUB_ID
 from test_cli import run
-from warpzone import __version__, doctor, esde, selfupdate, updatetimer
+from warpzone import __version__, doctor, esde, prune, selfupdate, updatetimer
 from warpzone.doctor import (
     FAIL,
     GIB,
@@ -33,6 +33,7 @@ from warpzone.doctor import (
     check_flycast,
     check_game_mode,
     check_hub,
+    check_prune_guard,
     check_ra,
     check_settings,
     check_switch,
@@ -50,6 +51,7 @@ from warpzone.doctor import (
     judge_flycast_vmus,
     judge_game_mode,
     judge_last_apply,
+    judge_prune_guard,
     judge_settings_layers,
     judge_unit_state,
     judge_update_timer,
@@ -2052,6 +2054,100 @@ class UpdaterCheckTests(TmpCase):
 
     def test_runs_with_the_other_checks(self) -> None:
         self.assertIn(check_updater, doctor.CHECKS)
+
+
+class PruneGuardJudgeTests(unittest.TestCase):
+    def judge(self, text, now=NOW):
+        return judge_prune_guard(text, now=now, device="deck")
+
+    def refusal(self, when=NOW - 7200, folders=None):
+        return prune.render_guard_state(folders or {"wz-library": (80 * 1024, 100 * 1024)}, when)
+
+    def test_no_file_is_ok(self) -> None:
+        status, _, fix = self.judge(None)
+        self.assertEqual((status, fix), (OK, ""))
+
+    def test_a_refusal_is_a_warning_with_the_review_and_apply_hint(self) -> None:
+        status, detail, fix = self.judge(self.refusal())
+        self.assertEqual(status, WARN)
+        self.assertIn("2 hour(s)", detail)
+        self.assertIn("wz-library would lose 80.0 KiB of the 100.0 KiB it holds", detail)
+        self.assertIn("`warpzone prune deck`", fix)
+        self.assertIn("`warpzone prune deck --apply` by hand", fix)
+
+    def test_it_counts_days_after_the_first_day(self) -> None:
+        self.assertIn("3 day(s)", self.judge(self.refusal(NOW - 3 * 86400 - 5))[1])
+
+    def test_every_folder_that_was_held_back_is_named(self) -> None:
+        folders = {"wz-library": (9, 10), "wz-songs": (5, 5)}
+        detail = self.judge(self.refusal(folders=folders))[1]
+        self.assertIn("wz-library", detail)
+        self.assertIn("wz-songs", detail)
+
+    def test_a_clock_that_went_back_does_not_give_a_negative_age(self) -> None:
+        self.assertIn("0 hour(s)", self.judge(self.refusal(NOW + 600))[1])
+
+    def test_an_unreadable_file_is_a_warning(self) -> None:
+        status, detail, fix = self.judge("not json")
+        self.assertEqual(status, WARN)
+        self.assertIn("cannot be read", detail)
+        self.assertIn("warpzone prune deck --apply", fix)
+
+
+class PruneGuardCheckTests(TmpCase):
+    def setUp(self) -> None:
+        super().setUp()
+        self.home = self.tmp / "home"
+        folder = self.home / ".config/syncthing"
+        folder.mkdir(parents=True)
+        (folder / "config.xml").write_text(
+            f'<configuration><folder id="wz-library" path="{self.home}/Emulation/">'
+            f'<device id="{HUB_ID}"/></folder><device id="{DECK_ID}" name="x"/>'
+            f"<gui><address>127.0.0.1:8384</address><apikey>{ST_KEY}</apikey></gui>"
+            "</configuration>"
+        )
+        self.config = FULL.replace(
+            "BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB", DECK_ID
+        )
+        self.state = prune.guard_state_path(self.home / ".local/state/warpzone")
+
+    def check(self, **kw):
+        return check_prune_guard(
+            context(
+                self.tmp,
+                kw.pop("config", self.config),
+                system="Linux",
+                home=self.home,
+                now=lambda: NOW,
+                **kw,
+            )
+        )
+
+    def test_no_file_is_one_ok_line(self) -> None:
+        (result,) = self.check()
+        self.assertEqual(
+            (result.name, result.group, result.status), ("Unattended prune", "Pruning", OK)
+        )
+
+    def test_a_refusal_file_is_a_warning(self) -> None:
+        self.state.parent.mkdir(parents=True)
+        self.state.write_text(prune.render_guard_state({"wz-library": (9, 10)}, NOW - 60))
+        (result,) = self.check()
+        self.assertEqual(result.status, WARN)
+        self.assertIn("warpzone prune deck", result.fix)
+
+    def test_silent_when_the_config_turns_the_timer_off(self) -> None:
+        off = self.config.replace(
+            'folders = ["library", "saves"]', 'folders = ["library", "saves"]\nauto_prune = false'
+        )
+        self.assertEqual(self.check(config=off), [])
+
+    def test_silent_on_a_machine_that_is_not_that_device(self) -> None:
+        (self.home / ".config/syncthing/config.xml").unlink()
+        self.assertEqual(self.check(), [])
+
+    def test_runs_with_the_other_checks(self) -> None:
+        self.assertIn(check_prune_guard, doctor.CHECKS)
 
 
 RA_APP = "org.libretro.RetroArch"
