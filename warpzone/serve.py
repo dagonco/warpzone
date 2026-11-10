@@ -18,6 +18,7 @@ import os
 import signal
 import socket
 import socketserver
+import stat
 import sys
 import threading
 import time
@@ -463,6 +464,11 @@ class HubFiles:
             for kind in library_api.MEDIA_KINDS:
                 base = self.root / "frontend" / "media" / system / kind
                 names: list[str] = []
+                # `os.walk(followlinks=False)` still enters `top` when `top` is a link, so a
+                # system or kind folder that is a link (a console can sync one) is not listed.
+                if base.parent.is_symlink() or base.is_symlink():
+                    listing[kind] = names
+                    continue
                 for here, _, files in os.walk(base, followlinks=False):
                     rel = Path(here).relative_to(base).as_posix()
                     names.extend(f if rel == "." else f"{rel}/{f}" for f in files)
@@ -494,12 +500,13 @@ class HubFiles:
         return self._saves.game(lib, found[0], found[1].primary, found[1].serials)
 
     def media_path(self, system: str, kind: str, name: str) -> Path | None:
-        """The image file, or None when it is not a regular file inside its kind's folder
-        (a symlink pointing out of it is refused)."""
+        """The image file, or None when it is not a regular file inside its kind's folder.
+        A symlink anywhere between `frontend/media/` and the file is refused."""
         parts = library_api.safe_parts("/" + name)
         if parts is None or not parts:
             return None
-        return safe_file(self.root / "frontend" / "media" / system / kind, parts)
+        media = self.root / "frontend" / "media"
+        return safe_file(media, media / system / kind, parts)
 
     # ------------------------------------------------------------- play state
 
@@ -578,14 +585,47 @@ class HubFiles:
             return []
 
 
-def safe_file(base: Path, parts: tuple[str, ...]) -> Path | None:
-    """`base` joined with `parts` when that is a regular file whose real path (symlinks
-    resolved) is still inside `base`'s real path; else None."""
-    real_base = os.path.realpath(base)
-    real = os.path.realpath(os.path.join(real_base, *parts))
-    if not real.startswith(real_base + os.sep) or not os.path.isfile(real):
+def safe_file(root: Path, base: Path, parts: tuple[str, ...]) -> Path | None:
+    """`base` (a folder below `root`) joined with `parts`, when that is a regular file and no
+    symbolic link lies anywhere between `root` and the file; else None.
+
+    `root` is the folder that must contain everything and it is resolved once; the chain below
+    it has to be made of real folders, so a link (even one that points inside `root`) in `base`
+    or in `parts` makes the answer None, and the file cannot be outside `root`. The returned
+    path is the resolved one. A caller that opens it must do so without following a final link
+    (`open_regular`): the check and the open are two steps."""
+    real_root = os.path.realpath(root)
+    try:
+        below = base.relative_to(root)
+    except ValueError:
         return None
-    return Path(real)
+    wanted = os.path.join(real_root, *below.parts, *parts)
+    if not wanted.startswith(real_root + os.sep) or os.path.realpath(wanted) != wanted:
+        return None
+    return Path(wanted) if os.path.isfile(wanted) else None
+
+
+def open_regular(path: Path) -> tuple[BinaryIO, int] | None:
+    """The file open for reading and its size, or None when `path` is not a regular file or
+    its last component is a link. The size is that of the open file, so it matches the bytes
+    read. `O_NONBLOCK` keeps a FIFO put in its place from blocking the open (it is refused
+    right after), and has no effect on a regular file.
+
+    This narrows the gap after `safe_file`, it does not close it: only the last component is
+    not followed, so a folder above it swapped for a link in between is still followed."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK)
+    except OSError:
+        return None
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode):
+            os.close(fd)
+            return None
+        return os.fdopen(fd, "rb"), info.st_size
+    except BaseException:
+        os.close(fd)
+        raise
 
 
 # --------------------------------------------------------------------------- background runs
@@ -1024,12 +1064,11 @@ class App:
         path = self.files.media_path(system, kind, name)
         if path is None:
             raise ApiError("not-found", "the image is not available", game=game_id)
+        opened = open_regular(path)
+        if opened is None:
+            raise ApiError("not-found", "the image is not available", game=game_id)
+        handle, size = opened
         try:
-            handle = path.open("rb")
-        except OSError:
-            raise ApiError("not-found", "the image is not available", game=game_id) from None
-        try:
-            size = os.fstat(handle.fileno()).st_size
             headers = [("Cache-Control", "private, max-age=3600"), ("Accept-Ranges", "bytes")]
             ctype = CONTENT_TYPES.get(path.suffix.lower(), "application/octet-stream")
             try:
@@ -1063,7 +1102,7 @@ class App:
         parts = library_api.safe_parts(urllib.parse.unquote(path))
         if parts is None or (parts and path.endswith("/")):
             raise ApiError("not-found", "no such file")
-        found = safe_file(self.ui_dir, parts or ("index.html",))
+        found = safe_file(self.ui_dir, self.ui_dir, parts or ("index.html",))
         if found is None:
             raise ApiError("not-found", "no such file")
         try:
