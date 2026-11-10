@@ -9,7 +9,7 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 ### Added
 
 - `warpzone catalog --dats [--dats-dir PATH] [--force] [--dry-run]` fills the DAT serials of the games already in the library that have none, from the DAT folder `inbox` uses, so the Flycast memory cards of Dreamcast games filed before serials were recorded can be matched to their game. It matches only by exact identity (the DAT name `inbox` stored, the SHA-1 and size of the file, the exact file name, or the exact names of the discs of an `.m3u`), leaves the rest unmatched, and writes only under `catalog/`.
-- The hub image ships `chdman` (Debian's `mame-tools`) and `bsdtar` (`libarchive-tools`), so `warpzone inbox` can convert discs to CHD and unpack `.7z` and `.rar` in the container. The image grows by roughly 40 to 60 MB; `dolphin-tool`, `nsz`, `orbis-pkg-util` and Vita3K are still not in it. Rebuild the image to get them. See [Where inbox runs](https://dagonco.github.io/warpzone/setup/inbox/#where-inbox-runs).
+- The hub image ships `chdman` (Debian's `mame-tools`) and `bsdtar` (`libarchive-tools`), so `warpzone inbox` can convert discs to CHD and unpack `.7z` and `.rar` in the container. The image grows by about 250 MB, most of it the graphics and sound libraries `mame-tools` depends on (SDL2, Mesa, LLVM); `dolphin-tool`, `nsz`, `orbis-pkg-util` and Vita3K are still not in it. Rebuild the image to get them. See [Where inbox runs](https://dagonco.github.io/warpzone/setup/inbox/#where-inbox-runs).
 
 ## [0.4.0rc1] - 2026-11-10
 
