@@ -155,7 +155,13 @@ The contract:
   killed tool fails only its item, like any other tool failure: the item goes to review with
   "chdman did not finish within 240 minutes" (`inbox_core.timeout_reason`; the archive or
   package name leads the message for `bsdtar` and `orbis-pkg-util`), the run goes on with the
-  next item and the lock is released as usual. Without a limit a hung tool would keep the run
+  next item and the lock is released as usual. The tool starts in a process group of its own
+  and a killed tool is killed with every process it started (`SIGKILL` to the group), so
+  nothing is left writing in the work folder when the item goes to review; the same happens
+  when the run is interrupted (Ctrl-C included), because a group of its own no longer gets the
+  terminal's signals and `inbox_core.run_process` kills it itself. A process of the tool that
+  left the group is out of reach, and collecting what is left of the pipes after the kill is
+  bounded, so such a process cannot hold the run. Without a limit a hung tool would keep the run
   alive and the lock taken until it counts as stale. 240 minutes is generous for a conversion
   of several GB and stays well under the 12 hours after which a lock is stale. The exception
   is `RAHasher`, whose hash is optional: when it is killed the RA line says the hash is
