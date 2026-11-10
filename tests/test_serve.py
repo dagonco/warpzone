@@ -1,6 +1,7 @@
 """`warpzone serve` over a real ThreadingHTTPServer on 127.0.0.1, a temporary hub tree and the
 fake Syncthing. Every request goes through a socket."""
 
+import contextlib
 import http.client
 import json
 import os
@@ -1845,6 +1846,91 @@ class HardeningTests(ServeCase):
             )
             self.assertTrue(reply.startswith(b"HTTP/1.0 400"), (length[:20], reply[:40]))
         self.assertFalse([line for line in self.logs if "internal" in line])
+
+    def oversized_post(self, announced: int, sent: int, pause: float = 0.3) -> bytes:
+        """POST `announced` bytes of JSON but send `sent` of them, wait until the server has had
+        time to answer, send the rest, and read to the end. A reset while reading raises, which
+        is what a browser shows as a network error."""
+        head = (
+            b"POST /api/v1/changes HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer "
+            + TOKEN.encode()
+            + b"\r\nContent-Type: application/json\r\nContent-Length: "
+            + str(announced).encode()
+            + b"\r\n\r\n"
+        )
+        body = b'{"pad": "' + b"x" * (announced - 11) + b'"}'  # exactly `announced` bytes
+        sock = socket.create_connection(("127.0.0.1", self.port), timeout=5)
+        try:
+            sock.sendall(head + body[:sent])
+            time.sleep(pause)
+            with contextlib.suppress(BrokenPipeError, ConnectionResetError):
+                sock.sendall(body[sent:])  # the server may have closed: the reply is what matters
+            chunks = []
+            while True:
+                part = sock.recv(65536)
+                if not part:
+                    return b"".join(chunks)
+                chunks.append(part)
+        finally:
+            sock.close()
+
+    def test_a_body_over_the_limit_that_arrives_late_still_gets_its_400(self) -> None:
+        # (announced, sent before the pause, pause): the whole body at once, a part of it and
+        # the rest after the server answered, and a body that is a good deal over the limit.
+        cases = [
+            (70_000, 70_000, 0.0),
+            (70_000, 10_000, 0.2),
+            (900_000, 5_000, 0.2),
+            (900_000, 900_000, 0.0),
+        ]
+        for announced, sent, pause in cases * 5:
+            reply = self.oversized_post(announced, sent, pause)
+            case = (announced, sent, pause)
+            self.assertTrue(reply.startswith(b"HTTP/1.0 400"), (case, reply[:60]))
+            self.assertIn(b'"code":"bad-request"', reply, case)
+            self.assertIn(b"the body is over 65536 bytes", reply, case)
+
+    def test_a_body_over_the_drain_cap_is_not_read_and_the_server_goes_on(self) -> None:
+        # Only 1000 bytes of the announced body are ever sent, and the handler would wait 15
+        # seconds for the rest: an answer within two seconds shows that it did not try to read it.
+        for announced in (serve.MAX_DRAIN + 1, 999_999_999, 10**12):
+            sock = socket.create_connection(("127.0.0.1", self.port), timeout=2)
+            try:
+                sock.sendall(
+                    b"POST /api/v1/changes HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer "
+                    + TOKEN.encode()
+                    + b"\r\nContent-Type: application/json\r\nContent-Length: "
+                    + str(announced).encode()
+                    + b"\r\n\r\n"
+                    + b"x" * 1000
+                )
+                reply = b""
+                while chunk := sock.recv(65536):  # to the end: the connection is closed
+                    reply += chunk
+            finally:
+                sock.close()
+            self.assertTrue(reply.startswith(b"HTTP/1.0 400"), (announced, reply[:60]))
+            self.assertIn(b"the body is over 65536 bytes", reply)
+        self.assertFalse([line for line in self.logs if "body not received" in line])
+        self.assertEqual(self.get("/api/v1/devices").status, 200)
+
+    def test_a_body_that_stalls_while_it_is_discarded_is_dropped_and_logged(self) -> None:
+        with mock.patch.object(serve._Handler, "timeout", 0.5):
+            sock = socket.create_connection(("127.0.0.1", self.port), timeout=5)
+            try:
+                sock.sendall(
+                    b"POST /api/v1/changes HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer "
+                    + TOKEN.encode()
+                    + b"\r\nContent-Type: application/json\r\nContent-Length: 70000"
+                    + b"\r\n\r\n"
+                    + b"x" * 1000
+                )
+                self.assertEqual(sock.recv(65536), b"")  # closed without an answer
+            finally:
+                sock.close()
+        self.assertTrue(any("body not received" in line for line in self.logs), self.logs)
+        self.assertFalse([line for line in self.logs if "internal" in line])
+        self.assertEqual(self.get("/api/v1/devices").status, 200)
 
 
 class TokenTests(unittest.TestCase):
