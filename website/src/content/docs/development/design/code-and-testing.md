@@ -49,7 +49,7 @@ warpzone/
   errors.py          `WarpzoneError` (every error carries its `exit_code`) and the `EXIT_*` codes
   paths.py           `expand_home`: `~` against a given home (pure)
   report.py          `Reporter`: the per-folder notes, warnings and deferred flag a command hands back
-  runners.py         the subprocess edge: flatpak, systemctl, the import check, the cut-off script check
+  runners.py         the subprocess edge: flatpak, systemctl, the import check, the cut-off script check, `run_tool` (a tool killed with its children)
   config.py          private config loading + validation (tomllib), dataclasses
   profiles.py        profile loading + validation
   model.py           folder specs: expands config + profiles into the desired state

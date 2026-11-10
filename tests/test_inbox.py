@@ -1,9 +1,11 @@
+import contextlib
 import hashlib
 import json
 import os
 import shutil
 import struct
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -16,7 +18,7 @@ from unittest import mock
 
 from inbox_support import CHDMAN, RAHASHER, age, make_hub, make_stub, stub_md5, write_dat
 from test_cli import run
-from warpzone import dat, inbox, inbox_core, ra
+from warpzone import dat, inbox, inbox_core, ra, runners
 from warpzone.config import InboxSettings
 from warpzone.dat import DiscGroup, Game, GameMatch, Rom
 from warpzone.inbox import (
@@ -637,6 +639,193 @@ class ToolTimeoutTests(Base):
         self.assertEqual(self.done(), ["a.nes"])
         self.assertFalse((self.inbox / ".warpzone.lock").exists())  # released as usual
         self.assertNotIn("Traceback", self.out)
+
+
+# A tool that starts a child of its own, writes the child's PID to the file named by $1 and
+# waits for it. The child inherits the tool's process group.
+SPAWNER = 'sleep 60 & echo $! > "$1.tmp" && mv "$1.tmp" "$1"; wait'
+# The same, but the child leaves the group (a session of its own) and keeps the tool's pipes.
+ESCAPER = (
+    "import subprocess, sys, time\n"
+    "child = subprocess.Popen(['sleep', '60'], start_new_session=True)\n"
+    "open(sys.argv[1], 'w').write(str(child.pid))\n"
+    "time.sleep(60)\n"
+)
+
+
+def alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    return True
+
+
+class RunProcessGroupTests(unittest.TestCase):
+    """`run_process` kills the whole process group of a tool that runs past its limit or whose
+    wait is interrupted, so no process of the tool outlives the run."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.pidfile = Path(self._tmp.name) / "child.pid"
+
+    def child_pid(self, deadline: float = 5.0) -> int:
+        end = time.monotonic() + deadline
+        while not self.pidfile.exists() and time.monotonic() < end:
+            time.sleep(0.01)
+        pid = int(self.pidfile.read_text())
+        self.addCleanup(self.reap, pid)  # never leave a stand-in behind, whatever happens
+        return pid
+
+    @staticmethod
+    def reap(pid: int) -> None:
+        with contextlib.suppress(ProcessLookupError):
+            os.kill(pid, 9)
+
+    def assert_gone(self, pid: int) -> None:
+        # A killed child is reparented to init, which reaps it a moment later; until then
+        # kill(pid, 0) still succeeds on the zombie, so wait for the real disappearance.
+        end = time.monotonic() + 5.0
+        while alive(pid) and time.monotonic() < end:
+            time.sleep(0.01)
+        self.assertFalse(alive(pid), f"process {pid} of the killed tool is still there")
+
+    def test_a_tool_that_hangs_is_killed_with_the_processes_it_started(self) -> None:
+        cmd = ["sh", "-c", SPAWNER, "sh", str(self.pidfile)]
+        with self.assertRaises(inbox_core.ToolTimeout) as ctx:
+            inbox_core.run_process(cmd, 0.5)
+        self.assertEqual(str(ctx.exception), "sh did not finish within 0.5 seconds")
+        self.assert_gone(self.child_pid())
+
+    def test_the_processes_of_an_interrupted_wait_are_killed_and_the_error_is_kept(self) -> None:
+        cmd = ["sh", "-c", SPAWNER, "sh", str(self.pidfile)]
+        seen: list[int] = []
+
+        def interrupted(*args: object, **kwargs: object) -> tuple[str, str]:
+            pid = self.child_pid()
+            seen.append(pid)
+            self.assertTrue(alive(pid))  # it runs until the interruption, not before
+            raise KeyboardInterrupt
+
+        with (
+            mock.patch.object(subprocess.Popen, "communicate", interrupted),
+            self.assertRaises(KeyboardInterrupt),
+        ):
+            inbox_core.run_process(cmd, 30.0)
+        self.assertEqual(len(seen), 1)
+        self.assert_gone(seen[0])
+
+    def test_another_error_while_waiting_kills_the_group_and_is_re_raised(self) -> None:
+        cmd = ["sh", "-c", SPAWNER, "sh", str(self.pidfile)]
+        boom = RuntimeError("boom")
+
+        def broken(*args: object, **kwargs: object) -> tuple[str, str]:
+            self.child_pid()
+            raise boom
+
+        with (
+            mock.patch.object(subprocess.Popen, "communicate", broken),
+            self.assertRaises(RuntimeError) as ctx,
+        ):
+            inbox_core.run_process(cmd, 30.0)
+        self.assertIs(ctx.exception, boom)
+        self.assert_gone(self.child_pid())
+
+    @staticmethod
+    def killpg_then_eperm() -> mock.Mock:
+        """A `killpg` that kills the group and then fails as macOS does for a group that holds
+        only a zombie, so the stand-in tool still dies and the code sees the error."""
+        real = os.killpg
+
+        def killpg(pgid: int, sig: int) -> None:
+            real(pgid, sig)
+            raise PermissionError
+
+        return mock.Mock(side_effect=killpg)
+
+    def test_the_tool_has_a_session_of_its_own_and_no_controlling_terminal(self) -> None:
+        # Otherwise a tool that prompts on the terminal would be stopped for the whole limit.
+        proc = inbox_core.run_process(
+            [sys.executable, "-c", "import os; print(os.getsid(0))"], 10.0
+        )
+        self.assertNotEqual(int(proc.stdout), os.getsid(0))
+
+    def test_a_group_that_cannot_be_signalled_still_ends_in_the_timeout(self) -> None:
+        cmd = ["sh", "-c", SPAWNER, "sh", str(self.pidfile)]
+        with (
+            mock.patch.object(os, "killpg", self.killpg_then_eperm()),
+            self.assertRaises(inbox_core.ToolTimeout),
+        ):
+            inbox_core.run_process(cmd, 0.5)
+        self.assert_gone(self.child_pid())
+
+    def test_a_group_that_cannot_be_signalled_keeps_the_original_interruption(self) -> None:
+        cmd = ["sh", "-c", SPAWNER, "sh", str(self.pidfile)]
+
+        def interrupted(*args: object, **kwargs: object) -> tuple[str, str]:
+            self.child_pid()
+            raise KeyboardInterrupt
+
+        with (
+            mock.patch.object(subprocess.Popen, "communicate", interrupted),
+            mock.patch.object(os, "killpg", self.killpg_then_eperm()),
+            self.assertRaises(KeyboardInterrupt),
+        ):
+            inbox_core.run_process(cmd, 30.0)
+        self.assert_gone(self.child_pid())
+
+    def test_rahasher_is_killed_with_the_processes_it_started_and_gives_no_hash(self) -> None:
+        tool = Path(self._tmp.name) / "rahasher"
+        tool.write_text('#!/bin/sh\nsleep 60 & echo $! > "$2.tmp" && mv "$2.tmp" "$2"; wait\n')
+        tool.chmod(0o755)
+        # The path argument is where the stand-in writes the PID of its child.
+        self.assertIsNone(ra.hash_image(str(tool), "nes", self.pidfile, timeout=0.5))
+        self.assert_gone(self.child_pid())
+
+    def test_a_process_outside_the_group_that_keeps_the_pipes_does_not_block_the_run(self) -> None:
+        script = Path(self._tmp.name) / "escaper.py"
+        script.write_text(ESCAPER)
+        cmd = [sys.executable, str(script), str(self.pidfile)]
+        started = time.monotonic()
+        with (
+            mock.patch.object(runners, "PIPE_DRAIN_SECONDS", 0.2),
+            self.assertRaises(inbox_core.ToolTimeout),
+        ):
+            inbox_core.run_process(cmd, 1.0)
+        self.assertLess(time.monotonic() - started, 5.0)
+        # The set-up held: the process that left the group is still there, holding the pipes.
+        self.assertTrue(alive(self.child_pid()))
+
+    def test_a_tool_that_ends_in_time_returns_its_output_and_exit_code(self) -> None:
+        cmd = ["sh", "-c", "echo out; echo err >&2; exit 3"]
+        proc = inbox_core.run_process(cmd, 10.0)
+        self.assertEqual((proc.stdout, proc.stderr, proc.returncode), ("out\n", "err\n", 3))
+        self.assertEqual(proc.args, cmd)
+
+    def test_stdin_is_passed_through(self) -> None:
+        source = Path(self._tmp.name) / "in.txt"
+        source.write_text("from the file\n")
+        with source.open("rb") as handle:
+            proc = inbox_core.run_process(["cat"], 10.0, stdin=handle.fileno())
+        self.assertEqual(proc.stdout, "from the file\n")
+        proc = inbox_core.run_process(["cat"], 10.0, stdin=subprocess.DEVNULL)
+        self.assertEqual((proc.stdout, proc.returncode), ("", 0))
+
+    def test_undecodable_output_is_replaced(self) -> None:
+        proc = inbox_core.run_process(["sh", "-c", "printf 'a\\377b'"], 10.0)
+        self.assertEqual(proc.stdout, "a�b")
+
+    def test_a_tool_that_writes_a_lot_to_both_pipes_does_not_deadlock(self) -> None:
+        source = (
+            "import sys\n"
+            "for _ in range(64):\n"
+            "    sys.stdout.write('o' * 16384)\n"
+            "    sys.stderr.write('e' * 16384)\n"
+        )
+        proc = inbox_core.run_process([sys.executable, "-c", source], 20.0)
+        self.assertEqual((len(proc.stdout), len(proc.stderr)), (64 * 16384, 64 * 16384))
+        self.assertEqual(proc.returncode, 0)
 
 
 class LayoutTests(Base):
