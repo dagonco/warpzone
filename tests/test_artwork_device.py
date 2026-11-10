@@ -15,7 +15,7 @@ from test_artwork import source_xml
 from test_doctor import by_name, context
 from test_provision import reporter
 from test_saveconvert_device import make_profile
-from warpzone import artwork, provision_artwork, safefile, timers
+from warpzone import artwork, provision_artwork, safefile, settings_state, timers
 from warpzone.cli import main
 from warpzone.doctor import OK, WARN, Context, check_frontend
 from warpzone.model import device_specs
@@ -42,6 +42,14 @@ GBA = source_xml(
     ("./Missing.zip", "Missing"),
 )
 MINI = source_xml(("./Pocket.zip", "Pocket", ("genre", "Casual")))
+
+
+# A gamelist the frontend saved, cut short by a power cut in the middle of the second game.
+TRUNCATED = (
+    b'<?xml version="1.0"?>\n<gameList>\n\t<game>\n\t\t<path>./Alpha (Europe).zip</path>\n'
+    b"\t\t<favorite>true</favorite>\n\t\t<playcount>7</playcount>\n\t</game>\n"
+    b"\t<game>\n\t\t<path>./Hacks/Be"
+)
 
 
 class Art(Device):
@@ -96,6 +104,7 @@ class Art(Device):
     def ensure(self, *, dry_run=False, **kw):
         rep, lines = reporter()
         kw.setdefault("probes", device_probes(self.proc.path))
+        kw.setdefault("state_root", self.state)
         ensure_gamelists("ark", self.profile, self.home, rep, dry_run=dry_run, **kw)
         return rep, lines
 
@@ -127,6 +136,102 @@ class GamelistTests(Art, unittest.TestCase):
         self.assertIn("too large", rep.warnings[0])
         self.assertTrue(self.out("gba").is_file())
         self.assertFalse(self.out("pokemonmini").exists())
+
+    def own(self, system: str = "gba") -> None:
+        """The frontend wrote its gamelist, and a power cut truncated it mid-game."""
+        self.ensure()
+        self.out(system).write_bytes(TRUNCATED)
+
+    def copies(self, system: str = "gba") -> list[Path]:
+        folder = self.state / "backups" / "emulationstation" / f"gamelist-{system}"
+        return sorted(folder.iterdir()) if folder.is_dir() else []
+
+    def test_an_unreadable_gamelist_is_copied_before_it_is_rewritten(self) -> None:
+        self.own()
+        rep, lines = self.ensure()
+        (copy,) = self.copies()
+        self.assertEqual(copy.read_bytes(), TRUNCATED)
+        self.assertEqual(copy.name[-len("gamelist.xml") :], "gamelist.xml")
+        artwork.parse_gamelist(self.out("gba").read_bytes())  # the new file is whole
+        self.assertIn(b"<name>Alpha</name>", self.out("gba").read_bytes())
+        (warning,) = rep.warnings
+        self.assertIn(str(self.out("gba")), warning)
+        self.assertIn(str(copy), warning)
+        self.assertIn("favourites", warning)
+        self.assertIn("play counts", warning)
+        self.assertTrue(any(f"wrote {self.out('gba')}" in line for line in lines))
+
+    def test_the_warning_gives_the_reason_the_file_could_not_be_read(self) -> None:
+        with self.assertRaises(artwork.ArtworkError) as raised:
+            artwork.parse_gamelist(TRUNCATED)
+        self.own()
+        rep, _ = self.ensure()
+        self.assertIn(str(raised.exception), rep.warnings[0])
+
+    def test_a_dry_run_says_it_would_keep_a_copy_and_changes_nothing(self) -> None:
+        self.own()
+        rep, lines = self.ensure(dry_run=True)
+        self.assertEqual(self.out("gba").read_bytes(), TRUNCATED)
+        self.assertEqual(self.copies(), [])
+        self.assertFalse((self.state / "backups").exists())
+        self.assertEqual(rep.warnings, [])
+        (line,) = [x for x in lines if str(self.out("gba")) in x]
+        self.assertIn("would keep a copy", line)
+        self.assertIn("would write", line)
+        with self.assertRaises(artwork.ArtworkError) as raised:
+            artwork.parse_gamelist(TRUNCATED)
+        self.assertIn(str(raised.exception), line)
+
+    def test_a_gamelist_that_can_be_read_is_replaced_without_a_copy_or_a_warning(self) -> None:
+        self.ensure()
+        self.scraped("gba", GBA.replace("A &amp; B", "Changed"))
+        rep, lines = self.ensure()
+        self.assertEqual(rep.warnings, [])
+        self.assertEqual(self.copies(), [])
+        self.assertFalse((self.state / "backups").exists())
+        self.assertTrue(any("wrote" in line for line in lines))
+
+    def test_a_missing_gamelist_needs_no_copy(self) -> None:
+        rep, _ = self.ensure()
+        self.assertEqual(rep.warnings, [])
+        self.assertFalse((self.state / "backups").exists())
+
+    def test_with_the_frontend_open_nothing_is_copied_or_written(self) -> None:
+        self.own()
+        self.start("emulationstatio")
+        rep, _ = self.ensure()
+        self.assertEqual(self.out("gba").read_bytes(), TRUNCATED)
+        self.assertEqual(self.copies(), [])
+        self.assertFalse((self.state / "backups").exists())
+        self.assertFalse(any(str(self.out("gba")) in w for w in rep.warnings))
+
+    def test_when_the_copy_cannot_be_made_the_damaged_gamelist_is_left_alone(self) -> None:
+        self.own()
+        self.scraped("pokemini", MINI.replace("Casual", "Changed"))  # the other system is stale
+        with mock.patch.object(settings_state, "backup", side_effect=PermissionError("denied")):
+            rep, lines = self.ensure()
+        self.assertEqual(self.out("gba").read_bytes(), TRUNCATED)
+        (warning,) = rep.warnings
+        self.assertIn(str(self.out("gba")), warning)
+        self.assertIn("left alone", warning)
+        self.assertIn("denied", warning)
+        self.assertFalse(any(f"wrote {self.out('gba')}" in line for line in lines))
+        self.assertEqual(self.copies(), [])
+
+    def test_a_failed_copy_does_not_stop_the_other_systems(self) -> None:
+        self.own()
+        self.scraped("pokemini", MINI.replace("Casual", "Changed"))
+        with mock.patch.object(settings_state, "backup", side_effect=PermissionError("denied")):
+            _, lines = self.ensure()
+        self.assertIn(b"Changed", self.out("pokemonmini").read_bytes())
+        self.assertTrue(any(f"wrote {self.out('pokemonmini')}" in line for line in lines))
+
+    def test_a_copy_of_a_second_run_is_not_made_when_the_first_fixed_the_file(self) -> None:
+        self.own()
+        self.ensure()
+        rep, _ = self.ensure()
+        self.assertEqual(len(self.copies()), 1)
+        self.assertEqual(rep.warnings, [])
 
     def test_a_system_name_that_climbs_out_of_the_folder_writes_nothing_outside(self) -> None:
         escape = "../../../outside"
@@ -631,6 +736,24 @@ folders = ["library", "frontend"]
         self.assertEqual(result.status, WARN)
         self.assertIn("stale", result.detail)
         self.assertIn("gba", result.detail)
+
+    def test_an_unreadable_gamelist_is_told_apart_from_a_stale_one(self) -> None:
+        self.ensure()
+        self.out("gba").write_bytes(TRUNCATED)
+        self.scraped("pokemini", MINI.replace("Casual", "Changed"))
+        result = self.artwork()
+        self.assertEqual(result.status, WARN)
+        self.assertIn("1 unreadable (gba)", result.detail)
+        self.assertIn("1 stale (pokemonmini)", result.detail)
+        self.assertIn("keeps a copy", result.fix)
+        self.assertIn("warpzone frontend refresh ark", result.fix)
+
+    def test_a_stale_gamelist_that_can_be_read_keeps_the_plain_fix(self) -> None:
+        self.ensure()
+        self.scraped("gba", GBA.replace("A &amp; B", "Changed"))
+        result = self.artwork()
+        self.assertNotIn("unreadable", result.detail)
+        self.assertNotIn("keeps a copy", result.fix)
 
     def test_only_the_kinds_of_the_profile_matter(self) -> None:
         self.ensure()
