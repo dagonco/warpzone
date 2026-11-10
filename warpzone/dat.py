@@ -91,6 +91,9 @@ class FileInfo:
     size: int
     crc: str
     sha1: str
+    # (size, CRC32, SHA-1) of the data after the 16-byte iNES header, for a file that starts
+    # with the iNES magic; None for any other file.
+    without_header: tuple[int, str, str] | None = None
 
 
 @dataclass(frozen=True)
@@ -331,12 +334,8 @@ def _assign(
     return tuple(chosen)
 
 
-def match_dat(dat: Dat, files: Sequence[FileInfo]) -> Identified:
-    """The games of `dat` whose roms are all among `files`.
-
-    Where several complete games compete for the same files, the one with more roms
-    wins; two different names with exactly the same files cannot be told apart, so
-    they are returned as `ambiguous` and nothing is chosen for those files."""
+def _resolve(dat: Dat, files: Sequence[FileInfo]) -> tuple[Identified, set[str]]:
+    """`match_dat` on the files as given, and the paths left out as ambiguous."""
     by_key: dict[tuple[int, str], list[FileInfo]] = {}
     for f in files:
         by_key.setdefault((f.size, f.crc), []).append(f)
@@ -369,7 +368,59 @@ def match_dat(dat: Dat, files: Sequence[FileInfo]) -> Identified:
         taken |= paths
         chosen.append(GameMatch(dat.system, game, found))
     chosen.sort(key=lambda m: m.files[0].path)
-    return Identified(tuple(chosen), tuple(ambiguous))
+    return Identified(tuple(chosen), tuple(ambiguous)), blocked
+
+
+def match_dat(dat: Dat, files: Sequence[FileInfo]) -> Identified:
+    """The games of `dat` whose roms are all among `files`.
+
+    Where several complete games compete for the same files, the one with more roms
+    wins; two different names with exactly the same files cannot be told apart, so
+    they are returned as `ambiguous` and nothing is chosen for those files.
+
+    In a NES DAT, an iNES file nothing matched whole is tried again without its 16-byte
+    header (see `_match_headerless`)."""
+    found, blocked = _resolve(dat, files)
+    if dat.system != "nes":
+        return found
+    used = {f.path for m in found.matches for f in m.files} | blocked
+    left = [f for f in files if f.without_header is not None and f.path not in used]
+    if not left:
+        return found
+    extra = _match_headerless(dat, left)
+    return Identified((*found.matches, *extra.matches), (*found.ambiguous, *extra.ambiguous))
+
+
+def _match_headerless(dat: Dat, files: Sequence[FileInfo]) -> Identified:
+    """Match iNES files by the data after the header against the DAT's headerless entries
+    (No-Intro lists them as `.unh`, 16 bytes smaller than the headered dump). The headers of
+    the same verified dump differ between dumpers (iNES against NES 2.0 fields, junk in the
+    reserved bytes), the data does not. Only a SHA-1 equal to the DAT's counts, so a CRC32
+    collision cannot place a wrong game.
+
+    The match describes the file as it is: the DAT roms are replaced by roms with the size,
+    hashes and `.nes` name of the file, so the library keeps the file with its own header and
+    everything downstream checks the bytes that are placed."""
+    real = {f.path: f for f in files}
+    views = [FileInfo(f.path, *f.without_header) for f in files if f.without_header is not None]
+    found, _ = _resolve(dat, views)
+    chosen: list[GameMatch] = []
+    for m in found.matches:
+        if not all(r.sha1 and r.sha1 == v.sha1 for r, v in zip(m.game.roms, m.files, strict=True)):
+            continue
+        whole = tuple(real[v.path] for v in m.files)
+        roms = tuple(
+            Rom(_headered_name(r.name), f.size, f.crc, f.sha1)
+            for r, f in zip(m.game.roms, whole, strict=True)
+        )
+        chosen.append(GameMatch(m.system, replace(m.game, roms=roms), whole))
+    return Identified(tuple(chosen), found.ambiguous)
+
+
+def _headered_name(name: str) -> str:
+    """The name of a headerless rom with the extension of a headered one."""
+    stem, ext = os.path.splitext(name)
+    return stem + ".nes" if ext.lower() == ".unh" else name
 
 
 # ------------------------------------------------------------------ naming and discs

@@ -64,6 +64,18 @@ The contract:
   a lookup needs them (the system the file extensions and sizes point at first, and the
   search stops once every file is explained) and each parsed DAT is cached as JSON in
   `$XDG_CACHE_HOME/warpzone/dats`, keyed by the DAT's size and modification time.
+- **NES dumps with another header.** A file that starts with the iNES magic `NES\x1a`
+  is also hashed without its first 16 bytes (`FileInfo.without_header`). In a NES DAT,
+  when the whole file matches nothing, `match_dat` looks that data up among the DAT's
+  headerless entries (No-Intro lists them as `.unh`, 16 bytes smaller than the headered
+  dump), and only a SHA1 equal to the DAT's counts. The same verified dump circulates with
+  different headers (iNES against NES 2.0 fields, junk in the reserved bytes) and the
+  data is what is verified. The game is filed under the DAT's game name as usual, and the
+  file is kept as it is, header included: the match carries roms that describe the file
+  (its size, hashes and a `.nes` name), so the zip holds the original bytes and the
+  size/CRC32 check after the copy compares those. A whole-file match always wins, two names
+  with the same data are ambiguous as before, and a file with no iNES magic or no
+  headerless match goes to review as "no DAT match".
 - **Formats follow the library.** `psx`, `saturn`, `dreamcast`: `chdman createcd` from
   the cue or gdi, then `chdman verify`. `ps2`: `createdvd` for an `.iso`, `createcd`
   for cue/bin. A lone `.bin` without a cue gets a generated one (PlayStation only).
