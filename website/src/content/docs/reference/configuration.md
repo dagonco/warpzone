@@ -45,7 +45,7 @@ One table per console. The table name is the device's name, used in commands (`w
 |---|---|---|---|---|
 | `device_id` | string | none | yes | Same format as the hub's. Must be unique across the hub and all devices. `provision device` refuses to run if the local Syncthing is a different device. |
 | `profile` | string | none | yes | Non-empty and the name of a [shipped profile](#device-profiles) (`anbernic-rg351mp`, `steamos-emudeck`). |
-| `folders` | array of strings | none | yes | Non-empty. Each item must be one of the folder groups below; repeats are dropped. The profile must define where each group lives (see [`[paths]`](#paths)), or every command that loads the config refuses the device. |
+| `folders` | array of strings | none | yes | Non-empty. Each item must be one of the folder groups below; repeats are dropped. The profile must define where each group lives (see [`[paths]`](#paths)), or every command that loads the config refuses the device. Taking a group out makes the next `provision hub` stop sharing its folders with the device. |
 | `addresses` | array of strings | `["dynamic"]` | no | Same rules as the hub's. Where the hub finds this device. |
 | `rescan_seconds` | integer | `300` | no | At least `5` (a boolean is rejected). A whitelist edited on the hub reaches the device within seconds but is only applied on a full scan, so the whitelisted folders (`library`, `songs`) are rescanned this often. |
 | `self_update` | boolean | `true` | no | Whether `provision device` installs the updater and its timer. `false` writes `enabled=false` in the [updater settings](#the-updater-settings-file) and installs nothing new. |

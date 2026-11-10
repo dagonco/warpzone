@@ -69,6 +69,14 @@ If you remove the line first, the console keeps its copy, and `prune` will repor
 
 **Fix.** Remove the folder in Syncthing (the files stay on disk), then run the provision command again. See [Safety](/warpzone/operation/safety/). If the message says the profile moved the folder and the old folder holds files that are not all on the hub yet, do not move any file yet: Syncthing would announce it as a deletion. Remove (or pause) the folder in Syncthing first (the files stay on disk), then move the files into the new directory and provision again. Often it is enough to wait until the folder is fully synced and run provision again, since a folder whose files are all on the hub is moved by itself.
 
+### The hub's Syncthing shows a console offering a `wz-*` folder
+
+**Symptom.** The hub's Syncthing GUI says `<console> wants to share folder "wz-..."`, for a folder the console no longer lists in its `folders` (or that moved to another group).
+
+**Cause.** `warpzone provision hub` stopped sharing the folder with that console, but the console's own Syncthing still has the folder and keeps announcing it. warpzone never accepts such an offer by itself.
+
+**Fix.** In the console's Syncthing, remove the folder (its files stay on disk), and do not accept the offer on the hub. If you want the console to have the folder, add the group back to its `folders` and run `warpzone provision hub`. See [Devices that stop subscribing](/warpzone/development/design/hub-and-folders/#devices-that-stop-subscribing).
+
 ### `prune` deletes less than expected, or refuses
 
 **Cause and fix.** `prune` is conservative by design:

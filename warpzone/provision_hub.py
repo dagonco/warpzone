@@ -82,6 +82,54 @@ def _missing_on(client: Client, spec: FolderSpec) -> list[str]:
     return [f for f in spec.required_files if f not in names]
 
 
+def unsubscribed(
+    spec: FolderSpec, current: dict[str, Any], managed: Collection[str]
+) -> tuple[str, ...]:
+    """The devices a hub `wz-*` folder is shared with but the config no longer gives it (pure).
+
+    `current` is the hub's folder as `GET /rest/config/folders` returns it, `managed` the
+    device IDs of the config. A device the config does not name, and the hub's own entry
+    (never one of the config's devices), are left out: they are not ours to take off.
+    The IDs come back in the folder's order.
+    """
+    if not spec.id.startswith(PREFIX):
+        return ()
+    wanted = set(spec.devices)
+    return tuple(
+        d["deviceID"]
+        for d in current.get("devices") or []
+        if d["deviceID"] in managed and d["deviceID"] not in wanted
+    )
+
+
+def unclaimed(
+    specs: Collection[FolderSpec], existing: dict[str, dict[str, Any]], names: dict[str, str]
+) -> tuple[str, ...]:
+    """Warnings for hub `wz-*` folders that no spec describes but a config device has (pure).
+
+    Nothing is changed for them: an admin checkout older than a console's release does not
+    know every folder the consoles use. `names` maps a config device ID to its name."""
+    described = {spec.id for spec in specs}
+    texts: list[str] = []
+    for folder_id, folder in existing.items():
+        if not folder_id.startswith(PREFIX) or folder_id in described:
+            continue
+        sharing = [
+            names[d["deviceID"]] for d in folder.get("devices") or [] if d["deviceID"] in names
+        ]
+        if sharing:
+            texts.append(
+                f"{folder_id}: no device in the config subscribes to it, still shared with "
+                f"{', '.join(sharing)} (left as it is)"
+            )
+    return tuple(texts)
+
+
+def _hub_folder(client: Client, folder_id: str) -> dict[str, Any] | None:
+    """The hub's folder as it is now, or None when it is not there."""
+    return next((f for f in client.folders() if f["id"] == folder_id), None)
+
+
 def provision_hub(
     cfg: Config,
     profiles: dict[str, Profile],
@@ -99,14 +147,44 @@ def provision_hub(
             f"the API at {cfg.hub.api_url} belongs to device {actual[:7]}..., "
             f"but hub.device_id starts with {cfg.hub.device_id[:7]}..."
         )
-    known = {d["deviceID"] for d in client.devices()}
+    hub_devices = client.devices()
+    known = {d["deviceID"] for d in hub_devices}
+    auto_accept = {d["deviceID"] for d in hub_devices if d.get("autoAcceptFolders")}
+    names = {d.device_id: d.name for d in cfg.devices.values()}
     for device in cfg.devices.values():
         ensure_device(client, device.device_id, device.name, device.addresses, known, rep)
 
     existing = {f["id"]: f for f in client.folders()}
-    for spec in hub_specs(cfg, profiles):
+    specs = hub_specs(cfg, profiles)
+    for spec in specs:
         current = existing.get(spec.id)
-        created = upsert_folder(client, spec, current, rep)
+        gone: tuple[str, ...] = ()
+        if current is not None and unsubscribed(spec, current, names):
+            # The list was read before the waits of earlier folders, and a PATCH replaces
+            # the whole list: decide again on the folder as it is now.
+            current = _hub_folder(client, spec.id) or current
+            gone = unsubscribed(spec, current, names)
+        created = upsert_folder(client, spec, current, rep, drop=gone)
+        for device_id in gone:
+            name = names[device_id]
+            if client.dry_run:
+                rep.note(
+                    spec.id,
+                    f"dry-run: would stop sharing with {name} "
+                    "(no longer subscribes; no file is deleted)",
+                )
+            else:
+                rep.note(
+                    spec.id,
+                    f"stopped sharing with {name} (no longer subscribes; no file is deleted)",
+                )
+            entry = next(d for d in (current or {})["devices"] if d["deviceID"] == device_id)
+            if device_id in auto_accept or entry.get("introducedBy"):
+                rep.warn(
+                    f"{spec.id}: {name} may be shared again by the hub's Syncthing "
+                    "(auto-accept or an introducer); turn that off for "
+                    f"{name} on the hub"
+                )
         bootstrapped = False
         if created and spec.bootstrap_ignores is not None:
             bootstrapped = True
@@ -132,6 +210,8 @@ def provision_hub(
             missing = _missing_on(client, spec)
             if missing:
                 rep.warn(f"{spec.id}: missing in {spec.path}: {', '.join(missing)}")
+    for text in unclaimed(specs, existing, names):
+        rep.warn(text)
 
 
 @dataclass(frozen=True)
@@ -203,6 +283,12 @@ def additive_plan(
         lacking = [names.get(d, d[:7]) for d in spec.devices if d not in shared]
         if lacking:
             differences.append(f"{spec.id}: not shared with {', '.join(lacking)} on the hub")
+        extra = [names[d] for d in unsubscribed(spec, current, names)]
+        if extra:
+            differences.append(
+                f"{spec.id}: still shared on the hub with {', '.join(extra)} "
+                "(no longer subscribed in the config)"
+            )
     return AdditivePlan(
         tuple(create), tuple(whitelisted), tuple(differences), tuple(clashes), tuple(paused)
     )

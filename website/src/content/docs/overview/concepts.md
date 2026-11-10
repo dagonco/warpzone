@@ -39,7 +39,7 @@ folders = ["library", "tools", "saves", "frontend", "bios", "settings"]
 - `profile` says where things live on that kind of device (see below).
 - `folders` lists the groups it subscribes to: `library`, `songs`, `tools`, `saves`, `frontend`, `bios`, `settings` and `play-state`.
 
-Devices are only ever added to the hub's Syncthing, never removed, and warpzone only touches folders whose ID starts with `wz-`.
+Devices are only ever added to the hub's Syncthing, never removed; a device that stops subscribing to a group is taken off those folders by the next `provision hub`, with no file deleted. warpzone only touches folders whose ID starts with `wz-`.
 
 ## Profiles
 

@@ -89,6 +89,38 @@ follows the `songs` group, so a device without `songs` gets neither); `frontend`
 `settings` is `wz-settings`; `play-state` is `wz-play-state` and needs `frontend` (see
 [Play state](/warpzone/development/design/play-state/)).
 
+### Devices that stop subscribing
+
+A device in the config that no longer subscribes to a `wz-*` folder (a group taken out of its
+`folders`, or a profile entry moved to another group) is taken off that hub folder by the next
+`provision hub`. No file is deleted and no folder is removed. A device the config does not name
+keeps its shares, and a `wz-*` folder no device subscribes to is only reported. The console's
+Syncthing keeps the folder, so the hub shows it as an offer from that console: remove the
+folder in the console's Syncthing (its files stay), and do not accept the offer on the hub.
+
+The decision is `provision_hub.unsubscribed` (pure): the entries of the hub's folder whose
+device ID is one of the config's devices and not one of the folder's subscribers, in the
+folder's order. The hub's own entry is never one of them, and every other entry is sent back
+as it was read, with all its fields (`introducedBy`, `encryptionPassword`). Syncthing replaces
+the whole device list on a `PATCH`, and the list was read before the waits of the folders that
+came first (a new whitelisted folder waits up to `--timeout`), so the run reads the folder
+again right before it writes, in a dry run too, and decides again: a device someone added by
+hand in that time is not lost.
+
+The removal is convergent, not destructive: running the same config again changes nothing,
+and putting the group back in the device's `folders` shares the folder again. Only a person
+runs it. The timers run `provision device --unattended`, which never writes the hub's device
+lists, and `provision hub --additive` (also `auto_hub`) changes nothing on a folder the hub
+has: it only warns that a device the folder is shared with no longer subscribes.
+
+`--dry-run` prints `would stop sharing with <device>` and the `PATCH` it would send. If the
+hub's Syncthing auto-accepts folders from the device, or the dropped entry names an
+introducer, Syncthing may share the folder again, so the run warns; warpzone does not change
+device settings. A `wz-*` folder that no spec describes but a configured device is on (a
+group taken out of every device, or an admin checkout older than a console's release that
+does not know a folder yet) is only reported, never changed. Run `provision hub` from the
+release the consoles run, so that two checkouts do not add and remove the same share.
+
 ## Ignore files and the bootstrap problem
 
 All whitelist files live **inside the synced folder on the hub** and are synced

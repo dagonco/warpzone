@@ -276,7 +276,10 @@ build the image; the `image` job of the weekly and manual runs does (see "CI" be
   every other byte kept, CRLF); `provision device` writing the script and enabling the
   setting with a backup, leaving it alone while a fake `/proc` shows ES-DE running, and
   their dry run. The e2e test subscribes the device to `settings` and checks that a layer file
-  travels both ways.
+  travels both ways. It then takes `settings` out of the device's `folders` while a second
+  configured device still subscribes: a dry run says it would stop sharing, the real run takes
+  the device off the hub's `wz-settings` while the device keeps the folder and its files, and
+  putting the group back shares it again.
 - A second e2e test starts from an empty hub: its folders exist and hold nothing. `provision
   hub` runs while the whitelists and a game are copied in, so the bootstrap waits for them;
   the test then checks the created `wz-*` folders, the final ignores, `check`, that a second

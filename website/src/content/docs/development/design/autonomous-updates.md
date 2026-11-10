@@ -180,7 +180,7 @@ same step is `provision hub --additive`, which a person can run from anywhere. T
   folder the hub has is never patched, never re-pathed, never has its type, versioning,
   devices, ignores or paused flag changed, so a console with an old config or channel reverts
   nothing and there is no question of whose config wins. Where an existing folder differs
-  from the config (path, type, or a subscribing device it is not shared with) the run only
+  from the config (path, type, a subscribing device it is not shared with, or a configured device it is shared with that no longer subscribes) the run only
   warns, naming `provision hub` as the way to change it. A missing folder whose path another
   hub folder already has (compared without a trailing slash and in any case, whatever that
   folder's ID) is not created either, with a warning: two folders on one directory would each

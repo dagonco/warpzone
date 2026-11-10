@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import os
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Collection, Sequence
 from typing import Any
 
 from warpzone.errors import WarpzoneError
@@ -116,8 +116,14 @@ def _subset(wanted: Any, actual: Any) -> bool:
     return bool(wanted == actual)
 
 
-def folder_patch(spec: FolderSpec, current: dict[str, Any]) -> dict[str, Any]:
-    """The owned keys that differ. Devices are only ever added, never removed."""
+def folder_patch(
+    spec: FolderSpec, current: dict[str, Any], drop: Collection[str] = ()
+) -> dict[str, Any]:
+    """The owned keys that differ.
+
+    Missing devices are added; those in `drop` are taken out; every other entry is kept as
+    it is. Only the hub run passes `drop`.
+    """
     body = spec.body()
     owned = ("label", "type", "fsWatcherEnabled", "rescanIntervalS", "ignorePerms")
     patch: dict[str, Any] = {
@@ -126,10 +132,11 @@ def folder_patch(spec: FolderSpec, current: dict[str, Any]) -> dict[str, Any]:
     if not _subset(spec.versioning, current.get("versioning") or {}):
         patch["versioning"] = spec.versioning
     have = list(current.get("devices") or [])
-    known = {d["deviceID"] for d in have}
+    kept = [d for d in have if d["deviceID"] not in drop]
+    known = {d["deviceID"] for d in kept}
     missing = [d for d in body["devices"] if d["deviceID"] not in known]
-    if missing:
-        patch["devices"] = have + missing
+    if missing or len(kept) != len(have):
+        patch["devices"] = kept + missing
     return patch
 
 
@@ -157,9 +164,16 @@ def ensure_device(
 
 
 def upsert_folder(
-    client: Client, spec: FolderSpec, current: dict[str, Any] | None, rep: Reporter
+    client: Client,
+    spec: FolderSpec,
+    current: dict[str, Any] | None,
+    rep: Reporter,
+    *,
+    drop: Collection[str] = (),
 ) -> bool:
-    """Create (paused) or patch the folder. Returns True if it was created."""
+    """Create (paused) or patch the folder. Returns True if it was created.
+
+    `drop` lists device IDs to take off an existing folder (see `folder_patch`)."""
     if current is None:
         client.add_folder({**spec.body(), "paused": True})
         rep.note(spec.id, f"created at {spec.path}")
@@ -173,7 +187,7 @@ def upsert_folder(
             "warpzone refuses. Remove the folder in Syncthing first (files stay on disk), "
             "then run provision again."
         )
-    patch = folder_patch(spec, current)
+    patch = folder_patch(spec, current, drop)
     if patch:
         client.patch_folder(spec.id, patch)
         rep.note(spec.id, f"updated {', '.join(sorted(patch))}")
