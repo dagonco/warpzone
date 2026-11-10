@@ -121,6 +121,15 @@ for every problem, the exact fix for this platform.
   system list or a scraped file is unreadable. `Artwork timer` (only when the profile sets
   `refresh`) is `[ok]` when `warpzone-artwork.timer` is installed and `[! ]` otherwise.
   `judge_artwork` is pure.
+  A device whose profile has `[shadps4.launch]` also gets `shadPS4 version`: the emulator the
+  launch script would run, found the way the script finds it (`shadps4.select_version`, pure:
+  the `versionSelected=` line of `qt_ui.ini`, then the `path` entries of `versions.json` in
+  order, each an executable AppImage or a folder holding `Shadps4-sdl.AppImage`; the tests
+  run the script and doctor on the same fixtures). `[ok]` names it. With none, ES-DE shows
+  nothing (the script's stderr goes nowhere), so it is `[! ]` while the device holds no PS4
+  games (a file in `roms/ps4/games`) and `[!!]` once it does, with the fix "open the
+  shadPS4 Qt launcher, go to Version Manager, then download and select a version" and the
+  log `~/.local/state/warpzone/shadps4-launch.log`. `judge_shadps4_version` is pure.
 - **Unattended prune.** Group `Pruning`, on a device found through `wz-library` (as for the
   frontend) whose config subscribes it to `library` without `auto_prune = false`. One line,
   `Unattended prune`: `judge_prune_guard` (pure) is `[ok]` when `prune-guard.json` is not
