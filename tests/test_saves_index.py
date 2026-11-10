@@ -4,10 +4,13 @@
 import os
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 
 from test_serve import EXAMPLE, PS4, ServeCase
+from warpzone import catalog
 from warpzone import saves_index as si
+from warpzone.library_api import Library
 from warpzone.saves_index import Entry, GameSaves
 
 T = 1_700_000_000
@@ -22,9 +25,10 @@ def find(
     system: str,
     primary: str,
     others: tuple[tuple[str, str], ...] = (),
+    serials: tuple[str, ...] = (),
 ) -> GameSaves:
     ctx = si.context_of([(system, primary), *others])
-    return si.match_game(si.build_index(listing), ctx, system, primary)
+    return si.match_game(si.build_index(listing), ctx, system, primary, serials)
 
 
 class RetroArchTests(unittest.TestCase):
@@ -89,17 +93,76 @@ class StandaloneTests(unittest.TestCase):
         self.assertEqual(found, GameSaves(True, 2, T, ("melonds",)))
         self.assertEqual(find(listing, "gba", "roms/gba/Fake DS.gba"), GameSaves())
 
-    def test_flycast_matches_per_game_cards_and_arcade_flash_not_the_shared_ones(self) -> None:
+    def test_flycast_arcade_files_are_named_after_the_content_file_with_its_extension(self) -> None:
         listing = entries(
-            "flycast/saves/Fake DC_vmu_save_A1.bin",
-            "flycast/saves/vmu_save_A1.bin",
-            "flycast/saves/dc_nvmem.bin",
-            "flycast/saves/fakearc.nvmem",
+            "flycast/saves/fakearc.zip.nvmem",
+            "flycast/saves/fakearc.zip_vmu_save_A1.bin",
+            "flycast/saves/aw.zip.nvmem2",
+            "flycast/saves/derby.zip-main.nvmem",
+            "flycast/saves/stem.nvmem",  # not how Flycast names it: the extension is kept
         )
-        self.assertTrue(find(listing, "dreamcast", "roms/dreamcast/Fake DC.chd").data)
-        self.assertTrue(find(listing, "naomi", "roms/naomi/fakearc.zip").data)
-        self.assertEqual(find(listing, "dreamcast", "roms/dreamcast/vmu_save_A1.chd"), GameSaves())
-        self.assertEqual(find(listing, "dreamcast", "roms/dreamcast/dc_nvmem.chd"), GameSaves())
+        naomi = find(listing, "naomi", "roms/naomi/fakearc.zip")
+        self.assertEqual(naomi, GameSaves(True, 0, T, ("flycast",)))
+        self.assertTrue(find(listing, "naomi2", "roms/naomi2/fakearc.zip").data)
+        self.assertTrue(find(listing, "atomiswave", "roms/atomiswave/aw.zip").data)
+        self.assertTrue(find(listing, "naomi", "roms/naomi/derby.zip").data)
+        self.assertEqual(find(listing, "naomi", "roms/naomi/stem.zip"), GameSaves())
+        self.assertEqual(find(listing, "naomi", "roms/naomi/fakearc2.zip"), GameSaves())
+
+    def test_flycast_only_port_a1_is_per_game_and_shared_cards_belong_to_nobody(self) -> None:
+        listing = entries(
+            "flycast/saves/Fake_vmu_save_A2.bin",
+            "flycast/saves/Fake.zip_vmu_save_B1.bin",
+            "flycast/saves/vmu_save_A1.bin",
+            "flycast/saves/vmu_save_B2.bin",
+            "flycast/saves/dc_nvmem.bin",
+            "flycast/saves/dc_boot.bin",
+        )
+        for system, primary in (
+            ("naomi", "roms/naomi/Fake.zip"),
+            ("dreamcast", "roms/dreamcast/Fake.chd"),
+            ("dreamcast", "roms/dreamcast/vmu_save_A1.chd"),
+            ("dreamcast", "roms/dreamcast/dc_nvmem.chd"),
+        ):
+            self.assertEqual(find(listing, system, primary, serials=("Fake",)), GameSaves())
+
+    def test_flycast_dreamcast_card_is_named_after_the_product_number(self) -> None:
+        listing = entries(
+            "flycast/saves/T-8106N_vmu_save_A1.bin",
+            "flycast/saves/T-45001D05_vmu_save_A1.bin",
+            "flycast/saves/T7016D__50_vmu_save_A1.bin",
+            "flycast/saves/MK-51058_vmu_save_A1.bin",
+        )
+        path = "roms/dreamcast/Fake Game (USA).chd"
+        found = find(listing, "dreamcast", path, serials=("T-8106N",))
+        self.assertEqual(found, GameSaves(True, 0, T, ("flycast",)))
+        # Redump's separators differ from the header's: only letters and digits count.
+        self.assertTrue(find(listing, "dreamcast", path, serials=("T-45001D-05",)).data)
+        self.assertTrue(find(listing, "dreamcast", path, serials=("T-7016D-50",)).data)
+        # Several serials of one disc: any of them.
+        self.assertTrue(find(listing, "dreamcast", path, serials=("952-0158-50", "MK-51058")).data)
+        # No serial, another one, or one that only starts the same: nothing.
+        self.assertEqual(find(listing, "dreamcast", path), GameSaves())
+        self.assertEqual(find(listing, "dreamcast", path, serials=("T-8106",)), GameSaves())
+        self.assertEqual(find(listing, "dreamcast", path, serials=("T-8106N-05",)), GameSaves())
+        self.assertEqual(find(listing, "dreamcast", path, serials=("MK-5105850",)), GameSaves())
+
+    def test_flycast_dreamcast_without_a_product_number_uses_the_file_name(self) -> None:
+        # With no product number in the header Flycast falls back to the content's file name.
+        listing = entries("flycast/saves/Homebrew.chd_vmu_save_A1.bin")
+        self.assertTrue(find(listing, "dreamcast", "roms/dreamcast/Homebrew.chd").data)
+
+    def test_flycast_product_numbers_are_not_arcade_names_and_the_reverse(self) -> None:
+        listing = entries("flycast/saves/T-8106N_vmu_save_A1.bin", "flycast/saves/g.zip.nvmem")
+        self.assertEqual(
+            find(listing, "naomi", "roms/naomi/x.zip", serials=("T-8106N",)), GameSaves()
+        )
+        self.assertEqual(find(listing, "dreamcast", "roms/dreamcast/g.zip"), GameSaves())
+
+    def test_flycast_id_key_keeps_letters_and_digits_only(self) -> None:
+        self.assertEqual(si.flycast_id("T7016D__50"), "T7016D50")
+        self.assertEqual(si.flycast_id("T-45001D-05"), si.flycast_id("T-45001D05"))
+        self.assertEqual(si.flycast_id("MK-51058-50"), si.flycast_id("MK-5105850"))
 
     def test_vita3k_matches_the_title_folder(self) -> None:
         listing = entries("vita3k/saves/PCSE00000", mtime=T + 5) + entries("vita3k/saves/PCSE11111")
@@ -215,6 +278,26 @@ class ScanTests(unittest.TestCase):
         self.assertEqual(cache.index().by_stem, {})
         now[0] = 61
         self.assertIn("Fake", cache.index().by_stem)
+
+
+class CacheGameTests(unittest.TestCase):
+    def test_a_dreamcast_game_is_matched_through_the_serials_the_catalog_holds(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            card = Path(tmp) / "flycast" / "saves" / "T-8106N_vmu_save_A1.bin"
+            card.parent.mkdir(parents=True)
+            card.write_text("x")
+            os.utime(card, (T, T))
+            primary = "roms/dreamcast/Fake Game (USA).chd"
+            with_serial = catalog.Game(
+                "a" * 16, "Fake", "fake", primary, (), "./x", 0, serials=("T-8106D-05", "T-8106N")
+            )
+            without = replace(with_serial, serials=())
+            lib = Library({"dreamcast": {with_serial.id: with_serial}})
+            cache = si.SavesCache(Path(tmp))
+            got = cache.game(lib, "dreamcast", primary, with_serial.serials)
+            self.assertEqual(got["data"], True)
+            self.assertEqual(got["emulators"], ["flycast"])
+            self.assertEqual(cache.game(lib, "dreamcast", primary, without.serials)["data"], False)
 
 
 class ApiTests(ServeCase):

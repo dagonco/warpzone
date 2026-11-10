@@ -492,6 +492,26 @@ class MergeAndJsonTests(unittest.TestCase):
         self.assertEqual((merged[0].added, merged[0].dat), ("2026-10-01", "Alpha (USA)"))
         self.assertEqual((merged[1].added, merged[1].dat), ("2026-11-06", None))
 
+    def test_serials_are_kept_set_by_inbox_and_survive_the_json(self) -> None:
+        old = self.stored([replace(self.hashed(self.alpha), serials=("T-1N",))])
+        kept = catalog.merge(old, self.derived, today="2026-11-06")
+        self.assertEqual((kept[0].serials, kept[1].serials), (("T-1N",), ()))
+        set_now = catalog.merge(
+            old, self.derived, today="2026-11-06", serials={"roms/gba/Alpha.zip": ("T-2N", "T-3")}
+        )
+        self.assertEqual(set_now[0].serials, ("T-2N", "T-3"))
+        doc = catalog.decode(catalog.encode("gba", set_now, "2026-11-06T00:00:00Z"))
+        assert doc is not None
+        self.assertEqual(doc.games[set_now[0].id].serials, ("T-2N", "T-3"))
+
+    def test_a_file_without_serials_reads_as_none(self) -> None:
+        raw = json.loads(catalog.encode("gba", self.derived, "t"))
+        for game in raw["games"].values():
+            del game["serials"]
+        doc = catalog.decode(json.dumps(raw).encode())
+        assert doc is not None
+        self.assertTrue(all(g.serials == () for g in doc.games.values()))
+
     def test_fill_hashes_and_diff(self) -> None:
         merged = catalog.merge({}, self.derived, today="2026-11-06")
         filled = catalog.fill_hashes(merged, {"roms/gba/Alpha.zip": "c" * 40})
