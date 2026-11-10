@@ -213,9 +213,11 @@ through `inbox`'s parse cache (`dat.DatLibrary`).
   exact match that differs replaces their serials, no match keeps them.
 - **Exact identity only** (`catalog.dat_serials`, pure). In this order: the `dat` name `inbox`
   stored, when a DAT game has exactly that name; else the SHA-1 and size of the primary file part
-  against the DAT games that have one rom; else, for an `.m3u` folder, each disc named in the
-  playlist inside it, by exact name against the DAT game names (`inbox` names a disc file after
-  its DAT game), with the union of the discs' serials in disc order, all discs needed. Nothing is
+  against the DAT games that have one rom; else, for a single file, its name without the
+  extension against the DAT game names (`inbox` names a file after its DAT game, so a single CHD
+  filed before `dat` was recorded is found this way); else, for an `.m3u` folder, each disc named
+  in the playlist inside it, by exact name against the DAT game names, with the union of the
+  discs' serials in disc order, all discs needed. Nothing is
   compared case-insensitively or cleaned up. A key the DATs give two different serial lists is
   not guessed at. A game with no exact match is left without serials and counted as unmatched.
 - **Writes:** only the `serials` of `catalog/systems/<system>.json`, with the scan's guarded atomic

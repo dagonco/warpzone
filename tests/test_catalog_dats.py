@@ -188,6 +188,14 @@ class DatSerialsTests(StoreCase):
         self.assertEqual((statuses["dreamcast"], statuses["psp"]), ("error", "written"))
         self.assertTrue(any(line.startswith("dreamcast: error: DATs: ") for line in self.lines))
 
+    def test_a_single_file_with_no_dat_name_is_found_by_its_file_name(self) -> None:
+        self.put("roms/dreamcast/Plain (USA).chd", b"plain chd")
+        self.run_catalog()
+        self.dats.games["dreamcast"] = [dat_game("Plain (USA)", ("T-7",))]
+        self.dats_pass()
+        self.assertEqual(self.serials("dreamcast")["Plain (USA).chd"], ["T-7"])
+        self.assertEqual(self.serials("dreamcast")["Lost.chd"], [])
+
     def test_a_name_with_two_serial_lists_is_not_guessed(self) -> None:
         self.dats.games["dreamcast"] = [
             dat_game("Named (USA)", ("T-1",)),
@@ -267,7 +275,7 @@ class DatsCliTests(StoreCase):
         code, out, _ = self.catalog("--dats", "--dats-dir", str(self.dats_dir))
         self.assertEqual(code, 0)
         self.assertIn("dreamcast: 1 game(s), written", out)
-        self.assertIn("dreamcast: 0 filled, 0 already had, 1 unmatched", out)
+        self.assertIn("dreamcast: 1 filled, 0 already had, 0 unmatched", out)  # by file name
 
     def test_a_missing_folder_or_a_folder_without_dats_is_exit_2_before_the_scan(self) -> None:
         code, _, err = self.catalog("--dats")

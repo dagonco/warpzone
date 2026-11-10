@@ -521,15 +521,20 @@ def dat_serials(
 
     In this order: the DAT name `inbox` stored, when the DAT has a game of that name (a name
     the DATs have twice with different serials gives None); else the SHA-1 and size of the
-    primary file part against the DAT games of one rom; else, for an `.m3u` folder, the union
-    of the serials of its discs, each found by its exact name (`discs`, see
-    `m3u_disc_names`), which needs every disc to be found. Names are compared as they are, with
-    no case folding or cleaning."""
+    primary file part against the DAT games of one rom; else, for a single file, its name
+    without the extension against the DAT game names (`inbox` names a file after its DAT game);
+    else, for an `.m3u` folder, the union of the serials of its discs, each found by its exact
+    name (`discs`, see `m3u_disc_names`), which needs every disc to be found. Names are compared
+    as they are, with no case folding or cleaning."""
     if game.dat and game.dat in index.by_name:
         return _only(index.by_name[game.dat])
     primary = next((p for p in game.parts if p.path == game.primary), None)
     if primary is not None and primary.type == FILE and primary.sha1:
         found = _only(index.by_rom.get((primary.size, primary.sha1.lower())))
+        if found is not None:
+            return found
+    if primary is not None and primary.type == FILE:
+        found = _only(index.by_name.get(_stem(posixpath.basename(game.primary))))
         if found is not None:
             return found
     if discs and game.primary.lower().endswith(".m3u"):

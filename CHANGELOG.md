@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ### Added
 
-- `warpzone catalog --dats [--dats-dir PATH] [--force] [--dry-run]` fills the DAT serials of the games already in the library that have none, from the DAT folder `inbox` uses, so the Flycast memory cards of Dreamcast games filed before serials were recorded can be matched to their game. It matches only by exact identity (the DAT name `inbox` stored, the SHA-1 and size of the file, or the exact names of the discs of an `.m3u`), leaves the rest unmatched, and writes only under `catalog/`.
+- `warpzone catalog --dats [--dats-dir PATH] [--force] [--dry-run]` fills the DAT serials of the games already in the library that have none, from the DAT folder `inbox` uses, so the Flycast memory cards of Dreamcast games filed before serials were recorded can be matched to their game. It matches only by exact identity (the DAT name `inbox` stored, the SHA-1 and size of the file, the exact file name, or the exact names of the discs of an `.m3u`), leaves the rest unmatched, and writes only under `catalog/`.
 
 ## [0.4.0rc1] - 2026-11-10
 

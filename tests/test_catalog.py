@@ -607,9 +607,27 @@ class DatSerialsTests(unittest.TestCase):
                 catalog.dat_serials(self.game("roms/dreamcast/Other.chd", dat=wrong), index), wrong
             )
 
-    def test_a_file_name_alone_is_not_an_identity(self) -> None:
+    def test_a_single_file_is_found_by_its_exact_name_without_the_extension(self) -> None:
         index = self.dat(self.disc("Game (USA)", ("T-1",)))
+        for name in ("Game (USA).chd", "Game (USA).iso", "Game (USA).cue"):
+            self.assertEqual(
+                catalog.dat_serials(self.game(f"roms/dreamcast/{name}"), index), ("T-1",), name
+            )
+        for name in ("game (usa).chd", "Game (USA) .chd", "Game (USA) (Rev A).chd", "Game.chd"):
+            self.assertIsNone(catalog.dat_serials(self.game(f"roms/dreamcast/{name}"), index), name)
+        nested = self.game("roms/dreamcast/sub/Game (USA).chd")
+        self.assertEqual(catalog.dat_serials(nested, index), ("T-1",))
+
+    def test_a_file_name_with_two_serial_lists_is_not_guessed(self) -> None:
+        index = self.dat(
+            self.disc("Game (USA)", ("T-1",)), self.disc("Game (USA)", ("T-2",), "e" * 40)
+        )
         self.assertIsNone(catalog.dat_serials(self.game("roms/dreamcast/Game (USA).chd"), index))
+
+    def test_the_hash_wins_over_the_file_name(self) -> None:
+        index = self.dat(self.disc("Game (USA)", ("T-1",)), self.disc("Other", ("T-2",), self.SHA))
+        game = self.game("roms/dreamcast/Game (USA).iso", sha1=self.SHA)
+        self.assertEqual(catalog.dat_serials(game, index), ("T-2",))
 
     def test_the_sha1_and_size_of_the_primary_file_find_a_one_rom_game(self) -> None:
         index = self.dat(self.disc("Game (USA)", ("T-1",), self.SHA))

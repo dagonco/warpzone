@@ -317,7 +317,8 @@ A game can carry the serials its Redump DAT lists (the disc's product number, fo
 
 1. the DAT game name `inbox` stored for it (`dat` in the catalog), when a DAT game has exactly that name;
 2. else the SHA-1 and size of its main file against the DAT games that have a single rom (a disc kept as an `.iso`, for instance; a CHD never matches this way, as its hash is not the DAT's);
-3. else, for a multi-disc `.m3u` folder, each disc named in its playlist by exact name against the DAT game names (`inbox` names a disc file after its DAT game), and the game gets the union of the serials of all its discs. If any disc is not found the game gets none.
+3. else, for a single file, its name without the extension against the DAT game names, exactly and with the same case (`inbox` names a file after its DAT game, so a single `.chd` filed before `dat` was recorded is found this way);
+4. else, for a multi-disc `.m3u` folder, each disc named in its playlist by exact name against the DAT game names, and the game gets the union of the serials of all its discs. If any disc is not found the game gets none.
 
 A name or hash that the DATs list with different serials is not guessed at. A game with no exact match stays without serials and is counted as unmatched (the first 20 are named). `--dats` runs the normal scan first, then writes only the `serials` of `catalog/systems/<system>.json`, with the same guarded write as the scan, and not at all for a file whose games would not change. It prints, per system, how many games were filled, already had serials, or matched nothing, and `no DAT with serials` for a system whose DATs are missing or list none. A game that has serials is left alone unless you pass `--force`, which replaces its serials only when the DAT gives it a single, different answer. With `--dry-run` it says how many games it would fill and writes nothing.
 
