@@ -111,6 +111,19 @@ rule above still holds, file by file, with the re-check right before each delete
   was emptied by mistake, or a library folder that briefly looks wrong, from wiping a console. A
   removal it refuses stays until the user runs `prune --apply` by hand, where the size cap and
   `--force` apply as usual; a device that holds a single game can only lose it that way.
+- **A refusal leaves a trace.** Nobody reads the journal of the timer, so when `guard` names a
+  folder the run writes `~/.local/state/warpzone/prune-guard.json` (next to the updater's
+  state, mode 0600, replaced atomically through `safefile.write_file`): `version`, `time`
+  (seconds since the epoch) and, per folder id, the bytes it would have deleted and the bytes the
+  device holds. No file or folder names. `prune.render_guard_state` and `prune.parse_guard_state`
+  are the pure ends of it; `record_guard_refusal` and `clear_guard_refusal` touch the disk. Any
+  `--apply` run that goes on to settle clears the file: no folder was skipped or busy, and it
+  either deleted or had nothing to delete (a manual `prune --apply` after the review does it). A
+  report-only run, a busy or skipped run, and a refusal by the attended size cap leave it as it
+  was. `prune_device` takes the state folder as `state_base` (the CLI passes
+  `~/.local/state/warpzone`; None records nothing), and a failed write is a warning, not a
+  failure of the run. `doctor` reads the file (see [Doctor](/warpzone/development/design/doctor/)).
+  `health` does not: it decides whether a version works, and a refusal says nothing about that.
 - **Busy is not a failure.** A full scan that gets no answer in time ("rescan queued", see
   [Syncthing API surface](/warpzone/development/design/code-and-testing/#syncthing-api-surface-used))
   means the device is still pulling: the run deletes nothing and exits 0, and the next tick tries

@@ -963,6 +963,7 @@ def _run(args: argparse.Namespace) -> int:
             notify_url=args.notify_url,
             rescan_timeout=args.timeout,
             unattended=args.unattended,
+            state_base=settings_state.state_dir().parent,
         )
         return EXIT_RUNTIME if problems else EXIT_OK
 

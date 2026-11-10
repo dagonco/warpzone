@@ -66,7 +66,7 @@ warpzone/
   provision_scripts.py  the ES-DE startup scripts, turning ES-DE's event scripts on, the Options menu entries
   provision_timers.py  the artwork, play state and unattended prune systemd user timers
   provision_updater.py  the autonomous update: settings file, live updater script, its timer
-  prune.py           leftover detection (pure `classify`), the unattended guard (pure `guard`), delete, webhook
+  prune.py           leftover detection (pure `classify`), the unattended guard (pure `guard`) and the state file of its refusal, delete, webhook
   bios.py            BIOS manifest, local overrides, pure `judge_*`, disk checks
   whitelist.py       managed whitelists: escape, parse, render, normalize, changes, matcher,
                      effect, migration parsing and classification, unsupported systems (pure)

@@ -29,9 +29,12 @@ from warpzone.prune import (
     apply_folder,
     classify,
     guard,
+    guard_state_path,
     notify,
+    parse_guard_state,
     parse_time,
     prune_device,
+    render_guard_state,
     rescan,
 )
 from warpzone.report import Reporter
@@ -426,6 +429,110 @@ class GuardTests(unittest.TestCase):
     def test_names_every_folder_that_exceeds(self) -> None:
         totals = {"ok": (10, 100), "big": (80, 100), "half": (50, 100), "bigger": (3, 4)}
         self.assertEqual(guard(totals), ["big", "bigger"])
+
+
+class GuardStateTests(unittest.TestCase):
+    """The pure part of the trace a guard refusal leaves for `doctor`."""
+
+    def test_a_refusal_round_trips(self) -> None:
+        text = render_guard_state({"wz-songs": (5, 5), "wz-library": (80, 100)}, 1_700_000_000.9)
+        refusal = parse_guard_state(text)
+        assert refusal is not None
+        self.assertEqual(refusal.when, 1_700_000_000)
+        self.assertEqual(refusal.folders, (("wz-library", 80, 100), ("wz-songs", 5, 5)))
+
+    def test_it_holds_sizes_and_folder_ids_only(self) -> None:
+        text = render_guard_state({"wz-library": (80, 100)}, 1)
+        self.assertEqual(set(json.loads(text)), {"version", "time", "folders"})
+        self.assertEqual(json.loads(text)["folders"], {"wz-library": {"delete": 80, "held": 100}})
+
+    def test_text_that_is_not_a_refusal_is_none(self) -> None:
+        for text in (
+            "",
+            "not json",
+            "[]",
+            "{}",
+            '{"time": 1}',
+            '{"time": 1, "folders": {}}',
+            '{"time": "x", "folders": {"a": {"delete": 1, "held": 1}}}',
+            '{"time": 1, "folders": {"a": {"delete": 1}}}',
+            '{"time": 1, "folders": {"a": 3}}',
+            '{"time": true, "folders": {"a": {"delete": 1, "held": 1}}}',
+        ):
+            self.assertIsNone(parse_guard_state(text), text)
+
+
+class GuardTraceTests(unittest.TestCase):
+    """`prune_device` leaves a trace of a guard refusal and clears it on the next good run."""
+
+    def setUp(self) -> None:
+        self.dev = Device(self)
+        self.base = self.dev.home / "state"
+        self.path = guard_state_path(self.base)
+
+    def run_prune(self, *, unattended: bool = True, **kw: Any) -> int:
+        return self.dev.prune(
+            apply=True, unattended=unattended, state_base=self.base, now=lambda: 1234.0, **kw
+        )
+
+    def refuse(self) -> None:
+        self.dev.put("roms/n64/a.z64", "12345")
+        self.dev.put("roms/nes/mario.nes", "abcd", info=wanted_info(4))
+        self.assertEqual(self.run_prune(), 1)
+
+    def test_a_refusal_is_recorded_with_the_folders_and_sizes(self) -> None:
+        self.refuse()
+        refusal = parse_guard_state(self.path.read_text())
+        assert refusal is not None
+        self.assertEqual((refusal.when, refusal.folders), (1234.0, (("wz-library", 5, 9),)))
+        self.assertEqual(oct(self.path.stat().st_mode & 0o777), "0o600")
+
+    def test_the_next_run_that_deletes_clears_it(self) -> None:
+        self.refuse()
+        self.dev.put("roms/nes/big.nes", "x" * 50, info=wanted_info(50))
+        self.assertEqual(self.run_prune(), 0)
+        self.assertFalse(self.path.exists())
+
+    def test_a_run_with_nothing_to_delete_clears_it(self) -> None:
+        self.refuse()
+        (self.dev.root / "roms/n64/a.z64").unlink()
+        self.assertEqual(self.run_prune(), 0)
+        self.assertFalse(self.path.exists())
+
+    def test_a_busy_run_leaves_it_alone(self) -> None:
+        self.refuse()
+        with mock.patch.object(Client, "scan", return_value=False):
+            self.assertEqual(self.run_prune(), 0)
+        self.assertTrue(self.path.exists())
+
+    def test_a_report_only_run_leaves_it_alone(self) -> None:
+        self.refuse()
+        self.dev.prune(state_base=self.base)
+        self.assertTrue(self.path.exists())
+
+    def test_a_manual_apply_that_deletes_clears_it(self) -> None:
+        self.refuse()
+        self.assertEqual(self.run_prune(unattended=False), 0)
+        self.assertFalse(self.path.exists())
+
+    def test_the_size_cap_of_an_attended_run_is_not_a_guard_refusal(self) -> None:
+        self.dev.put("roms/n64/a.z64", "12345")
+        self.assertEqual(self.run_prune(unattended=False, max_gib=0), 1)
+        self.assertFalse(self.path.exists())
+
+    def test_without_a_state_folder_nothing_is_written(self) -> None:
+        self.dev.put("roms/n64/a.z64", "12345")
+        self.dev.put("roms/nes/mario.nes", "abcd", info=wanted_info(4))
+        self.assertEqual(self.dev.prune(apply=True, unattended=True), 1)
+        self.assertFalse(self.base.exists())
+
+    def test_a_state_folder_that_cannot_be_written_is_a_warning(self) -> None:
+        blocked = self.dev.home / "blocked"
+        blocked.write_text("a file, not a folder")
+        self.dev.put("roms/n64/a.z64", "12345")
+        self.dev.put("roms/nes/mario.nes", "abcd", info=wanted_info(4))
+        self.assertEqual(self.dev.prune(apply=True, unattended=True, state_base=blocked), 1)
+        self.assertTrue(any("cannot update" in w for w in self.dev.warnings))
 
 
 class UnattendedTests(unittest.TestCase):
