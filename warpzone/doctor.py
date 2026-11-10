@@ -53,6 +53,7 @@ from warpzone import (
     selfupdate,
     settings_state,
     shadps4,
+    timers,
     titlelinks,
     updatetimer,
 )
@@ -1865,7 +1866,7 @@ def check_play_state(ctx: Context) -> list[Result]:
         )
         script = None if p.is_file(path) else str(path)
     if profile.play_state is not None and profile.play_state.refresh is not None:
-        unit = units / f"{artwork.PLAY_STATE_UNIT}.timer"
+        unit = units / f"{timers.PLAY_STATE_UNIT}.timer"
         timer = None if p.is_file(unit) else unit.name
     verdict = judge_play_state(
         device=device.name,
@@ -2103,7 +2104,7 @@ def _check_artwork(ctx: Context, device: SettingsDevice, library: str) -> list[R
     )
     results = [Result("Frontend artwork", G_FRONTEND, *verdict)]
     if art.refresh is not None:
-        unit = p.home / ".config" / "systemd" / "user" / f"{artwork.UNIT_NAME}.timer"
+        unit = p.home / ".config" / "systemd" / "user" / f"{timers.ARTWORK_UNIT}.timer"
         if p.is_file(unit):
             results.append(
                 Result(
@@ -2180,7 +2181,7 @@ def check_update_timer(ctx: Context) -> list[Result]:
     command_ok = True
     if files:
         live = str(selfupdate.live_path(p.home))
-        words = updatetimer.exec_command(p.read_text(units / updatetimer.SERVICE))
+        words = timers.exec_command(p.read_text(units / updatetimer.SERVICE))
         command_ok = words == updatetimer.expected_command(live)
         try:
             enabled = (

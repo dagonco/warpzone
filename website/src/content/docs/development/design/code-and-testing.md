@@ -92,7 +92,8 @@ warpzone/
   flatpak.py         the SyncThingy flatpak: app id and the unit's commands
   selfupdate.py      the updater's side in Python: paths, settings file, live copy rule, `self-update` wrapper
   versions.py        order of package versions and release tags (`version_key`, `tag_key`; pure)
-  updatetimer.py     the systemd user units that start `updater.sh tick` (pure)
+  updatetimer.py     the systemd user units that start `updater.sh tick` (pure; quotes with `timers.exec_word`)
+  timers.py          the systemd user units of the artwork, play state, prune and settings timers, their names and the `ExecStart=` quoting (pure)
   settings.py        `settings apply`, `capture`, `audit`: loading, prompts, output
   settings_formats.py  format handlers ini, qt-ini, retroarch-cfg, yaml-flat (pure)
   settings_tree.py   format handlers json, toml (pure)
@@ -107,7 +108,7 @@ warpzone/
   frontend.py        frontend system list rewrite, RetroArch key gap (pure)
   gamelist.py        ES-DE gamelist text edits: the per-game emulator and the helpers `playstate` shares (pure)
   artwork.py         frontend artwork: ES-DE gamelist -> the frontend's gamelist, scope ignores,
-                     system names, timer units (pure; the reads are passed in)
+                     system names (pure; the reads are passed in)
   playstate.py       play state: ledgers, merge rules, times, its tags in a gamelist (pure)
   playstate_device.py  play state on a device: files, ES-DE gamelists, generated gamelists
   diskstatus.py      the disk a console reports to the hub: when to write, format, staleness (pure)
@@ -209,6 +210,10 @@ CI, which has no Docker step.
   in a temporary home (idempotence, frontend running, no `/proc`, dry-run, a changed file), the
   timer units and their systemctl calls, scope sync against the fake Syncthing, `frontend
   refresh` and the doctor lines.
+- Timer unit tests (`test_timers.py`): the `ExecStart=` quoting, with a config or Python path
+  that holds `$`, `%`, a space, a quote or a backslash read back as the same words and with no
+  `%` or `$` left for systemd to expand, the updater's unit included; the priority settings of
+  the four services; the unit names.
 - Save conversion tests (`test_saveconvert.py`, `test_saveconvert_device.py`): the footer
   (parse, strip, build, malformed input), every branch of the decision, the files in a temporary
   home (both directions, kept footer, conflicts and backups, invalid and temporary files, the

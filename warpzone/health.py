@@ -21,7 +21,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from warpzone import artwork, esde, localst, settings, settings_state, updatetimer
+from warpzone import esde, localst, settings, settings_state, timers, updatetimer
 from warpzone.config import Config, ConfigError, Device
 from warpzone.model import ModelError
 from warpzone.paths import expand_home
@@ -109,13 +109,13 @@ def expected_files(device: Device, profile: Profile, home: Path) -> list[Expecte
         and profile.artwork.refresh
         and ("frontend" in folders or profile.converts_saves(folders))
     ):
-        unit(artwork.UNIT_NAME)
+        unit(timers.ARTWORK_UNIT)
     if (
         "play-state" in folders
         and profile.play_state is not None
         and profile.play_state.refresh is not None
     ):
-        unit(artwork.PLAY_STATE_UNIT)
+        unit(timers.PLAY_STATE_UNIT)
     if device.self_update:
         unit(updatetimer.NAME)
     return found
@@ -360,7 +360,7 @@ def _check_files(
         if text is not None and item.kind == SCRIPT:
             program, runs_warpzone = esde.script_interpreter(text), True
         elif text is not None and item.kind == SERVICE:
-            words = updatetimer.exec_command(text) or []
+            words = timers.exec_command(text) or []
             program = words[0] if words else None
             runs_warpzone = words[1:3] == ["-m", "warpzone"]
             if (
