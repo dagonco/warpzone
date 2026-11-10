@@ -37,6 +37,8 @@ from warpzone import (
     library_api,
     playstate,
     progress,
+    queue,
+    queue_store,
     ra,
     ra_data,
     ra_store,
@@ -264,6 +266,8 @@ class HubFiles:
         )
         self._ledgers: dict[Path, tuple[tuple[int, int], playstate.Ledger | None]] = {}
         self._ledgers_checked = float("-inf")
+        self._queue: tuple[tuple[int, int] | None, queue_store.Loaded] | None = None
+        self._queue_checked = float("-inf")
 
     # ------------------------------------------------------------- the catalog
 
@@ -483,6 +487,25 @@ class HubFiles:
                 ledger = None
             found[path] = (stamp, ledger)
         self._ledgers = found
+
+    # ------------------------------------------------------------- the queue
+
+    def queue(self) -> queue_store.Loaded:
+        """The queue file, read again when its size or mtime changed (checked at most every
+        `interval` seconds). A write of the server drops it (`invalidate_queue`)."""
+        with self._lock:
+            if self._queue is not None and self.clock() - self._queue_checked < self.interval:
+                return self._queue[1]
+            self._queue_checked = self.clock()
+            stamp = self._stat(queue_store.queue_path(self.root))
+            if self._queue is None or self._queue[0] != stamp:
+                self._queue = (stamp, queue_store.load(self.root))
+            return self._queue[1]
+
+    def invalidate_queue(self) -> None:
+        with self._lock:
+            self._queue = None
+            self._queue_checked = float("-inf")
 
     # ------------------------------------------------------------- whitelists
 
@@ -872,12 +895,16 @@ class App:
                 return json_response(200, self._progress_entries())
             case ["catalog"]:
                 return json_response(200, self._catalog_status())
+            case ["queue"]:
+                return self._queue_get(request)
         raise ApiError("not-found", "no such route")
 
     def _api_write(self, request: Request, segments: list[str]) -> Response:
         match segments:
             case ["changes"]:
                 return self._changes(self._json_body(request))
+            case ["queue"]:
+                return self._queue_post(self._json_body(request))
             case ["devices", device, "restore"]:
                 self._known_device(device)
                 return self._restore(device, self._json_body(request))
@@ -1020,6 +1047,124 @@ class App:
             return json_response(500, partial)
         return json_response(200, library_api.changes_response(plan, written, warnings))
 
+    # ------------------------------------------------------------- the queue
+
+    def _queue_context(self) -> queue.Context:
+        return queue.Context(
+            self.cfg,
+            self.files.library(),
+            self.files.views(self.cfg),
+            self._play_index(),
+            self.files.extras,
+        )
+
+    def _queue_get(self, request: Request) -> Response:
+        history = queue.parse_history(request.query.get("history"))
+        loaded = self.files.queue()
+        body = queue.queue_response(
+            loaded.reading,
+            loaded.reading.queue,
+            loaded.etag,
+            loaded.size,
+            self._queue_context(),
+            int(self.now().timestamp()),
+            history,
+        )
+        return json_response(200, body)
+
+    def _queue_post(self, body: object) -> Response:
+        ctx = self._queue_context()
+        loaded = queue_store.load(self.root)  # read fresh: the plan decides what is written
+        now = self.now()
+        stamp = int(now.timestamp())
+        plan = queue.plan(body, loaded.reading, loaded.etag, loaded.size, ctx, now)
+        if plan.dry_run:
+            return json_response(
+                200, queue.plan_response(plan, loaded.etag, loaded.size, ctx, stamp)
+            )
+        written: dict[str, bool] = {}
+        warnings: dict[str, list[str]] = {}
+        failure: ApiError | None = None
+        queue_written = False
+        with self.write_lock:
+            # Step 1: every file is checked before the first one is written.
+            if queue_store.load(self.root).etag != loaded.etag:
+                raise ApiError("stale", "the queue changed since it was read", queue=True)
+            todo = [dp for dp in plan.devices if dp.changed]
+            for name, etag in plan.reads.items():  # every whitelist the plan read, written or not
+                snapshot = store.read(store.whitelist_path(self.root, name))
+                if library_api.api_etag(snapshot.etag) != etag:
+                    raise ApiError(
+                        "stale", f"{name}: the whitelist changed since it was read", device=name
+                    )
+            # Step 4: the queue first, so a failure after it leaves a claim the page can show.
+            if plan.first is not None:
+                self._write_queue(loaded.etag, plan.first, now)
+                queue_written = True
+            # Step 5: the whitelists.
+            for dp in todo:
+                try:
+                    text = dp.new_text.encode("utf-8")
+
+                    def build(_snapshot: store.Snapshot, data: bytes = text) -> bytes:
+                        return data
+
+                    store.replace(
+                        self.root,
+                        dp.device,
+                        library_api.raw_etag(dp.etag),
+                        build,
+                        now=now,
+                    )
+                except (store.Stale, store.NoLibrary, OSError, WarpzoneError) as exc:
+                    stale = isinstance(exc, store.Stale)
+                    code = "stale" if stale else "write-failed"
+                    message = (
+                        f"{dp.device}: the whitelist changed while it was being written"
+                        if stale
+                        else f"{dp.device}: the whitelist could not be written ({_reason(exc)})"
+                    )
+                    failure = ApiError(code, message, device=dp.device)
+                    break
+                written[dp.device] = True
+            # Step 6: a `remove` that ended claims deletes the entry once every whitelist is out.
+            if failure is None and plan.second is not None and plan.first is not None:
+                try:
+                    self._write_queue(queue.etag_of(plan.first), plan.second, now)
+                except ApiError as exc:
+                    failure = exc
+        self._scan_written(list(written), warnings)
+        if failure is not None:
+            if not written and not queue_written:
+                raise failure
+            partial = library_api.changes_response(
+                library_api.Plan(False, plan.devices, plan.skipped), written, warnings
+            )
+            partial["queue"] = queue_written
+            partial["error"] = failure.body()["error"]
+            return json_response(500, partial)
+        answer = queue.plan_response(plan, loaded.etag, loaded.size, ctx, stamp, written, warnings)
+        return json_response(200, answer)
+
+    def _write_queue(self, etag: str, data: bytes, now: datetime) -> None:
+        """One guarded write of the queue file, under the write lock; `ApiError` when it fails."""
+        try:
+            queue_store.replace(self.root, etag, data, now)
+        except store.Stale:
+            raise ApiError(
+                "stale", "the queue changed while it was being written", queue=True
+            ) from None
+        except store.NoLibrary as exc:  # the answer names the folder, the log the hub root
+            self.log(f"error: {exc} (hub root {self.root})")
+            raise ApiError(
+                "write-failed", f"the queue could not be written ({exc})", queue=True
+            ) from None
+        except (OSError, WarpzoneError) as exc:
+            message = f"the queue could not be written ({_reason(exc)})"
+            raise ApiError("write-failed", message, queue=True) from None
+        finally:
+            self.files.invalidate_queue()
+
     # ------------------------------------------------------------- history and restore
 
     def _known_device(self, device: str) -> None:
@@ -1154,6 +1299,8 @@ class App:
 
 
 def _reason(exc: BaseException) -> str:
+    if isinstance(exc, store.NoLibrary):  # its message holds the hub's path
+        return "a folder of the hub is not there"
     return getattr(exc, "strerror", None) or str(exc) or type(exc).__name__
 
 

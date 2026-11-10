@@ -53,7 +53,7 @@ The pages after this one cover one subject each.
 - [BIOS check](/warpzone/development/design/bios/): the manifest and the judgements.
 - [Inbox](/warpzone/development/design/inbox/): identifying, converting and filing new games, kind by kind.
 - [Library UI](/warpzone/development/design/library-ui/): the catalog index, the managed whitelists, the web page and its API, the container on the hub.
-  - [Play queue](/warpzone/development/design/play-queue/) (proposed, not implemented): the games the user wants to play next, kept on the hub, and how queueing for a console turns the game on there.
+  - [Play queue](/warpzone/development/design/play-queue/) (file and API implemented, page to come): the games the user wants to play next, kept on the hub, and how queueing for a console turns the game on there.
 - [Emulator settings](/warpzone/development/design/emulator-settings/): layers, apply, capture and audit.
 - [Doctor](/warpzone/development/design/doctor/): the machine checklist.
 - [Self-update](/warpzone/development/design/self-update/): the device install, the settings, the timer.

@@ -2,13 +2,13 @@
 title: "Play queue"
 ---
 
-**Status: proposed, not implemented.** Nothing on this page exists in the code yet. It is the
-design of the play queue of the [library UI](/warpzone/development/design/library-ui/), with the
-maintainer's answers to the review's questions recorded in [Decisions](#decisions); once merged
-it becomes the contract for the implementation, and the library UI page, the hub
-layout in [Hub, folders and ignores](/warpzone/development/design/hub-and-folders/) and the code
-layout in [Code, testing and CI](/warpzone/development/design/code-and-testing/) are updated in
-the pull request that implements it.
+**Status: the file, the inferred states and the HTTP API are implemented; the page (the Queue
+button, the Up next section) is not yet.** This is the design of the play queue of the
+[library UI](/warpzone/development/design/library-ui/), with the maintainer's answers to the
+review's questions recorded in [Decisions](#decisions). It is the contract for the code in
+`queue.py`, `queue_store.py` and the two routes of `serve.py`, and for the page that comes next.
+[Implementation notes](#implementation-notes) lists the places where the code settled something
+the design left open.
 
 The play queue is an ordered list of the games the user wants to play next, kept on the hub and
 shown by the library UI: a "Queue" button on each game page and an "Up next" section on the home
@@ -144,7 +144,8 @@ the queue turns a partial game fully on when it is queued but never turns it off
 
 A file that does not match this schema exactly (an unknown key, a wrong type, a time that is not
 in the form above, two entries with the same owner and id, a claim for a device name that is not a valid device
-name) is **damaged** (below).
+name, an `ended` that is set while the entry is active or missing while it is ended, an `end` without
+an `until` or the other way round) is **damaged** (below).
 
 ### Game references
 
@@ -325,8 +326,9 @@ a queue request and a `POST /api/v1/changes` never interleave.
 - `state`: `ok`; `absent` (no file yet: an empty queue, `etag` `absent`); `damaged` (the file
   cannot be read, is not UTF-8 JSON, is over 16 MiB or does not match the schema: `entries` and
   `history` are empty and every write is refused with `queue-damaged`); `newer` (a format above
-  `1`: shown as far as the known keys allow, every write refused with `queue-damaged`). With
-  `damaged`, a `message` names the file and the cause; the log has the full path.
+  `1`: `entries` and `history` are empty, since a reader cannot trust keys it does not know, and
+  every write is refused with `queue-damaged`). With `damaged` or `newer`, a `message` names the
+  file and the cause, never the hub's path.
 - `etag`: `sha256:<hex>` of the file's bytes, or `absent`, echoed in `expect_queue`.
 - `entries`: the user's active entries in queue order; `history`: the user's ended ones, latest
   `ended` first, at most `N` of them (`history`: a whole number from 0 to 10000, default 50;
@@ -378,13 +380,15 @@ nothing and answers with `"dry_run": true`; the page uses it for the confirmatio
 `queue.plan` (pure) takes the request, the queue as read, the config, the catalog and the
 whitelists as read, and the time, and returns either the new queue, the whitelist changes per
 console and the second queue (for a `remove` that ends claims), or the first error, in this
-order: the body's shape and the [limits](#limits), the size limit included (it is checked on
-the rendered file); the queue is not `damaged` or `newer`; each
-game, device and position is known and valid for its operation; each device an operation touches
-supports the game's system (an `add` for a console with the system in `exclude_systems` is
-refused with `unsupported`) and has a managed whitelist (`not-managed` otherwise); `expect_queue`
-and an `expect` for every touched console are given and equal the current `etag`s; the release
-rules above. The whitelist changes are the same change items as in `POST /api/v1/changes` (`game
+order: the body's shape and the [limits](#limits); the queue is not `damaged` or `newer`; each
+`add` names a catalog game, each device named is known (a `keep` may name a console that left
+the config) and has a managed whitelist (`not-managed` otherwise); `expect_queue` and an
+`expect` for every console an operation reads or writes (`add`, `devices.add`, `release`,
+`sync`; not `keep`) are given (`expect-missing`) and equal the current `etag`s (`stale`); then
+the operations in order, each with its own checks: the entry exists, the position is valid, the
+console supports the game's system (an `add` for a console with the system in `exclude_systems`
+is refused with `unsupported`), the release rules above; last the size limit, which needs the
+rendered file. The whitelist changes are the same change items as in `POST /api/v1/changes` (`game
 on` and `game off` for one device) and go through the same per-device planning, so the effect
 check (the game reaches its state and no other game changes) is the one the switches use.
 
@@ -405,11 +409,13 @@ Then the server takes the write lock and:
    the second queue the same way, with the stamp of the file written in step 4.
 
 A failure in step 4 writes no whitelist and answers `500` `write-failed` (or `stale`, when the file
-changed during the write). A failure in step 5 or 6 answers `500` `write-failed` with `"queue":
-true` and the per-device results of the whitelists already written; each file is whole either
-way, and the next `GET` shows the claims that disagree with their whitelists. The server keeps
-the parsed queue in memory and reads it again when its size or mtime changed, checked at most
-every 5 seconds, like the other files.
+changed during the write), with `"queue": true` in the error. A failure in step 5 or 6 answers
+`500` with the body of a success (`devices` with what each whitelist did, `skipped`) in which
+`"queue": true` says that the queue file was written, plus an `error`: `write-failed` for the
+device (step 5) or with `"queue": true` for the file (step 6). Each file is whole either way,
+and the next `GET` shows the claims that disagree with their whitelists. The server keeps the
+parsed queue in memory for `GET` and reads it again when its size or mtime changed, checked at
+most every 5 seconds, like the other files; its own writes drop it at once.
 
 ### Errors
 
@@ -502,6 +508,51 @@ kept byte for byte)
 and the failure of each write step (a failure in step 4 writes no whitelist; a failure in step 5
 leaves a claim the next `GET` shows as `not-on` or `not-released`; a failure in step 6 leaves the
 entry).
+
+## Implementation notes
+
+Where the code settled something this page left open, or reads it more narrowly:
+
+- **The plan is made once.** `POST` reads the queue and the whitelists fresh, plans, then takes
+  the lock and compares the `etag` of the queue and of every whitelist the plan looked at, written
+  or not (`QueuePlan.reads`), with the one the plan used (step 1); a second plan on identical
+  inputs would give the same result, so there is none. The size limit
+  is checked last, on the rendered file, because only the result has a size.
+- **Held, kept, auto-ended.** Finishing, dropping or removing ends every open claim: the held
+  ones as the request says, and the ones that hold nothing (`before` `on` or `partial`) as
+  `kept` without being named, so an ended entry never keeps a claim open and blocks another
+  owner's release. `keep` may name any open claim; `release` only a held one (`not-held`
+  otherwise, also for a game that left the library: its consoles can only be kept). A console
+  named in both lists is `bad-request`; `release` and `keep` on any other `state` change are
+  `bad-request`.
+- **A release that did not reach the whitelist is pending.** A claim ended `released` with
+  `before` `off` whose game is still on its console (the view `not-released`) is still owed:
+  `remove`, and finishing or dropping an active entry, must name it in `release` (which turns
+  the game off again) or `keep`, like a held claim; `add` and `devices.add` over it record
+  `before: "off"` again, and a restart through `add` keeps such a claim on the entry. A closed
+  claim (released and really off, or `kept`) is closed.
+- **`moved` needs a candidate.** The candidates are computed after leaving out the games already
+  in the queue; an entry with none left is `missing`.
+- **One write when nothing was released.** A `remove` whose claims all end `kept` (or that had
+  none) deletes the entry in the first write. A request that changes no entry (a `sync`) writes
+  no queue file at all.
+- **`devices` and `add` details.** A new claim replaces an ended one for the same console; `add`
+  on a console with an open claim is `bad-request`. An ended entry is not changed by `devices`
+  (`bad-request`: queue it again first). A restarted entry also clears `ra_dismissed`. A `move`
+  takes a position from 0 to the number of the other active entries; `position` for `add` from
+  0 to the number of active entries.
+- **`relink`** takes any catalog game that has no entry (active or ended) of the owner
+  (`already-queued` otherwise) and refuses an entry that is still `present` (`bad-request`).
+  **`dismiss`** stores the award's date as a UTC time in the file's form; with no suggestion to
+  dismiss it is `bad-request`.
+- **A game removed earlier in the same request** cannot be named again in it (`bad-request`).
+- **The award's date** is compared to the second, in UTC; a date without a time counts as
+  midnight UTC.
+- **An unreadable file** (permissions) is `damaged` like a corrupt one. The hub's `catalog/`
+  folder must exist for the first write (an unmounted hub root creates nothing); the answer
+  names `catalog/`, the log the hub root.
+- **The file** is compact JSON with sorted keys; entries of other owners are kept as parsed and
+  written back identically.
 
 ## Out of scope
 

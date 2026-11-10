@@ -79,13 +79,20 @@ class ApiError(Exception):
     """An answer that is an error: `{"error": {"code", "message", "device", "game"}}`."""
 
     def __init__(
-        self, code: str, message: str, *, device: str | None = None, game: str | None = None
+        self,
+        code: str,
+        message: str,
+        *,
+        device: str | None = None,
+        game: str | None = None,
+        queue: bool = False,
     ) -> None:
         super().__init__(message)
         self.code = code
         self.message = message
         self.device = device
         self.game = game
+        self.queue = queue  # the error is about the queue file, not a whitelist
 
     @property
     def status(self) -> int:
@@ -97,6 +104,8 @@ class ApiError(Exception):
             error["device"] = self.device
         if self.game is not None:
             error["game"] = self.game
+        if self.queue:
+            error["queue"] = True
         return {"error": error}
 
 
@@ -665,7 +674,7 @@ def parse_changes(body: object) -> ChangeRequest:
 _HEX64 = re.compile(r"^[0-9a-f]{64}$")
 
 
-def _canonical_etag(value: str) -> str:
+def canonical_etag(value: str) -> str:
     return f"sha256:{value}" if _HEX64.match(value) else value
 
 
@@ -739,7 +748,7 @@ def plan_changes(body: object, cfg: Config, lib: Library, views: Mapping[str, De
         if name not in request.expect:
             raise ApiError("expect-missing", f"no `expect` for {name!r}", device=name)
     for name in per_device:
-        if _canonical_etag(request.expect[name]) != views[name].etag:
+        if canonical_etag(request.expect[name]) != views[name].etag:
             raise ApiError("stale", f"{name}: the whitelist changed since it was read", device=name)
     for name, items in per_device.items():
         for item in items:
@@ -757,29 +766,31 @@ def plan_changes(body: object, cfg: Config, lib: Library, views: Mapping[str, De
     return Plan(request.dry_run, plans, tuple(skipped))
 
 
-def _plan_device(
-    device: Device, view: DeviceView, items: Sequence[ChangeItem], lib: Library
-) -> DevicePlan:
+def apply_item(device: Device, model: wl.Model, item: ChangeItem, lib: Library) -> wl.Model:
+    """Apply one change item to a device's model, checking its effect; `ApiError` when it does
+    not hold. The queue plans its whitelist effects with this, so they obey the same rules."""
+    change: wl.Change
+    if item.game is None:
+        change = wl.SystemChange(item.system, item.on)
+    else:
+        game = lib.systems[item.system][item.game]
+        if catalog.UNLISTABLE in game.flags:
+            raise ApiError(
+                "unlistable",
+                f"{game.title!r} has a path that cannot be written as a whitelist line",
+                device=device.name,
+                game=item.game,
+            )
+        change = wl.GameChange(lib.wl_by_id[item.game], item.on)
+    try:
+        return wl.apply(model, change, lib.wl_games, device.exclude_systems).model
+    except wl.Refused as exc:
+        raise ApiError(exc.code, exc.message, device=device.name, game=item.game) from None
+
+
+def finish_device(device: Device, view: DeviceView, model: wl.Model, lib: Library) -> DevicePlan:
+    """The `DevicePlan` of a device whose whitelist `view` becomes `model`."""
     assert view.model is not None  # a managed or missing whitelist always has a model
-    model = view.model
-    for item in items:
-        change: wl.Change
-        if item.game is None:
-            change = wl.SystemChange(item.system, item.on)
-        else:
-            game = lib.systems[item.system][item.game]
-            if catalog.UNLISTABLE in game.flags:
-                raise ApiError(
-                    "unlistable",
-                    f"{game.title!r} has a path that cannot be written as a whitelist line",
-                    device=device.name,
-                    game=item.game,
-                )
-            change = wl.GameChange(lib.wl_by_id[item.game], item.on)
-        try:
-            model = wl.apply(model, change, lib.wl_games, device.exclude_systems).model
-        except wl.Refused as exc:
-            raise ApiError(exc.code, exc.message, device=device.name, game=item.game) from None
     try:
         text = wl.render(model)
     except wl.Unlistable as exc:
@@ -796,6 +807,16 @@ def _plan_device(
         bytes_on=lib.size_of(effect.turned_on),
         bytes_off=lib.size_of(effect.turned_off),
     )
+
+
+def _plan_device(
+    device: Device, view: DeviceView, items: Sequence[ChangeItem], lib: Library
+) -> DevicePlan:
+    assert view.model is not None  # a managed or missing whitelist always has a model
+    model = view.model
+    for item in items:
+        model = apply_item(device, model, item, lib)
+    return finish_device(device, view, model, lib)
 
 
 def changes_response(
@@ -943,7 +964,7 @@ def check_restore(etag: str, expect: str | None, device: str) -> None:
     the current file's (`etag`, in the API's form)."""
     if not expect:
         raise ApiError("expect-missing", f"no `expect` for {device!r}", device=device)
-    if _canonical_etag(expect) != etag:
+    if canonical_etag(expect) != etag:
         raise ApiError("stale", f"{device}: the whitelist changed since it was read", device=device)
 
 
@@ -1065,6 +1086,15 @@ def game_play(index: PlayIndex, system: str, game: catalog.Game) -> dict[str, An
         if (record := ledger.records.get(key)) is not None
     }
     return {"devices": devices, "totals": _totals(index, key)}
+
+
+def game_award(lib: Library, cfg: Config, system: str, game: catalog.Game) -> dict[str, str] | None:
+    """The user's highest RetroAchievements award on a game, `{"kind", "date"}`, or None
+    (no `[ra] user`, no downloaded progress, or no award): `progress.award` of the game page."""
+    found = ra_data.ra_game(system, game.ra, lib.ra_lists)
+    if found is None:
+        return None
+    return ra_data.award_of(lib.ra_cache, cfg.ra.user, found.id)
 
 
 def attach_play(
