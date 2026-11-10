@@ -9,7 +9,7 @@ tick from another launcher. See operation/self-update.md.
 
 from __future__ import annotations
 
-import re
+from warpzone.timers import exec_word
 
 NAME = "warpzone-self-update"
 SERVICE = f"{NAME}.service"
@@ -20,55 +20,6 @@ BOOT_SEC = "45s"
 INTERVAL = "15min"
 TIMEOUT_START = "30min"
 SHELL = "/bin/sh"
-
-_PLAIN = re.compile(r"[A-Za-z0-9_@+=:,./-]+")
-
-
-def exec_word(value: str) -> str:
-    """`value` as one word of an `ExecStart=` line: quoted when it needs it, with the `%`
-    and `$` that systemd expands doubled."""
-    if _PLAIN.fullmatch(value):
-        return value
-    escaped = value.replace("\\", "\\\\").replace('"', '\\"')
-    return '"' + escaped.replace("%", "%%").replace("$", "$$") + '"'
-
-
-def exec_command(text: str) -> list[str] | None:
-    """The words of the first `ExecStart=` line of a unit, or None when it has none.
-
-    Undoes `exec_word`: double quotes group a word and `\\` escapes inside them, and systemd's
-    `%%` and `$$` are one `%` and one `$`.
-    """
-    for line in text.splitlines():
-        key, sep, value = line.partition("=")
-        if sep and key.strip() == "ExecStart":
-            return _words(value.strip())
-    return None
-
-
-def _words(line: str) -> list[str]:
-    words: list[str] = []
-    word = ""
-    open_word = quoted = escaped = False
-    for char in line:
-        if escaped:
-            word += char
-            escaped = False
-        elif quoted and char == "\\":
-            escaped = True
-        elif char == '"':
-            quoted = not quoted
-            open_word = True
-        elif char.isspace() and not quoted:
-            if open_word:
-                words.append(word)
-                word, open_word = "", False
-        else:
-            word += char
-            open_word = True
-    if open_word:
-        words.append(word)
-    return [w.replace("%%", "%").replace("$$", "$") for w in words]
 
 
 def expected_command(updater: str) -> list[str]:

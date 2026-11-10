@@ -135,6 +135,10 @@ dats_dir = "~/dats/libretro-database/metadat"
 # orbis_pkg_util = "~/.cargo/bin/orbis-pkg-util"
 # vita3k = "/Applications/Vita3K.app"
 
+# Optional. Minutes one call of any of these tools may run before it is killed and its item
+# goes to review (a whole number, at least 1). Default: 240.
+# tool_timeout_minutes = 240
+
 # Optional Switch support. A local clone of blawar/titledb names the games
 # (git clone --depth 1 https://github.com/blawar/titledb; git pull updates it). nsz needs
 # your console's keys file to read the CNMT inside a Switch file; warpzone only passes the

@@ -12,7 +12,7 @@ from unittest import mock
 from support import API_KEY, DECK_ID, FakeProc, FakeSyncthing, config_data
 from test_anbernic import ARK_ID, ark_config
 from test_artwork_device import Art
-from warpzone import artwork, esde, health, localst, safefile, selfupdate, updatetimer
+from warpzone import artwork, esde, health, localst, safefile, selfupdate, timers, updatetimer
 from warpzone.cli import main
 from warpzone.config import Config, ConfigError, parse_config
 from warpzone.model import device_specs
@@ -90,8 +90,8 @@ class PureTests(unittest.TestCase):
                 ("script", scripts / esde.LINKS_SCRIPT),
                 ("service", units / updatetimer.SERVICE),
                 ("timer", units / updatetimer.TIMER),
-                ("service", units / f"{artwork.PLAY_STATE_UNIT}.service"),
-                ("timer", units / f"{artwork.PLAY_STATE_UNIT}.timer"),
+                ("service", units / f"{timers.PLAY_STATE_UNIT}.service"),
+                ("timer", units / f"{timers.PLAY_STATE_UNIT}.timer"),
             },
         )
 
@@ -107,8 +107,8 @@ class PureTests(unittest.TestCase):
             {
                 updatetimer.SERVICE,
                 updatetimer.TIMER,
-                f"{artwork.UNIT_NAME}.service",
-                f"{artwork.UNIT_NAME}.timer",
+                f"{timers.ARTWORK_UNIT}.service",
+                f"{timers.ARTWORK_UNIT}.timer",
             },
         )
 
@@ -186,21 +186,21 @@ class ExecCommandTests(unittest.TestCase):
     def test_the_words_of_an_exec_start_line(self) -> None:
         text = "[Service]\nType=oneshot\nExecStart=/usr/bin/python3 -m warpzone self-update\n"
         self.assertEqual(
-            updatetimer.exec_command(text),
+            timers.exec_command(text),
             ["/usr/bin/python3", "-m", "warpzone", "self-update"],
         )
 
     def test_a_quoted_word_keeps_its_spaces_and_systemd_escapes_are_undone(self) -> None:
         script = "/home/a b/updater/up%dater$.sh"
         text = updatetimer.render_service(script)
-        self.assertEqual(updatetimer.exec_command(text), ["/bin/sh", script, "tick"])
+        self.assertEqual(timers.exec_command(text), ["/bin/sh", script, "tick"])
 
     def test_the_units_warpzone_writes_round_trip(self) -> None:
-        service, _ = artwork.render_play_state_units(
+        service, _ = timers.render_play_state_units(
             "/v/bin/python", "deck", Path("/c d.toml"), "5min"
         )
         self.assertEqual(
-            updatetimer.exec_command(service),
+            timers.exec_command(service),
             [
                 "/v/bin/python",
                 "-m",
@@ -215,7 +215,7 @@ class ExecCommandTests(unittest.TestCase):
         )
 
     def test_no_exec_start_is_none(self) -> None:
-        self.assertIsNone(updatetimer.exec_command("[Timer]\nOnBootSec=5min\n"))
+        self.assertIsNone(timers.exec_command("[Timer]\nOnBootSec=5min\n"))
 
 
 class Base:
@@ -284,12 +284,12 @@ class DeckBase(Base):
             folder = self.home / updatetimer.UNIT_DIR
             live = selfupdate.live_path(self.home)
             safefile.write_script(live, "UPDATER_ABI=1\n")
-            service, timer = artwork.render_play_state_units(self.python, "deck", None, "15min")
+            service, timer = timers.render_play_state_units(self.python, "deck", None, "15min")
             for name, text in (
                 (updatetimer.SERVICE, updatetimer.render_service(str(live))),
                 (updatetimer.TIMER, updatetimer.render_timer()),
-                (f"{artwork.PLAY_STATE_UNIT}.service", service),
-                (f"{artwork.PLAY_STATE_UNIT}.timer", timer),
+                (f"{timers.PLAY_STATE_UNIT}.service", service),
+                (f"{timers.PLAY_STATE_UNIT}.timer", timer),
             ):
                 safefile.write_script(folder / name, text, 0o644)
 
@@ -372,13 +372,13 @@ class DeckTests(DeckBase, unittest.TestCase):
     def test_a_unit_that_runs_a_missing_program_fails(self) -> None:
         gone = str(self.home / "gone/bin/python")
         safefile.write_script(
-            self.home / updatetimer.UNIT_DIR / f"{artwork.PLAY_STATE_UNIT}.service",
+            self.home / updatetimer.UNIT_DIR / f"{timers.PLAY_STATE_UNIT}.service",
             f"[Service]\nExecStart={gone} -m warpzone play-state sync deck\n",
             0o644,
         )
         code, lines = self.health("deck", self.cfg, self.profiles)
         self.assertEqual(code, 1)
-        self.assertEqual(self.status(lines, f"{artwork.PLAY_STATE_UNIT}.service"), health.FAIL)
+        self.assertEqual(self.status(lines, f"{timers.PLAY_STATE_UNIT}.service"), health.FAIL)
 
     def test_a_self_update_unit_whose_script_is_gone_fails(self) -> None:
         os.remove(selfupdate.live_path(self.home))

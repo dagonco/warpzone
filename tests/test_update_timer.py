@@ -11,7 +11,7 @@ from unittest import mock
 
 from support import API_KEY, FakeSyncthing, config_data, device_probes
 from test_provision import reporter
-from warpzone import selfupdate, updatetimer
+from warpzone import selfupdate, timers, updatetimer
 from warpzone.config import parse_config
 from warpzone.probes import DeviceProbes
 from warpzone.profiles import load_profile
@@ -78,9 +78,23 @@ class RenderTests(unittest.TestCase):
         self.assertNotIn("python", text)
         self.assertNotIn("ES-DE", text)
 
+    def test_the_service_text_is_exactly_this(self) -> None:
+        # updater.sh and the doctor have counterparts of this text: it must not drift.
+        self.assertEqual(
+            updatetimer.render_service(UPDATER),
+            "[Unit]\n"
+            "Description=Keep warpzone on a release that works\n"
+            "# Written by warpzone provision device, which rewrites it.\n"
+            "\n"
+            "[Service]\n"
+            "Type=oneshot\n"
+            "TimeoutStartSec=30min\n"
+            f"ExecStart=/bin/sh {UPDATER} tick\n",
+        )
+
     def test_the_unit_round_trips_through_exec_command(self) -> None:
         self.assertEqual(
-            updatetimer.exec_command(updatetimer.render_service(UPDATER)),
+            timers.exec_command(updatetimer.render_service(UPDATER)),
             ["/bin/sh", UPDATER, "tick"],
         )
         self.assertEqual(updatetimer.expected_command(UPDATER), ["/bin/sh", UPDATER, "tick"])
@@ -89,7 +103,7 @@ class RenderTests(unittest.TestCase):
         path = "/opt/my wz/100%/u$h.sh"
         text = updatetimer.render_service(path)
         self.assertIn('ExecStart=/bin/sh "/opt/my wz/100%%/u$$h.sh" tick', text)
-        self.assertEqual(updatetimer.exec_command(text), ["/bin/sh", path, "tick"])
+        self.assertEqual(timers.exec_command(text), ["/bin/sh", path, "tick"])
 
     def test_unit_names(self) -> None:
         self.assertEqual(updatetimer.TIMER, TIMER)

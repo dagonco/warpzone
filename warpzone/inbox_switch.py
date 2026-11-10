@@ -477,6 +477,7 @@ class SwitchEnv:
     apply: bool
     copy: Callable[[Path, Path], None]  # copies and reads back; raises SwitchError
     cache_dir: Path | None = None
+    timeout: float = inbox_core.DEFAULT_TOOL_TIMEOUT  # seconds one nsz call may run
 
 
 @dataclass
@@ -502,15 +503,13 @@ def _keys_ok(env: SwitchEnv) -> bool:
     return env.keys is not None and env.keys.is_file()
 
 
-def run_nsz(command: Sequence[str]) -> tuple[int, str]:
-    proc = subprocess.run(
-        list(command),
-        capture_output=True,
-        text=True,
-        check=False,
-        errors="replace",
-        stdin=subprocess.DEVNULL,
-    )
+def run_nsz(command: Sequence[str], timeout: float) -> tuple[int, str]:
+    """(exit code, output) of one nsz call. An nsz that runs past `timeout` seconds is killed
+    and the file fails with `SwitchError`."""
+    try:
+        proc = inbox_core.run_process(command, timeout, stdin=subprocess.DEVNULL)
+    except inbox_core.ToolTimeout as exc:
+        raise SwitchError(str(exc)) from exc
     return proc.returncode, (proc.stdout or "") + "\n" + (proc.stderr or "")
 
 
@@ -522,7 +521,9 @@ def _tail(text: str) -> str:
 def read_cnmt(env: SwitchEnv, path: Path) -> list[Cnmt]:
     """The CNMT records of a `.nsp` or `.nsz`, read by `nsz --info`."""
     assert env.nsz and env.keys
-    code, text = run_nsz([env.nsz, "-i", "--depth", "3", "--keys", str(env.keys), str(path)])
+    code, text = run_nsz(
+        [env.nsz, "-i", "--depth", "3", "--keys", str(env.keys), str(path)], env.timeout
+    )
     if code != 0:
         raise SwitchError(f"nsz could not read {path.name} ({_tail(text)})")
     return parse_nsz_info(text)
@@ -554,7 +555,9 @@ def decompress(env: SwitchEnv, source: Path, scratch: Path) -> Path:
             f"{source.name}: not enough free space in {out} to decompress "
             f"(at least {least // 2**20} MiB)"
         )
-    code, text = run_nsz([env.nsz, "-D", "--keys", str(env.keys), "-o", str(out), str(source)])
+    code, text = run_nsz(
+        [env.nsz, "-D", "--keys", str(env.keys), "-o", str(out), str(source)], env.timeout
+    )
     produced = sorted(out.glob("*.nsp"))
     if code != 0 or "[DONE]" not in text or len(produced) != 1:
         raise SwitchError(f"nsz could not decompress {source.name} ({_tail(text)})")
@@ -563,7 +566,7 @@ def decompress(env: SwitchEnv, source: Path, scratch: Path) -> Path:
         check_pfs0_file(nsp)
     except SwitchError as exc:
         raise SwitchError(f"decompressed {source.name} is not a valid NSP ({exc})") from exc
-    code, text = run_nsz([env.nsz, "-V", "--keys", str(env.keys), str(nsp)])
+    code, text = run_nsz([env.nsz, "-V", "--keys", str(env.keys), str(nsp)], env.timeout)
     if code != 0 or "[VERIFIED]" not in text:
         raise SwitchError(f"decompressed {source.name} failed nsz verification ({_tail(text)})")
     return nsp
@@ -788,7 +791,7 @@ class SwitchHandler:
                 with zipfile.ZipFile(item) as z:
                     return any(is_switch_name(n) for n in z.namelist())
             if ctx.tools.bsdtar:
-                code, text = inbox_core.run([ctx.tools.bsdtar, "-tf", str(item)])
+                code, text = inbox_core.run([ctx.tools.bsdtar, "-tf", str(item)], ctx.tools.timeout)
                 return code == 0 and any(is_switch_name(n) for n in text.splitlines())
         except (zipfile.BadZipFile, OSError):
             pass
@@ -800,6 +803,7 @@ class SwitchHandler:
         env = SwitchEnv(
             library=opts.root / "library",
             nsz=ctx.tools.nsz,
+            timeout=ctx.tools.timeout,
             keys=Path(s.switch_keys) if s.switch_keys else default_keys(Path.home()),
             titledb_dir=Path(s.titledb_dir) if s.titledb_dir else None,
             apply=opts.apply,

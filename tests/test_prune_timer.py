@@ -15,7 +15,7 @@ from support import (
     stub_self_update,
 )
 from test_provision import reporter
-from warpzone import artwork
+from warpzone import timers
 from warpzone.config import ConfigError, parse_config
 from warpzone.probes import DeviceProbes
 from warpzone.profiles import load_profile
@@ -53,7 +53,7 @@ class ConfigTests(unittest.TestCase):
 
 class UnitTextTests(unittest.TestCase):
     def test_the_service_runs_the_unattended_prune_of_the_device(self) -> None:
-        service, timer = artwork.render_prune_units("/opt/wz/bin/python", "deck", None)
+        service, timer = timers.render_prune_units("/opt/wz/bin/python", "deck", None)
         self.assertIn("Type=oneshot", service)
         self.assertIn(
             "ExecStart=/opt/wz/bin/python -m warpzone prune deck --apply --unattended\n", service
@@ -64,7 +64,7 @@ class UnitTextTests(unittest.TestCase):
         self.assertIn("WantedBy=timers.target", timer)
 
     def test_a_non_default_config_is_named_and_quoted(self) -> None:
-        service, _ = artwork.render_prune_units("/p", "deck", Path("/some dir/config.toml"))
+        service, _ = timers.render_prune_units("/p", "deck", Path("/some dir/config.toml"))
         self.assertIn(
             '--apply --unattended --config "/some dir/config.toml"',
             service,
@@ -120,6 +120,18 @@ class InstallTests(Install):
         self.assertEqual(self.calls, [])
         self.assertEqual([self.unit(n).stat().st_mtime_ns for n in (SERVICE, TIMER)], before)
         self.assertTrue(any("unchanged" in line for line in lines))
+
+    def test_a_unit_written_by_an_older_release_is_rewritten_with_no_backup(self) -> None:
+        self.ensure()
+        old = self.unit(SERVICE).read_text().replace("IOSchedulingClass=idle\n", "")
+        self.unit(SERVICE).write_text(old, encoding="utf-8")
+        self.calls.clear()
+        self.ensure()
+        self.assertIn("IOSchedulingClass=idle\n", self.unit(SERVICE).read_text())
+        self.assertIn(("restart", TIMER), self.calls)
+        self.assertEqual(
+            sorted(p.name for p in self.unit(SERVICE).parent.iterdir()), [SERVICE, TIMER]
+        )
 
     def test_a_changed_unit_is_rewritten_and_restarted(self) -> None:
         self.ensure()

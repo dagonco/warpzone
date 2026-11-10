@@ -14,11 +14,12 @@ Versions follow [SemVer](https://semver.org/). The single source of the version 
 4. Set `__version__` in `warpzone/__init__.py` to `X.Y.Z`.
 5. Run the checks locally: `uvx ruff check .`, `uvx ruff format --check .`, `python3 -m unittest discover -s tests -v`. One test fails if `CHANGELOG.md` has no section for the current version.
 6. Open a pull request, wait for green CI (lint, tests, e2e, secrets) and merge it.
-7. Tag the merge commit on `main` with an annotated tag and push only that tag:
+7. Tag the merge commit on `main` with a signed tag (see [Signing a tag](/warpzone/development/releasing/#signing-a-tag); the workflow refuses any other), check it and push only that tag:
 
    ```bash
    git switch main && git pull --ff-only
-   git tag -a vX.Y.Z -m "warpzone X.Y.Z"
+   git tag -s vX.Y.Z -m "warpzone X.Y.Z"
+   python3 scripts/verify_tag_signature.py vX.Y.Z --signers warpzone/data/allowed_signers
    git push origin vX.Y.Z
    ```
 
@@ -26,7 +27,7 @@ Versions follow [SemVer](https://semver.org/). The single source of the version 
 
 ## What the workflow does
 
-- `verify`: fails unless the tag is `v` plus the package version, the tagged commit is contained in `main`, and `CHANGELOG.md` has a non-empty section for that version. Then it runs lint and the unit tests (the e2e test is not repeated: the tagged commit already passed it in CI on `main`).
+- `verify`: fails unless the tag is `v` plus the package version, the tagged commit is contained in `main`, `CHANGELOG.md` has a non-empty section for that version, and the tag is an annotated tag with an SSH signature made by a key listed in `warpzone/data/allowed_signers` (see "Signing a tag"). Then it runs lint and the unit tests (the e2e test is not repeated: the tagged commit already passed it in CI on `main`).
 - `build`: builds the sdist and wheel with a pinned `build`, writes `SHA256SUMS`, creates a build provenance attestation for the wheel and sdist, and uploads everything as a workflow artifact. This job has `id-token` and `attestations` write access but no `contents: write`.
 - `release`: the only job with `contents: write`. It creates the GitHub Release for the tag with the changelog section as notes (`scripts/changelog_section.py`) and attaches the wheel, the sdist and `SHA256SUMS`.
 
@@ -36,7 +37,7 @@ Users can verify a download with `sha256sum -c SHA256SUMS` and `gh attestation v
 
 ## When a release fails
 
-- `verify` fails (tag and version differ, missing changelog section, tag not on main, lint or test failure): nothing was published. Delete the tag locally and on the remote, fix the problem through a normal pull request, then tag again.
+- `verify` fails (tag and version differ, missing changelog section, tag not on main, signature that does not verify, lint or test failure): nothing was published. Delete the tag locally and on the remote, fix the problem through a normal pull request, then tag again.
 
   ```bash
   git tag -d vX.Y.Z
@@ -49,7 +50,7 @@ Users can verify a download with `sha256sum -c SHA256SUMS` and `gh attestation v
 
 ## Signing a tag
 
-Devices that update themselves accept only tags signed with the maintainer's SSH key, once its public key is in `warpzone/data/allowed_signers` of the version they are running. Until a key is there they accept unsigned tags and say so in their log. This covers release and candidate tags, a `pin` and the `retired/` tags below.
+Devices that update themselves accept only tags signed with the maintainer's SSH key, once its public key is in `warpzone/data/allowed_signers` of the version they are running. Until a key is there they accept unsigned tags and say so in their log (the release workflow does not: it always requires a signature). This covers release and candidate tags, a `pin` and the `retired/` tags below.
 
 One-time setup, with a key used only for this (an `ed25519` key is enough):
 
@@ -69,7 +70,7 @@ git -c gpg.ssh.allowedSignersFile=warpzone/data/allowed_signers verify-tag vX.Y.
 git push origin vX.Y.Z
 ```
 
-An unsigned or lightweight tag, or one signed by a key that is not in the file, is ignored by every device that checks signatures. The workflow does not check signatures: it only needs the tag to match the package version.
+An unsigned or lightweight tag, or one signed by a key that is not in the file, is ignored by every device that checks signatures. The `verify` job runs `scripts/verify_tag_signature.py` with the same checks a device makes, so such a tag is refused before anything is built or published. It reads the keys from `warpzone/data/allowed_signers` of the tagged commit, and only after it has checked that the commit is on `main`, where the file got through a reviewed pull request. Unlike a device, the workflow never accepts a file without keys: a release is always signed, so the first key must be merged before the first tag that needs it.
 
 ## Publishing a release candidate
 

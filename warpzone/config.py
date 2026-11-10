@@ -99,6 +99,9 @@ INBOX_KEYS = (
     "titledb_dir",
     "switch_keys",
 )
+# The one number of the table: the minutes any external tool of `inbox` may run (see below).
+TOOL_TIMEOUT_KEY = "tool_timeout_minutes"
+DEFAULT_TOOL_TIMEOUT_MINUTES = 240
 
 
 @dataclass(frozen=True)
@@ -108,7 +111,8 @@ class InboxSettings:
     (RAHasher only when set). `titledb_dir` (a clone of blawar/titledb) and `switch_keys`
     (the console keys file, default ~/.switch/prod.keys) are for Switch games. `orbis_pkg_util`
     unpacks PS4 packages. `vita3k` (Vita3K.app or its binary) installs PS Vita packages with the
-    zRIF keys of `vita_zrif`, a file the user keeps."""
+    zRIF keys of `vita_zrif`, a file the user keeps. `tool_timeout_minutes` is how long any
+    one call of an external tool may run before it is killed and its item goes to review."""
 
     root: str | None = None
     dats_dir: str | None = None
@@ -128,6 +132,7 @@ class InboxSettings:
     vita_zrif: str | None = None
     titledb_dir: str | None = None
     switch_keys: str | None = None
+    tool_timeout_minutes: int = DEFAULT_TOOL_TIMEOUT_MINUTES
 
 
 SERVE_KEYS = ("listen", "token_file")
@@ -265,8 +270,17 @@ def parse_inbox(raw: object, errors: list[str]) -> InboxSettings:
     if not isinstance(raw, dict):
         errors.append("[inbox]: must be a table")
         return InboxSettings()
-    _check_keys(raw, set(INBOX_KEYS), "inbox", errors)
-    values: dict[str, str] = {}
+    _check_keys(raw, {*INBOX_KEYS, TOOL_TIMEOUT_KEY}, "inbox", errors)
+    minutes = DEFAULT_TOOL_TIMEOUT_MINUTES
+    if TOOL_TIMEOUT_KEY in raw:
+        given = raw[TOOL_TIMEOUT_KEY]
+        if not isinstance(given, int) or isinstance(given, bool) or given < 1:
+            errors.append(
+                f"inbox.{TOOL_TIMEOUT_KEY}: must be a whole number of minutes, at least 1"
+            )
+        else:
+            minutes = given
+    values: dict[str, Any] = {TOOL_TIMEOUT_KEY: minutes}
     for key in INBOX_KEYS:
         if key not in raw:
             continue
