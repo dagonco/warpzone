@@ -85,9 +85,11 @@ class DatSerialsTests(StoreCase):
         counts = {r.system: (r.status, r.filled, r.had, r.unmatched) for r in results}
         self.assertEqual(counts["dreamcast"], ("written", 2, 0, 1))
         self.assertEqual(counts["psp"], ("written", 1, 0, 0))
-        self.assertIn("dreamcast: 2 filled, 0 already had, 1 unmatched", self.lines)
+        self.assertIn(
+            "dreamcast: 2 filled, 0 already had, 0 no serial in DAT, 1 unmatched", self.lines
+        )
         self.assertIn("  unmatched: roms/dreamcast/Lost.chd", self.lines)
-        self.assertIn("psp: 1 filled, 0 already had, 0 unmatched", self.lines)
+        self.assertIn("psp: 1 filled, 0 already had, 0 no serial in DAT, 0 unmatched", self.lines)
 
     def test_a_system_without_a_dat_with_serials_is_reported_and_left_alone(self) -> None:
         path = self.root / "catalog" / "systems" / "switch.json"
@@ -111,8 +113,10 @@ class DatSerialsTests(StoreCase):
         results = self.dats_pass()
         self.assertEqual(self.statuses(results)["psp"], "unchanged")
         self.assertEqual(self.dats.asked, ["dreamcast", "switch"])  # Lost.chd and Thing.nsp
-        self.assertIn("dreamcast: 0 filled, 2 already had, 1 unmatched", self.lines)
-        self.assertIn("psp: 0 filled, 1 already had, 0 unmatched", self.lines)
+        self.assertIn(
+            "dreamcast: 0 filled, 2 already had, 0 no serial in DAT, 1 unmatched", self.lines
+        )
+        self.assertIn("psp: 0 filled, 1 already had, 0 no serial in DAT, 0 unmatched", self.lines)
 
     def test_force_replaces_serials_the_dat_gives_other_ones_for(self) -> None:
         self.dats_pass()
@@ -133,7 +137,9 @@ class DatSerialsTests(StoreCase):
         write.assert_not_called()
         self.assertEqual({p: p.read_bytes() for p in before}, before)
         self.assertEqual(self.statuses(results)["dreamcast"], "would-write")
-        self.assertIn("dreamcast: 2 to fill, 0 already had, 1 unmatched", self.lines)
+        self.assertIn(
+            "dreamcast: 2 to fill, 0 already had, 0 no serial in DAT, 1 unmatched", self.lines
+        )
 
     def test_it_writes_only_under_catalog_and_only_the_serials(self) -> None:
         library = sorted(p.as_posix() for p in (self.root / "library").rglob("*"))
@@ -196,6 +202,48 @@ class DatSerialsTests(StoreCase):
         self.assertEqual(self.serials("dreamcast")["Plain (USA).chd"], ["T-7"])
         self.assertEqual(self.serials("dreamcast")["Lost.chd"], [])
 
+    def test_games_the_dat_knows_without_a_serial_are_counted_not_listed(self) -> None:
+        self.put("roms/dreamcast/Bare (USA).chd", b"bare chd")
+        self.put("roms/dreamcast/Bare (Europe).chd", b"bare chd eu")
+        self.run_catalog()
+        self.dats.games["dreamcast"] = [
+            dat_game("Named (USA)", ("T-1",)),
+            dat_game("Bare (USA)", ()),
+            dat_game("Bare (Europe)", ()),
+        ]
+        results = self.dats_pass()
+        dreamcast = next(r for r in results if r.system == "dreamcast")
+        self.assertEqual(
+            (dreamcast.filled, dreamcast.no_serial, dreamcast.unmatched), (1, 2, 2)
+        )  # Named.chd; the two Bare; Lost.chd and Two.m3u
+        self.assertIn(
+            "dreamcast: 1 filled, 0 already had, 2 no serial in DAT, 2 unmatched", self.lines
+        )
+        listed = [line for line in self.lines if line.startswith("  unmatched: ")]
+        self.assertEqual(
+            sorted(listed),
+            ["  unmatched: roms/dreamcast/Lost.chd", "  unmatched: roms/dreamcast/Two.m3u"],
+        )
+        self.assertEqual(self.serials("dreamcast")["Bare (USA).chd"], [])
+
+    def test_a_system_whose_identified_games_have_no_serial_is_one_summary_line(self) -> None:
+        self.put("roms/nes/Castlevania (Europe).nes", b"cv")
+        self.put("roms/nes/Zelda (USA).nes", b"zelda")
+        self.run_catalog()
+        self.dats.games["nes"] = [
+            dat_game("Castlevania (Europe)", ()),
+            dat_game("Zelda (USA)", ()),
+            dat_game("Other (USA)", ("NES-XX",)),
+        ]
+        before = (self.root / "catalog" / "systems" / "nes.json").read_bytes()
+        results = self.dats_pass()
+        self.assertEqual(
+            [line for line in self.lines if line.startswith("nes")],
+            ["nes: 0 filled, 0 already had, 2 no serial in DAT, 0 unmatched"],
+        )
+        self.assertEqual(next(r for r in results if r.system == "nes").status, "unchanged")
+        self.assertEqual((self.root / "catalog" / "systems" / "nes.json").read_bytes(), before)
+
     def test_a_name_with_two_serial_lists_is_not_guessed(self) -> None:
         self.dats.games["dreamcast"] = [
             dat_game("Named (USA)", ("T-1",)),
@@ -255,7 +303,7 @@ class DatsCliTests(StoreCase):
         self.mark_dat()
         code, out, err = self.catalog("--dats", "--dats-dir", str(self.dats_dir))
         self.assertEqual((code, err), (0, ""), out)
-        self.assertIn("dreamcast: 1 filled, 0 already had, 0 unmatched", out)
+        self.assertIn("dreamcast: 1 filled, 0 already had, 0 no serial in DAT, 0 unmatched", out)
         game = next(iter(self.system_file("dreamcast")["games"].values()))
         self.assertEqual(game["serials"], ["T-1D"])
 
@@ -268,14 +316,16 @@ class DatsCliTests(StoreCase):
         before = path.read_bytes()
         code, out, _ = self.catalog("--dats", "--dry-run", config=str(config))
         self.assertEqual(code, 0)
-        self.assertIn("dreamcast: 1 to fill, 0 already had, 0 unmatched", out)
+        self.assertIn("dreamcast: 1 to fill, 0 already had, 0 no serial in DAT, 0 unmatched", out)
         self.assertEqual(path.read_bytes(), before)
 
     def test_dats_scans_the_library_first(self) -> None:
         code, out, _ = self.catalog("--dats", "--dats-dir", str(self.dats_dir))
         self.assertEqual(code, 0)
         self.assertIn("dreamcast: 1 game(s), written", out)
-        self.assertIn("dreamcast: 1 filled, 0 already had, 0 unmatched", out)  # by file name
+        self.assertIn(
+            "dreamcast: 1 filled, 0 already had, 0 no serial in DAT, 0 unmatched", out
+        )  # by file name
 
     def test_a_missing_folder_or_a_folder_without_dats_is_exit_2_before_the_scan(self) -> None:
         code, _, err = self.catalog("--dats")

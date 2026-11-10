@@ -219,16 +219,20 @@ through `inbox`'s parse cache (`dat.DatLibrary`).
   in the playlist inside it, by exact name against the DAT game names, with the union of the
   discs' serials in disc order, all discs needed. Nothing is
   compared case-insensitively or cleaned up. A key the DATs give two different serial lists is
-  not guessed at. A game with no exact match is left without serials and counted as unmatched.
+  not guessed at. A game the DAT identifies but gives no serial (most No-Intro games) is left as it
+  is and counted as `no serial in DAT`; one no DAT identifies is left without serials and counted
+  as unmatched. The decision is `catalog.identify` (serials, `()` for no serial in the DAT, or
+  None), and `fill_serials` sorts the games into filled, had, no serial and unmatched.
 - **Writes:** only the `serials` of `catalog/systems/<system>.json`, with the scan's guarded atomic
   write and its changed-since-read check (read again, up to three tries, then a `conflict`). A
   file whose games would not change is not written, and `--dry-run` writes nothing (the DAT parse
   cache, which is not user data, is the one thing a dry run may still write).
-- **Output and exit code:** per system, `filled / already had / unmatched` (or `to fill` in a dry
-  run), `no DAT with serials` for a system whose DATs are missing or list none, and the first
-  unmatched games by path. Exit `1` when a system file could not be read or written, `2` for a
+- **Output and exit code:** per system, `filled / already had / no serial in DAT / unmatched` (`to
+  fill` instead of `filled` in a dry run), `no DAT with serials` for a system whose DATs are
+  missing or list none, and the first unmatched games by path (the `no serial in DAT` games are
+  only counted). Exit `1` when a system file could not be read or written, `2` for a
   usage error (no usable DAT folder, `--dats-dir` or `--force` without `--dats`), as for the other
-  passes; unmatched games are not a failure.
+  passes; neither unmatched games nor games with no serial in their DAT are a failure.
 
 ### RetroAchievements
 
