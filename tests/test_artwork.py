@@ -584,5 +584,56 @@ class RompathGamelistTests(unittest.TestCase):
         self.assertIn(b"<name>Alpha</name>", plan.items[0].data)
 
 
+class UnreadableGamelistTests(unittest.TestCase):
+    """The plan says why the device's own gamelist could not be read, and leaves the I/O out."""
+
+    ROOMS = Path("/lib/roms")
+    OWN = ROOMS / "gba/gamelist.xml"
+
+    def plan(self, own: bytes | None) -> artwork.GamelistPlan:
+        store = {
+            Path("/es/gamelists/gba/gamelist.xml"): (
+                b"<gameList><game><path>./A.zip</path><name>Alpha</name></game></gameList>"
+            ),
+            self.ROOMS / "gba/A.zip": b"x",
+        }
+        if own is not None:
+            store[self.OWN] = own
+        files = artwork.Files(
+            read=store.get, is_file=lambda p: p in store, exists=lambda p: p in store
+        )
+        return artwork.plan_gamelists(
+            artwork.FORMATS["emulationstation"],
+            ("covers",),
+            artwork.Layout(self.ROOMS, Path("/m"), Path("/es"), Path(artwork.ROMPATH)),
+            "<systemList><system><name>gba</name><path>/lib/roms/gba/</path></system></systemList>",
+            prefix="/lib/roms/",
+            renames={},
+            hubs=["gba"],
+            files=files,
+        )
+
+    def test_a_truncated_file_carries_the_reason(self) -> None:
+        (item,) = self.plan(b"<gameList><game><path>./A.zip</pa").items
+        self.assertEqual(item.state, "stale")
+        with self.assertRaises(artwork.ArtworkError) as raised:
+            artwork.parse_gamelist(b"<gameList><game><path>./A.zip</pa")
+        self.assertEqual(item.unreadable, str(raised.exception))
+        self.assertNotEqual(item.unreadable, "")
+
+    def test_an_unusable_encoding_carries_the_reason(self) -> None:
+        (item,) = self.plan(b'<?xml version="1.0" encoding="bogus"?><gameList/>').items
+        self.assertEqual(item.state, "stale")
+        self.assertIn("bogus", item.unreadable)
+
+    def test_a_missing_file_and_a_readable_one_carry_none(self) -> None:
+        (missing,) = self.plan(None).items
+        self.assertEqual((missing.state, missing.unreadable), ("missing", ""))
+        (readable,) = self.plan(
+            b"<gameList><game><path>./A.zip</path><name>Old</name></game></gameList>"
+        ).items
+        self.assertEqual((readable.state, readable.unreadable), ("stale", ""))
+
+
 if __name__ == "__main__":
     unittest.main()

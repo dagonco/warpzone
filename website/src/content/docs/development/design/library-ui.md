@@ -823,6 +823,15 @@ The server also bounds what a stranger can hold. A connection that sends nothing
 seconds, also in the middle of a body, is closed; at most 64 connections are served at once and
 the next ones are closed without an answer. A `Content-Length` that is not a number is `400`.
 
+A body over 64 KiB is answered `400 bad-request`, and the answer must reach the client: closing a
+socket that still holds unread bytes makes the kernel reset the connection, and a client that
+was still sending would then see a network error in place of the JSON error. So a body of up to
+1 MiB (`MAX_DRAIN`) is read and thrown away in chunks of 64 KiB, never held in memory, before the
+answer goes out; a client that stalls in the middle of it is dropped as for any other body. A
+`Content-Length` over 1 MiB, or of more than 9 digits, is not read at all: the server answers
+`400` at once and closes the connection, so the bytes still to come are never taken for a request.
+A client that keeps sending may see a reset there; the server spends no memory or time on it.
+
 The traffic is plain HTTP, so anyone who can read the LAN can read the token. Access from
 outside the home goes through the user's own reverse proxy with TLS, which is out of scope.
 
