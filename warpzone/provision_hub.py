@@ -120,7 +120,8 @@ def unclaimed(
         if sharing:
             texts.append(
                 f"{folder_id}: no device in the config subscribes to it, still shared with "
-                f"{', '.join(sharing)} (left as it is)"
+                f"{', '.join(sharing)} (left as it is; remove them from it in the hub's "
+                "Syncthing if they should not have it)"
             )
     return tuple(texts)
 

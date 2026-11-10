@@ -472,7 +472,8 @@ class HubTests(unittest.TestCase):
                 [w for w in rep.warnings if "wz-old" in w],
                 [
                     "wz-old: no device in the config subscribes to it, still shared with deck "
-                    "(left as it is)"
+                    "(left as it is; remove them from it in the hub's Syncthing if they "
+                    "should not have it)"
                 ],
             )
             self.assertEqual(fake.folders["wz-old"], old)
@@ -1354,7 +1355,8 @@ class UnsubscribedTests(unittest.TestCase):
             unclaimed(_hub_specs(), existing, self.NAMES),
             (
                 "wz-old: no device in the config subscribes to it, still shared with "
-                "deck, machine (left as it is)",
+                "deck, machine (left as it is; remove them from it in the hub's Syncthing "
+                "if they should not have it)",
             ),
         )
 

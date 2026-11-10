@@ -109,9 +109,9 @@ hand in that time is not lost.
 
 The removal is convergent, not destructive: running the same config again changes nothing,
 and putting the group back in the device's `folders` shares the folder again. Only a person
-runs it. The timers run `provision device --unattended`, which never writes the hub's device
-lists, and `provision hub --additive` (also `auto_hub`) changes nothing on a folder the hub
-has: it only warns that a device the folder is shared with no longer subscribes.
+runs it. The timers run `provision device --unattended`, which at most creates a missing folder on
+the hub (`auto_hub`) and never changes the device list of a folder the hub already has, and
+`provision hub --additive` (also `auto_hub`) changes nothing on a folder the hub has: it only warns that a device the folder is shared with no longer subscribes.
 
 `--dry-run` prints `would stop sharing with <device>` and the `PATCH` it would send. If the
 hub's Syncthing auto-accepts folders from the device, or the dropped entry names an
