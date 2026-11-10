@@ -147,6 +147,20 @@ The contract:
   `[inbox]` config keys or PATH (RAHasher only when configured). A tool that an item
   needs and is missing sends that item to review with a clear reason; other items
   continue. A configured path that does not exist is a configuration error.
+- **Time limit of the tools.** Every call of an external tool (`chdman`, `bsdtar`, `RAHasher`,
+  `dolphin-tool`, `nsz`, `orbis-pkg-util`, the listing and info calls as much as the
+  conversions) may run for `[inbox] tool_timeout_minutes` (a whole number, at least 1,
+  default 240) and is killed after that. The limit is one number for all tools, carried in
+  `Tools.timeout` as seconds (and in `SwitchEnv.timeout` for `nsz`), never in a global. A
+  killed tool fails only its item, like any other tool failure: the item goes to review with
+  "chdman did not finish within 240 minutes" (`inbox_core.timeout_reason`; the archive or
+  package name leads the message for `bsdtar` and `orbis-pkg-util`), the run goes on with the
+  next item and the lock is released as usual. Without a limit a hung tool would keep the run
+  alive and the lock taken until it counts as stale. 240 minutes is generous for a conversion
+  of several GB and stays well under the 12 hours after which a lock is stale. The exception
+  is `RAHasher`, whose hash is optional: when it is killed the RA line says the hash is
+  unavailable (or, after a conversion, the item fails as for any RAHasher failure), as before.
+  Vita3K keeps its own, shorter limits (see [PS Vita packages](#ps-vita-packages)).
 - **Arcade (MAME) sets.** See [Arcade sets](#arcade-sets) below; they do not go through
   DAT matching or conversion.
 - **Switch games.** See [Switch games](#switch-games) below; they do not go through DAT

@@ -19,7 +19,6 @@ import hashlib
 import os
 import re
 import shutil
-import subprocess
 import tempfile
 import zipfile
 import zlib
@@ -61,6 +60,7 @@ from warpzone.inbox_core import (
     Options,
     Staged,
     Tools,
+    ToolTimeout,
     UnitResult,
     UnmatchedHandler,
     copy_verified,
@@ -71,6 +71,7 @@ from warpzone.inbox_core import (
     printable,
     refused_name,
     run,
+    run_process,
     same_content,
     skip_name,
     stage_item,
@@ -286,13 +287,14 @@ def expand_compressed(
                 continue
         iso = next_free(work, "d") / (s.path.stem + ".iso")
         iso.parent.mkdir(parents=True)
-        proc = subprocess.run(
-            [tools.dolphin_tool, "convert", "-i", str(s.path), "-o", str(iso), "-f", "iso"],
-            capture_output=True,
-            text=True,
-            check=False,
-            errors="replace",
-        )
+        try:
+            proc = run_process(
+                [tools.dolphin_tool, "convert", "-i", str(s.path), "-o", str(iso), "-f", "iso"],
+                tools.timeout,
+            )
+        except ToolTimeout as exc:
+            failures.append(f"{s.rel}: {exc}")
+            continue
         if proc.returncode != 0 or not iso.is_file():
             failures.append(f"{s.rel}: dolphin-tool could not read it ({tail(proc.stderr)})")
             continue
@@ -339,13 +341,14 @@ def identify(
 # ------------------------------------------------------------------ conversion
 
 
-def make_chd(chdman: str, kind: str, source: Path, out: Path) -> None:
+def make_chd(chdman: str, kind: str, source: Path, out: Path, timeout: float) -> None:
     code, text = run(
-        [chdman, "createdvd" if kind == "dvd" else "createcd", "-i", str(source), "-o", str(out)]
+        [chdman, "createdvd" if kind == "dvd" else "createcd", "-i", str(source), "-o", str(out)],
+        timeout,
     )
     if code != 0:
         raise ItemFailure(f"chdman could not convert {source.name} ({tail(text)})")
-    code, text = run([chdman, "verify", "-i", str(out)])
+    code, text = run([chdman, "verify", "-i", str(out)], timeout)
     if code != 0 or "successful" not in text.lower():
         raise ItemFailure(f"chdman verify failed for {out.name} ({tail(text)})")
 
@@ -508,7 +511,7 @@ def _ra_lines(
         return [], "", None
     if prepared.ra_input is None:
         return [], "", None
-    before = ra.hash_image(tools.rahasher, system, prepared.ra_input)
+    before = ra.hash_image(tools.rahasher, system, prepared.ra_input, timeout=tools.timeout)
     if before is None:
         return [f"RA{label}: source hash unavailable"], "", None
     if ctx.lookup.enabled:
@@ -517,7 +520,7 @@ def _ra_lines(
         text = f"hash {before} (no {ra.KEY_ENV}: not looked up)"
     lines = [f"RA{label}: {text}"]
     if produced is not None and prepared.kind in ("cd", "dvd", "zip"):
-        after = ra.hash_image(tools.rahasher, system, produced)
+        after = ra.hash_image(tools.rahasher, system, produced, timeout=tools.timeout)
         if after is None:
             return (
                 lines,
@@ -617,7 +620,7 @@ def _produce(ctx: Context, p: Prepared, m: GameMatch, out_dir: Path) -> Path:
     if p.kind in ("cd", "dvd"):
         assert ctx.tools.chdman and p.chd_input
         out = out_dir / p.out_name
-        make_chd(ctx.tools.chdman, p.kind, p.chd_input, out)
+        make_chd(ctx.tools.chdman, p.kind, p.chd_input, out, ctx.tools.timeout)
         return out
     if p.kind == "zip":
         out = out_dir / p.out_name
@@ -639,9 +642,10 @@ def _place(
     res: UnitResult,
 ) -> None:
     chdman = ctx.tools.chdman
+    timeout = ctx.tools.timeout
     if not unit.is_m3u:
         p, out = prepared[0], produced[0]
-        identical = same_content(_kind_of(p), dest, out, chdman) if dest.exists() else None
+        identical = same_content(_kind_of(p), dest, out, chdman, timeout) if dest.exists() else None
         verdict = destination_verdict(dest.exists(), identical)
         if verdict == "already":
             res.outcome = "already"
@@ -670,7 +674,7 @@ def _place(
             and sorted(os.listdir(dest)) == sorted([*names, inner])
             and (dest / inner).read_text(encoding="utf-8", errors="replace") == playlist
             and all(
-                same_content(_kind_of(p), dest / p.out_name, out, chdman)
+                same_content(_kind_of(p), dest / p.out_name, out, chdman, timeout)
                 for p, out in zip(prepared, produced, strict=True)
             )
         )

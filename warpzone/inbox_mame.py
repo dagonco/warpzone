@@ -787,7 +787,7 @@ class MameHandler:
             )
         dest = folder / entry
         if dest.exists():
-            same = inbox_core.same_content("zip", dest, path, None)
+            same = inbox_core.same_content("zip", dest, path, None, ctx.tools.timeout)
             verdict = inbox_core.destination_verdict(True, same)
             if verdict == "conflict":
                 res.outcome = "review"

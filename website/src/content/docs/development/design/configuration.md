@@ -47,6 +47,7 @@ fbneo_dat = "~/dats/fbneo-arcade.dat"
 mame2003plus_dat = "~/dats/mame2003-plus.xml"
 gamelist_mame = "/Volumes/hub/frontend/es-de/gamelists/mame/gamelist.xml"  # optional
 gamelist_ps3 = "/Volumes/hub/frontend/es-de/gamelists/ps3/gamelist.xml"  # optional
+tool_timeout_minutes = 240                   # optional, the default: kills a tool that hangs
 
 [serve]                                      # optional, read only by `warpzone serve`
 listen = "0.0.0.0:8780"                      # optional, the default

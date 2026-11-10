@@ -50,6 +50,7 @@ from warpzone.inbox_core import (
 from warpzone.report import Reporter
 
 TODAY = date(2026, 10, 27)
+DEFAULT_TIMEOUT = inbox_core.DEFAULT_TOOL_TIMEOUT
 NES_ROM = b"NES\x1a" + b"adventure" * 100
 SPIRIT_ROM = b"NES\x1a" + b"other game" * 100
 DATA1 = b"data track one " * 200
@@ -429,13 +430,15 @@ class ArchiveTests(unittest.TestCase):
     def test_bsdtar_lists_before_it_extracts(self) -> None:
         archive = self.tmp / "a.7z"
         archive.write_bytes(b"7z")
-        extract_bsdtar(self.stub_bsdtar("x.bin"), archive, self.tmp / "ok")
+        extract_bsdtar(self.stub_bsdtar("x.bin"), archive, self.tmp / "ok", DEFAULT_TIMEOUT)
         self.assertTrue((self.tmp / "ok/x.bin").exists())
         with self.assertRaises(inbox_core.ItemFailure):
-            extract_bsdtar(self.stub_bsdtar("../x.bin"), archive, self.tmp / "bad")
+            extract_bsdtar(self.stub_bsdtar("../x.bin"), archive, self.tmp / "bad", DEFAULT_TIMEOUT)
         self.assertFalse((self.tmp / "bad/x.bin").exists())
         with self.assertRaises(inbox_core.ItemFailure):
-            extract_bsdtar(self.stub_bsdtar("x.bin", link=True), archive, self.tmp / "link")
+            extract_bsdtar(
+                self.stub_bsdtar("x.bin", link=True), archive, self.tmp / "link", DEFAULT_TIMEOUT
+            )
 
     def test_bsdtar_refuses_an_archive_that_does_not_fit_before_extracting(self) -> None:
         archive = self.tmp / "a.7z"
@@ -445,7 +448,7 @@ class ArchiveTests(unittest.TestCase):
             mock.patch("shutil.disk_usage", return_value=_usage(free=1000)),
             self.assertRaises(inbox_core.ItemFailure) as ctx,
         ):
-            extract_bsdtar(bsdtar, archive, self.tmp / "out")
+            extract_bsdtar(bsdtar, archive, self.tmp / "out", DEFAULT_TIMEOUT)
         self.assertIn("not enough free space", str(ctx.exception))
         self.assertNotIn("-xf", self.bsdtar_calls())
         self.assertFalse((self.tmp / "out/x.bin").exists())
@@ -458,9 +461,9 @@ class ArchiveTests(unittest.TestCase):
             mock.patch("shutil.disk_usage", return_value=_usage(free=1049)),
             self.assertRaises(inbox_core.ItemFailure),
         ):
-            extract_bsdtar(bsdtar, archive, self.tmp / "no")
+            extract_bsdtar(bsdtar, archive, self.tmp / "no", DEFAULT_TIMEOUT)
         with mock.patch("shutil.disk_usage", return_value=_usage(free=1050)):
-            extract_bsdtar(bsdtar, archive, self.tmp / "yes")
+            extract_bsdtar(bsdtar, archive, self.tmp / "yes", DEFAULT_TIMEOUT)
         self.assertTrue((self.tmp / "yes/x.bin").exists())
 
     def test_bsdtar_fails_closed_when_a_member_size_cannot_be_read(self) -> None:
@@ -474,7 +477,7 @@ class ArchiveTests(unittest.TestCase):
             )
             bsdtar = make_stub(self.tmp / "bin2", "bsdtar", source)
             with self.assertRaises(inbox_core.ItemFailure, msg=line) as ctx:
-                extract_bsdtar(bsdtar, archive, self.tmp / "out")
+                extract_bsdtar(bsdtar, archive, self.tmp / "out", DEFAULT_TIMEOUT)
             self.assertIn("a.7z: cannot read the member sizes", str(ctx.exception))
         self.assertFalse((self.tmp / "out/x.bin").exists())
 
@@ -514,8 +517,8 @@ class ArchiveTests(unittest.TestCase):
         )
         if made.returncode != 0:
             self.skipTest("this bsdtar cannot write 7z")
-        self.assertEqual(inbox_core.bsdtar_unpacked_size("bsdtar", archive), 5006)
-        extract_bsdtar("bsdtar", archive, self.tmp / "out")
+        self.assertEqual(inbox_core.bsdtar_unpacked_size("bsdtar", archive, DEFAULT_TIMEOUT), 5006)
+        extract_bsdtar("bsdtar", archive, self.tmp / "out", DEFAULT_TIMEOUT)
         self.assertEqual((self.tmp / "out/big.bin").stat().st_size, 5000)
 
     def test_sidecar_must_name_the_games_files(self) -> None:
@@ -534,6 +537,106 @@ class ArchiveTests(unittest.TestCase):
         self.assertIsNone(find_sidecar(other, files))
         (self.tmp / "g_a.cue").write_text('FILE "../a.bin" BINARY\n')
         self.assertIsNone(find_sidecar(match, files))
+
+
+HANG = "import time\ntime.sleep(60)\n"  # a tool that never answers (the limit kills it)
+LIMIT = 0.3  # seconds a stand-in tool may run in the tests below
+
+
+class ToolTimeoutTests(Base):
+    """Every external tool of the inbox has a time limit; a tool that hangs fails its item."""
+
+    def hung(self, name: str) -> str:
+        return make_stub(self.tmp / "hung", name, HANG)
+
+    def test_the_reason_names_the_tool_and_the_limit(self) -> None:
+        reason = inbox_core.timeout_reason
+        self.assertEqual(
+            reason("/opt/bin/chdman", 240 * 60), "chdman did not finish within 240 minutes"
+        )
+        self.assertEqual(reason("nsz", 60), "nsz did not finish within 1 minute")
+        self.assertEqual(reason("nsz", 90), "nsz did not finish within 90 seconds")
+        self.assertEqual(reason("RAHasher", 0.3), "RAHasher did not finish within 0.3 seconds")
+
+    def test_the_default_limit_is_240_minutes_and_find_tools_takes_it_from_the_config(self) -> None:
+        self.assertEqual(Tools().timeout, 240 * 60)
+        found = find_tools(InboxSettings(tool_timeout_minutes=2), which=lambda name: None)
+        self.assertEqual(found.timeout, 120.0)
+
+    def test_run_kills_a_tool_that_hangs(self) -> None:
+        with self.assertRaises(inbox_core.ToolTimeout) as ctx:
+            inbox_core.run([self.hung("chdman"), "info"], timeout=LIMIT)
+        self.assertIsInstance(ctx.exception, inbox_core.ItemFailure)
+        self.assertEqual(str(ctx.exception), "chdman did not finish within 0.3 seconds")
+
+    def test_a_hung_bsdtar_listing_of_sizes_fails_the_item(self) -> None:
+        archive = self.tmp / "a.7z"
+        archive.write_bytes(b"7z")
+        with self.assertRaises(inbox_core.ItemFailure) as ctx:
+            inbox_core.bsdtar_unpacked_size(self.hung("bsdtar"), archive, LIMIT)
+        self.assertEqual(str(ctx.exception), "a.7z: bsdtar did not finish within 0.3 seconds")
+
+    def test_a_hung_bsdtar_listing_fails_the_unpacking_of_the_archive(self) -> None:
+        archive = self.drop("a.7z", b"7z")
+        staged, _, failures = stage_item(
+            archive, self.tmp / "work", Tools(bsdtar=self.hung("bsdtar"), timeout=LIMIT)
+        )
+        self.assertEqual(staged, [])
+        self.assertEqual(failures, ["a.7z: bsdtar did not finish within 0.3 seconds"])
+
+    def test_a_hung_bsdtar_extraction_fails_the_item_and_unpacks_nothing(self) -> None:
+        archive = self.tmp / "a.7z"
+        archive.write_bytes(b"7z")
+        source = (
+            "import sys, time\n"
+            "if sys.argv[1] == '-tf':\n    print('x.bin'); sys.exit(0)\n"
+            "if sys.argv[1] == '-tvf':\n"
+            "    print('-rw-r--r--  0 0 0 1 Nov 10 19:41 x.bin'); sys.exit(0)\n"
+            "time.sleep(60)\n"
+        )
+        bsdtar = make_stub(self.tmp / "hung", "bsdtar", source)
+        with self.assertRaises(inbox_core.ItemFailure) as ctx:
+            extract_bsdtar(bsdtar, archive, self.tmp / "out", 1.0)
+        self.assertEqual(str(ctx.exception), "a.7z: bsdtar did not finish within 1 second")
+
+    def test_a_hung_dolphin_tool_fails_the_gcz_only(self) -> None:
+        gcz = self.tmp / "cube.gcz"
+        gcz.write_bytes(b"not a gcz, but long enough to hold a header of 24 bytes")
+        work = self.tmp / "gcz-work"
+        work.mkdir()
+        tools = Tools(dolphin_tool=self.hung("dolphin-tool"), timeout=LIMIT)
+        out, failures = inbox.expand_compressed([Staged(gcz, "cube.gcz")], work, tools)
+        self.assertEqual(out, [])
+        self.assertEqual(failures, ["cube.gcz: dolphin-tool did not finish within 0.3 seconds"])
+
+    def test_the_limit_reaches_rahasher(self) -> None:
+        self.drop("a.nes", NES_ROM)
+        tools = Tools(rahasher=self.rahasher, timeout=7.0)
+        with mock.patch("warpzone.ra.hash_image", return_value=None) as hash_image:
+            self.go(tools=tools)
+        self.assertTrue(hash_image.called)
+        for call in hash_image.call_args_list:
+            self.assertEqual(call.kwargs["timeout"], 7.0)
+
+    def test_a_hung_chdman_sends_its_item_to_review_and_the_run_goes_on(self) -> None:
+        hung = self.hung("chdman")
+        self.drop(
+            "crash",
+            {
+                "Crash Test.cue": cue("Crash Test (Track 1).bin", "Crash Test (Track 2).bin"),
+                "Crash Test (Track 1).bin": DATA1,
+                "Crash Test (Track 2).bin": AUDIO1,
+            },
+        )
+        self.drop("a.nes", NES_ROM)
+        tools = Tools(chdman=hung, timeout=LIMIT)
+        self.assertEqual(self.go(tools=tools), 1)
+        self.assertEqual(self.review(), ["crash", "crash.reason.txt"])
+        self.assertIn("chdman did not finish within 0.3 seconds", self.reason("crash"))
+        self.assertEqual(self.library(), ["nes/Adventure (USA).zip"])
+        self.assertEqual(self.done(), ["a.nes"])
+        self.assertFalse((self.inbox / ".warpzone.lock").exists())  # released as usual
+        self.assertNotIn("Traceback", self.out)
 
 
 class LayoutTests(Base):

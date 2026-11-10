@@ -207,10 +207,13 @@ def _fail_kind(rel: str) -> str:
     return f"{rel}: this package is not a game, update or DLC (unexpected content type)"
 
 
-def _extract(tool: str, pkg: Path, out: Path, *, empty_pfs: bool = False) -> None:
+def _extract(tool: str, pkg: Path, out: Path, timeout: float, *, empty_pfs: bool = False) -> None:
     """Unpack with orbis-pkg-util. A DLC without data (empty PFS in the header) makes it exit 1
     after writing `sce_sys`; that is accepted when `sce_sys/param.sfo` was written."""
-    code, text = inbox_core.run([tool, "extract", "-q", "-o", str(out), str(pkg)])
+    try:
+        code, text = inbox_core.run([tool, "extract", "-q", "-o", str(out), str(pkg)], timeout)
+    except inbox_core.ToolTimeout as exc:
+        raise inbox_core.ToolTimeout(f"{pkg.name}: {exc}") from exc
     if code == 0:
         return
     if empty_pfs and code == 1 and (out / "sce_sys" / "param.sfo").is_file():
@@ -346,7 +349,7 @@ class _Job:
             )
         self.work = Path(tempfile.mkdtemp(prefix="ps4-", dir=self.ctx.work))
         out = self.work / "game"
-        _extract(self.tool, self.path, out, empty_pfs=empty_pfs)
+        _extract(self.tool, self.path, out, self.ctx.tools.timeout, empty_pfs=empty_pfs)
         return out
 
     def checked_sfo(self, out: Path, expected: str) -> dict[str, str | int]:

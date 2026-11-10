@@ -475,7 +475,7 @@ def names_in(ctx: Context, item: Path) -> list[str]:
             with zipfile.ZipFile(item) as z:
                 return z.namelist()
         if ctx.tools.bsdtar:
-            code, text = inbox_core.run([ctx.tools.bsdtar, "-tf", str(item)])
+            code, text = inbox_core.run([ctx.tools.bsdtar, "-tf", str(item)], ctx.tools.timeout)
             return text.splitlines() if code == 0 else []
     except (zipfile.BadZipFile, OSError):
         pass

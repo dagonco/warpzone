@@ -7,8 +7,9 @@ import this module and never `inbox.py`, so the imports between the inbox module
 cycle. This module imports no other inbox module.
 
 The pure decisions here (`skip_name`, `unsafe_member`, `whitelist_line`,
-`unsupported_reason`, `unverified_reason`, `destination_verdict`, `vita3k_executable`) have no
-I/O; the rest touches the disk or runs a tool. See development/design/inbox.md.
+`unsupported_reason`, `unverified_reason`, `destination_verdict`, `vita3k_executable`,
+`timeout_reason`) have no I/O; the rest touches the disk or runs a tool. See
+development/design/inbox.md.
 """
 
 from __future__ import annotations
@@ -29,7 +30,7 @@ from pathlib import Path
 from typing import Protocol
 
 from warpzone import ra, whitelist
-from warpzone.config import InboxSettings
+from warpzone.config import DEFAULT_TOOL_TIMEOUT_MINUTES, InboxSettings
 from warpzone.dat import DatLibrary, FileInfo
 from warpzone.errors import UsageError
 from warpzone.report import Reporter
@@ -74,6 +75,11 @@ class InboxError(UsageError):
 
 class ItemFailure(Exception):
     """One item or unit cannot be placed; the message is the reason given for review."""
+
+
+class ToolTimeout(ItemFailure):
+    """An external tool ran past its time limit and was killed. The message names the tool
+    and the limit (`timeout_reason`)."""
 
 
 def skip_name(name: str) -> bool:
@@ -170,6 +176,21 @@ def destination_verdict(exists: bool, identical: bool | None) -> str:
     return "already" if identical else "conflict"
 
 
+# How long one call of any external tool may run, in seconds, when nothing says otherwise.
+DEFAULT_TOOL_TIMEOUT = DEFAULT_TOOL_TIMEOUT_MINUTES * 60.0
+
+
+def timeout_reason(tool: str, seconds: float) -> str:
+    """Why a tool call failed when it was killed at its limit: "chdman did not finish within
+    240 minutes". `tool` may be a path. The limit is shown in minutes when it is a whole
+    number of them (the config is in minutes), else in seconds (the tests use fractions)."""
+    name = os.path.basename(tool)
+    if seconds >= 60 and seconds % 60 == 0:
+        minutes = int(seconds // 60)
+        return f"{name} did not finish within {minutes} minute{'' if minutes == 1 else 's'}"
+    return f"{name} did not finish within {seconds:g} second{'' if seconds == 1 else 's'}"
+
+
 @dataclass(frozen=True)
 class Tools:
     chdman: str | None = None
@@ -179,6 +200,7 @@ class Tools:
     nsz: str | None = None
     orbis_pkg_util: str | None = None
     vita3k: str | None = None  # Vita3K.app (a folder) or the Vita3K binary
+    timeout: float = DEFAULT_TOOL_TIMEOUT  # seconds one call of any tool may run
 
 
 # Where Vita3K's macOS release is installed; `inbox` uses it when `[inbox] vita3k` is unset.
@@ -204,7 +226,8 @@ def find_tools(
     vita3k_default: str | None = DEFAULT_VITA3K,
 ) -> Tools:
     """Configured paths must exist; unset tools are looked up on PATH (RAHasher only
-    when configured). Vita3K is looked for at `vita3k_default` (the app on macOS) first."""
+    when configured). Vita3K is looked for at `vita3k_default` (the app on macOS) first.
+    `[inbox] tool_timeout_minutes` becomes the time limit of every tool call."""
 
     def pick(key: str, configured: str | None, command: str | None) -> str | None:
         if configured:
@@ -233,6 +256,7 @@ def find_tools(
         nsz=pick("nsz", settings.nsz, "nsz"),
         orbis_pkg_util=pick("orbis_pkg_util", settings.orbis_pkg_util, "orbis-pkg-util"),
         vita3k=pick_vita3k(),
+        timeout=settings.tool_timeout_minutes * 60.0,
     )
 
 
@@ -310,20 +334,37 @@ def extract_zip(archive: Path, dest: Path) -> None:
         raise ItemFailure(f"{archive.name}: cannot unpack ({exc})") from exc
 
 
-def bsdtar_unpacked_size(bsdtar: str, archive: Path) -> int:
+def run_process(
+    cmd: Sequence[str], timeout: float, *, stdin: int | None = None
+) -> subprocess.CompletedProcess[str]:
+    """Run a tool, capturing its output as text, for at most `timeout` seconds. A tool that
+    runs longer is killed and `ToolTimeout` is raised, so a hung tool fails its item and the
+    run (and the inbox lock) goes on."""
+    try:
+        return subprocess.run(
+            list(cmd),
+            capture_output=True,
+            text=True,
+            check=False,
+            errors="replace",
+            stdin=stdin,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise ToolTimeout(timeout_reason(cmd[0], timeout)) from exc
+
+
+def bsdtar_unpacked_size(bsdtar: str, archive: Path, timeout: float) -> int:
     """The sum of the member sizes in `bsdtar -tvf`, an ls-style listing whose fifth
     column is the size. Names are never read from it: they may hold spaces and ` -> `. A
     line that has no decimal size fails the item.
 
     The locale is left as it is: the columns before the name do not depend on it, and in the
     C locale libarchive cannot convert a name that is not ASCII, which fails the listing."""
-    listing = subprocess.run(
-        [bsdtar, "-tvf", str(archive)],
-        capture_output=True,
-        text=True,
-        check=False,
-        errors="replace",
-    )
+    try:
+        listing = run_process([bsdtar, "-tvf", str(archive)], timeout)
+    except ToolTimeout as exc:
+        raise ToolTimeout(f"{archive.name}: {exc}") from exc
     if listing.returncode != 0:
         raise ItemFailure(f"{archive.name}: cannot read ({tail(listing.stderr)})")
     total = 0
@@ -335,29 +376,25 @@ def bsdtar_unpacked_size(bsdtar: str, archive: Path) -> int:
     return total
 
 
-def extract_bsdtar(bsdtar: str, archive: Path, dest: Path) -> None:
+def extract_bsdtar(bsdtar: str, archive: Path, dest: Path, timeout: float) -> None:
     dest.mkdir(parents=True, exist_ok=True)
-    listing = subprocess.run(
-        [bsdtar, "-tf", str(archive)],
-        capture_output=True,
-        text=True,
-        check=False,
-        errors="replace",
-    )
+    try:
+        listing = run_process([bsdtar, "-tf", str(archive)], timeout)
+    except ToolTimeout as exc:
+        raise ToolTimeout(f"{archive.name}: {exc}") from exc
     if listing.returncode != 0:
         raise ItemFailure(f"{archive.name}: cannot read ({tail(listing.stderr)})")
     for member in listing.stdout.splitlines():
         why = unsafe_member(member)
         if why:
             raise ItemFailure(f"{archive.name}: refused, a member has {why}")
-    free_space_check(dest, bsdtar_unpacked_size(bsdtar, archive))
-    done = subprocess.run(
-        [bsdtar, "-xf", str(archive), "-C", str(dest), "--no-same-owner", "--no-same-permissions"],
-        capture_output=True,
-        text=True,
-        check=False,
-        errors="replace",
-    )
+    free_space_check(dest, bsdtar_unpacked_size(bsdtar, archive, timeout))
+    try:
+        extract = [bsdtar, "-xf", str(archive), "-C", str(dest)]
+        extract += ["--no-same-owner", "--no-same-permissions"]
+        done = run_process(extract, timeout)
+    except ToolTimeout as exc:
+        raise ToolTimeout(f"{archive.name}: {exc}") from exc
     if done.returncode != 0:
         raise ItemFailure(f"{archive.name}: cannot unpack ({tail(done.stderr)})")
     for base, dirs, names in os.walk(dest):
@@ -400,7 +437,7 @@ def stage_item(item: Path, work: Path, tools: Tools) -> tuple[list[Staged], list
                 if path.suffix.lower() in BSDTAR_EXTENSIONS:
                     if not tools.bsdtar:
                         raise ItemFailure(f"{path.name}: needs bsdtar to unpack (not found)")
-                    extract_bsdtar(tools.bsdtar, path, target)
+                    extract_bsdtar(tools.bsdtar, path, target, tools.timeout)
                 else:
                     extract_zip(path, target)
             except ItemFailure as exc:
@@ -414,13 +451,14 @@ def stage_item(item: Path, work: Path, tools: Tools) -> tuple[list[Staged], list
     return files, notes, failures
 
 
-def run(cmd: Sequence[str]) -> tuple[int, str]:
-    proc = subprocess.run(list(cmd), capture_output=True, text=True, check=False, errors="replace")
+def run(cmd: Sequence[str], timeout: float) -> tuple[int, str]:
+    """(exit code, output) of a tool; raises `ToolTimeout` when it runs past `timeout` seconds."""
+    proc = run_process(cmd, timeout)
     return proc.returncode, (proc.stdout + proc.stderr).replace("\r", "\n")
 
 
-def chd_data_sha1(chdman: str, chd: Path) -> str | None:
-    code, out = run([chdman, "info", "-i", str(chd)])
+def chd_data_sha1(chdman: str, chd: Path, timeout: float) -> str | None:
+    code, out = run([chdman, "info", "-i", str(chd)], timeout)
     if code != 0:
         return None
     m = _DATA_SHA1.search(out) or _SHA1.search(out)
@@ -443,19 +481,25 @@ def crc_of(path: Path) -> int:
     return crc & 0xFFFFFFFF
 
 
-def same_content(kind: str, existing: Path, produced: Path, chdman: str | None) -> bool:
-    """Is the file already in the library the same game as the one just produced?"""
+def same_content(
+    kind: str, existing: Path, produced: Path, chdman: str | None, timeout: float
+) -> bool:
+    """Is the file already in the library the same game as the one just produced? (A chdman
+    that hangs is not an answer: it fails the item, see `ToolTimeout`.)"""
     try:
         if kind == "chd":
             if not chdman:
                 return False
-            a, b = chd_data_sha1(chdman, existing), chd_data_sha1(chdman, produced)
+            a = chd_data_sha1(chdman, existing, timeout)
+            b = chd_data_sha1(chdman, produced, timeout)
             return a is not None and a == b
         if kind == "zip":
             return zip_members(existing) == zip_members(produced)
         return existing.stat().st_size == produced.stat().st_size and file_sha1(
             existing
         ) == file_sha1(produced)
+    except ToolTimeout:
+        raise
     except (OSError, zipfile.BadZipFile, ItemFailure):
         return False
 

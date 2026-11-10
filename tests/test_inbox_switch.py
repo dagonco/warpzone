@@ -20,6 +20,7 @@ from switch_support import (
     write_titledb,
 )
 from test_inbox import Base
+from warpzone import inbox_core
 from warpzone import inbox_switch as sw
 from warpzone.config import InboxSettings
 from warpzone.inbox_core import InboxError, Tools, whitelist_line
@@ -305,13 +306,21 @@ class SwitchBase(Base):
         os.environ["HOME"] = str(self.tmp / "home")
         self.extras = self.hub / "library" / "extras"
 
-    def go(self, *, nsz: bool = True, keys: bool = True, titledb: bool = True, **kw) -> int:  # type: ignore[no-untyped-def]
+    def go(  # type: ignore[no-untyped-def]
+        self,
+        *,
+        nsz: bool = True,
+        keys: bool = True,
+        titledb: bool = True,
+        timeout: float = inbox_core.DEFAULT_TOOL_TIMEOUT,
+        **kw,
+    ) -> int:
         """`keys=False` leaves switch_keys unset, and HOME is empty: no keys file anywhere."""
         settings = InboxSettings(
             titledb_dir=str(self.titledb) if titledb else None,
             switch_keys=str(self.keys) if keys else None,
         )
-        tools = Tools(chdman=self.chdman, nsz=self.nsz if nsz else None)
+        tools = Tools(chdman=self.chdman, nsz=self.nsz if nsz else None, timeout=timeout)
         return super().go(tools=tools, settings=settings, **kw)
 
     def files(self, folder: str = "") -> list[str]:
@@ -561,6 +570,14 @@ class IdentifyingTests(SwitchBase):
         self.drop(f"x [{MK8}][v0].nsp", make_nsp(MK8))
         self.assertEqual(self.go(), 1, self.out)
         self.assertIn("nsz could not read", self.reason(f"x [{MK8}][v0].nsp"))
+
+    def test_a_hung_nsz_is_killed_and_only_its_item_goes_to_review(self) -> None:
+        self.nsz = make_stub(self.tmp / "hung", "nsz", "import time\ntime.sleep(60)\n")
+        self.drop("pack.nsz", make_nsz(make_nsp(MK8)))
+        self.assertEqual(self.go(timeout=0.3), 1, self.out)
+        self.assertIn("nsz did not finish within 0.3 seconds", self.reason("pack.nsz"))
+        self.assertEqual(self.files("roms"), [])
+        self.assertNotIn("Traceback", self.out)
 
     def test_the_file_wins_over_a_wrong_name(self) -> None:
         self.drop(f"Wrong [{MK8_UPD}][v5][UPD].nsp", make_nsp(MK8))
