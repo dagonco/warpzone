@@ -668,7 +668,7 @@ class DatSerialsTests(unittest.TestCase):
             catalog.dat_serials(self.game("roms/dreamcast/W.iso", dat="Same Name"), twice), ("T-1",)
         )
 
-    def test_games_without_serials_are_not_in_the_index(self) -> None:
+    def test_the_index_says_whether_any_dat_game_has_serials(self) -> None:
         index = self.dat(self.disc("Bare", ()))
         self.assertFalse(index)
         self.assertTrue(self.dat(self.disc("Has", ("T-1",))))
@@ -688,6 +688,49 @@ class DatSerialsTests(unittest.TestCase):
     def test_disc_names_come_from_the_playlist_entries(self) -> None:
         text = "# comment\nTwo (Disc 1).chd\n\nsub\\Mr. Two (v1.1) (Disc 2).chd\n"
         self.assertEqual(catalog.m3u_disc_names(text), ["Two (Disc 1)", "Mr. Two (v1.1) (Disc 2)"])
+
+    def test_a_game_the_dat_knows_without_a_serial_is_identified_with_none(self) -> None:
+        index = self.dat(
+            self.disc("Bare (USA)", (), self.SHA), self.disc("Has (USA)", ("T-1",), "d" * 40)
+        )
+        by_dat = self.game("roms/dreamcast/W.chd", dat="Bare (USA)")
+        by_hash = self.game("roms/dreamcast/W.iso", sha1=self.SHA)
+        by_file = self.game("roms/dreamcast/Bare (USA).chd")
+        for game in (by_dat, by_hash, by_file):
+            self.assertEqual(catalog.identify(game, index), (), game.primary)
+            self.assertIsNone(catalog.dat_serials(game, index), game.primary)
+        unknown = self.game("roms/dreamcast/Nope.chd", dat="Nope (USA)")
+        self.assertIsNone(catalog.identify(unknown, index))
+
+    def test_a_serial_among_duplicates_without_one_is_the_answer(self) -> None:
+        index = self.dat(self.disc("Dup", ()), self.disc("Dup", ("T-1",), "d" * 40))
+        self.assertEqual(catalog.identify(self.game("roms/dreamcast/Dup.chd"), index), ("T-1",))
+
+    def test_discs_the_dat_knows_without_serials_give_none_but_a_missing_disc_is_unmatched(
+        self,
+    ) -> None:
+        index = self.dat(self.disc("Two (Disc 1)", ()), self.disc("Two (Disc 2)", ()))
+        folder = catalog.derive("dreamcast", listing({"roms/dreamcast/Two.m3u/Two.m3u": "x"}))[0]
+        self.assertEqual(catalog.identify(folder, index, ["Two (Disc 1)", "Two (Disc 2)"]), ())
+        self.assertIsNone(catalog.identify(folder, index, ["Two (Disc 1)", "Two (Disc 3)"]))
+
+    def test_fill_serials_tells_no_serial_in_the_dat_from_unmatched(self) -> None:
+        index = self.dat(self.disc("Found", ("T-1",)), self.disc("Bare", ()))
+        found = self.game("roms/dreamcast/A.chd", dat="Found")
+        bare = self.game("roms/dreamcast/B.chd", dat="Bare")
+        lost = self.game("roms/dreamcast/C.chd", dat="Nope")
+        plan = catalog.fill_serials([found, bare, lost], index, {})
+        self.assertEqual(
+            (plan.filled, plan.no_serial, plan.unmatched), ((found.id,), (bare.id,), (lost.id,))
+        )
+        self.assertEqual([g.serials for g in plan.games], [("T-1",), (), ()])
+
+    def test_force_keeps_the_serials_of_a_game_the_dat_lists_none_for(self) -> None:
+        index = self.dat(self.disc("Bare", ()))
+        game = replace(self.game("roms/dreamcast/B.chd", dat="Bare"), serials=("OLD",))
+        plan = catalog.fill_serials([game], index, {}, force=True)
+        self.assertEqual((plan.had, plan.no_serial, plan.filled), ((game.id,), (), ()))
+        self.assertEqual(plan.games[0].serials, ("OLD",))
 
     def test_fill_serials_sorts_games_into_filled_had_and_unmatched(self) -> None:
         index = self.dat(self.disc("Found", ("T-1",)), self.disc("Had", ("T-9",)))

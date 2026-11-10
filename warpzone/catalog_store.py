@@ -530,7 +530,8 @@ class SerialsResult:
     status: str  # written | would-write | unchanged | conflict | error | no-dat | no-catalog
     filled: int = 0  # games that got serials
     had: int = 0  # games that already had them and were left as they are
-    unmatched: int = 0  # games with no serials and no exact DAT match
+    no_serial: int = 0  # games a DAT identifies but lists no serial for
+    unmatched: int = 0  # games with no serials that no DAT identifies exactly
     message: str = ""
     names: tuple[str, ...] = ()  # primary paths of the unmatched games
 
@@ -598,6 +599,7 @@ def update_serials(
                 "unchanged",
                 filled=len(plan.filled),
                 had=len(plan.had),
+                no_serial=len(plan.no_serial),
                 unmatched=len(plan.unmatched),
                 names=tuple(sorted(doc.games[i].primary for i in plan.unmatched)),
             )
@@ -622,7 +624,7 @@ def _describe_serials(result: SerialsResult) -> str:
         return f"{result.system}: {what}{left}"
     verb = {"written": "filled", "would-write": "to fill", "unchanged": "filled"}[result.status]
     text = f"{result.system}: {result.filled} {verb}, {result.had} already had"
-    text += f", {result.unmatched} unmatched"
+    text += f", {result.no_serial} no serial in DAT, {result.unmatched} unmatched"
     return text
 
 

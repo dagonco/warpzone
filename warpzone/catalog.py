@@ -477,30 +477,34 @@ def merge(
 
 @dataclass(frozen=True)
 class SerialIndex:
-    """What `catalog --dats` looks games up in: the serials of the DAT games that have any,
-    by game name and, for a game of one rom, by (size, SHA-1) of that rom. Each key holds
-    every distinct serial list it has, so a key that is not unique can be told."""
+    """What `catalog --dats` looks games up in: every DAT game, by name and, for a game of
+    one rom, by (size, SHA-1) of that rom. Each key holds every distinct serial list it has
+    (an empty one for a DAT game without serials), so a game the DAT knows but gives no serial
+    can be told from one it does not know, and a key that is not unique can be told too."""
 
     by_name: Mapping[str, frozenset[tuple[str, ...]]]
     by_rom: Mapping[tuple[int, str], frozenset[tuple[str, ...]]]
+    has_serials: bool = False  # whether any DAT game lists a serial
 
     def __bool__(self) -> bool:
-        return bool(self.by_name)
+        return self.has_serials
 
 
 def serial_index(dats: Iterable[datmod.Dat]) -> SerialIndex:
-    """The index of the games of `dats` that list serials."""
+    """The index of the games of `dats`."""
     names: dict[str, set[tuple[str, ...]]] = {}
     roms: dict[tuple[int, str], set[tuple[str, ...]]] = {}
+    has_serials = False
     for dat in dats:
         for game in dat.games:
-            if not game.serials:
-                continue
+            has_serials = has_serials or bool(game.serials)
             names.setdefault(game.name, set()).add(game.serials)
             if len(game.roms) == 1 and game.roms[0].sha1:
                 roms.setdefault((game.roms[0].size, game.roms[0].sha1), set()).add(game.serials)
     return SerialIndex(
-        {k: frozenset(v) for k, v in names.items()}, {k: frozenset(v) for k, v in roms.items()}
+        {k: frozenset(v) for k, v in names.items()},
+        {k: frozenset(v) for k, v in roms.items()},
+        has_serials,
     )
 
 
@@ -510,37 +514,43 @@ def m3u_disc_names(text: str) -> list[str]:
     return [_stem(posixpath.basename(ref.replace("\\", "/"))) for ref in _m3u_refs(text)]
 
 
-def _only(options: frozenset[tuple[str, ...]] | None) -> tuple[str, ...] | None:
-    return next(iter(options)) if options is not None and len(options) == 1 else None
+def _answer(options: frozenset[tuple[str, ...]]) -> tuple[str, ...] | None:
+    """The one serial list among the options of a key the DAT knows: `()` when it has none,
+    None when it has two different ones (no single answer)."""
+    listed = {o for o in options if o}
+    if not listed:
+        return ()
+    return next(iter(listed)) if len(listed) == 1 else None
 
 
-def dat_serials(
-    game: Game, index: SerialIndex, discs: Sequence[str] = ()
-) -> tuple[str, ...] | None:
-    """The DAT serials of a game by exact identity, or None when there is no single answer.
+def identify(game: Game, index: SerialIndex, discs: Sequence[str] = ()) -> tuple[str, ...] | None:
+    """The DAT serials of a game by exact identity: the serials when it is identified, `()`
+    when it is identified but the DAT lists no serial for it, None when it is not identified
+    or the DATs give two different answers.
 
-    In this order: the DAT name `inbox` stored, when the DAT has a game of that name (a name
-    the DATs have twice with different serials gives None); else the SHA-1 and size of the
-    primary file part against the DAT games of one rom; else, for a single file, its name
-    without the extension against the DAT game names (`inbox` names a file after its DAT game);
-    else, for an `.m3u` folder, the union of the serials of its discs, each found by its exact
-    name (`discs`, see `m3u_disc_names`), which needs every disc to be found. Names are compared
-    as they are, with no case folding or cleaning."""
+    In this order: the DAT name `inbox` stored, when the DAT has a game of that name (final,
+    even for a name the DATs have twice with different serials); else the SHA-1 and size of
+    the primary file part against the DAT games of one rom; else, for a single file, its name
+    without the extension against the DAT game names (`inbox` names a file after its DAT
+    game); else, for an `.m3u` folder, the union of the serials of its discs, each found by its
+    exact name (`discs`, see `m3u_disc_names`), which needs every disc to be found. Names are
+    compared as they are, with no case folding or cleaning."""
     if game.dat and game.dat in index.by_name:
-        return _only(index.by_name[game.dat])
+        return _answer(index.by_name[game.dat])
     primary = next((p for p in game.parts if p.path == game.primary), None)
     if primary is not None and primary.type == FILE and primary.sha1:
-        found = _only(index.by_rom.get((primary.size, primary.sha1.lower())))
+        options = index.by_rom.get((primary.size, primary.sha1.lower()))
+        found = _answer(options) if options else None
         if found is not None:
             return found
     if primary is not None and primary.type == FILE:
-        found = _only(index.by_name.get(_stem(posixpath.basename(game.primary))))
-        if found is not None:
-            return found
+        options = index.by_name.get(_stem(posixpath.basename(game.primary)))
+        return _answer(options) if options else None
     if discs and game.primary.lower().endswith(".m3u"):
         union: list[str] = []
         for name in discs:
-            found = _only(index.by_name.get(name))
+            options = index.by_name.get(name)
+            found = _answer(options) if options else None
             if found is None:
                 return None
             union.extend(found)
@@ -548,11 +558,19 @@ def dat_serials(
     return None
 
 
+def dat_serials(
+    game: Game, index: SerialIndex, discs: Sequence[str] = ()
+) -> tuple[str, ...] | None:
+    """The serials `identify` finds, or None when there are none to give."""
+    return identify(game, index, discs) or None
+
+
 @dataclass(frozen=True)
 class SerialPlan:
     games: tuple[Game, ...]  # all the games given, with the serials filled in
     filled: tuple[str, ...]  # ids of games that got serials (or other ones, with `force`)
     had: tuple[str, ...]  # ids of games left as they were: they have serials already
+    no_serial: tuple[str, ...]  # ids of games the DAT knows but lists no serial for
     unmatched: tuple[str, ...]  # ids of games with no serials and no exact DAT match
 
 
@@ -563,26 +581,31 @@ def fill_serials(
     *,
     force: bool = False,
 ) -> SerialPlan:
-    """Give the games that have no serials the ones `dat_serials` finds. A game that has
+    """Give the games that have no serials the ones `identify` finds. A game that has
     serials is left alone unless `force`; then a single exact match replaces them, and no
-    match keeps them. `discs` maps a game id to its playlist's disc names."""
+    match (or a DAT game without serials) keeps them. A game with none that the DAT knows but
+    lists no serial for is `no_serial`, not `unmatched`. `discs` maps a game id to its
+    playlist's disc names."""
     out: list[Game] = []
     filled: list[str] = []
     had: list[str] = []
+    no_serial: list[str] = []
     unmatched: list[str] = []
     for game in games:
         found = (
-            None if game.serials and not force else dat_serials(game, index, discs.get(game.id, ()))
+            None if game.serials and not force else identify(game, index, discs.get(game.id, ()))
         )
-        if game.serials and (not force or found is None or found == game.serials):
+        if game.serials and (not force or not found or found == game.serials):
             had.append(game.id)
         elif found is None:
             unmatched.append(game.id)
+        elif not found:
+            no_serial.append(game.id)
         else:
             filled.append(game.id)
             game = replace(game, serials=found)
         out.append(game)
-    return SerialPlan(tuple(out), tuple(filled), tuple(had), tuple(unmatched))
+    return SerialPlan(tuple(out), tuple(filled), tuple(had), tuple(no_serial), tuple(unmatched))
 
 
 def pending_hashes(games: Iterable[Game]) -> list[Part]:
