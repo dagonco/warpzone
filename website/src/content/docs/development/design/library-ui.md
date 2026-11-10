@@ -36,8 +36,7 @@ These were decided before the design and are not reopened here:
    whitelist that names one.
 5. The progress of each console is read on the hub from `GET /rest/db/completion`; no console
    API key is needed.
-6. warpzone runs on the hub in a container (the same image planned for running `inbox` on the
-   hub).
+6. warpzone runs on the hub in a container (the same image `inbox` can run in on the hub).
 7. The catalog stores the RetroAchievements hash of each game and a cached copy of RA's game
    lists per console.
 8. A catalog index built by `warpzone catalog`, and updated by `inbox` when it files a game, is
@@ -99,6 +98,7 @@ several, and a game is on for a console only when every part is.
       "size": 3221225993,
       "added": "2026-10-28",
       "dat": null,
+      "serials": [],
       "ra": null,
       "flags": []
     }
@@ -122,6 +122,11 @@ several, and a game is on for a console only when every part is.
   it; a later scan keeps it.
 - `dat`: the DAT game name when `inbox` identified the game by DAT, else `null`. A scan never
   looks DATs up (the hub has none, and a CHD's hash is not the DAT's).
+- `serials`: the serials the DAT lists for the game (Redump's `serial`; a disc listed once per
+  serial gathers them all, and a multi-disc game those of all its discs), in file order, or `[]`.
+  Set by `inbox` like `dat`, kept by a scan, and absent in files written before it existed (read
+  as `[]`). A value with commas is split. The [saves index](#saves-per-game) uses them to find a
+  Dreamcast game's memory card.
 - `ra`: see [RetroAchievements](#retroachievements).
 - `flags`: `unlistable` when a part cannot be written as a whitelist line (see
   [Escaping](#escaping)); the UI shows such a game and refuses to change it.
@@ -334,17 +339,32 @@ game has no save".
 ### What is matched
 
 `saves_index.match_game` (pure) takes the index of the listing, the system and the primary path of
-the game. The catalog records no game IDs beyond what the paths carry, so only these are matched:
+the game, and the DAT serials the catalog holds for it. The catalog records no other game IDs
+beyond what the paths carry, so only these are matched:
 
 | Emulator folder | Matched by | Counts as |
 |---|---|---|
 | `retroarch/saves` | the stem of the primary part (`Game.chd`, `Game.cue` and the `Game.m3u` folder of a multi-disc game all give `Game`, the name RetroArch loads) plus `.srm`, `.rtc`, `.sav`, `.mcr`, `.mcd`, `.eep`, `.fla`, `.sra`, `.mpk`, `.nv` or `.dsv` | save data |
 | `retroarch/states` | the stem plus `.state`, `.state<N>` or `.state.auto` (the `.png` thumbnails are not counted) | one state each |
 | `melonds/saves`, `melonds/states` | the stem of a `nds` game plus `.sav`; plus `.ml<N>` | data; states |
-| `flycast/saves` | the stem of a `dreamcast`, `naomi`, `naomi2` or `atomiswave` game: `<stem>_vmu_save_<A-D><1-4>.bin` (per-game VMU) or `<stem>.nvmem`, `<stem>.nvmem2` (arcade flash) | data |
+| `flycast/saves` | an arcade game (`naomi`, `naomi2`, `atomiswave`): the primary file's name **with its extension** plus `_vmu_save_A1.bin`, `.nvmem`, `.nvmem2` or `-main.nvmem` (`game.zip.nvmem`); a `dreamcast` game: its disc's product number (see below) plus `_vmu_save_A1.bin`, or, when the disc header has none, the primary file's name with its extension plus the same suffix | data |
 | `vita3k/saves` | the folder `<TITLEID>` equals the folder name of `roms/psvita/app/<TITLEID>` | data |
 | `shadps4/saves` | the folder `<user>/<CUSAnnnnn>` equals the name of `roms/ps4/games/<CUSAnnnnn>` (also its `-UPDATE` folder) | data |
 | `eden/saves` | the folder `<account>/<profile>/<TitleID>` equals the `[<TitleID>]` of the Switch game's file name (hex, any case) | data |
+
+Flycast keeps port A1's card per game (its `PerGameVmu` option is on by default); the other
+ports use the shared `vmu_save_<port>.bin`, which belongs to no game. A console game's card is
+named after `settings.content.gameId`, the `product_number` field of the disc's header (10
+bytes) with trailing spaces and NULs cut and anything after a NUL dropped, each of ` /\:*?|<>"`
+replaced by `_`; an arcade game's after `settings.content.fileName`, the content file's name
+with its extension. Warpzone never reads a disc image. For a Dreamcast game it compares the
+game's `serials` with the card's name instead, keeping only the letters and digits of both
+sides, because Redump spells the same number with other separators (`T-45001D-05` in the DAT,
+`T-45001D05` in the header, `T7016D  50` becoming `T7016D__50` in the file name). Any one serial
+may match. A disc whose Redump serial is not its header's number (a bare `51064` for
+`MK-51064`, or a catalog number such as `952-0158-50`) gets no match from that serial, and
+neither does a game filed before `serials` existed (or not by `inbox`): both show no saves,
+which is "not found" like the rest.
 
 RetroArch's save files can sit in a subfolder of the hub folder when the player sorts them by core
 or by content folder; two levels are looked into. Two rules keep a stem from being taken for
@@ -359,8 +379,10 @@ below it is not a save.
 ### What is not matched
 
 - **Shared memory cards:** PCSX2 (`Mcd001.ps2`), DuckStation (`shared_card_*.mcd`), Dolphin's GC
-  memory cards, Flycast's shared `vmu_save_*.bin` and `dc_nvmem.bin`, and RetroArch cores that
-  share one card between games. A card holds many games.
+  memory cards, Flycast's shared `vmu_save_<port>.bin` (every port but A1) and `dc_nvmem.bin`,
+  and RetroArch cores that share one card between games. A card holds many games.
+- **Dreamcast cards of games with no `serials`** (known limit): filed before the field existed,
+  not filed by `inbox`, or with a Redump serial that differs from the disc's header number.
 - **Emulators that name saves by an ID the catalog does not record:** Dolphin (game ID and Wii
   title), PCSX2 and DuckStation states and per-game cards (serial), PPSSPP (disc ID), RPCS3 (PS3
   title ID), Azahar (3DS title ID), Cemu (Wii U title ID) and Xenia (title ID). They can be added
@@ -525,19 +547,24 @@ run: the UI never guesses what a hand edit meant.
 
 Every read hands out an `etag`, the SHA-256 of the file's bytes (`"absent"` for a missing file).
 A write names, for each device it touches, the `etag` it was computed from. The server holds one
-lock for all whitelist writes and, inside it, for each device:
+lock for all whitelist writes and, inside it, for each device (the slow reads of the catalog and
+the hub happen before the lock is taken, and the questions to the hub's Syncthing after it is
+released, so a slow or down Syncthing never holds up a write):
 
 1. Reads the file again and compares its SHA-256 with the given `etag`; a mismatch refuses the
    whole request (`stale`) before any file is written.
 2. Applies the change to the model of what it just read and checks the effect (above).
 3. Copies the current file to `catalog/whitelists/<device>/<UTC time>.stignore` (the 50 newest
-   are kept per device).
+   are kept per device). A file that did not exist leaves an empty backup: the time in the name
+   is what [progress](#progress) reads as the time of the write, so a whitelist the UI creates is
+   `pending` like any other edit.
 4. Writes the rendered file with `safefile.atomic_write` and the stamp taken in step 1, which
    compares once more right before the rename. Its temporary file sits beside the whitelist for
    the length of the write only.
-5. Asks the hub's Syncthing to scan that one file (`POST /rest/db/scan?folder=wz-library&sub=
-   patterns-<device>.stignore`) so the devices hear of it at once; a failed scan is a warning,
-   since the hub's watcher picks the file up anyway.
+
+Once the lock is released, the server asks the hub's Syncthing to scan each file it wrote
+(`POST /rest/db/scan?folder=wz-library&sub=patterns-<device>.stignore`) so the devices hear of
+it at once; a failed scan is a warning, since the hub's watcher picks the file up anyway.
 
 A missing file (`etag` `"absent"`) is created, for a configured device that lists `library`.
 
@@ -635,9 +662,14 @@ never prints, logs or echoes it.
 - The page asks for the token once and sends it to `POST /api/v1/session` (`{"token": "..."}`).
   A right token answers `204` with a cookie `wz_session=<HMAC-SHA256 of the token over
   "warpzone-ui-session">; HttpOnly; SameSite=Strict; Path=/; Max-Age=2592000` (30 days); a
-  wrong one answers `401` after a wait (see below). The cookie needs no server state, survives a
-  restart and stops working when the token changes or when it expires; the next request then
-  answers `401` and the page asks for the token again. There is no logout route: the page keeps
+  wrong one answers `401` after a wait (see below). The value is `<expires>.<mac>`: `expires` is
+  the Unix time the session ends (the login time plus the `Max-Age`, 30 days) and `mac` the
+  HMAC-SHA256 under the token of `"warpzone-ui-session.<expires>"`. The server keeps no state
+  and checks both on every request, so the session ends at `expires` even if the browser keeps
+  sending the cookie, a changed `expires` breaks the mac, and a cookie made by an older version
+  (no expiry) is not accepted. It survives a restart and stops working when the token changes
+  or when it expires; the next request then answers `401` and the page asks for the token
+  again. There is no logout route: the page keeps
   no token and the cookie is `HttpOnly`, so ending a session means clearing the cookie or
   changing the token.
 - A client that is not a browser (the Decky plugin) sends `Authorization: Bearer <token>`.
@@ -957,7 +989,9 @@ last two when they apply):
 `library`, `GET /rest/system/connections` (is it connected) and `GET /rest/db/completion?folder=
 wz-library&device=<id>` (`completion`, `needBytes`, `needItems`, `remoteState`). The answers are
 cached for 15 seconds, since a completion over a large folder costs the hub a walk of its
-database. `progress.state` (pure) turns them into one state per device:
+database. A failed question (`503 hub-unreachable`) is cached for 5 seconds as well, so a down
+Syncthing is not asked again by every poll of every open page; the first poll after that asks
+again. `progress.state` (pure) turns them into one state per device:
 
 | State | When |
 |---|---|
@@ -974,7 +1008,7 @@ database. `progress.state` (pure) turns them into one state per device:
 ```
 
 The write time comes from the newest backup in `catalog/whitelists/<device>/` (the server keeps
-no other state). Progress is per console, not per game. Before this is relied on, the e2e test
+no other state); a whitelist the UI created has an empty backup for that. Progress is per console, not per game. Before this is relied on, the e2e test
 must show how the hub counts files a device ignores: if a whitelisted device never reaches
 `completion` 100 because the hub counts its ignored files as needed, `downloading` is computed
 instead from `GET /rest/db/remoteneed?folder=wz-library&device=<id>` filtered through the
@@ -1023,8 +1057,8 @@ warpzone runs on the hub in a container, because a NAS's own Python is often old
 image (`docker/Dockerfile`) is a slim official Python image pinned by digest, with warpzone
 installed from the checkout the image is built from (a release tag, as a wheel, with no index
 access) and RAHasher built with CHD support in a separate stage from RALibretro, pinned by tag and
-commit; only its binary reaches the last stage, at `/usr/local/bin/RAHasher` (the "inbox on the
-hub" work will add its tools to the same image). The entry point is `warpzone` and the default
+commit; only its binary reaches the last stage, at `/usr/local/bin/RAHasher` (the other tools of `inbox` are not in the image; see
+[where inbox runs](/warpzone/setup/inbox/#where-inbox-runs)). The entry point is `warpzone` and the default
 command `serve`, so `docker compose run --rm warpzone catalog ...` runs the other commands. The
 image runs as a non-root user and the Compose file sets `user:` to the uid and gid that own the
 games share. An example Compose file is `examples/compose.example.yaml`, and the steps are in

@@ -50,11 +50,12 @@ from warpzone.syncthing import Client, SyncthingError
 
 TOKEN_ENV = "WARPZONE_UI_TOKEN"
 COOKIE = "wz_session"
-COOKIE_MAX_AGE = 30 * 24 * 3600
+COOKIE_MAX_AGE = 30 * 24 * 3600  # the session's lifetime: the cookie's Max-Age and the server's
 SESSION_MESSAGE = b"warpzone-ui-session"
 CACHE_SECONDS = 5.0  # a file is checked for a change at most this often
 MEDIA_SECONDS = 60.0  # the listing of the media folders is read again after this long
 PROGRESS_SECONDS = 15.0
+PROGRESS_FAILURE_SECONDS = 5.0  # a failed question to the hub's Syncthing is not asked again before
 LOGIN_DELAY = 1.0
 MIN_TOKEN = 16  # characters; a shorter token is refused at start
 MAX_CONNECTIONS = 64  # connections served at once; the rest are closed
@@ -146,9 +147,23 @@ class FailureLimiter:
         (self._sleep or time.sleep)(wait)
 
 
-def session_cookie(token: str) -> str:
-    """The value of the session cookie: the HMAC-SHA256 of a fixed message under the token."""
-    return hmac.new(token.encode("utf-8"), SESSION_MESSAGE, hashlib.sha256).hexdigest()
+def session_cookie(token: str, expires: int) -> str:
+    """The value of the session cookie: `<expires>.<mac>`, where `expires` is the Unix time the
+    session ends and `mac` the HMAC-SHA256 of a fixed message and `expires` under the token. It
+    needs no server state: the server checks the mac and the time (`session_valid`)."""
+    message = SESSION_MESSAGE + b"." + str(expires).encode("ascii")
+    mac = hmac.new(token.encode("utf-8"), message, hashlib.sha256).hexdigest()
+    return f"{expires}.{mac}"
+
+
+def session_valid(token: str, value: str, now: int) -> bool:
+    """Whether a cookie value was made by `session_cookie` under this token and has not
+    expired, whatever the browser does with its `Max-Age`."""
+    stamp, sep, _ = value.partition(".")
+    if not sep or not stamp.isascii() or not stamp.isdigit():
+        return False
+    expires = int(stamp)
+    return _same(value, session_cookie(token, expires)) and now < expires
 
 
 def _same(a: str, b: str) -> bool:
@@ -417,7 +432,7 @@ class HubFiles:
         found = lib.by_id.get(game_id)
         if found is None:
             return saves_index.saves_response(saves_index.GameSaves())
-        return self._saves.game(lib, found[0], found[1].primary)
+        return self._saves.game(lib, found[0], found[1].primary, found[1].serials)
 
     def media_path(self, system: str, kind: str, name: str) -> Path | None:
         """The image file, or None when it is not a regular file inside its kind's folder
@@ -648,6 +663,7 @@ class App:
         ui_dir: Path = UI_DIR,
         login_delay: float = LOGIN_DELAY,
         progress_seconds: float = PROGRESS_SECONDS,
+        progress_failure_seconds: float = PROGRESS_FAILURE_SECONDS,
         log: Callable[[str], None] = lambda text: None,
         now: Callable[[], datetime] = lambda: datetime.now(UTC),
         clock: Callable[[], float] = time.monotonic,
@@ -656,7 +672,6 @@ class App:
         self.root = root or Path(cfg.hub.root)
         self.files = files or HubFiles(self.root)
         self._token = token
-        self._cookie = session_cookie(token)
         self._client_factory = client_factory
         self.refresher = refresher
         if refresher is not None:
@@ -665,12 +680,14 @@ class App:
         self.login_delay = login_delay
         self.limiter = FailureLimiter(login_delay)
         self.progress_seconds = progress_seconds
+        self.progress_failure_seconds = progress_failure_seconds
         self.log = log
         self.now = now
         self._clock = clock
         self.write_lock = threading.Lock()
         self._progress_lock = threading.Lock()
         self._progress: tuple[float, list[dict[str, Any]]] | None = None
+        self._progress_failed: float | None = None  # when the last question failed
 
     # ------------------------------------------------------------- dispatch
 
@@ -714,9 +731,10 @@ class App:
         bearer = scheme.lower() == "bearer" and bool(given)
         if bearer and _same(given, self._token):
             return "bearer"
-        # Every `wz_session` value is compared: a client may send others it does not know of.
+        # Every `wz_session` value is checked: a client may send others it does not know of.
+        now = int(self.now().timestamp())
         if any(
-            _same(value, self._cookie)
+            session_valid(self._token, value, now)
             for value in cookie_values(request.headers.get("cookie", ""), COOKIE)
         ):
             return "cookie"
@@ -748,9 +766,8 @@ class App:
         if not _same(body["token"], self._token):
             self.limiter.failed()
             raise ApiError("unauthorized", "wrong token")
-        cookie = (
-            f"{COOKIE}={self._cookie}; HttpOnly; SameSite=Strict; Path=/; Max-Age={COOKIE_MAX_AGE}"
-        )
+        value = session_cookie(self._token, int(self.now().timestamp()) + COOKIE_MAX_AGE)
+        cookie = f"{COOKIE}={value}; HttpOnly; SameSite=Strict; Path=/; Max-Age={COOKIE_MAX_AGE}"
         return Response(204, b"", headers=[("Set-Cookie", cookie)])
 
     # ------------------------------------------------------------- the API
@@ -933,6 +950,9 @@ class App:
             return json_response(200, library_api.changes_response(plan))
         written: dict[str, bool] = {}
         warnings: dict[str, list[str]] = {}
+        failure: ApiError | None = None
+        # The lock covers the re-check and the writes only: the hub's Syncthing (its client and
+        # the scans) is asked after it is released, so a slow or down Syncthing blocks no write.
         with self.write_lock:
             todo = [dp for dp in plan.devices if dp.changed]
             for dp in todo:  # every file is checked before the first one is written
@@ -943,7 +963,6 @@ class App:
                         f"{dp.device}: the whitelist changed since it was read",
                         device=dp.device,
                     )
-            client = self._scan_client()
             for dp in todo:
                 try:
                     text = dp.new_text.encode("utf-8")
@@ -951,13 +970,12 @@ class App:
                     def build(_snapshot: store.Snapshot, data: bytes = text) -> bytes:
                         return data
 
-                    notes = store.replace(
+                    store.replace(
                         self.root,
                         dp.device,
                         library_api.raw_etag(dp.etag),
                         build,
                         now=self.now(),
-                        client=client,
                     )
                 except (store.Stale, store.NoLibrary, OSError, WarpzoneError) as exc:
                     stale = isinstance(exc, store.Stale)
@@ -967,18 +985,29 @@ class App:
                         if stale
                         else f"{dp.device}: the whitelist could not be written ({_reason(exc)})"
                     )
-                    error = ApiError(code, message, device=dp.device)
-                    if not written:
-                        raise error from None
-                    partial = library_api.changes_response(plan, written, warnings)
-                    partial["error"] = error.body()["error"]
-                    return json_response(500, partial)
+                    failure = ApiError(code, message, device=dp.device)
+                    break
                 written[dp.device] = True
-                if notes:
-                    warnings[dp.device] = notes
-                    for note in notes:
-                        self.log(f"warning: {note}")
+        if failure is not None and not written:
+            raise failure
+        self._scan_written(list(written), warnings)
+        if failure is not None:
+            partial = library_api.changes_response(plan, written, warnings)
+            partial["error"] = failure.body()["error"]
+            return json_response(500, partial)
         return json_response(200, library_api.changes_response(plan, written, warnings))
+
+    def _scan_written(self, devices: list[str], warnings: dict[str, list[str]]) -> None:
+        """Ask the hub's Syncthing to scan each written whitelist, without the write lock. A
+        failure is a warning: the file is written, and the hub's watcher picks it up anyway."""
+        client = self._scan_client() if devices else None
+        if client is None:
+            return
+        for device in devices:
+            note = store.scan(client, device)
+            if note:
+                warnings[device] = [note]
+                self.log(f"warning: {note}")
 
     def _scan_client(self) -> Client | None:
         if self._client_factory is None:
@@ -1005,7 +1034,15 @@ class App:
             held = self._progress
             if held is not None and self._clock() - held[0] < self.progress_seconds:
                 return held[1]
-            entries = self._read_progress()
+            failed = self._progress_failed
+            if failed is not None and self._clock() - failed < self.progress_failure_seconds:
+                raise ApiError("hub-unreachable", "the hub's Syncthing did not answer")
+            try:
+                entries = self._read_progress()
+            except ApiError:  # a down Syncthing is not asked again by every poll
+                self._progress_failed = self._clock()
+                raise
+            self._progress_failed = None
             self._progress = (self._clock(), entries)
             return entries
 

@@ -9,7 +9,9 @@ import socket
 import sys
 import tempfile
 import threading
+import time
 import unittest
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, NamedTuple
 from unittest import mock
@@ -41,6 +43,11 @@ class Reply(NamedTuple):
     @property
     def json(self) -> Any:
         return json.loads(self.body)
+
+
+def fresh_cookie() -> str:
+    """A session cookie value that is valid for an hour."""
+    return serve.session_cookie(TOKEN, int(time.time()) + 3600)
 
 
 def by_title(system: str, title: str) -> catalog.Game:
@@ -165,6 +172,9 @@ class ServeCase(unittest.TestCase):
     def error(self, reply: Reply) -> dict[str, Any]:
         return reply.json["error"]
 
+    def cookie_get(self, cookie: str) -> int:
+        return self.get("/api/v1/devices", headers={"Cookie": cookie}, auth=False).status
+
 
 class AuthTests(ServeCase):
     def test_no_token_and_a_wrong_token_are_401(self) -> None:
@@ -174,7 +184,7 @@ class AuthTests(ServeCase):
             {"Authorization": "Basic " + TOKEN},
             {"Authorization": "Bearer"},
             {"Cookie": "wz_session=nope"},
-            {"Cookie": "other=" + serve.session_cookie(TOKEN)},
+            {"Cookie": "other=" + fresh_cookie()},
         ):
             reply = self.get("/api/v1/devices", headers=headers, auth=False)
             self.assertEqual(reply.status, 401, headers)
@@ -196,10 +206,17 @@ class AuthTests(ServeCase):
         reply = self.call("POST", "/api/v1/session", {"token": TOKEN}, auth=False)
         self.assertEqual((reply.status, reply.body), (204, b""))
         cookie = reply.headers["Set-Cookie"]
-        value = serve.session_cookie(TOKEN)
-        self.assertTrue(cookie.startswith(f"wz_session={value};"), cookie)
-        for attribute in ("HttpOnly", "SameSite=Strict", "Path=/"):
+        value = cookie.split(";")[0].removeprefix("wz_session=")
+        for attribute in (
+            "HttpOnly",
+            "SameSite=Strict",
+            "Path=/",
+            f"Max-Age={serve.COOKIE_MAX_AGE}",
+        ):
             self.assertIn(attribute, cookie)
+        # the server's own expiry is the cookie's Max-Age from now
+        expires = int(value.split(".")[0])
+        self.assertAlmostEqual(expires, time.time() + serve.COOKIE_MAX_AGE, delta=60)
         self.assertNotIn(TOKEN, cookie)
         reply = self.get("/api/v1/devices", headers={"Cookie": f"wz_session={value}"}, auth=False)
         self.assertEqual(reply.status, 200)
@@ -220,15 +237,38 @@ class AuthTests(ServeCase):
         self.assertEqual(self.get("/api/v1/session", auth=False).status, 404)
 
     def test_the_cookie_survives_a_restart_and_stops_working_when_the_token_changes(self) -> None:
-        value = serve.session_cookie(TOKEN)
-        self.assertEqual(serve.session_cookie(TOKEN), value)
-        self.assertNotEqual(serve.session_cookie(TOKEN + "x"), value)
+        value = fresh_cookie()
         self.start()  # a new server with the same token
-        reply = self.get("/api/v1/devices", headers={"Cookie": f"wz_session={value}"}, auth=False)
-        self.assertEqual(reply.status, 200)
+        self.assertEqual(self.cookie_get(f"wz_session={value}"), 200)
+        other = serve.session_cookie(TOKEN + "x", int(time.time()) + 3600)
+        self.assertEqual(self.cookie_get(f"wz_session={other}"), 401)
+
+    def test_the_session_expires_on_the_server_even_if_the_browser_keeps_sending_it(self) -> None:
+        now = [datetime(2026, 11, 10, 12, 0, tzinfo=UTC)]
+        self.start(now=lambda: now[0])
+
+        def login() -> str:
+            reply = self.call("POST", "/api/v1/session", {"token": TOKEN}, auth=False)
+            return reply.headers["Set-Cookie"].split(";")[0]
+
+        cookie = login()
+        self.assertEqual(self.cookie_get(cookie), 200)
+        now[0] += timedelta(seconds=serve.COOKIE_MAX_AGE - 1)
+        self.assertEqual(self.cookie_get(cookie), 200)
+        now[0] += timedelta(seconds=1)
+        self.assertEqual(self.cookie_get(cookie), 401)
+        self.assertEqual(self.cookie_get(login()), 200)  # a new login starts a new session
+
+    def test_a_cookie_cannot_be_given_a_later_expiry_or_be_the_old_stateless_one(self) -> None:
+        now = int(time.time())
+        expired = serve.session_cookie(TOKEN, now - 10)
+        _, _, mac = expired.partition(".")
+        for value in (expired, f"{now + 10**9}.{mac}", mac, f".{mac}", "x.y", f"-5.{mac}"):
+            self.assertEqual(self.cookie_get(f"wz_session={value}"), 401, value)
+        self.assertEqual(self.cookie_get(f"wz_session={fresh_cookie()}"), 200)
 
     def test_a_write_by_cookie_needs_the_origin_of_the_page(self) -> None:
-        cookie = {"Cookie": f"wz_session={serve.session_cookie(TOKEN)}"}
+        cookie = {"Cookie": f"wz_session={fresh_cookie()}"}
         body = {"changes": [{"device": "deck", "system": "gba", "on": False}], "dry_run": True}
         body["expect"] = {"deck": self.etags()["deck"]}
         host = f"127.0.0.1:{self.port}"
@@ -644,9 +684,18 @@ class ChangeTests(ServeCase):
         reply = self.change([{"device": "machine", "system": "gba", "on": True}])
         self.assertEqual(reply.status, 200, reply.body)
         self.assertEqual(self.whitelist("machine").systems, frozenset({"gba"}))
-        self.assertFalse(
-            (self.root / "catalog" / "whitelists" / "machine").exists()
-        )  # nothing to back up
+        # nothing to back up, but the write is recorded (an empty backup), for `pending`
+        (backup,) = (self.root / "catalog" / "whitelists" / "machine").glob("*.stignore")
+        self.assertEqual(backup.read_bytes(), b"")
+
+    def test_a_created_whitelist_is_pending_like_any_edit(self) -> None:
+        (self.library / "patterns-deck.stignore").unlink()
+        self.fake.completion[("wz-library", DECK_ID)] = {"completion": 100, "needBytes": 0}
+        self.start(progress_seconds=0)
+        self.assertEqual(self.get("/api/v1/progress").json[0]["state"], "done")
+        reply = self.change([{"device": "deck", "system": "gba", "on": True}])
+        self.assertEqual(reply.status, 200, reply.body)
+        self.assertEqual(self.get("/api/v1/progress").json[0]["state"], "pending")
 
     def test_a_stale_expect_is_412_and_nothing_is_written(self) -> None:
         etags = self.etags()
@@ -799,6 +848,60 @@ class ChangeTests(ServeCase):
             t.join()
         self.assertEqual(sorted(results), [200, 412])
 
+    def test_the_hub_is_asked_outside_the_write_lock(self) -> None:
+        held: list[bool] = []
+        real_scan = serve.store.scan
+
+        def scan(client: Any, device: str) -> Any:
+            held.append(self.app.write_lock.locked())
+            return real_scan(client, device)
+
+        def factory() -> Client:
+            held.append(self.app.write_lock.locked())
+            return Client(self.fake.url, API_KEY, label="hub")
+
+        self.start(client_factory=factory)
+        with mock.patch.object(serve.store, "scan", scan):
+            reply = self.change([{"device": "*", "system": "gbc", "on": True}])
+        self.assertEqual(reply.status, 200, reply.body)
+        self.assertEqual(held, [False, False, False])  # the client, then a scan per device
+        self.assertFalse(self.app.write_lock.locked())
+
+    def test_a_scan_that_hangs_does_not_hold_up_another_write(self) -> None:
+        entered, release = threading.Event(), threading.Event()
+        real_scan = serve.store.scan
+
+        def scan(client: Any, device: str) -> Any:
+            entered.set()
+            release.wait(5)
+            return real_scan(client, device)
+
+        results: list[int] = []
+
+        def first() -> None:
+            results.append(self.change([{"device": "deck", "system": "psx", "on": True}]).status)
+
+        with mock.patch.object(serve.store, "scan", scan):
+            thread = threading.Thread(target=first)
+            thread.start()
+            self.assertTrue(entered.wait(5))
+            # the first write is on disk and its scan is waiting: the lock is free
+            self.assertTrue(self.app.write_lock.acquire(timeout=1))
+            self.app.write_lock.release()
+            release.set()
+            thread.join(5)
+        self.assertEqual(results, [200])
+
+    def test_a_stale_file_is_refused_without_writing_or_asking_the_hub(self) -> None:
+        etags = self.etags()
+        self.write_whitelist("deck", managed(["gba", "gbc"]))
+        before = self.fake.requests[:]
+        body = {"changes": [{"device": "deck", "system": "psx", "on": True}], "expect": etags}
+        reply = self.call("POST", "/api/v1/changes", body)
+        self.assertEqual((reply.status, self.error(reply)["code"]), (412, "stale"))
+        self.assertEqual(self.fake.requests, before)
+        self.assertEqual(self.whitelist("deck").systems, frozenset({"gba", "gbc"}))
+
 
 def library_game(path: str, title: str) -> catalog.Game:
     from library_support import game
@@ -848,6 +951,44 @@ class ProgressTests(ServeCase):
         reply = self.get("/api/v1/progress")
         self.assertEqual((reply.status, self.error(reply)["code"]), (503, "hub-unreachable"))
         self.assertNotIn(API_KEY, reply.body.decode())
+
+    def test_a_failure_is_cached_for_a_few_seconds(self) -> None:
+        clock = [0.0]
+        calls = []
+
+        def factory() -> Client:
+            calls.append(clock[0])
+            return Client("http://127.0.0.1:1", API_KEY, label="hub")
+
+        self.start(client_factory=factory, clock=lambda: clock[0])
+        for _ in range(3):
+            self.assertEqual(self.get("/api/v1/progress").status, 503)
+        self.assertEqual(calls, [0.0])  # one question; the other polls got the cached failure
+        clock[0] = 4.0
+        reply = self.get("/api/v1/progress")
+        self.assertEqual((reply.status, self.error(reply)["code"]), (503, "hub-unreachable"))
+        self.assertEqual(calls, [0.0])
+        clock[0] = 6.0
+        self.assertEqual(self.get("/api/v1/progress").status, 503)
+        self.assertEqual(calls, [0.0, 6.0])  # asked again once the failure expired
+
+    def test_the_hub_coming_back_is_noticed_after_the_failure_expires(self) -> None:
+        clock = [0.0]
+        up = [False]
+
+        def factory() -> Client:
+            url = self.fake.url if up[0] else "http://127.0.0.1:1"
+            return Client(url, API_KEY, label="hub")
+
+        self.start(client_factory=factory, clock=lambda: clock[0])
+        self.assertEqual(self.get("/api/v1/progress").status, 503)
+        up[0] = True
+        self.assertEqual(self.get("/api/v1/progress").status, 503)  # still the cached failure
+        clock[0] = 6.0
+        self.assertEqual(self.get("/api/v1/progress").status, 200)
+        up[0] = False
+        clock[0] = 7.0
+        self.assertEqual(self.get("/api/v1/progress").status, 200)  # a success keeps its 15 s
 
     def test_no_hub_client_is_503(self) -> None:
         self.start(client_factory=None)
@@ -983,9 +1124,6 @@ class HardeningTests(ServeCase):
         finally:
             sock.close()
 
-    def cookie_get(self, cookie: str) -> int:
-        return self.get("/api/v1/devices", headers={"Cookie": cookie}, auth=False).status
-
     # --- 1. brute force
 
     def test_a_wrong_bearer_is_delayed_like_a_wrong_login(self) -> None:
@@ -1070,7 +1208,7 @@ class HardeningTests(ServeCase):
     # --- 3. cookies
 
     def test_the_session_cookie_is_found_among_other_cookies(self) -> None:
-        value = serve.session_cookie(TOKEN)
+        value = fresh_cookie()
         for header in (
             f"pref=a b; wz_session={value}",
             f'st={{"t":1}}; wz_session={value}',
@@ -1101,7 +1239,7 @@ class HardeningTests(ServeCase):
     # --- 5. TLS proxy
 
     def test_a_cookie_write_from_the_https_origin_of_the_host_is_accepted(self) -> None:
-        value = serve.session_cookie(TOKEN)
+        value = fresh_cookie()
         body = {"changes": [], "expect": {}, "dry_run": True}
         for origin, ok in (
             ("https://example.lan", True),

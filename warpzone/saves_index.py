@@ -8,8 +8,9 @@ those are the only parts that read the disk. Nothing here writes below `saves/`,
 is never followed.
 
 Only exact matches count: a ROM stem for the emulators that name their files after it, a
-title ID for the ones that keep one folder per title. Shared memory cards and anything named
-by an ID the catalog does not record are left out.
+title ID for the ones that keep one folder per title, and for Flycast the file name of the
+content (arcade) or the disc's product number (Dreamcast). Shared memory cards and anything
+named by an ID the catalog does not record are left out.
 """
 
 from __future__ import annotations
@@ -38,8 +39,10 @@ RETROARCH_DATA = frozenset(
 )
 _RA_STATE = re.compile(r"^(?P<stem>.+)\.state(?:\d+|\.auto)?$")
 _MELONDS_STATE = re.compile(r"^(?P<stem>.+)\.ml\d$")
-_FLYCAST_VMU = re.compile(r"^(?P<stem>.+)_vmu_save_[A-D][1-4]\.bin$")
-_FLYCAST_NVMEM = re.compile(r"^(?P<stem>.+)\.nvmem2?$")
+# Flycast names only port A1's card per game; the other ports share `vmu_save_<port>.bin`.
+_FLYCAST_VMU = re.compile(r"^(?P<name>.+)_vmu_save_A1\.bin$")
+_FLYCAST_NVMEM = re.compile(r"^(?P<name>.+?)(?:-main\.nvmem|\.nvmem2?)$")
+_NOT_ALNUM = re.compile(r"[^0-9A-Za-z]")
 _VITA_ID = re.compile(r"^[A-Z]{4}\d{5}$")
 _PS4_ID = re.compile(r"^CUSA\d{5}$")
 _PS4_FOLDER = re.compile(r"^(CUSA\d{5})(?:-UPDATE)?$")
@@ -53,8 +56,11 @@ NOT_RETROARCH = frozenset(
 )
 MELONDS_SYSTEMS = frozenset({"nds"})
 FLYCAST_SYSTEMS = frozenset({"dreamcast", "naomi", "naomi2", "atomiswave"})
+FLYCAST_ARCADE = frozenset({"naomi", "naomi2", "atomiswave"})
 # The standalone emulators that keep one folder per title, by the system whose games they run.
 TITLE_EMULATORS = {"psvita": "vita3k", "ps4": "shadps4", "switch": "eden"}
+# Emulators whose hits are keyed by an ID, not by a ROM stem: they go to `Index.by_title`.
+KEYED_EMULATORS = frozenset({*TITLE_EMULATORS.values(), "flycast"})
 
 
 @dataclass(frozen=True)
@@ -124,9 +130,28 @@ class Context:
 # --------------------------------------------------------------------------- pure
 
 
-def classify(entry: Entry) -> tuple[str, Hit] | None:
-    """(key, hit) of an entry, or None when it is no save of an emulator we can attribute.
-    A key is a ROM stem, or `emulator:TITLEID` for a title folder."""
+def flycast_id(game_id: str) -> str:
+    """The product number of a disc as a comparison key: letters and digits only.
+
+    Flycast names a console game's card after the number in the disc's header, with each of
+    ` /\\:*?|<>"` replaced by `_`. Redump writes the same number with other separators
+    (`T-45001D05` in the header, `T-45001D-05` in the DAT), so both sides drop everything
+    that is not a letter or a digit."""
+    return _NOT_ALNUM.sub("", game_id)
+
+
+def classify(entry: Entry) -> list[tuple[str, Hit]]:
+    """(key, hit) pairs of an entry; empty when it is no save of an emulator we can
+    attribute. A key is a ROM stem, `emulator:TITLEID` for a title folder, or for Flycast
+    `flycast:vmu:<file name>`, `flycast:id:<product number key>` or `flycast:arcade:<file
+    name>`."""
+    found = _classify(entry)
+    if found is None:
+        return []
+    return found if isinstance(found, list) else [found]
+
+
+def _classify(entry: Entry) -> tuple[str, Hit] | list[tuple[str, Hit]] | None:
     parts = entry.path
     if len(parts) < 3:
         return None
@@ -149,9 +174,18 @@ def classify(entry: Entry) -> tuple[str, Hit] | None:
         if found:
             return found["stem"], Hit(emulator, True, entry.mtime)
     elif (emulator, kind) == ("flycast", "saves") and not where:
-        found = _FLYCAST_VMU.match(name) or _FLYCAST_NVMEM.match(name)
-        if found:
-            return found["stem"], Hit(emulator, False, entry.mtime)
+        hit = Hit(emulator, False, entry.mtime)
+        vmu = _FLYCAST_VMU.match(name)
+        if vmu:
+            # A console game's card carries its product number, an arcade game's the file
+            # name of the content with its extension: the game side decides which one counts.
+            return [
+                (f"flycast:vmu:{vmu['name']}", hit),
+                (f"flycast:id:{flycast_id(vmu['name'])}", hit),
+            ]
+        nvmem = _FLYCAST_NVMEM.match(name)
+        if nvmem:
+            return f"flycast:arcade:{nvmem['name']}", hit
     elif (emulator, kind) == ("vita3k", "saves") and len(parts) == 3:
         if _VITA_ID.match(name):
             return f"vita3k:{name}", Hit(emulator, False, entry.mtime)
@@ -168,15 +202,12 @@ def classify(entry: Entry) -> tuple[str, Hit] | None:
 def build_index(entries: Iterable[Entry]) -> Index:
     index = Index()
     for entry in entries:
-        found = classify(entry)
-        if found is None:
-            continue
-        key, hit = found
-        if hit.emulator in TITLE_EMULATORS.values():
-            emulator, _, title = key.partition(":")
-            index.by_title.setdefault((emulator, title), []).append(hit)
-        else:
-            index.by_stem.setdefault(key, []).append(hit)
+        for key, hit in classify(entry):
+            if hit.emulator in KEYED_EMULATORS:
+                emulator, _, ident = key.partition(":")
+                index.by_title.setdefault((emulator, ident), []).append(hit)
+            else:
+                index.by_stem.setdefault(key, []).append(hit)
     return index
 
 
@@ -234,8 +265,31 @@ def _belongs(hit: Hit, system: str, stem: str, ctx: Context) -> bool:
     return others <= {system}
 
 
-def match_game(index: Index, ctx: Context, system: str, primary: str) -> GameSaves:
-    """The saves of one game. Exact stem or title ID only; see the module docstring."""
+def flycast_hits(index: Index, system: str, primary: str, serials: Iterable[str]) -> list[Hit]:
+    """The Flycast files of one game, each once.
+
+    Port A1's card is named after the content's file name with its extension (an arcade game;
+    also a Dreamcast game whose disc header has no product number) or, for a Dreamcast game,
+    after the product number of the disc; the catalog's DAT serials give the numbers. Arcade
+    flash is named after the file name too, with `.nvmem`, `.nvmem2` or `-main.nvmem`."""
+    name = posixpath.basename(primary)
+    keys = [f"vmu:{name}"]
+    if system in FLYCAST_ARCADE:
+        keys.append(f"arcade:{name}")
+    else:
+        keys.extend(f"id:{key}" for key in sorted({flycast_id(s) for s in serials} - {""}))
+    found: dict[int, Hit] = {}
+    for key in keys:
+        for hit in index.by_title.get(("flycast", key), ()):
+            found[id(hit)] = hit
+    return list(found.values())
+
+
+def match_game(
+    index: Index, ctx: Context, system: str, primary: str, serials: Iterable[str] = ()
+) -> GameSaves:
+    """The saves of one game. Exact stem, title ID, file name or product number only; see the
+    module docstring. `serials` are the DAT serials the catalog holds for the game."""
     hits: list[Hit] = []
     stem = stem_of(primary)
     for hit in index.by_stem.get(stem, ()):
@@ -245,6 +299,8 @@ def match_game(index: Index, ctx: Context, system: str, primary: str) -> GameSav
     ident = title_id(system, primary)
     if emulator is not None and ident is not None:
         hits.extend(index.by_title.get((emulator, ident), ()))
+    if system in FLYCAST_SYSTEMS:
+        hits.extend(flycast_hits(index, system, primary, serials))
     if not hits:
         return GameSaves()
     return GameSaves(
@@ -386,5 +442,8 @@ class SavesCache:
                 self._ctx = (lib, context_of(pairs))
             return self._ctx[1]
 
-    def game(self, lib: Library, system: str, primary: str) -> dict[str, Any]:
-        return saves_response(match_game(self.index(), self.context(lib), system, primary))
+    def game(
+        self, lib: Library, system: str, primary: str, serials: Iterable[str] = ()
+    ) -> dict[str, Any]:
+        found = match_game(self.index(), self.context(lib), system, primary, serials)
+        return saves_response(found)

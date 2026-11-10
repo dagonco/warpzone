@@ -201,6 +201,7 @@ def update_system(
     updated: str,
     dry_run: bool = False,
     dat: Mapping[str, str] | None = None,
+    serials: Mapping[str, tuple[str, ...]] | None = None,
     ra_known: RaKnown | None = None,
     ra_hasher: RaHasher | None = None,
     ra_limit: int | None = None,
@@ -231,7 +232,7 @@ def update_system(
         for _ in range(WRITE_TRIES):
             doc, stamp = read_state(path)
             previous = doc.games if doc else {}
-            games = catalog.merge(previous, derived, today=today, dat=dat)
+            games = catalog.merge(previous, derived, today=today, dat=dat, serials=serials)
             if not dry_run:
                 pending = catalog.pending_hashes(games)
                 if pending:
@@ -520,17 +521,25 @@ def update_after_inbox(
     dat: Mapping[str, str],
     out: Callable[[str], None],
     warn: Callable[[str], None],
+    serials: Mapping[str, tuple[str, ...]] | None = None,
     ra_known: RaKnown | None = None,
     now: datetime | None = None,
 ) -> None:
     """What `inbox --apply` runs after filing: the same derivation as `catalog` for each
-    system it placed something in, merged with the DAT names and RA hashes it knows (by
+    system it placed something in, merged with the DAT names, serials and RA hashes it knows (by
     primary path; see `RaKnown`).
     A failure is a warning: the next `catalog` run picks the game up."""
     today, updated = _clock(now)
     for system in sorted(systems):
         result = update_system(
-            root, system, today=today, updated=updated, dat=dat, ra_known=ra_known, out=out
+            root,
+            system,
+            today=today,
+            updated=updated,
+            dat=dat,
+            serials=serials,
+            ra_known=ra_known,
+            out=out,
         )
         if result.failed:
             warn(f"catalog: {_describe(result)}; run `warpzone catalog` later")
