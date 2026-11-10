@@ -200,6 +200,17 @@ A game's `ra` is `null` or `{"hash": "<32 hex>", "of": "<part path>", "size": N,
 the RA hash of one part (the primary part; for an `.m3u` folder, its first disc), and the size
 and mtime that part had when it was hashed. A part that changed since is hashed again.
 
+`ra.CONSOLE_IDS` maps the ES-DE system folder name under `roms/` to RA's console id (the numbers
+of rcheevos, which RAHasher and the web API share). It holds the consoles RAHasher can hash and
+RA has sets for: the Nintendo, Sony, Sega, NEC, SNK, Atari and Bandai systems, the classic
+consoles (3DO, ColecoVision, Intellivision, Vectrex, Odyssey 2, ...), arcade (`arcade`, `mame`,
+`fbneo`, `neogeo`, `cps1` to `cps3`: RA files them all under Arcade), and some home computers and
+fantasy consoles (`dos`, `msx`, `c64`, `zxspectrum`, `tic80`, ...). When ES-DE has several folder
+names for one RA console, each is listed (`genesis` and `megadrive`, `pcengine` and `tg16`,
+`ngp` and `ngpc`, ...). Not listed: Wii, Wii U, Xbox and PS3 (no sets), Switch, PS4 and Vita
+(RA has no console for them), and consoles RAHasher cannot hash (Atari 5200, Atari ST, Amiga,
+CD-i). A system outside the table has no hash, no list and the `no-list` state.
+
 - `inbox` writes it when `[inbox] rahasher` is set: it is the hash of the result, which it
   already compares with the source's.
 - `warpzone catalog --ra-hash` is the one-time pass for the existing library: it runs RAHasher
