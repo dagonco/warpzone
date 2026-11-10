@@ -110,8 +110,12 @@ path = "~/.config/Ryujinx/bis/system/save"
 path = "~/Emulation/storage/azahar/sdmc"
 [saves.azahar-states]
 path = "~/.local/share/azahar-emu/states"
+# shadPS4 keeps saves per user, `home/<user id>/savedata/<save title id>/`, and the first
+# user is 1000. Versions before the per-user layout wrote to `savedata/` directly, which
+# is the previous path (EmuDeck's `~/Emulation/saves/shadps4/saves` link still points there).
 [saves.shadps4-saves]
-path = "~/.local/share/shadPS4/savedata"
+path = "~/.local/share/shadPS4/home/1000/savedata"
+previous_paths = ["~/.local/share/shadPS4/savedata"]
 [saves.cemu-saves]
 path = "~/Emulation/roms/wiiu/mlc01/usr/save"
 [saves.xenia-content]
@@ -767,6 +771,45 @@ known = ['sys.mem_limit']
 [settings.xemu.data.eeprom]
 path = "~/Emulation/storage/xemu/eeprom.bin"
 create_when = "~/Emulation/storage/xemu"
+
+# shadPS4 v0.21 and later keep their settings in config.json (General, GPU, Vulkan, Input...).
+# The config.toml of earlier versions is read once, to migrate it, only while config.json is
+# missing, so a layer on it would do nothing and it is not declared. `General.console_language`
+# is the PS4 system language (1 = English US, 3 = Spanish). The Qt launcher keeps its own
+# interface language in qt_ui.ini (`guiLanguage`, such as es_ES). The install and DLC folders
+# are set by `[shadps4]` above and follow each console's library path, so they are noise.
+[settings.shadps4]
+process = ["shadps4", "shadPS4QtLauncher", "Shadps4-qt.AppImage", "Shadps4-sdl.AppImage"]
+[settings.shadps4.files.config]
+path = "~/.local/share/shadPS4/config.json"
+format = "json"
+noise = [
+  'General.install_dirs',
+  'General.addon_install_dir',
+  'General.home_dir',
+  'General.sys_modules_dir',
+  'General.font_dir',
+  'General.big_picture_*',
+  'Debug.*',
+  'Input.*',
+  'Audio.*_device',
+  'Log.*',
+]
+device = ['GPU.window_*', 'GPU.internal_screen_*', 'GPU.full_screen*', 'Vulkan.gpu_id']
+known = ['General.console_language']
+[settings.shadps4.files.launcher]
+path = "~/.local/share/shadPS4QtLauncher/qt_ui.ini"
+format = "ini"
+noise = [
+  '[main_window]*',
+  '[game_list]*',
+  '[game_list_column]*',
+  '[game_grid]*',
+  '[favorites]*',
+  '[version_manager]*',
+  '[general_settings]shadPath',
+]
+known = ['[general_settings]guiLanguage']
 
 # Xenia Canary, the Windows build EmuDeck runs under Proton in portable mode (portable.txt
 # next to the exe). Canary reads only xenia-canary.config.toml; the xenia.config.toml and

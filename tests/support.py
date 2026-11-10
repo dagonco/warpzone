@@ -151,6 +151,8 @@ class FakeSyncthing:
         self.connections: dict[str, dict[str, Any]] = {}
         # db/completion: (folder, device ID) -> the answer; a pair that is not there is a 404.
         self.completion: dict[tuple[str, str], dict[str, Any]] = {}
+        # db/status: folder -> keys that replace the default answer (idle, nothing needed).
+        self.status: dict[str, dict[str, Any]] = {}
         # Seconds a full scan takes to answer: Syncthing holds it while the folder pulls.
         self.scan_delay = 0.0
         self.requests: list[tuple[str, str, Any]] = []
@@ -203,7 +205,7 @@ class FakeSyncthing:
                 code, payload = fake.route(self.command, url.path, query, body)
                 self._send(code, payload)
 
-            do_GET = do_POST = do_PATCH = _handle
+            do_GET = do_POST = do_PATCH = do_DELETE = _handle
 
         return Handler
 
@@ -228,6 +230,12 @@ class FakeSyncthing:
                 return 404, "No folder with given ID"
             self.folders[fid].update(body)
             return 200, None
+        if path.startswith("/rest/config/folders/") and method == "DELETE":
+            fid = path.rsplit("/", 1)[1]
+            if self.folders.pop(fid, None) is None:
+                return 404, "No folder with given ID"
+            self.ignores.pop(fid, None)
+            return 200, None
         if path == "/rest/db/ignores":
             if folder not in self.folders:
                 return 500, "no such folder"
@@ -244,6 +252,8 @@ class FakeSyncthing:
                 "stateChanged": str(self.scans),
                 "globalFiles": 3,
                 "needFiles": 0,
+                "needTotalItems": 0,
+                **self.status.get(folder, {}),
             }
         if (method, path) == ("GET", "/rest/system/connections"):
             return 200, {"connections": self.connections, "total": {}}

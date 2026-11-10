@@ -67,7 +67,7 @@ If you remove the line first, the console keeps its copy, and `prune` will repor
 
 **Cause.** The `wz-*` folder already exists in Syncthing with a different path than the config. Changing a folder's path would make Syncthing see a mass delete.
 
-**Fix.** Remove the folder in Syncthing (the files stay on disk), then run the provision command again. See [Safety](/warpzone/operation/safety/).
+**Fix.** Remove the folder in Syncthing (the files stay on disk), then run the provision command again. See [Safety](/warpzone/operation/safety/). If the message says the profile moved the folder and the old folder holds files that are not all on the hub yet, do not move any file yet: Syncthing would announce it as a deletion. Remove (or pause) the folder in Syncthing first (the files stay on disk), then move the files into the new directory and provision again. Often it is enough to wait until the folder is fully synced and run provision again, since a folder whose files are all on the hub is moved by itself.
 
 ### `prune` deletes less than expected, or refuses
 

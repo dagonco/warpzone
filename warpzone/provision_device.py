@@ -32,8 +32,10 @@ from warpzone.provision_emulators import (
 from warpzone.provision_folders import (
     ProvisionError,
     apply_ignores,
+    can_move,
     ensure_device,
     in_sync,
+    move_refusal,
     rescan,
     unattended_refusals,
     unpause,
@@ -128,12 +130,16 @@ def _auto_hub(
         rep.warn(f"auto_hub: {exc}; the hub was not changed beyond what is reported above")
 
 
-def _missing_markers(specs: Iterable[FolderSpec], existing: dict[str, dict[str, Any]]) -> list[str]:
-    """Folders Syncthing has whose marker is not on disk: the card is not mounted."""
+def _missing_markers(
+    specs: Iterable[FolderSpec], existing: dict[str, dict[str, Any]], moving: set[str]
+) -> list[str]:
+    """Folders Syncthing has whose marker is not on disk: the card is not mounted.
+
+    A folder about to move has no marker at its new path yet."""
     problems = []
     for spec in specs:
         current = existing.get(spec.id)
-        if current is None:
+        if current is None or spec.id in moving:
             continue
         marker = current.get("markerName") or ".stfolder"
         if not os.path.exists(os.path.join(spec.path, marker)):
@@ -344,18 +350,34 @@ def provision_device(
             s,
             path=expand_home(s.path, home),
             create_when=expand_home(s.create_when, home) if s.create_when else None,
+            previous_paths=tuple(expand_home(p, home) for p in s.previous_paths),
         )
         for s in device_specs(cfg, name, profile, scope)
     ]
     existing = {f["id"]: f for f in local.folders()}
+
+    # Folders Syncthing has at a path the profile retired, whose old directory is empty or
+    # whose files are all on the hub: they are removed from Syncthing (no file is touched)
+    # and added again at the new path. Decided over the folders whose directory exists.
+    def movable(candidates: Iterable[FolderSpec]) -> set[str]:
+        return {
+            s.id
+            for s in candidates
+            if s.id in existing
+            and not (s.skip_if_missing and not os.path.isdir(s.path))
+            and can_move(local, s, existing[s.id])
+        }
+
+    moving: set[str] = set()
     if unattended:
         present = [s for s in specs if not (s.skip_if_missing and not os.path.isdir(s.path))]
+        moving = movable(present)
         problems = [
             problem
             for spec in present
             if spec.id in existing
-            for problem in unattended_refusals(spec, existing[spec.id])
-        ] + _missing_markers(present, existing)
+            for problem in unattended_refusals(spec, existing[spec.id], moving=spec.id in moving)
+        ] + _missing_markers(present, existing, moving)
         if problems:
             raise ProvisionError(
                 "an unattended run does not change these folders, so nothing was changed. "
@@ -376,6 +398,10 @@ def provision_device(
                 )
         else:
             todo.append(spec)
+
+    if not unattended:
+        # Directories were made just above, so a folder whose new directory is new can move.
+        moving = movable(todo)
 
     if hub is not None and device.auto_hub and profiles is not None:
         _auto_hub(cfg, profiles, hub, {s.id for s in todo}, rep, dry_run=local.dry_run)
@@ -400,6 +426,19 @@ def provision_device(
 
     for spec in todo:
         current = existing.get(spec.id)
+        if current is not None and spec.id in moving:
+            # Look again right before acting: whitelist waits and the other folders came
+            # between the decision and now, and files may have been written meanwhile.
+            if not can_move(local, spec, current):
+                raise ProvisionError(move_refusal(spec, current))
+            rep.note(
+                spec.id,
+                f"moves from {current.get('path')} to {spec.path}: removed from Syncthing, no "
+                "file touched, added again at the new path (files already on the hub come "
+                "back into it; the old directory is left as it is)",
+            )
+            local.remove_folder(spec.id)
+            current = None
         created = upsert_folder(local, spec, current, rep)
         if spec.bootstrap_ignores is None:
             apply_ignores(local, spec, current, created, rep)
