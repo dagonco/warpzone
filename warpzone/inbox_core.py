@@ -29,7 +29,7 @@ from datetime import date
 from pathlib import Path
 from typing import Protocol
 
-from warpzone import ra, whitelist
+from warpzone import ra, runners, whitelist
 from warpzone.config import DEFAULT_TOOL_TIMEOUT_MINUTES, InboxSettings
 from warpzone.dat import DatLibrary, FileInfo
 from warpzone.errors import UsageError
@@ -338,18 +338,11 @@ def run_process(
     cmd: Sequence[str], timeout: float, *, stdin: int | None = None
 ) -> subprocess.CompletedProcess[str]:
     """Run a tool, capturing its output as text, for at most `timeout` seconds. A tool that
-    runs longer is killed and `ToolTimeout` is raised, so a hung tool fails its item and the
-    run (and the inbox lock) goes on."""
+    runs longer is killed together with every process it started (`runners.run_tool`) and
+    `ToolTimeout` is raised, so a hung tool fails its item and the run (and the inbox lock)
+    goes on without anything still writing in the work folder."""
     try:
-        return subprocess.run(
-            list(cmd),
-            capture_output=True,
-            text=True,
-            check=False,
-            errors="replace",
-            stdin=stdin,
-            timeout=timeout,
-        )
+        return runners.run_tool(cmd, timeout, stdin=stdin)
     except subprocess.TimeoutExpired as exc:
         raise ToolTimeout(timeout_reason(cmd[0], timeout)) from exc
 
