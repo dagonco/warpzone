@@ -52,7 +52,7 @@ In `config.toml`, copied from [`examples/config.example.toml`](https://github.co
 
 ```toml
 [hub]
-root = "/volume1/games"                  # the hub root, as on the NAS (and as mounted below)
+root = "/volume1/games"                  # the hub root, as on the NAS (a Synology path here; use yours) and as mounted below
 api_url = "http://192.168.1.10:8384"     # a LAN address of the NAS, not 127.0.0.1
 api_key_file = "/config/hub.key"
 

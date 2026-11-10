@@ -12,7 +12,7 @@ data. `examples/config.example.toml` documents every key.
 [hub]
 name = "nas"
 device_id = "XXXXXXX-..."
-root = "/volume1/games"                    # path on the hub's filesystem
+root = "/volume1/games"                    # path on the hub's filesystem (a Synology path as an example)
 api_url = "http://nas.local:8384"
 api_key_file = "~/.config/warpzone/hub.key"  # or api_key = "..."
 addresses = ["tcp://nas.local:22000"]        # optional, default ["dynamic"]
