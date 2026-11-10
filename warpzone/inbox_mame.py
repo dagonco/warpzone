@@ -768,6 +768,10 @@ class MameHandler:
         if not decision.ok:
             res = UnitResult(SYSTEM, path.name, "review", reason=f"{rel}: {decision.reason}")
             return res
+        # The set name is the DAT's, and it names the file in the library and in the gamelist.
+        refused = inbox_core.refused_name(decision.set_name, decision.label)
+        if refused:
+            return UnitResult(SYSTEM, path.name, "review", reason=f"{rel}: {refused}")
         entry = f"{decision.set_name}.zip"
         res = UnitResult(SYSTEM, entry, "planned" if not ctx.opts.apply else "placed")
         if entry != path.name:
