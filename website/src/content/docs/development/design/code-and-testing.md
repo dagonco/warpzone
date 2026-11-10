@@ -123,6 +123,7 @@ warpzone/
   ra_data.py         RA achievements, the user's progress and their JSON cache files; the merge and totals (pure)
   ra_store.py        `catalog --ra-achievements`: achievements, progress and badge downloads, cache reads
   library_api.py     the library UI's API as pure functions: validation, `plan_changes`, responses
+  recommend.py       the home page's recommendation shelves: unfinished games, games like a recent one (pure)
   progress.py        per-device progress states from the hub's completion (pure)
   saves_index.py     saves per game for the library API: exact matching of the hub's `saves/` to games
                      (pure), the listing and its short cache

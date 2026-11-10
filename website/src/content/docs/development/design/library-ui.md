@@ -449,7 +449,10 @@ request to another origin; dynamic styling sets CSS custom properties from scrip
 - **Home:** a "Now showing" carousel of games that have art, the state and download progress of
   each console (from `/api/v1/progress`) with its disk as a bar of used and free space (from
   `disk`; nothing for a console that reported none), a "Continue playing" row (from
-  `/api/v1/recent`: cover, name, the console that played it last and when), the systems with
+  `/api/v1/recent`: cover, name, the console that played it last and when), the two
+[recommendation shelves](#recommendations) from `/api/v1/recommendations` ("Unfinished", with
+when the game was last played, its play time and its achievements, and "Because you play X",
+with the genres, developer and year it shares with X; each is hidden when empty), the systems with
   their coverage per console, the newest games and, at the very end and with little weight, a
   records panel: the RetroAchievements points, games played, beaten and mastered and the
   achievements unlocked (from `/api/v1/ra/summary`), the share unlocked per system, and the most
@@ -794,6 +797,7 @@ outside the home goes through the user's own reverse proxy with TLS, which is ou
 | `GET /api/v1/ra/summary` | the library's RetroAchievements games and the user's [progress](#achievements) in them, per system and in all |
 | `GET /api/v1/ra/badges/{badge}/{variant}` | a cached RA badge image (`variant` is `unlocked` or `locked`), or `404` |
 | `GET /api/v1/recent?limit=N` | the games played most recently on any device, newest first |
+| `GET /api/v1/recommendations` | the [Unfinished](#recommendations) shelf and the "Because you play" shelf of the home page |
 | `GET /api/v1/progress` | the [progress state](#progress) of each device |
 | `GET /api/v1/catalog` | whether the catalog is built, and the state of the background run |
 | `GET /api/v1/devices/{device}/backups` | the device's whitelist [backups](#history-and-restore), newest first, each compared with the current file, and the current `etag` |
@@ -917,6 +921,86 @@ is `400 bad-request`) answers the games with a last played time, newest first, t
 
 `device` is the device whose ledger has that `last`; two devices of one replica share it, and
 the one whose name sorts last is named. `plays` and `playtime` are the totals above.
+
+#### Recommendations
+
+`GET /api/v1/recommendations` answers the two shelves of the home page. It reads only what the
+hub already has (the play-state ledgers above, the RetroAchievements cache of
+[Achievements and progress](#achievements-and-progress) and the gamelist fields `genre`,
+`developer` and `releasedate`) and never makes a request to another machine. A game missing a
+piece of data just does not qualify for the rule that needs it. The rules are pure functions in
+`recommend.py`; `library_api` collects the data into one candidate per game.
+
+```json
+{"unfinished": [{"id": "5d0c1f3a9b2e7c48", "system": "psx", "title": "Example Game",
+                 "name": "Example Game", "cover": true, "last": 1790000000, "plays": 3,
+                 "playtime": 7200, "ra": {"unlocked": 12, "total": 40}}],
+ "similar": {"to": {"id": "a1b2c3d4e5f60718", "system": "snes", "title": "Other Game",
+                    "name": "Other Game", "cover": true},
+             "games": [{"id": "0f9e8d7c6b5a4321", "system": "gba", "title": "Tiny",
+                        "name": "Tiny", "cover": false, "genres": ["Platform"],
+                        "developer": "Example Studio", "year": 1996}]}}
+```
+
+`unfinished` is a list and `similar` is `null` when its shelf is empty (the page hides an empty
+shelf). In `unfinished`, `last` is the UTC epoch of the last activity (below) and `ra` is `null`
+for a game RetroAchievements has no achievements for. In `similar.games`, `genres` are the
+genres shared with `similar.to` (as the game's own gamelist spells them), `developer` is the
+developer when it is the seed's too (else `null`), and `year` is the game's release year when it
+is within 5 years of the seed's (else `null`).
+
+What every rule reads, for each catalog game:
+
+- **Play:** the `totals` of [`play`](#endpoints) (plays, play time, last played).
+- **RetroAchievements:** the unlocked count (the larger of the softcore and hardcore counts of
+  the user's progress line), the achievements available, the highest award and the date of the
+  last unlock (read to the day, UTC). It counts only when the cached progress is of the
+  configured `[ra] user`; without a user, a cache or a game on RA these are all zero.
+- **Gamelist:** `genre` split at commas, slashes and semicolons, `developer` (compared ignoring
+  case and repeated spaces) and the first four digits of `releasedate` (a year from 1950 to
+  2100; anything else is no year). A game with no genre, no developer, no play record and no
+  unlocks is not looked at.
+- **Availability:** a game is *on a console* when some console shows it `on` or `partial`;
+  else it *fits* when some console that takes the system (`off`, not `unsupported`, not
+  `unknown`) has a disk report (see [Disk space](#disk-space)) with at least as many bytes free
+  as the game's `size`, and the UI can switch the game (no `unlistable` flag); else it is
+  neither. Consoles that never reported a disk contribute only the first case.
+- **Activity:** the later of the last play and the last unlock date, ignoring any time more than
+  a day ahead of the server (a wrong clock). A game with no date has no activity date.
+
+**Unfinished** lists games the user started and left:
+
+1. *Started:* at least 600 seconds of play time, or at least one unlocked achievement. A play
+   count alone does not count (a frontend that records no play time would make every launched
+   game look started).
+2. *Left:* the activity date is at least 14 days before now. What was touched more recently is
+   in "Continue playing".
+3. *Not finished:* the user has no award (beaten, completed or mastered) for the game and has
+   not unlocked every achievement. If any version of the same title key (another system) is
+   finished, none of them is listed.
+4. Order: on a console, then fits, then neither; within each, the most recent activity first,
+   then the most play time, then the title (ignoring case), the system and the id.
+5. One game per title key (the best placed of a title that exists on several systems), at most
+   12.
+
+**Because you play X** is one shelf that starts from one game, the *seed*:
+
+1. The seed is the game with the most recent activity that has a genre or a developer, provided
+   the activity is at most 90 days old; ties go to the most play time, then title and id. With
+   no such game there is no shelf (`similar` is `null`).
+2. A candidate resembles the seed when it shares at least one genre (ignoring case) or has the
+   same developer. Its score is 3 for each shared genre, 3 for the same developer, and for the
+   release year 2 when it is within 2 years of the seed's or 1 when within 5. A year never
+   makes a match on its own.
+3. Left out: any game with a play, play time or unlocked achievement of its own; any title key
+   in which another version has any of those; the seed's title key; and every title key of the
+   Unfinished shelf, so the two shelves never show the same title.
+4. Order: on a console, then fits, then neither; within each, the higher score first, then the
+   title (ignoring case), the system and the id.
+5. One game per title key, at most 12. The shelf is shown only when it has games.
+
+The order never depends on the order the catalog was read in, so two requests over the same data
+give the same shelves.
 
 #### Achievements
 
@@ -1207,7 +1291,8 @@ As everywhere in warpzone, a pure function decides and a thin layer touches the 
 network:
 
 - **Pure:** `catalog.derive`, `catalog.system_roots`, `catalog.title_key`, `catalog.search`,
-  `catalog.ra_state`, the catalog's JSON encoding and merge; `ra_data` (the achievement
+  `catalog.ra_state`, the catalog's JSON encoding and merge; `recommend` (the two shelves' rules);
+  `ra_data` (the achievement
   cache's encoding, `game_view`, `summary_view`) and the parsers of `ra.py`; `whitelist.escape`, `unescape`,
   `parse`, `parse_hand`, `render`, `normalize`, `apply`, `decide`, `decide_lines`, `effect`,
   `unsupported` and the migration's classification; `whitelist_history` (backup names, the

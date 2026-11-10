@@ -64,6 +64,7 @@
     refreshCatalog: () => request('POST', '/api/v1/catalog/refresh', {}),
     recent: (limit) => request('GET', `/api/v1/recent?limit=${encodeURIComponent(limit)}`),
     raSummary: () => request('GET', '/api/v1/ra/summary'),
+    recommendations: () => request('GET', '/api/v1/recommendations'),
     // An image URL, not a request: the browser loads it (lazily) through an <img>.
     mediaUrl: (id, kind) => `/api/v1/games/${encodeURIComponent(id)}/media/${kind}`,
     // The same for a cached RetroAchievements badge; `variant` is 'unlocked' or 'locked'.

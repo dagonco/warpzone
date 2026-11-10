@@ -47,6 +47,23 @@ SCANNING = ("scanning", "scan-waiting")
 SHOWN_GROUPS = 30
 SHOWN_KEPT = 20
 
+# Files EmuDeck and the emulators write into the library on every console; the shipped
+# profile's `[library] ignore` list ignores them (data/profiles/steamos-emudeck.toml), so
+# the hub never has them. See `is_generated`.
+_GENERATED_PLACEHOLDERS = ("metadata.txt", "systeminfo.txt")
+_GENERATED_BIOS_DIRS = (
+    "PPSSPP",
+    "HdPacks",
+    "Mupen64plus",
+    "fbneo",
+    "kronos",
+    "same_cdi",
+    "ryujinx",
+    "shadps4",
+    "yuzu",
+)
+_GENERATED_DC_FILES = ("dc_nvmem.bin", "vulkan_pipeline.cache")
+
 _TYPE_FILE = "FILE_INFO_TYPE_FILE"
 _TYPE_SYMLINK = "FILE_INFO_TYPE_SYMLINK"
 _TIME = re.compile(r"^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(?:\.(\d+))?(Z|[+-]\d\d:\d\d)$")
@@ -82,6 +99,7 @@ class FolderReport:
     root: str
     leftovers: list[Entry] = field(default_factory=list)
     kept: list[tuple[str, str]] = field(default_factory=list)  # (path, reason)
+    generated: int = 0  # kept too, but expected: see `is_generated`
     untracked: int = 0
     held_bytes: int = 0  # the regular files the walk found: what the device holds here
     deleted_files: int = 0
@@ -128,6 +146,41 @@ def classify(entry: Entry, info: dict[str, Any] | None) -> tuple[Verdict, str]:
         if synced is None or abs(synced - entry.mtime) > MTIME_TOLERANCE_S:
             return Verdict.DIFFERS, "it changed after it was synced"
     return Verdict.LEFTOVER, ""
+
+
+def is_generated(path: str) -> bool:
+    """Whether `path` (relative to the library root, "/" separated) is a file EmuDeck or an
+    emulator writes by itself and the hub never has, so keeping it is expected.
+
+    The list mirrors the profile's library ignores, one for one: `roms/<system>/metadata.txt`
+    and `systeminfo.txt`; any `readme.txt` under `bios/`; everything under `bios/PPSSPP`,
+    `HdPacks`, `Mupen64plus`, `fbneo`, `kronos`, `same_cdi`, `ryujinx`, `shadps4` and `yuzu`;
+    RetroArch's Flycast files in `bios/dc` (`vmu_save_*.bin`, `dc_nvmem.bin`,
+    `vulkan_pipeline.cache`, `data/`); and the `hiscore.dat` and `artwork/` of mame2003-plus.
+    Matching is exact and case-sensitive, per path segment.
+    """
+    parts = path.split("/")
+    n = len(parts)
+    if parts[0] == "roms":
+        return n == 3 and parts[2] in _GENERATED_PLACEHOLDERS
+    if parts[0] != "bios" or n < 2:
+        return False
+    if parts[-1] == "readme.txt":
+        return True
+    if n < 3:
+        return False
+    folder = parts[1]
+    if folder in _GENERATED_BIOS_DIRS:
+        return True
+    if folder == "dc":
+        if n == 3:
+            return (
+                fnmatch.fnmatchcase(parts[2], "vmu_save_*.bin") or parts[2] in _GENERATED_DC_FILES
+            )
+        return parts[2] == "data"
+    if folder == "mame2003-plus":
+        return (n == 3 and parts[2] == "hiscore.dat") or (n > 3 and parts[2] == "artwork")
+    return False
 
 
 def guard(totals: Mapping[str, tuple[int, int]]) -> list[str]:
@@ -327,6 +380,8 @@ def inspect_folder(
             report.leftovers.append(entry)
         elif verdict is Verdict.UNTRACKED:
             report.untracked += 1
+        elif verdict is Verdict.LOCAL_ONLY and is_generated(entry.path):
+            report.generated += 1
         elif verdict is not Verdict.WANTED:
             report.kept.append((entry.path, reason))
     return report
@@ -395,6 +450,14 @@ def _group(path: str) -> str:
     return "/".join(parts[:2]) if len(parts) > 2 else (parts[0] if len(parts) > 1 else ".")
 
 
+def _print_generated(report: FolderReport, rep: Reporter) -> None:
+    if report.generated:
+        rep.out(
+            f"{report.folder_id}: {report.generated} file(s) emulators and EmuDeck "
+            "generate themselves"
+        )
+
+
 def print_report(
     report: FolderReport, rep: Reporter, *, list_all: bool, summary_only: bool = False
 ) -> None:
@@ -407,6 +470,7 @@ def print_report(
                 f"{report.folder_id}: kept {len(report.kept)} ignored file(s) "
                 "the hub cannot restore"
             )
+        _print_generated(report, rep)
         if report.untracked:
             rep.out(
                 f"{report.folder_id}: {report.untracked} file(s) not known to Syncthing, left alone"
@@ -433,6 +497,7 @@ def print_report(
             rep.out(f"  {path} ({reason})")
         if not list_all and len(report.kept) > SHOWN_KEPT:
             rep.out(f"  ... and {len(report.kept) - SHOWN_KEPT} more, use --list")
+    _print_generated(report, rep)
     if report.untracked:
         rep.out(
             f"{report.folder_id}: {report.untracked} file(s) not known to Syncthing, left alone"

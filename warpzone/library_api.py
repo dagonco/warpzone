@@ -12,11 +12,11 @@ import posixpath
 import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from functools import cached_property
 from typing import Any
 
-from warpzone import artwork, catalog, diskstatus, playstate, ra_data
+from warpzone import artwork, catalog, diskstatus, playstate, ra_data, recommend
 from warpzone import whitelist as wl
 from warpzone import whitelist_history as hist
 from warpzone.config import Config, Device
@@ -1126,3 +1126,161 @@ def recent_response(
             }
         )
     return {"games": out}
+
+
+# --------------------------------------------------------------------------- recommendations
+
+
+def _epoch(date: str) -> int | None:
+    """The UTC epoch of a RetroAchievements date (`2026-10-01` or `2026-10-01 12:30:00`), read
+    to the day; None when it is empty or not a date."""
+    try:
+        return int(datetime.strptime(date.strip()[:10], "%Y-%m-%d").replace(tzinfo=UTC).timestamp())
+    except ValueError:
+        return None
+
+
+def _availability(
+    cfg: Config,
+    views: Mapping[str, DeviceView],
+    disks: Mapping[str, Mapping[str, Any]],
+    system: str,
+    game: catalog.Game,
+) -> int:
+    """`recommend.ON_CONSOLE` when some console has the game (or part of it), `FITS` when a
+    console that takes the system and has a fresh disk report has room for it, else
+    `ELSEWHERE`. A game the UI cannot switch (`unlistable`) never fits."""
+    best = recommend.ELSEWHERE
+    for device in library_devices(cfg):
+        state = game_state(device, views[device.name], system, game)
+        if state in ("on", "partial"):
+            return recommend.ON_CONSOLE
+        free = (disks.get(device.name) or {}).get("free")
+        if (
+            state == "off"
+            and "unlistable" not in game.flags
+            and isinstance(free, int)
+            and 0 < game.size <= free
+        ):
+            best = recommend.FITS
+    return best
+
+
+def _ra_progress(
+    lib: Library, cfg: Config, system: str, game: catalog.Game
+) -> tuple[int, int, str, int | None]:
+    """The user's achievements unlocked, the achievements available, the highest award and the
+    date of the last unlock, from the cached progress. Zeros when RetroAchievements has no
+    achievements for the game or the cache holds no progress of the configured user."""
+    found = ra_data.ra_game(system, game.ra, lib.ra_lists)
+    mine = lib.ra_cache.user
+    if found is None or mine is None or not ra_data.same_user(mine.user, cfg.ra.user):
+        return 0, 0, "", None
+    line = mine.games.get(found.id)
+    if line is None:
+        return 0, found.achievements, "", None
+    return (
+        max(line.awarded, line.awarded_hardcore),
+        found.achievements,
+        line.award,
+        _epoch(line.last),
+    )
+
+
+def candidates(
+    lib: Library,
+    cfg: Config,
+    views: Mapping[str, DeviceView],
+    index: PlayIndex,
+    extras: Extras,
+    disks: Mapping[str, Mapping[str, Any]],
+) -> list[recommend.Candidate]:
+    """Every game that has some activity or some metadata to compare, with what the shelves
+    read: its play totals, its RA progress, its genre, developer and year, and its availability.
+    A game with neither is left out (no shelf could use it)."""
+    found: list[recommend.Candidate] = []
+    for system, games in sorted(lib.systems.items()):
+        extra = extras(system)
+        for game in sorted(games.values(), key=lambda g: g.id):
+            entry = extra.meta.get(game.gamelist)
+            fields = entry.fields if entry else {}
+            genres = recommend.parse_genres(fields.get("genre"))
+            developer = (fields.get("developer") or "").strip()
+            totals = game_totals(index, system, game)
+            unlocked, total, award, ra_last = _ra_progress(lib, cfg, system, game)
+            if not (genres or developer or totals or unlocked):
+                continue
+            found.append(
+                recommend.Candidate(
+                    id=game.id,
+                    system=system,
+                    title=game.title,
+                    key=game.key,
+                    genres=genres,
+                    developer=developer,
+                    year=recommend.parse_year(fields.get("releasedate")),
+                    plays=totals["plays"] if totals else 0,
+                    playtime=totals["playtime"] if totals else 0,
+                    last_played=totals["last"] if totals else None,
+                    ra_unlocked=unlocked,
+                    ra_total=total,
+                    ra_last=ra_last,
+                    ra_award=award,
+                    tier=_availability(cfg, views, disks, system, game),
+                )
+            )
+    return found
+
+
+def _shelf_game(lib: Library, extras: Extras, c: recommend.Candidate) -> dict[str, Any]:
+    system, game = lib.by_id[c.id]
+    extra = extras(system)
+    entry = extra.meta.get(game.gamelist)
+    return {
+        "id": game.id,
+        "system": system,
+        "title": game.title,
+        "name": (entry.fields.get("name") if entry else None) or game.title,
+        "cover": "covers" in game_media(game, extra),
+    }
+
+
+def recommendations_response(
+    lib: Library,
+    cfg: Config,
+    views: Mapping[str, DeviceView],
+    index: PlayIndex,
+    extras: Extras,
+    disks: Mapping[str, Mapping[str, Any]],
+    now: int,
+) -> dict[str, Any]:
+    """`GET /api/v1/recommendations`: the "Unfinished" shelf and the "Because you play X" shelf
+    (see "Recommendations" in development/design/library-ui.md)."""
+    picked = recommend.shelves(candidates(lib, cfg, views, index, extras, disks), now)
+    unfinished = []
+    for c in picked.unfinished:
+        item = _shelf_game(lib, extras, c)
+        item.update(
+            {
+                "last": recommend.activity(c, now),
+                "plays": c.plays,
+                "playtime": c.playtime,
+                "ra": {"unlocked": c.ra_unlocked, "total": c.ra_total} if c.ra_total else None,
+            }
+        )
+        unfinished.append(item)
+    similar = None
+    if picked.seed is not None and picked.similar:
+        games = []
+        for m in picked.similar:
+            item = _shelf_game(lib, extras, m.game)
+            item.update(
+                {
+                    "genres": list(m.genres),
+                    "developer": m.game.developer if m.developer else None,
+                    "year": m.year,
+                }
+            )
+            games.append(item)
+        similar = {"to": _shelf_game(lib, extras, picked.seed), "games": games}
+    return {"unfinished": unfinished, "similar": similar}

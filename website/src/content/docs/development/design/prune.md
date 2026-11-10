@@ -68,7 +68,8 @@ delete:
    followed. The subtree of any other Syncthing folder nested in the root (the
    save folders under `~/Emulation`) is skipped.
 
-Files that are ignored but fail 4 or 5 are listed as kept, with the reason. After
+Files that are ignored but fail 4 or 5 are listed as kept, with the reason; the expected
+ones are only counted (see [Files the console generates](#files-the-console-generates)). After
 deleting, directories that held deleted files, that Syncthing flags ignored, and
 that are now empty are removed (`rmdir`, so a non-empty one is never touched).
 
@@ -79,8 +80,9 @@ The default is report only. `--apply` deletes. A run that would delete more than
 [Unattended runs](#unattended-runs)).
 
 Output is a per-folder summary (leftover files and bytes, grouped by the first
-two path levels; `--list` prints every file), the files kept and why, and the
-count of files Syncthing does not know. Exit codes are those of the other
+two path levels; `--list` prints every file), the unusual files kept and why, one line with
+the count of files the console generates by itself, and the count of files Syncthing does not
+know. Exit codes are those of the other
 commands: `0` ok (a report with leftovers is still `0`), `1` for a runtime
 error, a folder that was skipped as unsafe, a refused cap or files that could not
 be deleted, `2` for usage or config errors.
@@ -91,6 +93,30 @@ JSON object per folder that has leftovers: `{"device", "folder", "files", "bytes
 Assistant webhook. The URL may embed a secret, so it is never printed, and a
 failed notification is a warning, not a failure of the run. No API key or path
 appears in the payload.
+
+## Files the console generates
+
+EmuDeck and some emulators write files into the library that the hub never has, and the
+profile's `[library] ignore` list ignores them, so on every run they are ignored files the hub
+cannot restore. Listing hundreds of them hides the few kept files that matter. `prune.is_generated`
+(pure, no I/O) recognises them by path, relative to the folder root, with exact, case-sensitive
+matching per path segment:
+
+- `roms/<system>/metadata.txt` and `roms/<system>/systeminfo.txt` (one level below `roms`).
+- Any `readme.txt` at any depth under `bios/`.
+- Everything under `bios/PPSSPP`, `bios/HdPacks`, `bios/Mupen64plus`, `bios/fbneo`,
+  `bios/kronos`, `bios/same_cdi`, `bios/ryujinx`, `bios/shadps4` and `bios/yuzu`.
+- RetroArch's Flycast files directly in `bios/dc`: `vmu_save_*.bin`, `dc_nvmem.bin` and
+  `vulkan_pipeline.cache`, plus everything under `bios/dc/data`.
+- `bios/mame2003-plus/hiscore.dat` and everything under `bios/mame2003-plus/artwork`.
+
+The list mirrors the profile's ignores, so a new ignore for a file an emulator writes by itself
+is added to both. A file counts here only when its verdict is "the hub does not have it": a
+matching file the hub does have in a different state is still listed as kept. These files are
+still kept, never deleted; they are reported as one line, `<folder>: N file(s) emulators and
+EmuDeck generate themselves`, in the normal and in the unattended output. The `kept ... ignored
+file(s) the hub cannot restore` line then counts only the other files. The `--notify-url`
+payload is unchanged.
 
 ## Unattended runs
 

@@ -839,6 +839,19 @@ class App:
                         self.files.library(), self._play_index(), self.files.extras, limit
                     ),
                 )
+            case ["recommendations"]:
+                return json_response(
+                    200,
+                    library_api.recommendations_response(
+                        self.files.library(),
+                        cfg,
+                        self.files.views(cfg),
+                        self._play_index(),
+                        self.files.extras,
+                        self._disks(),
+                        int(self.now().timestamp()),
+                    ),
+                )
             case ["games", game_id, "media", kind]:
                 return self._media(request, game_id, kind)
             case ["search"]:
