@@ -72,16 +72,16 @@ A device that lists `play-state` without `frontend` is refused, and so is one th
 
 ### `[inbox]`
 
-Optional. Only `warpzone inbox` and `warpzone doctor` read it. `inbox` works with just this table, with no `[hub]` or `[devices]`, on a desktop that mounts the hub's games share. Every key is a non-empty string, and `~` is expanded. A tool path that is set (`chdman`, `bsdtar`, `rahasher`, `dolphin_tool`, `nsz`, `orbis_pkg_util`) must be an executable file, `vita3k` must be an app bundle with its binary or an executable file, and `vita_zrif` must be a file, or `inbox` stops.
+Optional. Only `warpzone inbox` and `warpzone doctor` read it. `inbox` works with just this table, with no `[hub]` or `[devices]`, on a computer that mounts the hub's games share, and it also runs in the hub container, where every path below is a path inside the container ([the two ways](/warpzone/setup/inbox/#where-inbox-runs)). Every key is a non-empty string, and `~` is expanded. A tool path that is set (`chdman`, `bsdtar`, `rahasher`, `dolphin_tool`, `nsz`, `orbis_pkg_util`) must be an executable file, `vita3k` must be an app bundle with its binary or an executable file, and `vita_zrif` must be a file, or `inbox` stops.
 
 | Key | Default | Meaning |
 |---|---|---|
-| `root` | none (use `--root`) | The hub root as mounted on this machine: the folder holding `inbox/` and `library/`. This is not `[hub].root`, which is the path on the hub. |
-| `dats_dir` | none (use `--dats`) | Folder with the Redump and No-Intro DATs in clrmamepro format, such as libretro-database's `metadat/` folder, or one flat folder of `.dat` files. warpzone never downloads them. |
-| `work_dir` | the system temp folder | Local folder for unpacked archives and conversions (several GiB). |
+| `root` | none (use `--root`) | The hub root as mounted on this machine: the folder holding `inbox/` and `library/`. On a computer this is not `[hub].root`, which is the path on the hub; in the hub container the share is mounted at the same path, so it equals `[hub].root`. |
+| `dats_dir` | none (use `--dats`) | Folder with the Redump and No-Intro DATs in clrmamepro format, such as libretro-database's `metadat/` folder, or one flat folder of `.dat` files. warpzone never downloads them. In the container it is a folder you mount; the image holds none. |
+| `work_dir` | the system temp folder | Local folder for unpacked archives and conversions (several GiB). In the container, a mounted folder: its `/tmp` is memory. |
 | `chdman` | `chdman` on `PATH` | Converts discs to CHD. |
 | `bsdtar` | `bsdtar` on `PATH` | Unpacks `.7z` and `.rar`. |
-| `rahasher` | none (used only when set) | RAHasher from RALibretro, built with CHD support: checks that a conversion keeps the RetroAchievements hash. |
+| `rahasher` | none (used only when set) | RAHasher from RALibretro, built with CHD support: checks that a conversion keeps the RetroAchievements hash. In the container, `/usr/local/bin/RAHasher`, the copy in the image. |
 | `dolphin_tool` | `dolphin-tool` on `PATH` | Reads compressed GameCube `.gcz` images. `.rvz` and `.wia` need no tool. |
 | `nsz` | `nsz` on `PATH` | Reads the title ID and version of Switch `.nsp` and `.nsz` files, and decompresses `.nsz`. |
 | `orbis_pkg_util` | `orbis-pkg-util` on `PATH` | Unpacks PS4 `.pkg` games. Without it the package is filed as it is. |

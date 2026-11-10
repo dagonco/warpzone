@@ -864,6 +864,20 @@ class CatalogHookTests(Base):
     def catalog_file(self, system: str) -> dict:
         return json.loads((self.hub / "catalog" / "systems" / f"{system}.json").read_text())
 
+    def test_the_dat_serials_of_a_placed_game_are_in_the_index(self) -> None:
+        path = self.dats / "no-intro" / "Nintendo - Nintendo Entertainment System.dat"
+        text = path.read_text()
+        block = text[text.index("game (") :]
+        tagged = block.replace(
+            'name "Adventure (USA)"', 'name "Adventure (USA)"\n\tserial "AD-1, AD-2"'
+        )
+        again = block.replace('name "Adventure (USA)"', 'name "Adventure (USA)"\n\tserial "AD-3"')
+        path.write_text(text.replace(block, tagged + again))
+        self.drop("a.nes", NES_ROM)
+        self.assertEqual(self.go(tools=Tools(), now=lambda: self.NOW), 0)
+        games = {g["primary"]: g for g in self.catalog_file("nes")["games"].values()}
+        self.assertEqual(games["roms/nes/Adventure (USA).zip"]["serials"], ["AD-1", "AD-2", "AD-3"])
+
     def test_a_placed_game_is_in_the_index_with_its_dat_name_and_date(self) -> None:
         (self.roms / "nes" / "Old.zip").write_bytes(b"older game")
         self.drop("a.nes", NES_ROM)

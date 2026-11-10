@@ -29,6 +29,26 @@ for every problem, the exact fix for this platform.
   something that is not a file (`inbox` refuses to start) and `[ok]` otherwise. A config that does not load,
   a configured tool path that is not executable, a tool that cannot run, a local
   Syncthing whose API does not answer, and Python older than 3.11 are always problems.
+- **Where inbox runs.** `warpzone inbox` runs on a computer that mounts the hub's share
+  or in the hub container (see [Inbox](/warpzone/development/design/inbox/)), and with an
+  `[inbox]` table `doctor` checks the way in use, found from the machine and never asked.
+  The probe `Probes.in_container` is true when the runtime left a marker in the root of the
+  container (`/.dockerenv` for Docker, `/run/.containerenv` for Podman); tests replace it.
+  `Where inbox runs` says which way it found. On a computer the tool checks are the ones
+  above (the `[inbox]` path, else `PATH`) with the install command of the platform as fix.
+  In the container they differ in four ways. The tools are the image's: besides `PATH`, a
+  tool is looked for where the image puts it (`IMAGE_TOOL_PATHS`, today
+  `/usr/local/bin/RAHasher`; `known_tool_paths` is pure), and `RAHasher` found there with
+  no `[inbox] rahasher` is `[! ]` with the line to set. A missing tool has the fix "this hub
+  image does not ship it" (run inbox on a computer, or build the image with it) instead of
+  an install command, since the root of a container is read-only and rebuilt from the
+  image; `chdman` and `bsdtar` stay `[!!]` there as on a computer, so an image without them
+  fails. `Hub root for inbox` is `[! ]` when `[inbox] root` is unset but `[hub] root` is
+  there, because `inbox` needs its own `root` (the same path as `[hub] root` in the
+  container). `Work folder` is `[! ]` when `work_dir` is unset (`/tmp` is memory in the
+  container) or is not a mounted folder, and the missing-DATs fix says to mount a folder.
+  Image tools that cannot run (a wrong architecture) are `[!!]` with "build the image
+  again".
 - **Game Mode (SteamOS).** With a local Syncthing on SteamOS, `Game Mode` says whether
   Syncthing runs without a desktop session. Game Mode starts no desktop session, so
   `~/.config/autostart/*.desktop` entries never run there; only a systemd user unit

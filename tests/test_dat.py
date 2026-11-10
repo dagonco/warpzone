@@ -58,6 +58,20 @@ class ParseTests(unittest.TestCase):
         self.assertEqual(game.roms[0].crc, "8acd8fb1")
         self.assertEqual(game.roms[0].sha1, "782c50827bf4cf8fe5530b64b188a2d43c75b0e0")
 
+    def test_serials_come_from_the_game_or_its_roms_and_repeats_add_theirs(self) -> None:
+        def block(serial: str, rom_serial: str = "") -> str:
+            line = f'\tserial "{serial}"\n' if serial else ""
+            extra = f' serial "{rom_serial}"' if rom_serial else ""
+            return f'game (\n\tname "A"\n{line}\trom ( name "a" size 1 crc 1{extra} )\n)\n'
+
+        text = block("T-1N") + block("MK-2, T-1N") + block("") + block("", "X-3")
+        (game,) = parse_dat(text)
+        self.assertEqual(game.serials, ("T-1N", "MK-2", "X-3"))
+        (lone,) = parse_dat(block("", "R-1"))
+        self.assertEqual(lone.serials, ("R-1",))
+        (none,) = parse_dat(block(""))
+        self.assertEqual(none.serials, ())
+
     def test_repeats_and_empty_games_are_dropped(self) -> None:
         one = ("Same", [("a.bin", b"1")])
         text = dat_text("x", [one, one, ("Empty", [])])
@@ -106,6 +120,18 @@ class CacheTests(unittest.TestCase):
         # A different size is a different file.
         path.write_text(dat_text("x", [("B", [("b.bin", b"2")]), ("C", [("c.bin", b"3")])]))
         self.assertEqual([g.name for g in load_dat(path, "psx", cache).games], ["B", "C"])
+
+    def test_the_cache_keeps_the_serials(self) -> None:
+        path = self.tmp / "dats" / "Sony - PlayStation.dat"
+        path.parent.mkdir()
+        path.write_text(
+            'game (\n\tname "A"\n\tserial "S-1"\n\trom ( name "a" size 1 crc 1 )\n)\n'
+            'game (\n\tname "A"\n\tserial "S-2"\n\trom ( name "a" size 1 crc 1 )\n)\n'
+        )
+        cache = self.tmp / "cache"
+        self.assertEqual(load_dat(path, "psx", cache).games[0].serials, ("S-1", "S-2"))
+        self.assertEqual(load_dat(path, "psx", cache).games[0].serials, ("S-1", "S-2"))
+        self.assertEqual(len(list(cache.glob("*.json"))), 1)
 
     def test_corrupt_cache_is_ignored(self) -> None:
         path = write_dat(self.tmp / "dats", "Sony - PlayStation", [("A", [("a.bin", b"1")])])

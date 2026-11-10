@@ -1156,16 +1156,23 @@ class HardeningTests(ServeCase):
         self.assertEqual(serve._Handler.timeout, 15)
 
     def test_idle_and_stalled_connections_free_their_threads(self) -> None:
-        with mock.patch.object(serve._Handler, "timeout", 0.3):
+        # The timeout is long enough for a slow runner to start all seven threads before the
+        # first one gives up, and the peak is polled for rather than read after a fixed wait.
+        with mock.patch.object(serve._Handler, "timeout", 1.5):
             before = threading.active_count()
             idle = [socket.create_connection(("127.0.0.1", self.port)) for _ in range(6)]
             stalled = socket.create_connection(("127.0.0.1", self.port))
             stalled.sendall(
                 b"POST /api/v1/changes HTTP/1.1\r\nHost: x\r\nContent-Length: 10\r\n\r\nab"
             )
-            threading.Event().wait(0.2)
-            self.assertGreaterEqual(threading.active_count(), before + 7)
-            for _ in range(60):
+            peak = threading.active_count()
+            for _ in range(40):
+                if peak >= before + 7:
+                    break
+                threading.Event().wait(0.025)
+                peak = max(peak, threading.active_count())
+            self.assertGreaterEqual(peak, before + 7)
+            for _ in range(100):
                 if threading.active_count() <= before:
                     break
                 threading.Event().wait(0.1)

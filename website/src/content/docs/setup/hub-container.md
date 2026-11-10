@@ -5,7 +5,7 @@ description: "Build the warpzone image, run it on the hub with Compose, and open
 
 Build the warpzone image, run it on the hub with Compose, and open the library UI in a browser.
 
-A NAS often ships a Python older than 3.11, and warpzone needs 3.11. So `warpzone serve` (the library UI) and `warpzone catalog` run in a small container on the hub: a slim official Python image with warpzone installed and RAHasher (the RetroAchievements hasher) built in, running one process as the user that owns the games share. Nothing else of warpzone needs the container. The consoles, `provision hub` and `inbox` run as before, on other machines. The contract is in [Library UI: the container](/warpzone/development/design/library-ui/#the-container).
+A NAS often ships a Python older than 3.11, and warpzone needs 3.11. So `warpzone serve` (the library UI) and `warpzone catalog` run in a small container on the hub: a slim official Python image with warpzone installed and RAHasher (the RetroAchievements hasher) built in, running one process as the user that owns the games share. Nothing else of warpzone needs the container. The consoles and `provision hub` run as before, on other machines, and so does `inbox` by default; it can also run in the container (see [Adding games from the container](#adding-games-from-the-container)). The contract is in [Library UI: the container](/warpzone/development/design/library-ui/#the-container).
 
 You need Docker with Compose v2 on the hub (Synology Container Manager has both), the hub's Syncthing GUI on a LAN address, and the [private config](/warpzone/reference/configuration/) of your setup.
 
@@ -119,6 +119,10 @@ The server also updates the catalog by itself at start and every 6 hours, so gam
 Open `http://<the NAS's address>:8780/` in a browser on the home network, on a phone, a desktop or a handheld. The page asks for the token (the line in `config/ui.token`) once and keeps a cookie for 30 days. Change the token and every browser is asked again.
 
 The traffic is plain HTTP and the token is one shared secret, so keep the port inside the home network. For access from outside, put your own reverse proxy with TLS in front of it. See [Authentication](/warpzone/development/design/library-ui/#authentication).
+
+## Adding games from the container
+
+`warpzone inbox` can run in this container as well as on a computer that mounts the share. The image ships RAHasher (at `/usr/local/bin/RAHasher`) and no other tool of `inbox`; the DATs are not in it either, and `inbox` needs a work folder with room, because the container's `/tmp` is memory. [Adding new games](/warpzone/setup/inbox/#where-inbox-runs) compares the two ways, lists the tools of each and gives the `compose.yaml` service, the `[inbox]` paths and the commands (`docker compose run --rm warpzone-inbox inbox --apply`). `docker compose run --rm warpzone-inbox doctor` checks them from inside.
 
 ## Updating
 

@@ -47,9 +47,10 @@ Inbox tools
 - The inbox tools (`chdman`, `bsdtar`, `RAHasher`, `dolphin-tool`, `nsz`, `orbis-pkg-util`, `Vita3K`; Vita3K is only found, never run, and on macOS `/Applications/Vita3K.app` counts; a Vita3K that inbox would refuse, such as an AppImage, is a warning), the Switch titledb folder and keys file (presence only).
 - The DAT folder and how old the newest DAT is, and the optional arcade DAT files.
 - The hub folder and its free space.
+- Where `inbox` runs, with an `[inbox]` table: on a computer or in the hub container, found from the machine. In the container it checks the tools of the image (RAHasher at `/usr/local/bin/RAHasher`; a tool the image lacks says so instead of giving an install command), `[inbox] root`, the mounted DATs and the work folder. See [where inbox runs](/warpzone/setup/inbox/#where-inbox-runs).
 - Whether `RA_API_KEY` is set (never printed).
 
-A tool or table you do not use is shown as optional, not as a problem. A desktop that only runs `inbox` does not need Syncthing. A machine with no `[inbox]` table in its config gets one line saying inbox is not set up, instead of the whole list of inbox tools, DATs and keys. A machine whose config has only an `[inbox]` table gets one `[ok]` note for `[hub]` and `[devices]`.
+A tool or table you do not use is shown as optional, not as a problem. A computer or container that only runs `inbox` does not need Syncthing. A machine with no `[inbox]` table in its config gets one line saying inbox is not set up, instead of the whole list of inbox tools, DATs and keys. A machine whose config has only an `[inbox]` table gets one `[ok]` note for `[hub]` and `[devices]`.
 
 Long details and fixes are wrapped to the terminal width (100 columns when it is unknown). Lines of a fix that start with a space, such as a unit file, are not wrapped, so they can be copied.
 

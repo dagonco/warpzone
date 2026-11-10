@@ -36,8 +36,7 @@ These were decided before the design and are not reopened here:
    whitelist that names one.
 5. The progress of each console is read on the hub from `GET /rest/db/completion`; no console
    API key is needed.
-6. warpzone runs on the hub in a container (the same image planned for running `inbox` on the
-   hub).
+6. warpzone runs on the hub in a container (the same image `inbox` can run in on the hub).
 7. The catalog stores the RetroAchievements hash of each game and a cached copy of RA's game
    lists per console.
 8. A catalog index built by `warpzone catalog`, and updated by `inbox` when it files a game, is
@@ -99,6 +98,7 @@ several, and a game is on for a console only when every part is.
       "size": 3221225993,
       "added": "2026-10-28",
       "dat": null,
+      "serials": [],
       "ra": null,
       "flags": []
     }
@@ -122,6 +122,11 @@ several, and a game is on for a console only when every part is.
   it; a later scan keeps it.
 - `dat`: the DAT game name when `inbox` identified the game by DAT, else `null`. A scan never
   looks DATs up (the hub has none, and a CHD's hash is not the DAT's).
+- `serials`: the serials the DAT lists for the game (Redump's `serial`; a disc listed once per
+  serial gathers them all, and a multi-disc game those of all its discs), in file order, or `[]`.
+  Set by `inbox` like `dat`, kept by a scan, and absent in files written before it existed (read
+  as `[]`). A value with commas is split. The [saves index](#saves-per-game) uses them to find a
+  Dreamcast game's memory card.
 - `ra`: see [RetroAchievements](#retroachievements).
 - `flags`: `unlistable` when a part cannot be written as a whitelist line (see
   [Escaping](#escaping)); the UI shows such a game and refuses to change it.
@@ -334,17 +339,32 @@ game has no save".
 ### What is matched
 
 `saves_index.match_game` (pure) takes the index of the listing, the system and the primary path of
-the game. The catalog records no game IDs beyond what the paths carry, so only these are matched:
+the game, and the DAT serials the catalog holds for it. The catalog records no other game IDs
+beyond what the paths carry, so only these are matched:
 
 | Emulator folder | Matched by | Counts as |
 |---|---|---|
 | `retroarch/saves` | the stem of the primary part (`Game.chd`, `Game.cue` and the `Game.m3u` folder of a multi-disc game all give `Game`, the name RetroArch loads) plus `.srm`, `.rtc`, `.sav`, `.mcr`, `.mcd`, `.eep`, `.fla`, `.sra`, `.mpk`, `.nv` or `.dsv` | save data |
 | `retroarch/states` | the stem plus `.state`, `.state<N>` or `.state.auto` (the `.png` thumbnails are not counted) | one state each |
 | `melonds/saves`, `melonds/states` | the stem of a `nds` game plus `.sav`; plus `.ml<N>` | data; states |
-| `flycast/saves` | the stem of a `dreamcast`, `naomi`, `naomi2` or `atomiswave` game: `<stem>_vmu_save_<A-D><1-4>.bin` (per-game VMU) or `<stem>.nvmem`, `<stem>.nvmem2` (arcade flash) | data |
+| `flycast/saves` | an arcade game (`naomi`, `naomi2`, `atomiswave`): the primary file's name **with its extension** plus `_vmu_save_A1.bin`, `.nvmem`, `.nvmem2` or `-main.nvmem` (`game.zip.nvmem`); a `dreamcast` game: its disc's product number (see below) plus `_vmu_save_A1.bin`, or, when the disc header has none, the primary file's name with its extension plus the same suffix | data |
 | `vita3k/saves` | the folder `<TITLEID>` equals the folder name of `roms/psvita/app/<TITLEID>` | data |
 | `shadps4/saves` | the folder `<user>/<CUSAnnnnn>` equals the name of `roms/ps4/games/<CUSAnnnnn>` (also its `-UPDATE` folder) | data |
 | `eden/saves` | the folder `<account>/<profile>/<TitleID>` equals the `[<TitleID>]` of the Switch game's file name (hex, any case) | data |
+
+Flycast keeps port A1's card per game (its `PerGameVmu` option is on by default); the other
+ports use the shared `vmu_save_<port>.bin`, which belongs to no game. A console game's card is
+named after `settings.content.gameId`, the `product_number` field of the disc's header (10
+bytes) with trailing spaces and NULs cut and anything after a NUL dropped, each of ` /\:*?|<>"`
+replaced by `_`; an arcade game's after `settings.content.fileName`, the content file's name
+with its extension. Warpzone never reads a disc image. For a Dreamcast game it compares the
+game's `serials` with the card's name instead, keeping only the letters and digits of both
+sides, because Redump spells the same number with other separators (`T-45001D-05` in the DAT,
+`T-45001D05` in the header, `T7016D  50` becoming `T7016D__50` in the file name). Any one serial
+may match. A disc whose Redump serial is not its header's number (a bare `51064` for
+`MK-51064`, or a catalog number such as `952-0158-50`) gets no match from that serial, and
+neither does a game filed before `serials` existed (or not by `inbox`): both show no saves,
+which is "not found" like the rest.
 
 RetroArch's save files can sit in a subfolder of the hub folder when the player sorts them by core
 or by content folder; two levels are looked into. Two rules keep a stem from being taken for
@@ -359,8 +379,10 @@ below it is not a save.
 ### What is not matched
 
 - **Shared memory cards:** PCSX2 (`Mcd001.ps2`), DuckStation (`shared_card_*.mcd`), Dolphin's GC
-  memory cards, Flycast's shared `vmu_save_*.bin` and `dc_nvmem.bin`, and RetroArch cores that
-  share one card between games. A card holds many games.
+  memory cards, Flycast's shared `vmu_save_<port>.bin` (every port but A1) and `dc_nvmem.bin`,
+  and RetroArch cores that share one card between games. A card holds many games.
+- **Dreamcast cards of games with no `serials`** (known limit): filed before the field existed,
+  not filed by `inbox`, or with a Redump serial that differs from the disc's header number.
 - **Emulators that name saves by an ID the catalog does not record:** Dolphin (game ID and Wii
   title), PCSX2 and DuckStation states and per-game cards (serial), PPSSPP (disc ID), RPCS3 (PS3
   title ID), Azahar (3DS title ID), Cemu (Wii U title ID) and Xenia (title ID). They can be added
@@ -1035,8 +1057,8 @@ warpzone runs on the hub in a container, because a NAS's own Python is often old
 image (`docker/Dockerfile`) is a slim official Python image pinned by digest, with warpzone
 installed from the checkout the image is built from (a release tag, as a wheel, with no index
 access) and RAHasher built with CHD support in a separate stage from RALibretro, pinned by tag and
-commit; only its binary reaches the last stage, at `/usr/local/bin/RAHasher` (the "inbox on the
-hub" work will add its tools to the same image). The entry point is `warpzone` and the default
+commit; only its binary reaches the last stage, at `/usr/local/bin/RAHasher` (the other tools of `inbox` are not in the image; see
+[where inbox runs](/warpzone/setup/inbox/#where-inbox-runs)). The entry point is `warpzone` and the default
 command `serve`, so `docker compose run --rm warpzone catalog ...` runs the other commands. The
 image runs as a non-root user and the Compose file sets `user:` to the uid and gid that own the
 games share. An example Compose file is `examples/compose.example.yaml`, and the steps are in

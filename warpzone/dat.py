@@ -12,7 +12,7 @@ import hashlib
 import os
 import re
 from collections.abc import Iterator, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -60,7 +60,7 @@ EXTENSION_HINTS: dict[str, str] = {
     ".gg": "gamegear",
 }
 
-CACHE_VERSION = 1
+CACHE_VERSION = 2
 _TOKEN = re.compile(r'"((?:[^"\\]|\\.)*)"|([()])|([^\s()"]+)')
 _DATE_SUFFIX = re.compile(r" \(\d{8}-\d{6}\)$")
 _DISC = re.compile(r" \(Disc ([0-9A-Za-z]+)\)")
@@ -79,6 +79,10 @@ class Rom:
 class Game:
     name: str
     roms: tuple[Rom, ...]
+    # The serials Redump gives the disc (a disc listed once per serial gathers them all), in
+    # file order. Not part of the game's identity: two entries with the same name and roms
+    # are one game.
+    serials: tuple[str, ...] = field(default=(), compare=False)
 
 
 @dataclass(frozen=True)
@@ -169,12 +173,29 @@ def _rom(fields: list[tuple[str, Any]]) -> Rom | None:
     return Rom(values["name"], size, crc, sha1 if re.fullmatch(r"[0-9a-f]{40}", sha1) else "")
 
 
+def _serials(body: list[tuple[str, Any]]) -> tuple[str, ...]:
+    """The serials of a game block: its own `serial` lines, else those of its roms. A value
+    may hold several, separated by commas."""
+    own = [v for k, v in body if k == "serial" and isinstance(v, str)]
+    if not own:
+        own = [
+            v
+            for k, rom in body
+            if k == "rom" and isinstance(rom, list)
+            for key, v in rom
+            if key == "serial" and isinstance(v, str)
+        ]
+    found = (part.strip() for value in own for part in value.split(","))
+    return tuple(dict.fromkeys(part for part in found if part))
+
+
 def parse_dat(text: str) -> list[Game]:
     """Games of a clrmamepro DAT. Entries without roms are dropped, and so are repeats
-    of the same name and roms (Redump lists a disc once per serial)."""
+    of the same name and roms (Redump lists a disc once per serial); the repeat's serials
+    are added to the game kept."""
     tokens = _tokens(text)
     games: list[Game] = []
-    seen: set[Game] = set()
+    seen: dict[Game, int] = {}
     key: str | None = None
     for tok in tokens:
         if tok == "(":
@@ -184,10 +205,16 @@ def parse_dat(text: str) -> list[Game]:
             if key in ("game", "machine"):
                 name = next((v for k, v in body if k == "name" and isinstance(v, str)), "")
                 roms = tuple(r for k, v in body if k == "rom" and (r := _rom(v)) is not None)
-                game = Game(name, roms)
-                if name and roms and game not in seen:
-                    seen.add(game)
-                    games.append(game)
+                game = Game(name, roms, _serials(body))
+                if name and roms:
+                    at = seen.get(game)
+                    if at is None:
+                        seen[game] = len(games)
+                        games.append(game)
+                    elif game.serials:
+                        known = games[at]
+                        merged = tuple(dict.fromkeys((*known.serials, *game.serials)))
+                        games[at] = replace(known, serials=merged)
             key = None
         elif tok == ")":
             raise ValueError("unbalanced parenthesis")
@@ -222,7 +249,10 @@ def _read_cache(cache: Path, stat: os.stat_result) -> list[Game] | None:
             or data["mtime_ns"] != stat.st_mtime_ns
         ):
             return None
-        return [Game(n, tuple(Rom(*r) for r in roms)) for n, roms in data["games"]]
+        return [
+            Game(n, tuple(Rom(*r) for r in roms), tuple(serials))
+            for n, roms, serials in data["games"]
+        ]
     except (ValueError, KeyError, TypeError):
         return None
 
@@ -232,7 +262,10 @@ def _write_cache(cache: Path, stat: os.stat_result, games: Sequence[Game]) -> No
         "version": CACHE_VERSION,
         "size": stat.st_size,
         "mtime_ns": stat.st_mtime_ns,
-        "games": [[g.name, [[r.name, r.size, r.crc, r.sha1] for r in g.roms]] for g in games],
+        "games": [
+            [g.name, [[r.name, r.size, r.crc, r.sha1] for r in g.roms], list(g.serials)]
+            for g in games
+        ],
     }
     safefile.write_json_cache(cache, data)
 
