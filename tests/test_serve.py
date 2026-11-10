@@ -909,6 +909,207 @@ def library_game(path: str, title: str) -> catalog.Game:
     return game("psx", path, title)
 
 
+class HistoryTests(ServeCase):
+    """The backups of a whitelist, their diff and the restore."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.path = self.library / "patterns-deck.stignore"
+        self.original = self.path.read_bytes()
+        self.backups = self.root / "catalog" / "whitelists" / "deck"
+        # turn the example game off: the original is kept as the one backup
+        reply = self.change([{"device": "deck", "system": "psx", "game": EXAMPLE.id, "on": False}])
+        self.assertEqual(reply.status, 200, reply.body)
+        self.edited = self.path.read_bytes()
+        (found,) = self.backups.glob("*.stignore")
+        self.name = found.name
+        self.base = f"/api/v1/devices/deck/backups/{self.name}"
+
+    def restore(self, name: str | None = None, **extra: Any) -> Reply:
+        body = {"backup": name or self.name, "expect": self.etags()["deck"], **extra}
+        return self.call("POST", "/api/v1/devices/deck/restore", body)
+
+    def test_the_backups_are_listed_newest_first_against_the_current_file(self) -> None:
+        reply = self.get("/api/v1/devices/deck/backups")
+        self.assertEqual(reply.status, 200, reply.body)
+        found = reply.json
+        self.assertEqual((found["device"], found["etag"]), ("deck", self.etags()["deck"]))
+        (item,) = found["backups"]
+        self.assertEqual(item["name"], self.name)
+        self.assertRegex(item["time"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
+        self.assertEqual(
+            (item["empty"], item["same"], item["included"], item["excluded"]),
+            (False, False, 1, 0),
+        )
+        self.assertIn("back on", item["summary"])
+        newer = self.backups / "29990101T000000.000000Z.stignore"
+        newer.write_bytes(self.edited)
+        names = [b["name"] for b in self.get("/api/v1/devices/deck/backups").json["backups"]]
+        self.assertEqual(names, [newer.name, self.name])
+
+    def test_a_device_without_backups_has_an_empty_list(self) -> None:
+        found = self.get("/api/v1/devices/machine/backups").json
+        self.assertEqual(found["backups"], [])
+
+    def test_one_backup_is_shown_with_its_diff_and_the_games_it_changes(self) -> None:
+        reply = self.get(self.base)
+        self.assertEqual(reply.status, 200, reply.body)
+        found = reply.json
+        self.assertEqual(found["backup"], self.name)
+        self.assertEqual(found["etag"], self.etags()["deck"])
+        self.assertFalse(found["same"])
+        self.assertTrue(found["managed"])
+        self.assertEqual(found["included"], [EXAMPLE.primary])
+        self.assertEqual(found["excluded"], [])
+        self.assertEqual((found["on"], found["off"]), ([EXAMPLE.id], []))
+        self.assertEqual((found["bytes_on"], found["bytes_off"]), (5 * GIB, 0))
+        self.assertIn("+!/" + EXAMPLE.primary, found["diff"])
+        self.assertIn("back on", found["warning"])
+        self.assertEqual(self.path.read_bytes(), self.edited)
+
+    def test_a_restore_writes_the_backup_after_backing_up_the_current_file(self) -> None:
+        reply = self.restore()
+        self.assertEqual(reply.status, 200, reply.body)
+        found = reply.json
+        self.assertTrue(found["written"])
+        self.assertFalse(found["dry_run"])
+        self.assertEqual(found["on"], [EXAMPLE.id])
+        self.assertEqual(self.path.read_bytes(), self.original)
+        self.assertEqual(found["etag"], self.etags()["deck"])
+        names = sorted(p.name for p in self.backups.glob("*.stignore"))
+        self.assertEqual(len(names), 2)
+        self.assertEqual((self.backups / names[-1]).read_bytes(), self.edited)
+        self.assertIn(
+            ("POST", "/rest/db/scan?folder=wz-library&sub=patterns-deck.stignore", None),
+            self.fake.requests,
+        )
+        games = self.get("/api/v1/systems/psx/games").json["games"]
+        self.assertEqual(next(g for g in games if g["id"] == EXAMPLE.id)["devices"]["deck"], "on")
+        self.assertEqual([p.name for p in self.library.glob(".*wz-tmp")], [])
+
+    def test_a_dry_run_writes_nothing(self) -> None:
+        before = len(self.fake.requests)
+        reply = self.restore(dry_run=True)
+        self.assertEqual(reply.status, 200, reply.body)
+        self.assertEqual((reply.json["written"], reply.json["dry_run"]), (False, True))
+        self.assertEqual(reply.json["etag"], self.etags()["deck"])
+        self.assertEqual(self.path.read_bytes(), self.edited)
+        self.assertEqual(len(self.fake.requests), before)
+        self.assertEqual(len(list(self.backups.glob("*.stignore"))), 1)
+
+    def test_restoring_what_is_current_writes_nothing(self) -> None:
+        current = self.backups / "29990101T000000.000000Z.stignore"
+        current.write_bytes(self.edited)
+        reply = self.restore(current.name)
+        self.assertEqual(reply.status, 200, reply.body)
+        self.assertEqual((reply.json["written"], reply.json["same"]), (False, True))
+        self.assertEqual(len(list(self.backups.glob("*.stignore"))), 2)
+
+    def test_the_etag_is_required_and_checked(self) -> None:
+        reply = self.call("POST", "/api/v1/devices/deck/restore", {"backup": self.name})
+        error = self.error(reply)
+        self.assertEqual(
+            (reply.status, error["code"], error["device"]), (428, "expect-missing", "deck")
+        )
+        stale = {"backup": self.name, "expect": self.etags()["machine"]}
+        reply = self.call("POST", "/api/v1/devices/deck/restore", stale)
+        self.assertEqual((reply.status, self.error(reply)["code"]), (412, "stale"))
+        self.assertEqual(self.path.read_bytes(), self.edited)
+
+    def test_a_file_that_changes_between_the_check_and_the_write_is_stale(self) -> None:
+        real = serve.store.replace
+
+        def racing(root: Path, device: str, etag: str, build: Any, **kw: Any) -> list[str]:
+            self.write_whitelist(device, managed(["gba", "gbc"]))
+            return real(root, device, etag, build, **kw)
+
+        with mock.patch.object(serve.store, "replace", racing):
+            reply = self.restore()
+        self.assertEqual((reply.status, self.error(reply)["code"]), (412, "stale"))
+        self.assertEqual(self.path.read_text(), managed(["gba", "gbc"]))
+
+    def test_an_empty_backup_is_not_restorable(self) -> None:
+        name = "20250101T000000.000000Z.stignore"
+        (self.backups / name).write_bytes(b"")
+        reply = self.restore(name)
+        self.assertEqual((reply.status, self.error(reply)["code"]), (409, "not-restorable"))
+        reply = self.get(f"/api/v1/devices/deck/backups/{name}")
+        self.assertEqual((reply.status, self.error(reply)["code"]), (409, "not-restorable"))
+        listed = self.get("/api/v1/devices/deck/backups").json["backups"]
+        self.assertTrue(next(b for b in listed if b["name"] == name)["empty"])
+        self.assertEqual(self.path.read_bytes(), self.edited)
+
+    def test_a_hand_written_backup_can_be_restored_and_says_it_is_not_managed(self) -> None:
+        hand = b"#include patterns-common.stignore\n!/roms/gba\n*\n"
+        name = "20250102T000000.000000Z.stignore"
+        (self.backups / name).write_bytes(hand)
+        found = self.get(f"/api/v1/devices/deck/backups/{name}").json
+        self.assertFalse(found["managed"])
+        self.assertEqual(self.restore(name).status, 200)
+        self.assertEqual(self.path.read_bytes(), hand)
+        reply = self.change([{"device": "deck", "system": "psx", "on": True}])
+        self.assertEqual((reply.status, self.error(reply)["code"]), (409, "not-managed"))
+
+    def test_a_missing_whitelist_is_created_from_the_backup(self) -> None:
+        self.path.unlink()
+        reply = self.restore()
+        self.assertEqual(reply.status, 200, reply.body)
+        self.assertEqual(self.path.read_bytes(), self.original)
+
+    def test_unknown_devices_backups_and_bad_names(self) -> None:
+        for path in (
+            "/api/v1/devices/tablet/backups",
+            "/api/v1/devices/tablet/backups/" + self.name,
+            "/api/v1/devices/deck/backups/29990101T000000.000000Z.stignore",
+            "/api/v1/devices/deck/backups/notes.txt",
+            "/api/v1/devices/deck/backups/..%2Fpatterns-deck.stignore",
+        ):
+            reply = self.get(path)
+            self.assertEqual((reply.status, self.error(reply)["code"]), (404, "not-found"), path)
+        body = {"backup": "29990101T000000.000000Z.stignore", "expect": self.etags()["deck"]}
+        reply = self.call("POST", "/api/v1/devices/deck/restore", body)
+        self.assertEqual((reply.status, self.error(reply)["code"]), (404, "not-found"))
+        reply = self.call("POST", "/api/v1/devices/tablet/restore", body)
+        self.assertEqual((reply.status, self.error(reply)["code"]), (404, "not-found"))
+        for bad in (
+            {},
+            {"backup": "../x", "expect": "absent"},
+            {"backup": self.name, "expect": 3},
+            {"backup": self.name, "expect": "absent", "dry_run": "yes"},
+            {"backup": self.name, "expect": "absent", "extra": 1},
+            [1],
+        ):
+            reply = self.call("POST", "/api/v1/devices/deck/restore", bad)
+            self.assertEqual((reply.status, self.error(reply)["code"]), (400, "bad-request"), bad)
+        self.assertEqual(self.path.read_bytes(), self.edited)
+
+    def test_the_same_auth_and_origin_rules_as_every_write(self) -> None:
+        body = {"backup": self.name, "expect": self.etags()["deck"]}
+        for path in ("/api/v1/devices/deck/backups", self.base):
+            self.assertEqual(self.get(path, auth=False).status, 401)
+        reply = self.call("POST", "/api/v1/devices/deck/restore", body, auth=False)
+        self.assertEqual(reply.status, 401)
+        cookie = {"Cookie": f"wz_session={fresh_cookie()}"}
+        reply = self.call("POST", "/api/v1/devices/deck/restore", body, headers=cookie, auth=False)
+        self.assertEqual((reply.status, self.error(reply)["code"]), (403, "bad-origin"))
+        good = {**cookie, "Origin": f"http://127.0.0.1:{self.port}"}
+        reply = self.call("POST", "/api/v1/devices/deck/restore", body, headers=good, auth=False)
+        self.assertEqual(reply.status, 200, reply.body)
+        self.assertEqual(self.path.read_bytes(), self.original)
+
+    def test_a_get_on_restore_and_a_post_on_a_backup_are_not_routes(self) -> None:
+        self.assertEqual(self.get("/api/v1/devices/deck/restore").status, 404)
+        self.assertEqual(self.call("POST", self.base, {}).status, 404)
+
+    def test_a_failed_scan_is_a_warning(self) -> None:
+        self.start(client_factory=lambda: Client("http://127.0.0.1:1", API_KEY, label="hub"))
+        reply = self.restore()
+        self.assertEqual(reply.status, 200, reply.body)
+        self.assertEqual(len(reply.json["warnings"]), 1)
+        self.assertEqual(self.path.read_bytes(), self.original)
+        self.assertNotIn(API_KEY, reply.body.decode())
+
+
 class ProgressTests(ServeCase):
     def test_states_from_the_hub(self) -> None:
         found = {p["device"]: p for p in self.get("/api/v1/progress").json}

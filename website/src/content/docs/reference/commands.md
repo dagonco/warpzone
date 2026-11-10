@@ -13,7 +13,7 @@ warpzone --version                # prints "warpzone X.Y.Z" and exits 0
 
 ## Reading this page
 
-**Where a command runs.** `catalog`, `serve` and `whitelist migrate` run where the hub root is mounted. `check`, `provision hub`, `status`, `render-ignores`, `bios` and `inbox` run on any machine that can reach what they need (the hub's Syncthing API, or the library on a disk). `provision device`, `prune`, `frontend refresh`, `play-state sync`, `links sync`, `saves convert`, `settings`, `self-update` and `health` run on a console, because they read its local Syncthing and write its files. `doctor` runs anywhere and only queries the local Syncthing on `127.0.0.1`.
+**Where a command runs.** `catalog`, `serve`, `whitelist migrate` and `whitelist restore` run where the hub root is mounted. `check`, `provision hub`, `status`, `render-ignores`, `bios` and `inbox` run on any machine that can reach what they need (the hub's Syncthing API, or the library on a disk). `provision device`, `prune`, `frontend refresh`, `play-state sync`, `links sync`, `saves convert`, `settings`, `self-update` and `health` run on a console, because they read its local Syncthing and write its files. `doctor` runs anywhere and only queries the local Syncthing on `127.0.0.1`.
 
 **What changes files.** Commands report first and act only when you ask:
 
@@ -21,13 +21,13 @@ warpzone --version                # prints "warpzone X.Y.Z" and exits 0
 |---|---|
 | `check`, `status`, `render-ignores`, `bios`, `doctor`, `health`, `settings audit` | No. Read only. |
 | `prune`, `inbox` | Report only. They delete or move files only with `--apply`. |
-| `provision hub`, `provision device`, `frontend refresh`, `play-state sync`, `links sync`, `saves convert`, `settings apply`, `settings capture`, `catalog`, `whitelist migrate` | Yes, and each accepts `--dry-run` to show what it would do and change nothing. |
+| `provision hub`, `provision device`, `frontend refresh`, `play-state sync`, `links sync`, `saves convert`, `settings apply`, `settings capture`, `catalog`, `whitelist migrate`, `whitelist restore` | Yes, and each accepts `--dry-run` to show what it would do and change nothing. |
 | `serve` | Only on request: it rewrites a device's `patterns-<device>.stignore` (with a backup of the old file), and writes `catalog/` when it runs `catalog`. It has no `--dry-run`; every change request can set `dry_run` instead. |
 | `self-update` | Yes: it runs one tick of the updater, which can switch the checkout to a newer release. It has no `--dry-run`. |
 
 **`--config PATH`.** Almost every leaf command takes `--config PATH`: the private config file. Without it warpzone uses `$WARPZONE_CONFIG`, then `$XDG_CONFIG_HOME/warpzone/config.toml`, then `~/.config/warpzone/config.toml`. The option goes after the full command (`warpzone provision hub --config FILE`, not before `provision`). `self-update` is the exception: it needs no config and takes only `--now`.
 
-**`--dry-run`.** For commands that talk to Syncthing (`provision`, `frontend refresh`) it prints the REST calls it would make (method, path and JSON body, with API keys redacted) and sends no write; it still sends the `GET` requests it needs to work out the difference. For `play-state sync`, `links sync`, `saves convert`, `settings` and `whitelist migrate`, it says what it would do and writes nothing.
+**`--dry-run`.** For commands that talk to Syncthing (`provision`, `frontend refresh`) it prints the REST calls it would make (method, path and JSON body, with API keys redacted) and sends no write; it still sends the `GET` requests it needs to work out the difference. For `play-state sync`, `links sync`, `saves convert`, `settings`, `whitelist migrate` and `whitelist restore`, it says what it would do and writes nothing.
 
 **Safety rule.** Never delete or overwrite user data without checking again right before acting. See [Safety](/warpzone/operation/safety/) and [Pruning what a device no longer whitelists](/warpzone/setup/whitelists/#pruning-what-a-device-no-longer-whitelists).
 
@@ -54,6 +54,7 @@ Every error warpzone raises on purpose derives from one base class and carries i
 | [`render-ignores`](#warpzone-render-ignores) | Print the ignore lines a device would get. |
 | [`prune`](#warpzone-prune) | Report or delete files a device no longer whitelists. |
 | [`whitelist migrate`](#warpzone-whitelist-migrate) | Convert hand-written device whitelists to the library UI's format. |
+| [`whitelist restore`](#warpzone-whitelist-restore) | List the backups of a device's whitelist, or write one back. |
 | [`bios`](#warpzone-bios) | Which BIOS and firmware files a library has, lacks or has wrong. |
 | [`inbox`](#warpzone-inbox) | Identify, convert and file new games. |
 | [`catalog`](#warpzone-catalog) | Build and update the catalog index of the library on the hub. |
@@ -228,6 +229,34 @@ Exit `0` when every file was migrated, already managed or missing; `1` when any 
 ```bash
 warpzone whitelist migrate --dry-run
 warpzone whitelist migrate deck
+```
+
+## `warpzone whitelist restore`
+
+```
+warpzone whitelist restore <device> [backup] [--config PATH] [--root PATH] [--dry-run]
+```
+
+Every change to a device's whitelist (the library UI, `whitelist migrate`, a restore) keeps the file it replaced as `catalog/whitelists/<device>/<UTC time>.stignore` on the hub, the 50 newest. This command brings one of them back. It runs where the hub root is mounted. See [History and restore](/warpzone/development/design/library-ui/#history-and-restore).
+
+Without `backup` it lists the backups, newest first, each with its time and how it differs from the current whitelist ("2 path(s) back on, 1 path(s) off", "same as the current whitelist"). With `backup`, given as its name or the start of it (`20261106T1000`) when that is enough to tell it from the others, it prints the unified diff against the current whitelist, the paths the restore turns on and off, and a warning when paths come back on: the console will download them again, including games or systems you took off it since. Then it writes the backup over the whitelist, after saving the current file as a new backup (so a restore can be undone with another restore), and asks the hub's Syncthing to scan the file (a failure there is a warning). It writes only if the whitelist is still the file it read; if it changed meanwhile, nothing is written.
+
+An empty backup, taken when the whitelist did not exist yet, is refused: an empty whitelist lets every file through. A backup made before `whitelist migrate` can be restored, and leaves the whitelist hand-written again.
+
+| Option | Default | Meaning |
+|---|---|---|
+| `device` | required | A device name from the config. |
+| `backup` | list them | The backup to restore. |
+| `--config PATH` | see above | The private config file. |
+| `--root PATH` | `[hub] root` | The hub root as mounted on this machine. |
+| `--dry-run` | off | Print the diff and the paths and write nothing. |
+
+Exit `0` when the backups were listed, the file was restored, or the backup is already the current file; `1` when the restore was refused (an empty backup, or the whitelist changed meanwhile) or the backup does not exist; `2` for an invalid config or an unknown device.
+
+```bash
+warpzone whitelist restore deck
+warpzone whitelist restore deck 20261106T1000 --dry-run
+warpzone whitelist restore deck 20261106T1000
 ```
 
 ## `warpzone bios`

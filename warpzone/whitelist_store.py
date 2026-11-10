@@ -1,5 +1,6 @@
 """Whitelist files on the hub: reading with a stamp, backups, the guarded write, the hub scan,
-`warpzone whitelist migrate` and its proof walk, and the `check` report of excluded systems.
+`warpzone whitelist migrate` and its proof walk, `warpzone whitelist restore` and the
+`check` report of excluded systems.
 
 The decisions are in `whitelist.py` (pure); this module touches the disk and, for the scan,
 the hub's Syncthing. See "The whitelist model" in development/design/library-ui.md.
@@ -17,6 +18,7 @@ from pathlib import Path
 
 from warpzone import ignores, safefile
 from warpzone import whitelist as wl
+from warpzone import whitelist_history as hist
 from warpzone.config import Config
 from warpzone.errors import WarpzoneError
 from warpzone.model import LIBRARY_ID
@@ -197,6 +199,128 @@ def replace(
         raise Stale(device)
     warning = scan(client, device) if client is not None else None
     return [warning] if warning else []
+
+
+# --------------------------------------------------------------------------- the backups
+
+
+class BackupNotFound(WarpzoneError):
+    """The backup asked for is not in the device's backups folder."""
+
+
+def backup_names(root: Path, device: str) -> list[str]:
+    """The device's backups, newest first; none when the folder is not there."""
+    try:
+        names = os.listdir(backups_dir(root, device))
+    except FileNotFoundError:
+        return []
+    except OSError as exc:
+        raise WhitelistIOError("read", backups_dir(root, device), exc) from exc
+    return hist.newest_first(names)
+
+
+def read_backup(root: Path, device: str, name: str) -> bytes:
+    """The bytes of the backup `name` (an exact backup name; anything else is not found)."""
+    if not hist.is_backup_name(name):
+        raise BackupNotFound(f"{name!r} is not a backup name")
+    path = backups_dir(root, device) / name
+    try:
+        return path.read_bytes()
+    except FileNotFoundError:
+        raise BackupNotFound(f"no backup {name} for {device}") from None
+    except OSError as exc:
+        raise WhitelistIOError("read", path, exc) from exc
+
+
+def entries(root: Path, device: str, current: bytes | None) -> list[hist.Entry]:
+    """Every backup of the device as a listing entry, newest first, against the current bytes."""
+    found = []
+    for name in backup_names(root, device):
+        try:
+            found.append(hist.entry(name, read_backup(root, device, name), current))
+        except BackupNotFound:  # deleted while listing: gone
+            continue
+    return found
+
+
+# --------------------------------------------------------------------------- the restore
+
+
+def _list_backups(
+    device: str, snapshot: Snapshot, items: list[hist.Entry], out: Callable[[str], None]
+) -> None:
+    if not items:
+        out(f"{device}: no backups (every change of the whitelist keeps one)")
+        return
+    out(f"{device}: {len(items)} backup(s), newest first; the current file is {snapshot.path.name}")
+    for item in items:
+        out(f"  {hist.stem(item.name)}  {hist.moment(item.name)}  {hist.describe(item)}")
+    out(f"restore one with: warpzone whitelist restore {device} <backup>")
+
+
+def restore_device(
+    root: Path,
+    device: str,
+    ref: str | None,
+    *,
+    dry_run: bool,
+    now: datetime | None,
+    out: Callable[[str], None],
+    scan_client: Callable[[], Client] | None = None,
+    warn: Callable[[str], None] = print,
+) -> bool:
+    """List a device's backups (`ref` is None) or restore one; True when it was refused.
+
+    The restore shows the diff against the file as read now and the paths it turns on and off,
+    then writes through the same guarded write as every other change: the file it replaces is
+    backed up first, and nothing is written if that file changed since it was read here.
+    """
+    snapshot = read(whitelist_path(root, device))
+    if ref is None:
+        _list_backups(device, snapshot, entries(root, device, snapshot.data), out)
+        return False
+    try:
+        name = hist.resolve(backup_names(root, device), ref)
+    except hist.UnknownBackup as exc:
+        raise BackupNotFound(f"{device}: {exc}") from None
+    data = read_backup(root, device, name)
+    item = hist.entry(name, data, snapshot.data)
+    path = snapshot.path
+    why = hist.refusal(item)
+    if why:
+        out(f"{device}: refused, {path.name} is left as it is")
+        out(f"  {why}")
+        return True
+    if item.same:
+        out(f"{device}: {hist.stem(name)} is the current whitelist; nothing to restore")
+        return False
+    out(f"{device}: {path.name} -> backup {hist.stem(name)} ({hist.moment(name)})")
+    for line in hist.unified_diff(hist.text_of(snapshot.data), hist.text_of(data), name):
+        out(f"  {line}")
+    for title, paths in (("back on", item.delta.included), ("off", item.delta.excluded)):
+        if paths:
+            out(f"  {len(paths)} path(s) {title}:")
+            for shown in paths:
+                out(f"    {shown}")
+    caution = hist.warning(item.delta)
+    if caution:
+        warn(f"{device}: {caution}")
+    if dry_run:
+        out(f"{device}: would restore {hist.stem(name)}; nothing written")
+        return False
+    result = write(root, device, data, snapshot, now=now)
+    if not result.ok:
+        out(f"{device}: refused, {path.name} changed since it was read; run it again")
+        return True
+    out(f"{device}: restored {hist.stem(name)}; the file it replaced is saved as {result.backup}")
+    if scan_client is not None:
+        try:
+            warning = scan(scan_client(), device)
+        except WarpzoneError as exc:  # the client could not even be built
+            warning = str(exc)
+        if warning:
+            warn(warning)
+    return False
 
 
 # --------------------------------------------------------------------------- the proof walk

@@ -57,6 +57,9 @@
     search: (q, signal) => request('GET', `/api/v1/search?q=${encodeURIComponent(q)}`, undefined, signal),
     progress: () => request('GET', '/api/v1/progress'),
     changes: (body) => request('POST', '/api/v1/changes', body),
+    backups: (device) => request('GET', `/api/v1/devices/${encodeURIComponent(device)}/backups`),
+    backup: (device, name) => request('GET', `/api/v1/devices/${encodeURIComponent(device)}/backups/${encodeURIComponent(name)}`),
+    restore: (device, body) => request('POST', `/api/v1/devices/${encodeURIComponent(device)}/restore`, body),
     catalog: () => request('GET', '/api/v1/catalog'),
     refreshCatalog: () => request('POST', '/api/v1/catalog/refresh', {}),
     recent: (limit) => request('GET', `/api/v1/recent?limit=${encodeURIComponent(limit)}`),
@@ -89,6 +92,8 @@
         return 'That change would not give the result asked for, or it would also change other games, so nothing was written.' + where;
       case 'unlistable':
         return 'A file of this game has a name that cannot be written into a whitelist (a newline or leading/trailing spaces). It cannot be changed from the UI.';
+      case 'not-restorable':
+        return 'That backup is empty (it was taken before the whitelist existed), so it cannot be restored: an empty whitelist would let every file through.' + where;
       case 'stale':
         return `The whitelist of ${dev || 'a console'} changed since this page loaded it (another tab, the command line or another change). Nothing was written; the page reloaded the current state. Check it and try again.`;
       case 'unsupported':

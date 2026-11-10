@@ -364,6 +364,29 @@ def _build_parser() -> argparse.ArgumentParser:
         help="print the new files and the dropped lines, write nothing",
     )
 
+    wl_restore = wl_sub.add_parser(
+        "restore",
+        parents=[common],
+        help="list the backups of a device's whitelist, or restore one (run where the hub root "
+        "is mounted)",
+    )
+    wl_restore.add_argument("device", metavar="device", help="a device name from the config")
+    wl_restore.add_argument(
+        "backup",
+        nargs="?",
+        help="the backup to restore (its name, or the start of it); without it, list them",
+    )
+    wl_restore.add_argument(
+        "--root",
+        type=Path,
+        help="the hub root as mounted on this machine (default: [hub] root in the config)",
+    )
+    wl_restore.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="show the diff and the paths it turns on and off, write nothing",
+    )
+
     sv_ui = sub.add_parser(
         "serve",
         parents=[common],
@@ -895,10 +918,22 @@ def _health(args: argparse.Namespace, rep: Reporter) -> int:
 def _whitelist(args: argparse.Namespace, cfg: Config) -> int:
     from warpzone import whitelist_store
 
+    root = args.root or Path(cfg.hub.root)
+    if args.whitelist_command == "restore":
+        refused = whitelist_store.restore_device(
+            root,
+            _device(cfg, args.device),
+            args.backup,
+            dry_run=args.dry_run,
+            now=None,
+            out=print,
+            scan_client=lambda: _hub_client(cfg),
+            warn=lambda text: _eprint(f"warning: {text}"),
+        )
+        return 1 if refused else 0
     names = [_device(cfg, n) for n in args.devices] or [
         n for n, d in sorted(cfg.devices.items()) if "library" in d.folders
     ]
-    root = args.root or Path(cfg.hub.root)
     return whitelist_store.migrate(
         root,
         names,
