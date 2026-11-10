@@ -42,7 +42,7 @@ ES-DE's own `es_settings.xml` is covered too, for the scraper options only (whic
 ScrapeVideos = false
 ```
 
-Each value must have the kind of the setting in the file (`true`/`false` for an on/off option, a number for a number, quoted text for text). Logins, paths and the *Enable custom event scripts* option are never shared. ES-DE rewrites the file when it quits, so `apply` leaves it alone while ES-DE runs, which includes the startup script's own run: to apply an ES-DE setting, close ES-DE and run `warpzone settings apply --emulator esde` (from a terminal in Desktop Mode, or over SSH); ES-DE uses it from its next start.
+Each value must have the kind of the setting in the file (`true`/`false` for an on/off option, a number for a number, quoted text for text). Logins, paths and the *Enable custom event scripts* option are never shared. ES-DE rewrites the file when it quits, so it cannot be changed while ES-DE runs, and the startup script runs while it does. `provision device` therefore installs a user timer, `warpzone-settings` (5 minutes after boot and then every 15), that applies the ES-DE keys only when no ES-DE process is running, makes no noise when there is nothing to change, and never shows as failed. A setting from the hub reaches a console within about 15 minutes of Syncthing delivering it while ES-DE is closed, or at the first tick after you quit ES-DE, and ES-DE uses it from its next start. To get it at once, close ES-DE and run `warpzone settings apply --emulator esde`.
 
 ## Set up
 

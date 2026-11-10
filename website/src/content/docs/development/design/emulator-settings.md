@@ -271,7 +271,7 @@ value still equals the snapshot).
 ## Apply
 
 `warpzone settings apply [--device NAME] [--emulator ID ...] [--dry-run] [--quiet]
-[--overwrite-local]` runs on the device, offline: it reads the local copy of `wz-settings`
+[--overwrite-local] [--when-idle]` runs on the device, offline: it reads the local copy of `wz-settings`
 and never calls Syncthing. Without `--device` the device is the configured one whose ID
 matches the local Syncthing, as for `prune`; the startup script always passes it.
 
@@ -372,8 +372,8 @@ find the config. Provisioning again with another config rewrites the script.
   not `true` (`event_scripts_enabled`, pure), it sets it, only while ES-DE is not running:
   ES-DE keeps its settings in memory and rewrites the file when it quits, so an edit made
   while it runs would be lost. ES-DE is detected as `apply` detects an emulator (`comm` and
-  the base name of `argv[0]`, names in `esde.ESDE_PROCESSES`: `es-de` and `ES-DE.AppImage`,
-  to be confirmed on a device). The edit (`enable_event_scripts`, pure) changes only the
+  the base name of `argv[0]`, names in `esde.ESDE_PROCESSES`: `es-de` and `ES-DE.AppImage`).
+  The edit (`enable_event_scripts`, pure) changes only the
   `value` of the existing `<bool name="CustomEventScripts" .../>` element, or adds that one
   line after the last `<bool .../>` line with its indentation and line ending; every other
   byte stays as it was, and the result must still parse as the same settings plus that one.
@@ -390,6 +390,8 @@ find the config. Provisioning again with another config rewrites the script.
 - The same mechanism installs `warpzone-links.sh` (for a device that lists `library` and whose profile has `[links.*]`), which runs `links sync` and so links the games that arrived since the last start before ES-DE lists them (see [Title links](/warpzone/development/design/title-links/)).
 - Apply runs once per ES-DE start, possibly before Syncthing has pulled the newest layers.
   What arrives later applies at the next start, or at once with `warpzone settings apply`.
+  ES-DE's own settings are not applied by this script, which runs while ES-DE is open, but by
+  the timer in [ES-DE settings](#es-de-settings).
 
 ## ES-DE settings
 
@@ -418,10 +420,40 @@ therefore treats ES-DE like any other emulator: its `process` names are those of
 touches the file, and a running ES-DE is skipped before the file is read and again right
 before the replace. The startup script runs `apply` while ES-DE is already running, so the
 `esde` entry is always skipped there (logged as running) and the other emulators go on as
-before. ES-DE's layered keys land when `warpzone settings apply` runs with ES-DE closed, for
-example from a terminal or over SSH in Desktop Mode; ES-DE then reads them at its next start.
-`capture` skips ES-DE while it runs for the same reason (its file may not hold its latest
-changes).
+before. `capture` skips ES-DE while it runs for the same reason (its file may not hold its
+latest changes).
+
+**The timer.** ES-DE is a Steam app that is closed most of the time, so its keys are applied
+by a `systemd --user` timer, not by hand. `provision device` installs `warpzone-settings`
+(`OnBootSec=5min`, `OnUnitActiveSec=15min`, `Nice=10`) for a device that subscribes to
+`settings` and whose profile declares `esde`, and removes it for any other. The service runs
+
+```
+python -m warpzone settings apply --device NAME --emulator esde --when-idle --quiet
+```
+
+(plus `--config` when the config is not the default one). No existing timer exists on every
+device that has the `settings` group (the play state, artwork and prune timers each depend on
+their own folder or profile rule), so this one is its own. `--when-idle` is the unattended
+mode of `apply`:
+
+- The selected emulators that are running (ES-DE by `esde.ESDE_PROCESSES`, as above) are
+  left out before the lock is taken or any file is read. When none is left it ends with exit
+  0 and no trace at all. The guard is the same one every `apply` run has, and the write still
+  re-checks right before the replace.
+- A run that writes no key and finds no error leaves no log line, no backup and no
+  `last-apply.json`, so the log and the doctor's "last settings apply" keep describing the
+  last run that did something (the startup script's). Keys held or not writable are not a
+  trace either: the startup run and `audit` report them. A run that writes a key logs it
+  (emulator, file and key name, never a value) and records `last-apply.json` as usual, and an
+  invalid layer or a file that could not be written is logged and recorded.
+- The exit code is 0 whatever happened (a failure is in the log and `last-apply.json`, where
+  `doctor` reads it), so the unit never shows as failed; a usage or config error is still 2.
+  A run that finds the lock taken ends silently.
+
+A new key in the layers therefore reaches a console within about 15 minutes of Syncthing
+delivering it, if ES-DE is closed, or at the first tick after ES-DE quits; ES-DE reads it at
+its next start. Run `warpzone settings apply --emulator esde` for it to happen at once.
 
 ## Capture
 

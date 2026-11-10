@@ -851,11 +851,11 @@ known = [
 # ES-DE itself: its `es_settings.xml` (a flat list of `<bool|int|float|string name= value=>`
 # elements; canonical key = the `name`, value typed by the tag). Only the scraper's media
 # toggles, region and language are `known`. ES-DE rewrites the file when it quits, so it is
-# skipped while it runs, which includes the startup script's own `settings apply`: its keys land
-# when `settings apply` runs with ES-DE closed (see development/design/emulator-settings.md,
-# "ES-DE settings"). The `esde-xml` handler never writes `CustomEventScripts` (provision owns
-# it) or a key ending in `Directory`, `Dir`, `Path` or `Paths`, whatever a layer says. The
-# process names are those of `esde.ESDE_PROCESSES`, to be confirmed on a device.
+# skipped while it runs, which includes the startup script's own `settings apply`: its keys are
+# applied by the `warpzone-settings` timer while ES-DE is closed (see
+# development/design/emulator-settings.md, "ES-DE settings"). The `esde-xml` handler never
+# writes `CustomEventScripts` (provision owns it) or a key ending in `Directory`, `Dir`, `Path`
+# or `Paths`, whatever a layer says. The process names are those of `esde.ESDE_PROCESSES`.
 [settings.esde]
 process = ["es-de", "ES-DE.AppImage"]
 [settings.esde.files.es-settings]

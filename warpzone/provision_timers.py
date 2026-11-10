@@ -147,6 +147,54 @@ def ensure_prune_timer(
     )
 
 
+def ensure_settings_timer(
+    name: str,
+    device: Device,
+    profile: Profile,
+    home: Path,
+    rep: Reporter,
+    *,
+    dry_run: bool,
+    python: str | None = None,
+    config_path: Path | None = None,
+    probes: DeviceProbes = REAL_PROBES,
+) -> None:
+    """Install and start the `systemd --user` timer that applies the layered ES-DE settings.
+
+    Only for a device that subscribes to `settings` and whose profile declares the `esde`
+    settings; for any other the units are removed if they exist. ES-DE is a Steam app that is
+    closed most of the time and rewrites `es_settings.xml` when it quits, so its keys cannot
+    be applied by its own startup script: the timer runs `settings apply --emulator esde
+    --when-idle`, which does nothing while ES-DE runs (see development/design/emulator-settings.md,
+    "ES-DE settings"). The units run the Python that runs this command, are rewritten only when
+    their text differs, and a second run makes no systemctl call.
+    """
+    if "settings" not in device.folders or artwork.SETTINGS_EMULATOR not in profile.settings:
+        _remove_timer(artwork.SETTINGS_UNIT, "settings", home, rep, dry_run, probes.user_systemctl)
+        return
+    python = python or sys.executable
+    if not probes.import_check(python):
+        rep.warn(
+            f"the settings timer was not installed: {python} cannot import warpzone from "
+            "outside the current folder (run from a clone?). Set the device up with "
+            f"`updater.sh install {name}`, which provisions from a venv"
+        )
+        return
+    service, timer = artwork.render_settings_units(python, name, script_config(config_path, home))
+    _install_timer(
+        artwork.SETTINGS_UNIT,
+        service,
+        timer,
+        artwork.SETTINGS_INTERVAL,
+        "settings",
+        home,
+        rep,
+        dry_run,
+        probes.user_systemctl,
+        "applying ES-DE's settings only while ES-DE is closed",
+    )
+
+
 def _remove_timer(
     unit_name: str,
     label: str,

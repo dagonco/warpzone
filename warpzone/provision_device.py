@@ -52,6 +52,7 @@ from warpzone.provision_timers import (
     ensure_artwork_timer,
     ensure_play_state_timer,
     ensure_prune_timer,
+    ensure_settings_timer,
 )
 from warpzone.provision_updater import UPDATER_SOURCE, ensure_self_update
 from warpzone.report import Reporter
@@ -520,6 +521,18 @@ def provision_device(
     ensure_prune_timer(
         name,
         device,
+        home,
+        rep,
+        dry_run=local.dry_run,
+        python=python,
+        config_path=config_path,
+        probes=probes,
+    )
+
+    ensure_settings_timer(
+        name,
+        device,
+        profile,
         home,
         rep,
         dry_run=local.dry_run,
