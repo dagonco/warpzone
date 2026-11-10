@@ -222,7 +222,8 @@ def parse_game_list(data: bytes) -> dict[str, RaGame]:
 def http_fetch(url: str) -> bytes:
     request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     with urllib.request.urlopen(request, timeout=120) as response:
-        return response.read()
+        body: bytes = response.read()
+    return body
 
 
 class FetchError(Exception):
@@ -303,9 +304,10 @@ class Unlock:
 
 def _int(value: object) -> int:
     try:
-        return int(value)  # type: ignore[call-overload]
+        number: int = int(value)  # type: ignore[call-overload]
     except (TypeError, ValueError):
         return 0
+    return number
 
 
 def _text(value: object) -> str:

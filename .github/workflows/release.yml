@@ -58,6 +58,9 @@ jobs:
         with:
           version: "0.17.2"
           args: format --check
+      # Same pinned version and command as the `typecheck` job of ci.yml.
+      - run: python -m pip install mypy==2.4.1
+      - run: python -m mypy
       - run: python -m unittest discover -s tests -v
 
   build:

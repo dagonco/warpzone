@@ -3,10 +3,13 @@
 The page is plain HTML, CSS and JavaScript with no build step, so there is nothing to compile
 and nothing that would notice a drift between it and the design. These checks read the files as
 text: the endpoints and error codes the page knows must be the ones in the design page, and the
-page must keep working under the policy the server sends (`default-src 'self'`).
+page must keep working under the policy the server sends (`default-src 'self'`). The one check
+that runs code is the syntax check with `node --check`, skipped where node is not installed.
 """
 
 import re
+import shutil
+import subprocess
 import unittest
 from pathlib import Path
 
@@ -255,6 +258,34 @@ class UiFilesTest(unittest.TestCase):
                     displays.setdefault(one, set()).add(found.group(1).strip())
         clashes = {name: sorted(values) for name, values in displays.items() if len(values) > 1}
         self.assertEqual(clashes, {}, "one class name with two layouts; rename one of them")
+
+    @unittest.skipUnless(shutil.which("node"), "node is not on PATH, so the scripts are not parsed")
+    def test_every_script_parses(self):
+        # The page loads them as classic scripts (`<script src defer>`, no type="module"). A
+        # plain `node --check file.js` would parse a file as CommonJS, or as a module when it
+        # has `import`, so each script is compiled as a classic script with `vm.Script`, the
+        # parse `node --check` does, and nothing runs. The text checks above never notice a
+        # syntax error.
+        html = read("index.html")
+        self.assertNotIn('type="module"', html)
+        node = shutil.which("node")
+        assert node is not None
+        program = (
+            "const fs = require('fs'), vm = require('vm'); const file = process.argv[1];"
+            " new vm.Script(fs.readFileSync(file, 'utf8'), { filename: file });"
+        )
+        for name in SCRIPTS:
+            try:
+                proc = subprocess.run(
+                    [node, "-e", program, str(UI / name)],
+                    capture_output=True,
+                    text=True,
+                    timeout=60,
+                    check=False,
+                )
+            except subprocess.TimeoutExpired:
+                self.fail(f"{name}: node did not finish parsing in 60 seconds")
+            self.assertEqual(proc.returncode, 0, f"{name} does not parse:\n{proc.stderr}")
 
     def test_package_data_includes_the_ui(self):
         pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")

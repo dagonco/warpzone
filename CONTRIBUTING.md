@@ -12,7 +12,7 @@ uvx ruff format --check .
 uvx mypy==2.4.1
 ```
 
-CI pins the ruff and mypy versions in `.github/workflows/ci.yml`. mypy runs in its default (non-strict) mode over the `warpzone` package, as configured in `pyproject.toml`; the tests are not type-checked.
+CI pins the ruff and mypy versions in `.github/workflows/ci.yml`. mypy runs in strict mode over the `warpzone` package, as configured in `pyproject.toml`; the tests are not type-checked.
 
 ## Tests
 
