@@ -5,7 +5,7 @@ description: "Build the warpzone image, run it on the hub with Compose, and open
 
 Build the warpzone image, run it on the hub with Compose, and open the library UI in a browser.
 
-A NAS often ships a Python older than 3.11, and warpzone needs 3.11. So `warpzone serve` (the library UI) and `warpzone catalog` run in a small container on the hub: a slim official Python image with warpzone installed and RAHasher (the RetroAchievements hasher) built in, running one process as the user that owns the games share. Nothing else of warpzone needs the container. The consoles and `provision hub` run as before, on other machines, and so does `inbox` by default; it can also run in the container (see [Adding games from the container](#adding-games-from-the-container)). The contract is in [Library UI: the container](/warpzone/development/design/library-ui/#the-container).
+A NAS often ships a Python older than 3.11, and warpzone needs 3.11. So `warpzone serve` (the library UI) and `warpzone catalog` run in a small container on the hub: a slim official Python image with warpzone installed, RAHasher (the RetroAchievements hasher) built in, and `chdman` and `bsdtar` from Debian's packages for `inbox`, running one process as the user that owns the games share. Nothing else of warpzone needs the container. The consoles and `provision hub` run as before, on other machines, and so does `inbox` by default; it can also run in the container (see [Adding games from the container](#adding-games-from-the-container)). The contract is in [Library UI: the container](/warpzone/development/design/library-ui/#the-container).
 
 You need Docker with Compose v2 on the hub (Synology Container Manager has both), the hub's Syncthing GUI on a LAN address, and the [private config](/warpzone/reference/configuration/) of your setup.
 
@@ -21,7 +21,7 @@ docker build -f docker/Dockerfile -t warpzone:local .
 
 A NAS may have no git. Download the release instead (`curl -L https://github.com/dagonco/warpzone/archive/refs/tags/vX.Y.Z.tar.gz | tar xz`), then `cd` into the folder it makes and run the `docker build` line.
 
-The build compiles RAHasher from [RALibretro](https://github.com/RetroAchievements/RALibretro) in a first stage, so it needs the network, a few minutes and, on a small NAS, a while longer. The compiler stays in that stage: the image that runs holds Python, warpzone and the RAHasher binary, and nothing to build with. The base image and RALibretro are pinned by digest and by commit in [`docker/Dockerfile`](https://github.com/dagonco/warpzone/blob/main/docker/Dockerfile).
+The build compiles RAHasher from [RALibretro](https://github.com/RetroAchievements/RALibretro) in a first stage, so it needs the network, a few minutes and, on a small NAS, a while longer. The compiler stays in that stage: the image that runs holds Python, warpzone, the RAHasher binary and the two Debian packages `mame-tools` (`chdman`) and `libarchive-tools` (`bsdtar`), which add about 250 MB on disk to it (most of it is the graphics and sound libraries `mame-tools` depends on: SDL2, Mesa and LLVM; Debian packages no `chdman` without them), and nothing to build with. The base image and RALibretro are pinned by digest and by commit in [`docker/Dockerfile`](https://github.com/dagonco/warpzone/blob/main/docker/Dockerfile).
 
 To build on another machine and carry the image over, name the NAS's architecture (`linux/amd64` for an Intel or AMD NAS) and move it as a file:
 
@@ -122,7 +122,7 @@ The traffic is plain HTTP and the token is one shared secret, so keep the port i
 
 ## Adding games from the container
 
-`warpzone inbox` can run in this container as well as on a computer that mounts the share. The image ships RAHasher (at `/usr/local/bin/RAHasher`) and no other tool of `inbox`; the DATs are not in it either, and `inbox` needs a work folder with room, because the container's `/tmp` is memory. [Adding new games](/warpzone/setup/inbox/#where-inbox-runs) compares the two ways, lists the tools of each and gives the `compose.yaml` service, the `[inbox]` paths and the commands (`docker compose run --rm warpzone-inbox inbox --apply`). `docker compose run --rm warpzone-inbox doctor` checks them from inside.
+`warpzone inbox` can run in this container as well as on a computer that mounts the share. The image ships `chdman` and `bsdtar` (on `PATH`, in `/usr/bin`) and RAHasher (at `/usr/local/bin/RAHasher`), and no other tool of `inbox` (`dolphin-tool`, `nsz`, `orbis-pkg-util` and Vita3K are not packaged for Debian); the DATs are not in it either, and `inbox` needs a work folder with room, because the container's `/tmp` is memory. [Adding new games](/warpzone/setup/inbox/#where-inbox-runs) compares the two ways, lists the tools of each and gives the `compose.yaml` service, the `[inbox]` paths and the commands (`docker compose run --rm warpzone-inbox inbox --apply`). `docker compose run --rm warpzone-inbox doctor` checks them from inside.
 
 ## Updating
 
