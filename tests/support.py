@@ -119,6 +119,12 @@ class _Server(ThreadingHTTPServer):
         socketserver.TCPServer.server_bind(self)
         self.server_name, self.server_port = "127.0.0.1", self.server_address[1]
 
+    def handle_error(self, request: Any, client_address: Any) -> None:
+        # The default prints a traceback to sys.stderr. A handler thread outlives shutdown()
+        # (daemon threads are not joined), so a late broken pipe would land in the stderr a
+        # later test is capturing and fail it. A test that cares asserts on the requests.
+        return
+
 
 class FakeSyncthing:
     """Just enough of Syncthing's REST API, backed by dicts. Records every request."""
