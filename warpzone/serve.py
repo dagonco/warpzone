@@ -13,6 +13,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import math
 import os
 import signal
 import socket
@@ -59,6 +60,7 @@ MEDIA_SECONDS = 60.0  # the listing of the media folders is read again after thi
 PROGRESS_SECONDS = 15.0
 PROGRESS_FAILURE_SECONDS = 5.0  # a failed question to the hub's Syncthing is not asked again before
 LOGIN_DELAY = 1.0
+MAX_WAITING = 8  # failed authentications that wait at once; the next attempts are refused (429)
 MIN_TOKEN = 16  # characters; a shorter token is refused at start
 MAX_CONNECTIONS = 64  # connections served at once; the rest are closed
 SOCKET_TIMEOUT = 15  # seconds a connection may stay silent, also in the middle of a body
@@ -121,32 +123,68 @@ def _long_enough(token: str, source: str) -> str:
     return token
 
 
+class QueueFull(Exception):
+    """`MAX_WAITING` failed authentications are already waiting: this attempt is not made."""
+
+
 class FailureLimiter:
-    """One limiter for every failed authentication, whichever thread it comes from: the
+    """One limiter for every authentication attempt, whichever thread it comes from: the
     failures are answered `interval` seconds apart, so parallel guesses queue up behind each
-    other instead of each sleeping on its own. A right token never comes here."""
+    other instead of each sleeping on its own. At most `max_waiting` wait at once, each one
+    holding a connection. Checking the queue, comparing the offered token and taking a place
+    are one step under the lock (`attempt`), so while the queue is full no token is compared
+    at all: the guesses leave one per `interval` however many arrive together, and the
+    sleepers cannot take every connection of the server."""
 
     def __init__(
         self,
         interval: float,
         *,
+        max_waiting: int = MAX_WAITING,
         clock: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], None] | None = None,
     ) -> None:
         self.interval = interval
+        self.max_waiting = max_waiting
         self._clock = clock
         self._sleep = sleep
         self._lock = threading.Lock()
         self._next = float("-inf")
+        self._waiting = 0
 
-    def failed(self) -> None:
-        if not self.interval:
-            return
+    @property
+    def retry_after(self) -> int:
+        """Whole seconds after which a place in the queue is free (`Retry-After`)."""
+        return max(1, math.ceil(self.interval))
+
+    def full(self) -> bool:
+        """Whether the queue is full now. Only a shortcut for a caller that can refuse before
+        it does other work; `attempt` is what guarantees that nothing is compared."""
         with self._lock:
+            return self._waiting >= self.max_waiting
+
+    def attempt(self, right: Callable[[], bool]) -> bool:
+        """Make one attempt. Raises `QueueFull`, without calling `right`, when `max_waiting`
+        failures already wait. Otherwise calls `right()` (the comparison of the offered
+        token, a few microseconds, done under the lock) and returns True if it is true. If
+        not, this failure takes a place in the queue, waits for its turn and returns False."""
+        if not self.interval:
+            return right()
+        with self._lock:
+            if self._waiting >= self.max_waiting:
+                raise QueueFull
+            if right():
+                return True
             now = self._clock()
             wait = self.interval + max(0.0, self._next - now)
             self._next = now + wait
-        (self._sleep or time.sleep)(wait)
+            self._waiting += 1
+        try:
+            (self._sleep or time.sleep)(wait)
+        finally:
+            with self._lock:
+                self._waiting -= 1
+        return False
 
 
 def session_cookie(token: str, expires: int) -> str:
@@ -156,6 +194,22 @@ def session_cookie(token: str, expires: int) -> str:
     message = SESSION_MESSAGE + b"." + str(expires).encode("ascii")
     mac = hmac.new(token.encode("utf-8"), message, hashlib.sha256).hexdigest()
     return f"{expires}.{mac}"
+
+
+def forwarded_https(header: str | None) -> bool:
+    """Whether the `X-Forwarded-Proto` header of a request says the client reached a proxy over
+    TLS: its first comma-separated value is `https`, in any case. Any client can send the
+    header, which is acceptable here: it is used only to add `Secure` to the session cookie,
+    so a client that lies over plain HTTP only stops its own browser from sending the cookie
+    back."""
+    return (header or "").split(",")[0].strip().lower() == "https"
+
+
+def session_cookie_line(value: str, *, secure: bool) -> str:
+    """The `Set-Cookie` line of a new session; `secure` adds the attribute that keeps the
+    browser from sending the cookie over plain HTTP."""
+    line = f"{COOKIE}={value}; HttpOnly; SameSite=Strict; Path=/; Max-Age={COOKIE_MAX_AGE}"
+    return line + "; Secure" if secure else line
 
 
 def session_valid(token: str, value: str, now: int) -> bool:
@@ -228,7 +282,8 @@ def json_response(
 
 
 def error_response(error: ApiError) -> Response:
-    return json_response(error.status, error.body())
+    headers = [("Retry-After", str(error.retry_after))] if error.retry_after is not None else []
+    return json_response(error.status, error.body(), headers)
 
 
 # --------------------------------------------------------------------------- reading the hub
@@ -752,18 +807,42 @@ class App:
         scheme, _, given = auth.partition(" ")
         given = given.strip()
         bearer = scheme.lower() == "bearer" and bool(given)
-        if bearer and _same(given, self._token):
-            return "bearer"
+        if not bearer:
+            return "cookie" if self._cookie_valid(request) else None
+        who: list[str] = []
+
+        def right() -> bool:
+            if _same(given, self._token):
+                who.append("bearer")
+            elif self._cookie_valid(request):  # a wrong bearer next to a valid session
+                who.append("cookie")
+            return bool(who)
+
+        try:
+            # A wrong token waits its turn, as a wrong login does.
+            self.limiter.attempt(right)
+        except QueueFull:
+            # The queue is full and the offered token was not compared, so the refusal tells
+            # nothing about it. A valid session still gets in, as without a bearer.
+            if self._cookie_valid(request):
+                return "cookie"
+            raise self._busy() from None
+        return who[0] if who else None
+
+    def _cookie_valid(self, request: Request) -> bool:
         # Every `wz_session` value is checked: a client may send others it does not know of.
         now = int(self.now().timestamp())
-        if any(
+        return any(
             session_valid(self._token, value, now)
             for value in cookie_values(request.headers.get("cookie", ""), COOKIE)
-        ):
-            return "cookie"
-        if bearer:  # a token was offered and it is wrong: the same wait as a wrong login
-            self.limiter.failed()
-        return None
+        )
+
+    def _busy(self) -> ApiError:
+        return ApiError(
+            "too-many-attempts",
+            "too many failed sign-ins are waiting; try again in a moment",
+            retry_after=self.limiter.retry_after,
+        )
 
     def _json_body(self, request: Request) -> object:
         content_type = request.headers.get("content-type", "").split(";")[0].strip().lower()
@@ -779,6 +858,8 @@ class App:
     def _session(self, request: Request) -> Response:
         if request.method != "POST":
             raise ApiError("not-found", "no such route")
+        if self.limiter.full():  # a shortcut: `attempt` is what keeps the token uncompared
+            raise self._busy()
         body = self._json_body(request)
         if (
             not isinstance(body, dict)
@@ -786,11 +867,16 @@ class App:
             or not isinstance(body["token"], str)
         ):
             raise ApiError("bad-request", 'the body must be {"token": "..."}')
-        if not _same(body["token"], self._token):
-            self.limiter.failed()
+        offered = body["token"]
+        try:
+            right = self.limiter.attempt(lambda: _same(offered, self._token))
+        except QueueFull:
+            raise self._busy() from None
+        if not right:  # it waited its turn
             raise ApiError("unauthorized", "wrong token")
         value = session_cookie(self._token, int(self.now().timestamp()) + COOKIE_MAX_AGE)
-        cookie = f"{COOKIE}={value}; HttpOnly; SameSite=Strict; Path=/; Max-Age={COOKIE_MAX_AGE}"
+        secure = forwarded_https(request.headers.get("x-forwarded-proto"))
+        cookie = session_cookie_line(value, secure=secure)
         return Response(204, b"", headers=[("Set-Cookie", cookie)])
 
     # ------------------------------------------------------------- the API

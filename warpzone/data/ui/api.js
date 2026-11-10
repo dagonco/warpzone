@@ -119,6 +119,8 @@
         return 'The queue file would pass its size limit (4 MiB), so nothing was written. Remove ended entries from the history or games from collections, then try again.';
       case 'catalog-running':
         return 'A catalog scan is already running on the hub.';
+      case 'too-many-attempts':
+        return 'Too many wrong tokens were tried just now. Wait a few seconds and try again.';
       case 'write-failed':
         if (err.info.queue) {
           return err.info.body && err.info.body.devices

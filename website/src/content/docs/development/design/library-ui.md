@@ -785,7 +785,13 @@ never prints, logs or echoes it.
   or when it expires; the next request then answers `401` and the page asks for the token
   again. There is no logout route: the page keeps
   no token and the cookie is `HttpOnly`, so ending a session means clearing the cookie or
-  changing the token.
+  changing the token. The server is plain HTTP, so the cookie carries `Secure` only when the
+  login request came through a TLS reverse proxy: it has an `X-Forwarded-Proto` header whose
+  first comma-separated value is `https` (any case, spaces ignored). Without that header the
+  cookie is as above and works over plain HTTP on a LAN. The header is believed from any
+  client, which is safe for this one use: it can only add the attribute, so a client that
+  lies over plain HTTP only stops its own browser from sending the cookie back. The login
+  route is the only place that sets the cookie, and the page's script never reads it.
 - A client that is not a browser (the Decky plugin) sends `Authorization: Bearer <token>`.
 - Every `/api/` route except `POST /api/v1/session` needs one of the two, compared with
   `hmac.compare_digest`; the static files and `GET /healthz` do not. The session cookie is
@@ -799,6 +805,17 @@ never prints, logs or echoes it.
   shared: failures leave the server one second apart in all, however many connections send
   them, so guessing in parallel gains nothing. A request with no credentials, or the right
   ones, never waits.
+- Each waiting failure holds its connection, so at most 8 wait at once. While 8 are waiting,
+  every further attempt to authenticate, that is a `POST` to the session route or a request
+  with a `Bearer` token, is answered `429` (`too-many-attempts`) with a `Retry-After` header
+  (1 second) at once, before the offered token is compared: a right token is refused too, and
+  the refusal tells a guesser nothing, so guesses still leave one second apart. Looking at
+  the queue, comparing the token and taking a place are one step under a lock, so a burst of
+  parallel guesses has at most 8 of them compared and the others are refused unread. A request
+  with a valid session cookie is not affected, also when it carries a wrong bearer token next
+  to it (the cookie answers, as when the queue is not full), and neither are requests that
+  offer no credentials (`401`, as always) or the static files. This keeps a flood of wrong
+  tokens from using up the 64 connections the server serves.
 
 The server also bounds what a stranger can hold. A connection that sends nothing for 15
 seconds, also in the middle of a body, is closed; at most 64 connections are served at once and
@@ -1207,6 +1224,7 @@ last two when they apply; an error about the queue file carries `"queue": true` 
 | 412 | `stale` | an `expect` differs from the file as it is now |
 | 422 | `unsupported` | turning on a system in the device's `exclude_systems` |
 | 428 | `expect-missing` | a touched device has no `expect` |
+| 429 | `too-many-attempts` | an attempt to sign in (the session route or a bearer token) while 8 failed ones already wait; has a `Retry-After` header |
 | 500 | `write-failed` | a whitelist could not be written (a disk error); the answer also lists the devices already written |
 | 500 | `read-failed` | a whitelist exists but could not be read (permissions on the share); the message names the file and the cause, the log has the full path |
 | 500 | `internal` | an unexpected failure of the server (the log has the exception name, never a token) |

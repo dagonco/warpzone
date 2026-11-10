@@ -68,6 +68,7 @@ STATUS = {
     "stale": 412,
     "unsupported": 422,
     "expect-missing": 428,
+    "too-many-attempts": 429,
     "write-failed": 500,
     "read-failed": 500,
     "internal": 500,
@@ -86,6 +87,7 @@ class ApiError(Exception):
         device: str | None = None,
         game: str | None = None,
         queue: bool = False,
+        retry_after: int | None = None,
     ) -> None:
         super().__init__(message)
         self.code = code
@@ -93,6 +95,7 @@ class ApiError(Exception):
         self.device = device
         self.game = game
         self.queue = queue  # the error is about the queue file, not a whitelist
+        self.retry_after = retry_after  # seconds, sent as `Retry-After`
 
     @property
     def status(self) -> int:

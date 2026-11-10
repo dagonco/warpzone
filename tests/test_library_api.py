@@ -620,6 +620,7 @@ class ErrorTests(unittest.TestCase):
             "cannot-apply": 409,
             "unlistable": 409,
             "stale": 412,
+            "too-many-attempts": 429,
             "unsupported": 422,
             "expect-missing": 428,
             "hub-unreachable": 503,
