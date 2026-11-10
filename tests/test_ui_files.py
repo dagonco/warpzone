@@ -12,9 +12,11 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 UI = ROOT / "warpzone" / "data" / "ui"
-DESIGN = ROOT / "website" / "src" / "content" / "docs" / "development" / "design" / "library-ui.md"
+DESIGN_DIR = ROOT / "website" / "src" / "content" / "docs" / "development" / "design"
+DESIGN = DESIGN_DIR / "library-ui.md"
+QUEUE_DESIGN = DESIGN_DIR / "play-queue.md"
 SVG_NAMESPACE = "http://www.w3.org/2000/svg"
-SCRIPTS = ["api.js", "kit.js", "store.js", "components.js", "views.js", "app.js"]
+SCRIPTS = ["api.js", "kit.js", "store.js", "components.js", "queue.js", "views.js", "app.js"]
 FILES = ["index.html", *SCRIPTS, "style.css", "placeholder.svg", "favicon.svg"]
 
 
@@ -64,8 +66,12 @@ def design_endpoints() -> set[tuple[str, str]]:
 
 
 def design_error_codes() -> set[str]:
-    text = DESIGN.read_text(encoding="utf-8")
-    return set(re.findall(r"^\| \d{3} \| `([a-z-]+)` \|", text, re.MULTILINE))
+    """The codes of the error tables of the library API and of the play queue."""
+    codes: set[str] = set()
+    for path in (DESIGN, QUEUE_DESIGN):
+        text = path.read_text(encoding="utf-8")
+        codes |= set(re.findall(r"^\| \d{3} \| `([a-z-]+)` \|", text, re.MULTILINE))
+    return codes
 
 
 def js_requests() -> set[tuple[str, str]]:
@@ -139,9 +145,7 @@ class UiFilesTest(unittest.TestCase):
     def test_the_ui_uses_every_endpoint_it_needs(self):
         # /healthz is for the container's health check; the media and badge routes are <img> and
         # <video> URLs, which the browser loads.
-        # The play queue's routes are served before its page exists: drop them from this list
-        # when api.js calls them.
-        needed = {e for e in design_endpoints() if e[1] not in ("/healthz", "/api/v1/queue")}
+        needed = {e for e in design_endpoints() if e[1] != "/healthz"}
         used = js_requests() | {
             ("GET", normalize(p))
             for p in re.findall(
@@ -153,9 +157,40 @@ class UiFilesTest(unittest.TestCase):
     def test_every_error_code_has_a_message(self):
         codes = design_error_codes()
         self.assertIn("stale", codes)
+        self.assertIn("queue-damaged", codes)
         text = read("api.js")
         missing = sorted(code for code in codes if f"case '{code}':" not in text)
         self.assertEqual(missing, [], "api.js humanError has no message for these codes")
+
+    def test_every_queue_operation_is_sent_by_the_page(self):
+        # The operations of `POST /api/v1/queue`: one the page never sends is dead weight on the
+        # hub, and one the server does not know is refused with `bad-request`.
+        from warpzone import queue
+
+        sent = set(re.findall(r"\bop: '([a-z]+)'", read("queue.js")))
+        self.assertEqual(sent, set(queue._FIELDS))
+
+    def test_the_queue_picker_preselects_no_console(self):
+        # Queueing is one click and the consoles are optional: no console is ticked by default,
+        # and nothing is remembered between visits (no cookie, no storage).
+        text = read("queue.js")
+        self.assertNotIn("document.cookie", text)
+        self.assertIn("const sel = new Set();", text)
+        self.assertIn("Also put it on a console", text)
+
+    def test_queue_classes_are_defined_and_prefixed(self):
+        # CSS class names are global: the queue's start with `q-`, each one is styled, and no
+        # other script uses a `q-` class (a shared name once broke every home shelf).
+        css = read("style.css")
+        used: set[str] = set()
+        for name in ("queue.js", "components.js"):
+            for value in re.findall(r"class: '([^']*)'", read(name)):
+                used |= {c for c in value.split() if c.startswith("q-")}
+        self.assertTrue(used)
+        for cls in sorted(used):
+            self.assertRegex(css, rf"\.{re.escape(cls)}(?![\w-])", cls)
+        for name in ("api.js", "kit.js", "store.js", "views.js", "app.js"):
+            self.assertNotRegex(read(name), r"class: '[^']*\bq-", name)
 
     def test_every_state_the_api_can_send_has_a_display(self):
         # The states of "HTTP API" and "Progress" in the design: the page must name each one.
