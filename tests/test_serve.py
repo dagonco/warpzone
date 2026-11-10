@@ -221,6 +221,29 @@ class AuthTests(ServeCase):
         reply = self.get("/api/v1/devices", headers={"Cookie": f"wz_session={value}"}, auth=False)
         self.assertEqual(reply.status, 200)
 
+    def test_the_cookie_is_secure_only_behind_a_tls_proxy(self) -> None:
+        def login(headers: dict[str, str]) -> str:
+            reply = self.call("POST", "/api/v1/session", {"token": TOKEN}, headers, auth=False)
+            self.assertEqual(reply.status, 204)
+            return reply.headers["Set-Cookie"]
+
+        plain = login({})
+        for forwarded, secure in (
+            ("https", True),
+            ("HTTPS", True),
+            (" https ", True),
+            ("https, http", True),
+            ("http", False),
+            ("http, https", False),
+            ("", False),
+        ):
+            cookie = login({"X-Forwarded-Proto": forwarded})
+            self.assertEqual("; Secure" in cookie, secure, forwarded)
+            # nothing else changes, whichever the header says
+            self.assertEqual(cookie.replace("; Secure", "").split("; ")[1:], plain.split("; ")[1:])
+        self.assertNotIn("Secure", plain)
+        self.assertIn("HttpOnly", login({"X-Forwarded-Proto": "https"}))
+
     def test_a_wrong_token_at_login_is_401_after_a_delay(self) -> None:
         self.start(login_delay=1.0)
         with mock.patch.object(serve.time, "sleep") as sleep:
@@ -319,6 +342,187 @@ class AuthTests(ServeCase):
         self.get("/api/v1/nope")
         self.get("/api/v1/progress")
         self.assertNotIn(TOKEN, "\n".join(self.logs))
+
+
+class LoginFloodTests(ServeCase):
+    """Failed sign-ins wait in a bounded queue; a full queue refuses the next attempt at once,
+    and the connections it holds cannot starve the rest of the UI."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.release = threading.Event()
+        self.addCleanup(self.release.set)
+        self.sleeping = threading.Semaphore(0)
+        self.sleeps: list[float] = []
+        self.start(login_delay=1.0)
+        self.app.limiter = serve.FailureLimiter(1.0, sleep=self.sleep)
+        self.answers: list[Reply | BaseException] = []
+        self.threads: list[threading.Thread] = []
+        self.addCleanup(self.join)
+
+    def join(self) -> None:
+        self.release.set()
+        for thread in self.threads:
+            thread.join(timeout=5)
+
+    def sleep(self, seconds: float) -> None:
+        self.sleeps.append(seconds)
+        self.sleeping.release()
+        self.release.wait(5)
+
+    def login_request(self, token: str) -> serve.Request:
+        return serve.Request(
+            "POST",
+            "/api/v1/session",
+            {"content-type": "application/json"},
+            json.dumps({"token": token}).encode(),
+        )
+
+    def fill_the_queue(self, count: int) -> None:
+        """`count` wrong tokens, each asleep in the limiter."""
+        for _ in range(count):
+            thread = threading.Thread(
+                target=self.app.handle, args=(self.login_request("wrong"),), daemon=True
+            )
+            thread.start()
+            self.threads.append(thread)
+        for _ in range(count):
+            self.assertTrue(self.sleeping.acquire(timeout=5))
+
+    def code(self, reply: serve.Response) -> str:
+        return json.loads(reply.body)["error"]["code"]
+
+    def test_a_full_queue_refuses_every_attempt_before_comparing_the_token(self) -> None:
+        self.fill_the_queue(serve.MAX_WAITING)
+        slept = len(self.sleeps)
+        with mock.patch.object(serve, "_same") as same:
+            for token in ("wrong", TOKEN):  # the right one is refused too
+                reply = self.app.handle(self.login_request(token))
+                self.assertEqual(
+                    (reply.status, self.code(reply)), (429, "too-many-attempts"), token
+                )
+                self.assertIn(("Retry-After", "1"), reply.headers)
+                self.assertNotIn("Set-Cookie", [name for name, _ in reply.headers])
+            bearer = serve.Request("GET", "/api/v1/devices", {"authorization": f"Bearer {TOKEN}"})
+            reply = self.app.handle(bearer)
+            self.assertEqual((reply.status, self.code(reply)), (429, "too-many-attempts"))
+            self.assertIn(("Retry-After", "1"), reply.headers)
+        same.assert_not_called()
+        self.assertEqual(len(self.sleeps), slept)  # refused, not queued
+
+    def test_a_burst_compares_no_more_tokens_than_the_queue_holds(self) -> None:
+        # Many wrong tokens arrive together while the queue has room for 4. Only the ones that
+        # take a place may have their token compared; the rest are refused without it.
+        attempts, places = 32, 4
+        self.app.limiter = serve.FailureLimiter(1.0, max_waiting=places, sleep=self.sleep)
+        compared: list[str] = []
+        real = serve._same
+
+        def slow_same(a: str, b: str) -> bool:
+            compared.append(a)
+            time.sleep(0.02)  # the comparison takes long enough for the others to arrive
+            return real(a, b)
+
+        barrier = threading.Barrier(attempts)
+        replies: list[serve.Response] = []
+
+        def attempt() -> None:
+            barrier.wait(timeout=5)
+            replies.append(self.app.handle(self.login_request("wrong")))
+
+        with mock.patch.object(serve, "_same", slow_same):
+            for _ in range(attempts):
+                thread = threading.Thread(target=attempt, daemon=True)
+                thread.start()
+                self.threads.append(thread)
+            deadline = time.monotonic() + 5
+            while len(replies) < attempts - places and time.monotonic() < deadline:
+                time.sleep(0.01)
+            self.assertEqual(len(replies), attempts - places)  # the others are asleep
+            self.assertLessEqual(len(compared), places)
+            self.assertEqual({r.status for r in replies}, {429})
+            self.assertEqual(len(self.sleeps), places)
+
+    def test_what_does_not_offer_a_token_is_not_affected(self) -> None:
+        self.fill_the_queue(serve.MAX_WAITING)
+        cookie = {"cookie": f"{serve.COOKIE}={fresh_cookie()}"}
+        reply = self.app.handle(serve.Request("GET", "/api/v1/devices", cookie))
+        self.assertEqual(reply.status, 200)
+        # a wrong bearer next to a valid cookie keeps being answered by the cookie
+        both = {**cookie, "authorization": "Bearer wrong"}
+        self.assertEqual(self.app.handle(serve.Request("GET", "/api/v1/devices", both)).status, 200)
+        reply = self.app.handle(serve.Request("GET", "/api/v1/devices", {}))
+        self.assertEqual((reply.status, self.code(reply)), (401, "unauthorized"))
+        stale = {"cookie": f"{serve.COOKIE}=nope"}
+        reply = self.app.handle(serve.Request("GET", "/api/v1/devices", stale))
+        self.assertEqual(reply.status, 401)
+        self.assertEqual(self.app.handle(serve.Request("GET", "/", {})).status, 200)
+        self.assertEqual(self.app.handle(serve.Request("GET", "/healthz", {})).status, 200)
+
+    def test_the_queue_drains_and_logins_work_again(self) -> None:
+        self.fill_the_queue(serve.MAX_WAITING)
+        self.release.set()
+        for thread in self.threads:
+            thread.join(timeout=5)
+        reply = self.app.handle(self.login_request(TOKEN))
+        self.assertEqual(reply.status, 204)
+        reply = self.app.handle(self.login_request("wrong"))
+        self.assertEqual((reply.status, self.code(reply)), (401, "unauthorized"))
+
+    def test_a_flood_of_wrong_tokens_does_not_take_every_connection(self) -> None:
+        connections = serve.MAX_WAITING + 4  # more than the queue holds, fewer than all slots
+        server = serve.UiServer(("127.0.0.1", 0), self.app, max_connections=connections)
+        thread = threading.Thread(
+            target=server.serve_forever, kwargs={"poll_interval": 0.02}, daemon=True
+        )
+        thread.start()
+
+        def stop() -> None:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
+
+        self.addCleanup(stop)
+        port = server.server_address[1]
+
+        def flood() -> None:
+            conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+            try:
+                body = json.dumps({"token": "wrong"})
+                conn.request("POST", "/api/v1/session", body, {"Content-Type": "application/json"})
+                response = conn.getresponse()
+                self.answers.append(Reply(response.status, response.msg, response.read()))
+            except BaseException as exc:
+                self.answers.append(exc)
+            finally:
+                conn.close()
+
+        # One at a time (the listen backlog is small): each flooder is either asleep in the
+        # limiter or already answered before the next one connects.
+        for sent in range(1, connections + 1):
+            sender = threading.Thread(target=flood, daemon=True)
+            sender.start()
+            self.threads.append(sender)
+            deadline = time.monotonic() + 5
+            while len(self.sleeps) + len(self.answers) < sent and time.monotonic() < deadline:
+                time.sleep(0.005)
+            self.assertEqual(len(self.sleeps) + len(self.answers), sent)
+        self.assertTrue(all(isinstance(a, Reply) for a in self.answers), self.answers)
+        self.assertEqual([a.status for a in self.answers if isinstance(a, Reply)], [429] * 4)
+
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+        try:
+            headers = {"Cookie": f"{serve.COOKIE}={fresh_cookie()}"}
+            conn.request("GET", "/api/v1/devices", headers=headers)
+            self.assertEqual(conn.getresponse().status, 200)
+        finally:
+            conn.close()
+        page = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+        try:
+            page.request("GET", "/")
+            self.assertEqual(page.getresponse().status, 200)
+        finally:
+            page.close()
 
 
 class StaticTests(ServeCase):
@@ -1546,22 +1750,162 @@ class FailureLimiterTests(unittest.TestCase):
         sleeps: list[float] = []
         limiter = serve.FailureLimiter(1.0, clock=lambda: 100.0, sleep=sleeps.append)
         for _ in range(3):  # three failures at the same instant, from three threads
-            limiter.failed()
+            limiter.attempt(lambda: False)
         self.assertEqual(sleeps, [1.0, 2.0, 3.0])
 
     def test_the_backlog_drains_with_time(self) -> None:
         now = [0.0]
         sleeps: list[float] = []
         limiter = serve.FailureLimiter(1.0, clock=lambda: now[0], sleep=sleeps.append)
-        limiter.failed()
+        limiter.attempt(lambda: False)
         now[0] = 10.0
-        limiter.failed()
+        limiter.attempt(lambda: False)
         self.assertEqual(sleeps, [1.0, 1.0])
 
     def test_no_interval_means_no_waiting(self) -> None:
         sleeps: list[float] = []
-        serve.FailureLimiter(0, sleep=sleeps.append).failed()
+        serve.FailureLimiter(0, sleep=sleeps.append).attempt(lambda: False)
         self.assertEqual(sleeps, [])
+
+
+class ForwardedHttpsTests(unittest.TestCase):
+    def test_only_a_first_value_of_https_counts(self) -> None:
+        for value, expected in (
+            ("https", True),
+            ("HTTPS", True),
+            ("Https", True),
+            ("  https  ", True),
+            ("https,http", True),
+            ("https , http", True),
+            ("http", False),
+            ("http, https", False),
+            ("", False),
+            (None, False),
+            ("httpss", False),
+            ("wss", False),
+            (",https", False),
+        ):
+            self.assertIs(serve.forwarded_https(value), expected, value)
+
+    def test_the_cookie_line_carries_secure_when_asked(self) -> None:
+        plain = serve.session_cookie_line("v", secure=False)
+        self.assertEqual(
+            plain,
+            f"{serve.COOKIE}=v; HttpOnly; SameSite=Strict; Path=/; Max-Age={serve.COOKIE_MAX_AGE}",
+        )
+        self.assertEqual(serve.session_cookie_line("v", secure=True), plain + "; Secure")
+
+
+class WaitingQueueTests(unittest.TestCase):
+    """The limiter keeps at most `max_waiting` failures asleep; the rest are refused."""
+
+    def setUp(self) -> None:
+        self.release = threading.Event()
+        self.entered = threading.Semaphore(0)
+        self.sleeps: list[float] = []
+        self.addCleanup(self.release.set)
+
+    def sleep(self, seconds: float) -> None:
+        self.sleeps.append(seconds)
+        self.entered.release()
+        self.release.wait(5)
+
+    def fill(self, limiter: serve.FailureLimiter, count: int) -> list[threading.Thread]:
+        threads = [
+            threading.Thread(target=limiter.attempt, args=(lambda: False,), daemon=True)
+            for _ in range(count)
+        ]
+        for thread in threads:
+            thread.start()
+        for _ in threads:
+            self.assertTrue(self.entered.acquire(timeout=5))
+        return threads
+
+    def test_a_full_queue_refuses_at_once_and_drains(self) -> None:
+        limiter = serve.FailureLimiter(1.0, max_waiting=3, clock=lambda: 0.0, sleep=self.sleep)
+        self.assertFalse(limiter.full())
+        threads = self.fill(limiter, 3)
+        self.assertTrue(limiter.full())
+        self.assertEqual(self.sleeps, [1.0, 2.0, 3.0])
+        with self.assertRaises(serve.QueueFull):
+            limiter.attempt(lambda: False)
+        self.assertEqual(len(self.sleeps), 3)  # the refused one did not sleep
+        self.release.set()
+        for thread in threads:
+            thread.join(timeout=5)
+        self.assertFalse(limiter.full())
+        limiter.attempt(lambda: False)  # accepted again
+        self.assertEqual(len(self.sleeps), 4)
+
+    def test_a_full_queue_does_not_call_the_comparison_right_or_wrong(self) -> None:
+        limiter = serve.FailureLimiter(1.0, max_waiting=1, clock=lambda: 0.0, sleep=self.sleep)
+        self.fill(limiter, 1)
+        calls: list[bool] = []
+        for outcome in (False, True):
+            with self.assertRaises(serve.QueueFull):
+                limiter.attempt(lambda outcome=outcome: calls.append(outcome) or outcome)
+        self.assertEqual(calls, [])
+
+    def test_a_right_answer_is_returned_at_once_and_takes_no_place(self) -> None:
+        limiter = serve.FailureLimiter(1.0, max_waiting=1, clock=lambda: 0.0, sleep=self.sleep)
+        self.assertTrue(limiter.attempt(lambda: True))
+        self.assertEqual(self.sleeps, [])
+        self.assertFalse(limiter.full())
+
+    def test_a_burst_calls_the_comparison_at_most_max_waiting_times(self) -> None:
+        attempts, places = 32, 4
+        limiter = serve.FailureLimiter(1.0, max_waiting=places, clock=lambda: 0.0, sleep=self.sleep)
+        barrier = threading.Barrier(attempts)
+        calls: list[int] = []
+        refused: list[int] = []
+
+        def right() -> bool:
+            calls.append(1)
+            time.sleep(0.01)
+            return False
+
+        def one() -> None:
+            barrier.wait(timeout=5)
+            try:
+                limiter.attempt(right)
+            except serve.QueueFull:
+                refused.append(1)
+
+        threads = [threading.Thread(target=one, daemon=True) for _ in range(attempts)]
+        for thread in threads:
+            thread.start()
+        deadline = time.monotonic() + 5
+        while len(refused) < attempts - places and time.monotonic() < deadline:
+            time.sleep(0.01)
+        self.assertEqual((len(refused), len(calls)), (attempts - places, places))
+        self.release.set()
+        for thread in threads:
+            thread.join(timeout=5)
+        self.assertEqual(len(calls), places)
+
+    def test_the_wait_ahead_of_a_refused_attempt_is_not_extended(self) -> None:
+        limiter = serve.FailureLimiter(1.0, max_waiting=1, clock=lambda: 0.0, sleep=self.sleep)
+        threads = self.fill(limiter, 1)
+        for _ in range(5):
+            with self.assertRaises(serve.QueueFull):
+                limiter.attempt(lambda: False)
+        self.release.set()
+        threads[0].join(timeout=5)
+        # a refusal does not push the next failure further out
+        limiter.attempt(lambda: False)
+        self.assertEqual(self.sleeps, [1.0, 2.0])
+
+    def test_retry_after_is_whole_seconds_and_at_least_one(self) -> None:
+        self.assertEqual(serve.FailureLimiter(1.0).retry_after, 1)
+        self.assertEqual(serve.FailureLimiter(0.2).retry_after, 1)
+        self.assertEqual(serve.FailureLimiter(2.5).retry_after, 3)
+
+    def test_without_an_interval_nothing_waits_and_nothing_is_full(self) -> None:
+        limiter = serve.FailureLimiter(0, max_waiting=1, sleep=self.sleep)
+        for _ in range(3):
+            limiter.attempt(lambda: False)
+        self.assertFalse(limiter.full())
+        self.assertEqual(self.sleeps, [])
 
 
 class RunTests(unittest.TestCase):
