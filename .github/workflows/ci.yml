@@ -227,3 +227,75 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITLEAKS_ENABLE_COMMENTS: "false"
+
+  # The two jobs below run only on the weekly and manual runs, never on a pull request: the
+  # image takes minutes to build and the coverage number is information, not a gate.
+
+  # Builds the hub's container image and runs it far enough to see that it works, so that a
+  # base image or apt change that breaks it shows up here and not on the first rebuild on the
+  # hub. Nothing is pushed and no registry login is made. The RAHasher stage compiles C++,
+  # hence the generous timeout.
+  image:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build the image
+        timeout-minutes: 35
+        run: docker build -f docker/Dockerfile -t warpzone:ci .
+      # The entrypoint is `warpzone` and the user is 65534, so the version check passes only
+      # its argument; the tools are looked up with the entrypoint replaced by `sh`.
+      - name: Check the version and the tools
+        run: |
+          set -euo pipefail
+          expected="$(python3 -m warpzone --version)"
+          actual="$(docker run --rm warpzone:ci --version)"
+          echo "checkout: $expected"
+          echo "image:    $actual"
+          test "$actual" = "$expected"
+          docker run --rm --entrypoint sh warpzone:ci -c '
+            set -eu
+            # One name at a time: dash, the sh of the image, looks up only the first argument.
+            command -v chdman
+            command -v bsdtar
+            command -v RAHasher
+            bsdtar --version
+            test "$(id -u)" != 0
+          '
+
+  # Unit tests under coverage with branch measurement, limited to the warpzone package, on the
+  # Python the typecheck job uses. The number goes to the job summary; there is no threshold.
+  # The updater script's tests are skipped as in the `test` job: they measure a shell script.
+  # Subprocesses the tests start are not measured.
+  coverage:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.11"
+      # A CI-only tool, pinned like mypy; the package keeps no dependency.
+      - run: python -m pip install coverage==7.17.2
+      - name: Run the tests under coverage
+        timeout-minutes: 10
+        env:
+          WARPZONE_SKIP_UPDATER_SH: "1"
+        run: python -X faulthandler -m coverage run --branch --source=warpzone -m unittest discover -s tests
+      - name: Write the summary
+        run: |
+          {
+            echo "### Coverage of the warpzone package (branches included)"
+            echo
+            echo "Total: $(python -m coverage report --precision=1 --format=total) %"
+            echo
+            echo "The ten least covered modules:"
+            echo
+            python -m coverage report --precision=1 --format=markdown --sort=cover | head -n 12
+          } >> "$GITHUB_STEP_SUMMARY"

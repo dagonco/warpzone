@@ -1,6 +1,6 @@
 """The hub's container files: the pins and rules that keep the image reproducible and the example
-free of secrets. The image itself is not built here (CI has no Docker step); these tests read the
-files."""
+free of secrets. The image itself is not built here (the weekly `image` job of CI builds it); these
+tests read the files."""
 
 import re
 import unittest
