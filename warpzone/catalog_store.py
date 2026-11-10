@@ -2,15 +2,16 @@
 
 The decisions are in `catalog.py` (pure). Here is what touches the disk: the walk of a
 system's folders, the SHA-1 of file parts that have none, the RAHasher pass, the download of
-the RetroAchievements game lists (through `ra.py`) and the guarded writes of
-`catalog/systems/<system>.json` and `catalog/ra/<console id>.json` (see "Location and format"
-and "RetroAchievements" in development/design/library-ui.md). It writes only under
-`catalog/` at the hub root.
+the RetroAchievements game lists (through `ra.py`), the fill of `serials` from DATs and the
+guarded writes of `catalog/systems/<system>.json` and `catalog/ra/<console id>.json` (see
+"Location and format" and "RetroAchievements" in development/design/library-ui.md). It writes
+only under `catalog/` at the hub root.
 """
 
 from __future__ import annotations
 
 import os
+import posixpath
 from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
@@ -18,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from warpzone import catalog, ra, safefile
+from warpzone import dat as datmod
 from warpzone.errors import UsageError
 from warpzone.inbox_core import file_sha1
 
@@ -511,6 +513,149 @@ def run_ra_lists(
             "failed": "download failed, no list",
         }[result.status]
         out(f"RA list {console} ({system}): {verb}")
+    return results
+
+
+# ------------------------------------------------------------------ DAT serials
+
+UNMATCHED_SHOWN = 20  # unmatched games named in the output per system; the rest are counted
+
+# What `catalog --dats` reads DATs through: system -> its parsed DATs (`DatLibrary.load`).
+DatLoader = Callable[[str], Sequence[datmod.Dat]]
+
+
+@dataclass(frozen=True)
+class SerialsResult:
+    system: str
+    status: str  # written | would-write | unchanged | conflict | error | no-dat | no-catalog
+    filled: int = 0  # games that got serials
+    had: int = 0  # games that already had them and were left as they are
+    unmatched: int = 0  # games with no serials and no exact DAT match
+    message: str = ""
+    names: tuple[str, ...] = ()  # primary paths of the unmatched games
+
+    @property
+    def failed(self) -> bool:
+        return self.status in ("conflict", "error")
+
+
+def _playlist_discs(library: Path, game: catalog.Game) -> list[str]:
+    """The disc names in the playlist of an `.m3u` folder game (the file inside it named
+    like the folder, as `inbox` writes it); none for any other game or an unreadable file."""
+    if not game.primary.lower().endswith(".m3u"):
+        return []
+    playlist = library / game.primary / posixpath.basename(game.primary)
+    try:
+        if playlist.stat().st_size > MAX_TEXT:
+            return []
+        text = playlist.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return []
+    return catalog.m3u_disc_names(text)
+
+
+def update_serials(
+    root: Path,
+    system: str,
+    load: DatLoader,
+    *,
+    updated: str,
+    force: bool = False,
+    dry_run: bool = False,
+) -> SerialsResult:
+    """Fill `serials` in `catalog/systems/<system>.json` from the system's DATs.
+
+    Only games with no serials are looked at, unless `force`. The write is guarded like the
+    scan's: when the file changed since it was read it is read again and the decision made
+    again, up to `WRITE_TRIES` times. A file that would not change is not written, and
+    `dry_run` writes nothing."""
+    path = system_path(root, system)
+    library = root / "library"
+    index: catalog.SerialIndex | None = None
+    try:
+        for _ in range(WRITE_TRIES):
+            doc, stamp = read_state(path)
+            if doc is None:
+                return SerialsResult(system, "no-catalog", message="no catalog file for it")
+            games = list(doc.games.values())
+            todo = [g for g in games if force or not g.serials]
+            if not todo:
+                return SerialsResult(system, "unchanged", had=len(games))
+            if index is None:
+                try:
+                    index = catalog.serial_index(load(system))
+                except (OSError, ValueError) as exc:
+                    text = exc.strerror if isinstance(exc, OSError) and exc.strerror else exc
+                    return SerialsResult(system, "error", message=f"DATs: {text}")
+            if not index:
+                return SerialsResult(
+                    system, "no-dat", had=len(games) - len(todo), unmatched=len(todo)
+                )
+            discs = {g.id: _playlist_discs(library, g) for g in todo}
+            plan = catalog.fill_serials(games, index, discs, force=force)
+            counts = SerialsResult(
+                system,
+                "unchanged",
+                filled=len(plan.filled),
+                had=len(plan.had),
+                unmatched=len(plan.unmatched),
+                names=tuple(sorted(doc.games[i].primary for i in plan.unmatched)),
+            )
+            if not plan.filled:
+                return counts
+            if dry_run:
+                return replace(counts, status="would-write")
+            data = catalog.encode(system, plan.games, updated)
+            if safefile.atomic_write(path, data, expect=stamp):
+                return replace(counts, status="written")
+        return SerialsResult(system, "conflict", message="the file kept changing, try again")
+    except OSError as exc:
+        return SerialsResult(system, "error", message=exc.strerror or str(exc))
+
+
+def _describe_serials(result: SerialsResult) -> str:
+    if result.status in ("conflict", "error"):
+        return f"{result.system}: {result.status}: {result.message}"
+    if result.status in ("no-dat", "no-catalog"):
+        what = "no DAT with serials" if result.status == "no-dat" else result.message
+        left = f"; {result.unmatched} game(s) left without" if result.unmatched else ""
+        return f"{result.system}: {what}{left}"
+    verb = {"written": "filled", "would-write": "to fill", "unchanged": "filled"}[result.status]
+    text = f"{result.system}: {result.filled} {verb}, {result.had} already had"
+    text += f", {result.unmatched} unmatched"
+    return text
+
+
+def run_dats(
+    root: Path,
+    load: DatLoader,
+    *,
+    force: bool,
+    dry_run: bool,
+    out: Callable[[str], None],
+    now: datetime | None = None,
+) -> list[SerialsResult]:
+    """`warpzone catalog --dats`: for each system with a catalog file, fill the `serials` of
+    the games that have none from its DATs (see `update_serials`), and say per system how
+    many were filled, already had them, matched nothing, or had no DAT with serials. The
+    caller exits 1 when any result `failed`. `load` is called only for a system with a game
+    to look at."""
+    if not (root / "library" / "roms").is_dir():
+        raise CatalogError(f"{root} has no library/roms/ folder; is --root the hub root?")
+    _, updated = _clock(now)
+    results = []
+    for system in library_systems(root):
+        result = update_serials(root, system, load, updated=updated, force=force, dry_run=dry_run)
+        if result.status == "no-catalog":
+            continue
+        results.append(result)
+        out(_describe_serials(result))
+        for name in result.names[:UNMATCHED_SHOWN]:
+            out(f"  unmatched: {name}")
+        if len(result.names) > UNMATCHED_SHOWN:
+            out(f"  ... and {len(result.names) - UNMATCHED_SHOWN} more unmatched")
+    if not results:
+        out("no catalog files: run `warpzone catalog` first")
     return results
 
 

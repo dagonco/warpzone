@@ -121,11 +121,12 @@ several, and a game is on for a console only when every part is.
 - `size`: the sum of the parts. `added`: the date `inbox` filed it, or the date a scan first saw
   it; a later scan keeps it.
 - `dat`: the DAT game name when `inbox` identified the game by DAT, else `null`. A scan never
-  looks DATs up (the hub has none, and a CHD's hash is not the DAT's).
+  looks DATs up (the hub has none, and a CHD's hash is not the DAT's); only the opt-in
+  [`catalog --dats`](#dat-serials) pass does, and it fills `serials`, not `dat`.
 - `serials`: the serials the DAT lists for the game (Redump's `serial`; a disc listed once per
   serial gathers them all, and a multi-disc game those of all its discs), in file order, or `[]`.
-  Set by `inbox` like `dat`, kept by a scan, and absent in files written before it existed (read
-  as `[]`). A value with commas is split. The [saves index](#saves-per-game) uses them to find a
+  Set by `inbox` like `dat`, kept by a scan, filled for older games by
+  [`catalog --dats`](#dat-serials), and absent in files written before it existed (read as `[]`). A value with commas is split. The [saves index](#saves-per-game) uses them to find a
   Dreamcast game's memory card.
 - `ra`: see [RetroAchievements](#retroachievements).
 - `flags`: `unlistable` when a part cannot be written as a whitelist line (see
@@ -198,6 +199,36 @@ the RA hash. One derivation path serves both writers, so a PS4 shortcut, a Vita 
 Switch update filed by `inbox` lands in the right game exactly as a scan would put it there. A
 failure to update the index is a warning in the inbox report, never a reason to send an item to
 review: the next `catalog` run picks the game up.
+
+### DAT serials
+
+`inbox` records the DAT serials of the games it files. The games that were already in the library
+have none, and a scan cannot know them (the hub has no DATs and a CHD's hash is not the DAT's).
+`warpzone catalog --dats [--dats-dir PATH] [--force] [--dry-run]` fills them in, as a pass of its
+own after the scan, from the DAT folder `inbox` uses (`[inbox] dats_dir`, or `--dats-dir`),
+through `inbox`'s parse cache (`dat.DatLibrary`).
+
+- **Which games:** those with no `serials`, in every system whose DATs list serials (in practice
+  the Redump ones; the pass does not name any system). With `--force` the others too: a single
+  exact match that differs replaces their serials, no match keeps them.
+- **Exact identity only** (`catalog.dat_serials`, pure). In this order: the `dat` name `inbox`
+  stored, when a DAT game has exactly that name; else the SHA-1 and size of the primary file part
+  against the DAT games that have one rom; else, for a single file, its name without the
+  extension against the DAT game names (`inbox` names a file after its DAT game, so a single CHD
+  filed before `dat` was recorded is found this way); else, for an `.m3u` folder, each disc named
+  in the playlist inside it, by exact name against the DAT game names, with the union of the
+  discs' serials in disc order, all discs needed. Nothing is
+  compared case-insensitively or cleaned up. A key the DATs give two different serial lists is
+  not guessed at. A game with no exact match is left without serials and counted as unmatched.
+- **Writes:** only the `serials` of `catalog/systems/<system>.json`, with the scan's guarded atomic
+  write and its changed-since-read check (read again, up to three tries, then a `conflict`). A
+  file whose games would not change is not written, and `--dry-run` writes nothing (the DAT parse
+  cache, which is not user data, is the one thing a dry run may still write).
+- **Output and exit code:** per system, `filled / already had / unmatched` (or `to fill` in a dry
+  run), `no DAT with serials` for a system whose DATs are missing or list none, and the first
+  unmatched games by path. Exit `1` when a system file could not be read or written, `2` for a
+  usage error (no usable DAT folder, `--dats-dir` or `--force` without `--dats`), as for the other
+  passes; unmatched games are not a failure.
 
 ### RetroAchievements
 
@@ -363,7 +394,8 @@ sides, because Redump spells the same number with other separators (`T-45001D-05
 `T-45001D05` in the header, `T7016D  50` becoming `T7016D__50` in the file name). Any one serial
 may match. A disc whose Redump serial is not its header's number (a bare `51064` for
 `MK-51064`, or a catalog number such as `952-0158-50`) gets no match from that serial, and
-neither does a game filed before `serials` existed (or not by `inbox`): both show no saves,
+neither does a game with no `serials` (filed before the field existed and not yet filled by
+`catalog --dats`, or not identified in a DAT): both show no saves,
 which is "not found" like the rest.
 
 RetroArch's save files can sit in a subfolder of the hub folder when the player sorts them by core
@@ -381,8 +413,9 @@ below it is not a save.
 - **Shared memory cards:** PCSX2 (`Mcd001.ps2`), DuckStation (`shared_card_*.mcd`), Dolphin's GC
   memory cards, Flycast's shared `vmu_save_<port>.bin` (every port but A1) and `dc_nvmem.bin`,
   and RetroArch cores that share one card between games. A card holds many games.
-- **Dreamcast cards of games with no `serials`** (known limit): filed before the field existed,
-  not filed by `inbox`, or with a Redump serial that differs from the disc's header number.
+- **Dreamcast cards of games with no `serials`** (known limit): not filed by `inbox` since the
+  field existed (`warpzone catalog --dats` fills those it can identify exactly), or with a Redump
+  serial that differs from the disc's header number.
 - **Emulators that name saves by an ID the catalog does not record:** Dolphin (game ID and Wii
   title), PCSX2 and DuckStation states and per-game cards (serial), PPSSPP (disc ID), RPCS3 (PS3
   title ID), Azahar (3DS title ID), Cemu (Wii U title ID) and Xenia (title ID). They can be added
