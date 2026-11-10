@@ -395,7 +395,9 @@ find the config. Provisioning again with another config rewrites the script.
   The edit (`enable_event_scripts`, pure) changes only the
   `value` of the existing `<bool name="CustomEventScripts" .../>` element, or adds that one
   line after the last `<bool .../>` line with its indentation and line ending; every other
-  byte stays as it was, and the result must still parse as the same settings plus that one.
+  byte stays as it was, and the result must still parse as the same settings plus that one,
+  with `CustomEventScripts` read back as `true` (text inside a comment or a CDATA section is
+  not an element, so a file that only has it there is refused, not reported as enabled).
   The old file is copied first to
   `$XDG_STATE_HOME/warpzone/settings/backups/esde/es_settings/<YYYYMMDD-HHMMSS>-es_settings.xml`
   and the new one written atomically, as `apply` writes a config file. While ES-DE runs,

@@ -46,7 +46,9 @@ def _norm(path: str) -> str:
 def _parse(text: str) -> ET.Element:
     try:
         root = ET.fromstring(text.encode("utf-8"))
-    except ET.ParseError as exc:
+    except (ET.ParseError, LookupError, ValueError) as exc:
+        # The last two are what the parser raises for a declaration naming an encoding it
+        # cannot use (unknown, multi-byte or not text).
         raise CemuConfigError(f"not well-formed XML ({exc})") from exc
     if root.tag != ROOT:
         raise CemuConfigError(f"its root element is <{root.tag}>, not <{ROOT}>")

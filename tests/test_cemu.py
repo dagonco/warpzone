@@ -53,6 +53,12 @@ class ReadTests(unittest.TestCase):
         self.assertEqual(cemu.missing(done, MLC, GAMES), ())
         self.assertEqual(cemu.missing(done, MLC + "/", GAMES + "/"), ())
 
+    def test_an_unusable_declared_encoding_is_refused(self) -> None:
+        for enc in ("bogus", "shift_jis", "big5", "utf-16-le", "idna"):
+            text = f'<?xml version="1.0" encoding="{enc}"?><content/>'
+            with self.subTest(encoding=enc), self.assertRaises(cemu.CemuConfigError):
+                cemu.read(text)
+
     def test_a_file_it_does_not_understand_is_refused(self) -> None:
         for text in (
             "not xml",

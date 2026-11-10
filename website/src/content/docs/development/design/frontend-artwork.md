@@ -53,8 +53,14 @@ one more name in `ARTWORK_FORMATS`; planning, writing, the timer and the doctor 
 
 - ES-DE's gamelist is read from the synced `metadata` folder. ES-DE writes an
   `<alternativeEmulator>` element before `<gameList>` (two top-level elements), so a file that
-  does not parse as one document is read from its `<gameList>` block. Entries with a path that
-  is absolute or climbs out of the system folder (`..`) are dropped.
+  does not parse as one document is read from its `<gameList>` block (found with plain
+  searches: the first `<gameList` to the last `</gameList>`, so the cost is linear). Another
+  machine writes the file, so a bad one is an `ArtworkError` and never a traceback: that
+  includes an XML declaration that names an encoding the parser cannot use (`bogus`,
+  `shift_jis`, `utf-16-le`), and a file over `MAX_GAMELIST_BYTES` (32 MiB), which is refused
+  before parsing, and before reading where the reader has the path (`read_gamelist`). `frontend
+  refresh` reports such a scraped gamelist as a problem of its system and writes the others.
+  Entries with a path that is absolute or climbs out of the system folder (`..`) are dropped.
 - An entry is kept only when its ROM exists on the device
   (`<library>/roms/<hub system>/<path>`).
 - The cover is `<media>/<hub system>/<kind>/<path without extension>.png`, subfolders kept; the
@@ -68,7 +74,9 @@ always the ROM folder: dArkOS's `ppsspp` reads `psp`, `mame2010` reads `mame`, `
 `atarijaguar`. So `artwork.frontend_systems` reads the system list (the OS's, after the same
 rewrite as the override, which applies `[es_systems.rename]`: frontend folder -> hub folder,
 so hub `pokemini` is the system `pokemonmini`) and takes `<name>` and the folder of each
-entry. A system whose folder is below the hub's system folder (`pico-8` reads `pico8/carts/`)
+entry; the name becomes a folder below the gamelists folder, so an entry whose name is not a
+plain name (`artwork.is_plain`: letters, digits, `.`, `_` and `-`, not starting with a dot) is
+skipped. A system whose folder is below the hub's system folder (`pico-8` reads `pico8/carts/`)
 gets paths relative to it (the hub has no system list, so the library UI matches the same
 shift by trying shorter paths, see [Metadata and media](/warpzone/development/design/library-ui/#metadata-and-media)). When several hub folders carry one name (`snes` has two entries),
 the one the hub names alike wins and the rest are reported. One hub folder may feed several

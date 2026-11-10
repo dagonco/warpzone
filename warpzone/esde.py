@@ -198,4 +198,7 @@ def enable_event_scripts(text: str) -> str:
         expected.append(("bool", on))
     if sorted(parse_elements(new)) != sorted(expected):
         raise EsdeError("the edit would change something else in es_settings.xml")
+    if event_scripts_enabled(new) is not True:
+        # The text that was flipped is not an element: it sits in a comment or a CDATA section.
+        raise EsdeError(f"{SETTING} in es_settings.xml is not a real element (a comment?)")
     return new

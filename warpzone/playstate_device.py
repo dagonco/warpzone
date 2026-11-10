@@ -111,7 +111,7 @@ def _read_gamelists(
             continue
         try:
             stamp = safefile.stamp(path)
-            text = _read(path)
+            text = artwork.read_gamelist(path).decode("utf-8")
             entries = artwork.parse_gamelist(text)
             clock = _clock(path, now)
         except (OSError, UnicodeDecodeError, artwork.ArtworkError) as exc:

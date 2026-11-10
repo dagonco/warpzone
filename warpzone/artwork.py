@@ -21,7 +21,7 @@ from warpzone import frontend
 from warpzone.errors import WarpzoneError
 
 # A system folder that can be written as an ignore pattern as it is.
-_PLAIN = re.compile(r"^[A-Za-z0-9_-][A-Za-z0-9._-]*$")
+_PLAIN = re.compile(r"[A-Za-z0-9_-][A-Za-z0-9._-]*")
 # Characters XML 1.0 cannot hold.
 _ILLEGAL = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f\ud800-\udfff￾￿]")
 
@@ -84,7 +84,7 @@ class FrontendSystem:
 
 
 def is_plain(name: str) -> bool:
-    return bool(_PLAIN.match(name))
+    return bool(_PLAIN.fullmatch(name))
 
 
 def library_systems(roms: Path) -> list[str]:
@@ -111,23 +111,76 @@ def metadata_ignores(systems: Collection[str]) -> tuple[str, ...]:
 # ------------------------------------------------------------------ reading
 
 
-_GAMELIST_BLOCK = re.compile(rb"<gameList(?:\s[^>]*)?(?:/>|>.*</gameList\s*>)", re.DOTALL)
+# The largest gamelist read. Parsing takes tens of times the file's size in memory (deep
+# nesting is the worst case), and a console can write any file into the shared folder.
+MAX_GAMELIST_BYTES = 32 * 1024 * 1024
+
+# What the XML parser raises, besides `ParseError`, for a declaration that names an encoding
+# it cannot use: unknown (`LookupError`), multi-byte or not text (`ValueError`, which is also
+# the base of `UnicodeError`).
+_UNUSABLE = (ET.ParseError, LookupError, ValueError)
+
+
+def _too_large(size: int) -> ArtworkError:
+    return ArtworkError(f"too large ({size} bytes, the limit is {MAX_GAMELIST_BYTES})")
+
+
+def read_gamelist(path: Path) -> bytes:
+    """The bytes of a gamelist file; `ArtworkError` when it is over the size limit.
+
+    The size is read first, so a file that is too large is never loaded.
+    """
+    size = path.stat().st_size
+    if size > MAX_GAMELIST_BYTES:
+        raise _too_large(size)
+    return path.read_bytes()
+
+
+def _block(raw: bytes) -> bytes | None:
+    """The `<gameList>` element of `raw` on its own, or None when there is not one.
+
+    From the first `<gameList` to the last `</gameList>`, or to the `/>` of an empty one. Found
+    with plain searches, so the cost is linear however the file is made.
+    """
+    start = 0
+    while True:
+        start = raw.find(b"<gameList", start)
+        if start < 0:
+            return None
+        after = raw[start + 9 : start + 10]
+        if after and (after in b">/" or after.isspace()):
+            break
+        start += 9  # `<gameListX`: another element
+    head = raw.find(b">", start)
+    if head < 0:
+        return None
+    if raw[head - 1 : head] == b"/":
+        return raw[start : head + 1]
+    end = raw.rfind(b"</gameList")
+    close = raw.find(b">", end) if end > head else -1
+    if close >= 0 and not raw[end + 10 : close].strip():
+        return raw[start : close + 1]
+    return None
 
 
 def _root(data: str | bytes) -> ET.Element:
     raw = data.encode("utf-8") if isinstance(data, str) else data
+    if len(raw) > MAX_GAMELIST_BYTES:
+        raise _too_large(len(raw))
     try:
         return ET.fromstring(raw)
     except ET.ParseError as exc:
         # ES-DE writes an `<alternativeEmulator>` element ahead of `<gameList>`, which makes
         # the file two documents. Read the `<gameList>` on its own.
-        block = _GAMELIST_BLOCK.search(raw)
+        block = _block(raw)
         if block is None:
             raise ArtworkError(f"not valid XML ({exc})") from exc
         try:
-            return ET.fromstring(block.group(0))
-        except ET.ParseError as inner:
+            return ET.fromstring(block)
+        except _UNUSABLE as inner:
             raise ArtworkError(f"not valid XML ({inner})") from inner
+    except _UNUSABLE as exc:
+        raise ArtworkError(f"not valid XML ({exc})") from exc
 
 
 def parse_gamelist(data: str | bytes) -> list[Entry]:
@@ -170,7 +223,8 @@ def frontend_systems(
     for node in root.iter("system"):
         name = (node.findtext("name") or "").strip()
         path = (node.findtext("path") or "").strip()
-        if not name or not path.startswith(target):
+        # The name becomes a folder below the gamelists folder: only a plain name will do.
+        if not is_plain(name) or not path.startswith(target):
             continue
         parts = [p for p in path[len(target) :].split("/") if p]
         if not parts:

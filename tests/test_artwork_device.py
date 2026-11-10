@@ -109,6 +109,34 @@ class GamelistTests(Art, unittest.TestCase):
         self.assertFalse(self.out("pokemini").exists())
         self.assertFalse(self.out("nes").exists())  # no games, no scrape
 
+    def test_a_scraped_gamelist_with_an_unusable_encoding_spares_the_other_systems(self) -> None:
+        bad = self.meta / "gamelists" / "pokemini" / "gamelist.xml"
+        bad.write_bytes(b'<?xml version="1.0" encoding="shift_jis"?><gameList/>')
+        rep, _ = self.ensure()
+        self.assertEqual(len(rep.warnings), 1)
+        self.assertIn(str(bad), rep.warnings[0])
+        self.assertIn("left as they are", rep.warnings[0])
+        self.assertTrue(self.out("gba").is_file())
+        self.assertFalse(self.out("pokemonmini").exists())
+
+    def test_an_oversized_scraped_gamelist_spares_the_other_systems(self) -> None:
+        self.scraped("pokemini", MINI + "<!--" + "x" * 5000 + "-->")
+        with mock.patch.object(artwork, "MAX_GAMELIST_BYTES", 3000):
+            rep, _ = self.ensure()
+        self.assertEqual(len(rep.warnings), 1)
+        self.assertIn("too large", rep.warnings[0])
+        self.assertTrue(self.out("gba").is_file())
+        self.assertFalse(self.out("pokemonmini").exists())
+
+    def test_a_system_name_that_climbs_out_of_the_folder_writes_nothing_outside(self) -> None:
+        escape = "../../../outside"
+        self.system_list.write_text(
+            SYSTEM_LIST.replace("<name>pokemonmini</name>", f"<name>{escape}</name>")
+        )
+        self.ensure()
+        self.assertFalse((self.home.parent / "outside").exists())
+        self.assertTrue(self.out("gba").is_file())
+
     def test_the_content_is_the_converted_gamelist(self) -> None:
         self.ensure()
         entries = artwork.parse_gamelist(self.out("gba").read_bytes())

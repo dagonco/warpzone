@@ -252,6 +252,18 @@ class FrontendStateTests(Shared):
         self.assertEqual(len(self.warnings), 1)
         self.assertIn("ES-DE started", self.warnings[0])
 
+    def test_a_gamelist_over_the_size_limit_is_left_alone_without_being_read(self) -> None:
+        with (
+            mock.patch.object(artwork, "MAX_GAMELIST_BYTES", len(GAMELIST) - 1),
+            mock.patch.object(Path, "read_bytes", side_effect=AssertionError("read")),
+        ):
+            lists, seen = playstate_device._read_gamelists(
+                self.gamelist.parent.parent, NOW, None, self.warnings.append
+            )
+        self.assertEqual((lists, seen), ([], {}))
+        self.assertEqual(len(self.warnings), 1)
+        self.assertIn("too large", self.warnings[0])
+
     def test_a_gamelist_edited_during_the_backup_is_left_alone(self) -> None:
         self.peer("ark", "ark", {ALPHA: Record(plays=3)})
         real = settings_state.backup
