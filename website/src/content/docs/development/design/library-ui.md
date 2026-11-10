@@ -12,8 +12,10 @@ it).
 
 Underneath, the UI does one thing: it rewrites `library/patterns-<device>.stignore`. It never
 deletes, moves or renames anything in the library. What it writes is limited to the device
-whitelists, the catalog index (`catalog/`) and the backups of the whitelists it replaced. It can also
-put one of those backups back (see [History and restore](#history-and-restore)).
+whitelists, the catalog index (`catalog/`), the backups of the whitelists it replaced and the
+[play queue](/warpzone/development/design/play-queue/) (`catalog/queue.json`, with its own
+backups). It can also put one of those backups back (see
+[History and restore](#history-and-restore)).
 Removing a game from a console reaches the console through the normal path: Syncthing delivers
 the new whitelist, the console's rescan applies it, and the console's prune timer deletes the
 leftovers (see [Removal reaches the console](#removal-reaches-the-console)).
@@ -804,6 +806,8 @@ outside the home goes through the user's own reverse proxy with TLS, which is ou
 | `GET /api/v1/devices/{device}/backups/{name}` | one backup: its diff against the current file, the paths and games a restore turns on and off |
 | `POST /api/v1/devices/{device}/restore` | writes a backup over the device's whitelist |
 | `POST /api/v1/changes` | turns games and systems on and off |
+| `GET /api/v1/queue?history=N` | the [play queue](/warpzone/development/design/play-queue/#get-apiv1queue), resolved against the catalog, the whitelists, the play totals and the RA progress |
+| `POST /api/v1/queue` | applies a list of [queue operations](/warpzone/development/design/play-queue/#post-apiv1queue), with the whitelist changes they imply, in one request |
 | `POST /api/v1/catalog/refresh` | starts a `catalog` run now (`202`; `409` while one runs) |
 
 `GET /api/v1/devices`:
@@ -1162,7 +1166,8 @@ the answer is `500` with `write-failed` (or `stale`, when the file changed durin
 and the per-device results of the files already written, each file being whole either way.
 
 Errors are `{"error": {"code": "...", "message": "...", "device": "...", "game": "..."}}` (the
-last two when they apply):
+last two when they apply; an error about the queue file carries `"queue": true` instead of
+`device`, and the queue's own codes are in [Errors](/warpzone/development/design/play-queue/#errors)):
 
 | Status | `code` | When |
 |---|---|---|
@@ -1296,12 +1301,14 @@ network:
   cache's encoding, `game_view`, `summary_view`) and the parsers of `ra.py`; `whitelist.escape`, `unescape`,
   `parse`, `parse_hand`, `render`, `normalize`, `apply`, `decide`, `decide_lines`, `effect`,
   `unsupported` and the migration's classification; `whitelist_history` (backup names, the
-  comparison of two files, the diff, what a restore refuses and warns about); `library_api.plan_changes` and every
+  comparison of two files, the diff, what a restore refuses and warns about); `queue` (the play queue's schema,
+  inferred states and `plan`); `library_api.plan_changes` and every
   response builder (the play statistics included: `game_play`, `attach_play`, `recent_response`);
   `saves_index.build_index`, `match_game` and `saves_response`; `progress.state`; `prune.guard`;
   `diskstatus` (`measure`, `should_write`, `render`, `parse`, `stale`, `api_disk`).
 - **I/O:** `catalog_store` (the walk, hashing, RAHasher and the RA download through `ra.py`, the
   guarded writes), `diskstatus_io` (the disk report's write on a console and read on the hub),
+  `queue_store` (the queue file: reading with a stamp, backups, the guarded write),
   `whitelist_store` (reading with a stamp, backups, the guarded write, the hub
   scan, the migration's walk, the restore), `saves_index.scan` and `SavesCache` (the listing of `saves/` and its
   60-second cache), `serve` (sockets, sessions, the lock, the background runs, the
