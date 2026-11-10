@@ -45,7 +45,47 @@ class ParseTests(unittest.TestCase):
     def test_console_ids_cover_what_inbox_places(self) -> None:
         from warpzone.dat import SYSTEMS
 
-        self.assertEqual(set(ra.CONSOLE_IDS), set(SYSTEMS.values()))
+        self.assertLessEqual(set(SYSTEMS.values()), set(ra.CONSOLE_IDS))
+
+    def test_console_ids_pin_known_systems(self) -> None:
+        ids = ra.CONSOLE_IDS
+        known = {
+            "genesis": 1,
+            "n64": 2,
+            "snes": 3,
+            "nes": 7,
+            "psx": 12,
+            "nds": 18,
+            "ps2": 21,
+            "pokemini": 24,
+            "atari2600": 25,
+            "arcade": 27,
+            "dreamcast": 40,
+            "psp": 41,
+            "n3ds": 62,
+            "fds": 81,
+            "atarilynx": 13,
+            "atari7800": 51,
+            "wonderswancolor": 53,
+        }
+        for system, console in known.items():
+            self.assertEqual(ids.get(system), console, system)
+
+    def test_console_ids_alias_folders_share_the_console(self) -> None:
+        ids = ra.CONSOLE_IDS
+        self.assertEqual(ids["genesis"], ids["megadrive"])
+        self.assertEqual(ids["pcengine"], ids["tg16"])
+        self.assertEqual(ids["segacd"], ids["megacd"])
+        self.assertEqual(ids["ngp"], ids["ngpc"])
+        self.assertEqual({ids[s] for s in ("arcade", "mame", "fbneo", "neogeo")}, {27})
+
+    def test_console_ids_are_es_de_folder_names_and_rcheevos_ids(self) -> None:
+        for system, console in ra.CONSOLE_IDS.items():
+            self.assertRegex(system, r"^[a-z0-9][a-z0-9-]*$")
+            self.assertTrue(1 <= console <= 82, system)  # rcheevos console ids, without hubs
+        # Consoles RA has no sets for, or RAHasher cannot hash, stay out.
+        for system in ("wii", "wiiu", "xbox", "ps3", "switch", "ps4", "psvita", "atari5200"):
+            self.assertNotIn(system, ra.CONSOLE_IDS)
 
 
 class FetchTests(unittest.TestCase):
