@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Troubleshooting guide
+    url: https://dagonco.github.io/warpzone/troubleshooting/
+    about: Symptoms, causes and fixes. Run `warpzone doctor` on the machine with the problem first.
+  - name: Security issue
+    url: https://github.com/dagonco/warpzone/blob/main/SECURITY.md
+    about: How to report a vulnerability privately. Never in a public issue.

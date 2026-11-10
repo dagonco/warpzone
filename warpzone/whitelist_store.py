@@ -95,7 +95,9 @@ def _sha(data: bytes) -> str:
 
 
 def backup(root: Path, device: str, data: bytes, now: datetime) -> Path:
-    """Copy `data` to `catalog/whitelists/<device>/<UTC time>.stignore`; keep the 50 newest."""
+    """Copy `data` to `catalog/whitelists/<device>/<UTC time>.stignore`; keep the 50 newest.
+
+    The name is when the whitelist was written: `progress.written_at` reads it."""
     directory = backups_dir(root, device)
     target = directory / (now.astimezone(UTC).strftime("%Y%m%dT%H%M%S.%fZ") + ".stignore")
     safefile.write_file(target, data, 0o644)
@@ -131,7 +133,8 @@ def write(
 
     The atomic write compares the file with the snapshot's stamp once more right before the
     rename. A missing file (`"absent"`) is created, and a file that appeared meanwhile is not
-    overwritten.
+    overwritten. A missing file leaves an empty backup: the backup's name is what records when
+    the whitelist was written (`progress.written_at`), so a new whitelist is `pending` too.
     """
     if snapshot.stamp is None:
         _require_library(snapshot.path)
@@ -140,10 +143,9 @@ def write(
 
     def save() -> None:
         nonlocal failing
-        if snapshot.data is not None:
-            failing = backups_dir(root, device)
-            saved.append(backup(root, device, snapshot.data, now or utc_now()))
-            failing = snapshot.path
+        failing = backups_dir(root, device)
+        saved.append(backup(root, device, snapshot.data or b"", now or utc_now()))
+        failing = snapshot.path
 
     try:
         edit = safefile.guarded_edit(
@@ -177,7 +179,8 @@ def replace(
     now: datetime | None = None,
     client: Client | None = None,
 ) -> list[str]:
-    """The UI's write: read again, compare the `etag`, build the new file, back up, write, scan.
+    """The UI's write: read again, compare the `etag`, build the new file, back up, write, and
+    scan when a client is given (the UI scans after releasing its lock, so it passes none).
 
     `build` gets the snapshot just read and returns the bytes to write (it may raise, and then
     nothing is written). A missing file is created only inside an existing `library/`
