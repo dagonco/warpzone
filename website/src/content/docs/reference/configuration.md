@@ -60,9 +60,9 @@ Folder groups for `folders`:
 | Group | What the device gets | Direction |
 |---|---|---|
 | `library` | ROMs, BIOS and extras the device's whitelist allows | receive-only |
-| `songs` | Clone Hero and YARG songs the device's whitelist allows | receive-only |
+| `songs` | Clone Hero and YARG songs the device's whitelist allows, and YARG's own data (`yarg-data`, two-way) | receive-only (two-way for YARG's data) |
 | `tools` | Scripts and documents | receive-only |
-| `saves` | Every `[saves.*]` folder of the profile | two-way |
+| `saves` | Every `[saves.*]` folder of the profile, except those whose entry names another group (YARG's data comes with `songs`) | two-way |
 | `frontend` | ES-DE media, gamelists and collections (or the scraped artwork, for a profile with `[artwork]`) | two-way (receive-only artwork) |
 | `bios` | Keys and firmware delivered into each emulator's own folder (the profile's `[bios.*]`) | receive-only |
 | `settings` | The emulator settings layers | two-way |

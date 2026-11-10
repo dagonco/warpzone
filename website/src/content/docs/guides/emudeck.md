@@ -12,6 +12,8 @@ RetroArch, Dolphin, PrimeHack (GC, Wii, states), DuckStation, PCSX2, melonDS, PP
 
 YARG syncs `custom/` in lowercase, as YARG on Linux writes it, and ignores the `*.bak` files it leaves in `profiles/`. If the hub holds the content under `saves/yarg/data/Custom`, rename it to `custom`.
 
+YARG's data comes with the `songs` group, not with `saves`: a console that lists `saves` but not `songs` gets nothing of YARG. If you stop listing `songs` on a console that had YARG, the hub keeps sharing `wz-save-yarg-data` with it until you remove the console from that folder in the hub's Syncthing (warpzone never removes a device from a folder); no file is deleted on either side.
+
 ## Syncthing on the console
 
 On SteamOS the Syncthing that warpzone configures is usually the SyncThingy flatpak (`com.github.zocker_160.SyncThingy`). To keep it running in Game Mode, start it from a systemd user unit, `~/.config/systemd/user/syncthing.service`:

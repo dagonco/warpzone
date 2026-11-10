@@ -73,7 +73,12 @@ User profiles are synced so that a save keeps its owner on every console: a
 Switch save belongs to a profile ID, and the same ID must exist everywhere.
 
 The save key `<emu>-<kind>` maps to folder ID `wz-save-<emu>-<kind>` and hub
-path `saves/<emu>/<kind>`. A save folder with an `ignore` list gets those
+path `saves/<emu>/<kind>`. The optional `group` key of a `[saves.*]` entry (default `saves`,
+any folder group of the device config) says which group brings the folder: a device gets it
+only if it lists that group, and listing `saves` does not bring a folder of another group.
+`yarg-data` has `group = "songs"`, so a console that plays no songs receives nothing of YARG
+(and the hub does not show a folder that stays at 0% because YARG is not installed there).
+The folder ID, the hub path and the device path do not depend on the group. A save folder with an `ignore` list gets those
 patterns (after `#include patterns-common.stignore`).
 
 Save paths that do not exist on the device yet (the emulator was never opened,
