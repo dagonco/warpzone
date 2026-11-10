@@ -337,6 +337,12 @@ def _award(line: ra.UserGame | None) -> dict[str, str] | None:
     return {"kind": line.award, "date": line.award_date}
 
 
+def award_of(data: RaData, user: str | None, game_id: int) -> dict[str, str] | None:
+    """The user's award on a game, `{"kind", "date"}`, from the cached progress; None without."""
+    summary = _progress(data, user)
+    return _award(summary.games.get(game_id)) if summary else None
+
+
 def game_view(game: ra.RaGame, data: RaData, user: str | None) -> dict[str, Any]:
     """`achievements` of `GET /api/v1/games/{id}`, for a game RA has achievements for."""
     cached = data.games.get(game.id)

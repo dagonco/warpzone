@@ -20,7 +20,7 @@ title: "Hub, folders and ignores"
 ├── songs/                   hub: send-only → opted-in devices, per-device whitelist
 ├── tools/                   hub: send-only → devices (scripts, docs)
 ├── settings/                hub: send-receive ⇄ devices: send-receive, emulator settings layers
-├── catalog/                 never synced; the catalog index and whitelist backups (see Library UI)
+├── catalog/                 never synced; the catalog index, whitelist backups and the play queue (see Library UI)
 └── inbox/                   never synced; drop zone for new content (SMB)
 ```
 

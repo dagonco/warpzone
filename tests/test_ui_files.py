@@ -116,7 +116,9 @@ class UiFilesTest(unittest.TestCase):
     def test_the_ui_uses_every_endpoint_it_needs(self):
         # /healthz is for the container's health check; the media and badge routes are <img> and
         # <video> URLs, which the browser loads.
-        needed = {e for e in design_endpoints() if e[1] != "/healthz"}
+        # The play queue's routes are served before its page exists: drop them from this list
+        # when api.js calls them.
+        needed = {e for e in design_endpoints() if e[1] not in ("/healthz", "/api/v1/queue")}
         used = js_requests() | {
             ("GET", normalize(p))
             for p in re.findall(
