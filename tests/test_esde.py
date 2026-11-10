@@ -194,6 +194,15 @@ class EnableTests(unittest.TestCase):
         with self.assertRaises(esde.EsdeError):
             esde.enable_event_scripts('<bool name="CustomEventScripts" />\n')
 
+    def test_a_setting_only_inside_a_comment_or_cdata_is_not_enabled(self) -> None:
+        hidden = '<bool name="CustomEventScripts" value="false" />'
+        for text in (
+            f'<?xml version="1.0"?>\n<!-- {hidden} -->\n<int name="MaxVRAM" value="256" />\n',
+            f'<?xml version="1.0"?>\n<string name="a"><![CDATA[{hidden}]]></string>\n',
+        ):
+            with self.subTest(text=text), self.assertRaises(esde.EsdeError):
+                esde.enable_event_scripts(text)
+
     def test_the_processes_are_the_documented_names(self) -> None:
         self.assertEqual(esde.ESDE_PROCESSES, ("es-de", "ES-DE.AppImage"))
 

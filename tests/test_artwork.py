@@ -1,8 +1,11 @@
 """Scraped artwork for a frontend that is not ES-DE: profile data, folder specs, converter."""
 
 import dataclasses
+import tempfile
+import time
 import unittest
 from pathlib import Path
+from unittest import mock
 from xml.etree import ElementTree as ET
 
 from support import config_data, make_config
@@ -241,6 +244,15 @@ class SystemMapTests(unittest.TestCase):
         pico = next(s for s in self.systems() if s.name == "pico-8")
         self.assertEqual((pico.hub, pico.base), ("pico8", "carts/"))
 
+    def test_a_name_that_is_not_a_plain_folder_name_is_skipped(self) -> None:
+        names = ("../../../x", "a/b", "..", ".hidden", "a b")
+        entries = "".join(
+            f"<system><name>{n}</name><path>/roms/gba/</path></system>" for n in names
+        )
+        text = f"<systemList>{entries}<system><name>ok</name><path>/roms/nes/</path></system>"
+        (system,) = artwork.frontend_systems(text + "</systemList>", "/roms/", TARGET)
+        self.assertEqual((system.name, system.hub), ("ok", "nes"))
+
     def test_entries_outside_the_prefix_are_not_systems(self) -> None:
         self.assertNotIn("retroarch", {s.name for s in self.systems()})
 
@@ -266,6 +278,91 @@ class SystemMapTests(unittest.TestCase):
         chosen, dropped = artwork.assign(systems, {"x"})
         self.assertEqual([s.name for s in chosen["x"]], ["a", "b"])
         self.assertEqual(dropped, [])
+
+
+class HostileGamelistTests(unittest.TestCase):
+    """A gamelist another machine wrote must fail as a gamelist, never as a traceback."""
+
+    ENCODINGS = ("bogus", "shift_jis", "big5", "utf-16-le", "idna", "rot13", "utf-7")
+
+    def test_an_unusable_declared_encoding_is_an_artwork_error(self) -> None:
+        for enc in self.ENCODINGS:
+            data = f'<?xml version="1.0" encoding="{enc}"?><gameList/>'
+            for form in (data, data.encode()):
+                with (
+                    self.subTest(encoding=enc, form=type(form).__name__),
+                    self.assertRaises(artwork.ArtworkError),
+                ):
+                    artwork.parse_gamelist(form)
+
+    def test_the_block_fallback_does_not_hide_an_unusable_encoding(self) -> None:
+        text = (
+            '<?xml version="1.0" encoding="bogus"?><alternativeEmulator/>'
+            "<gameList><game><path>./A.zip</path></game></gameList>"
+        )
+        with self.assertRaises(artwork.ArtworkError):
+            artwork.parse_gamelist(text.encode())
+
+    def test_the_fallback_finds_the_block_after_other_elements(self) -> None:
+        game = "<game><path>./A.zip</path><name>A</name></game>"
+        for text in (
+            f"<alternativeEmulator><label>x</label></alternativeEmulator><gameList>{game}</gameList>",
+            f"<a/><b>text</b><gameList version='1'>{game}</gameList  >\n",
+            f"<a/><gameList>{game}</gameList>",
+        ):
+            with self.subTest(text=text):
+                (entry,) = artwork.parse_gamelist(text)
+                self.assertEqual(entry.path, "./A.zip")
+        self.assertEqual(artwork.parse_gamelist("<a/><gameList/>"), [])
+        self.assertEqual(artwork.parse_gamelist("<a/><gameList />"), [])
+
+    def test_the_fallback_does_not_take_a_longer_tag_for_the_block(self) -> None:
+        with self.assertRaises(artwork.ArtworkError):
+            artwork.parse_gamelist("<a/><gameListX><game/></gameListX>")
+        with self.assertRaises(artwork.ArtworkError):
+            artwork.parse_gamelist("<a/><gameList><game>")
+
+    def test_many_gamelist_starts_are_read_in_linear_time(self) -> None:
+        data = b"<gameList>" * 40000 + b"<oops"
+        started = time.monotonic()
+        with self.assertRaises(artwork.ArtworkError):
+            artwork.parse_gamelist(data)
+        self.assertLess(time.monotonic() - started, 2.0)
+
+    def test_a_gamelist_over_the_limit_is_refused_before_parsing(self) -> None:
+        text = "<gameList><game><path>./A.zip</path></game></gameList>"
+        with (
+            mock.patch.object(artwork, "MAX_GAMELIST_BYTES", len(text) - 1),
+            mock.patch.object(artwork.ET, "fromstring") as parse,
+        ):
+            for form in (text, text.encode()):
+                with self.assertRaisesRegex(artwork.ArtworkError, "too large"):
+                    artwork.parse_gamelist(form)
+            parse.assert_not_called()
+        with mock.patch.object(artwork, "MAX_GAMELIST_BYTES", len(text)):
+            self.assertEqual(len(artwork.parse_gamelist(text)), 1)
+
+    def test_the_limit_is_32_mib(self) -> None:
+        self.assertEqual(artwork.MAX_GAMELIST_BYTES, 32 * 1024 * 1024)
+
+    def test_a_file_over_the_limit_is_refused_without_reading_it(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "gamelist.xml"
+            path.write_text("<gameList/>" + " " * 100)
+            with (
+                mock.patch.object(artwork, "MAX_GAMELIST_BYTES", 50),
+                mock.patch.object(Path, "read_bytes") as read,
+            ):
+                with self.assertRaisesRegex(artwork.ArtworkError, "too large"):
+                    artwork.read_gamelist(path)
+                read.assert_not_called()
+            self.assertEqual(artwork.read_gamelist(path), path.read_bytes())
+
+    def test_a_name_with_a_final_newline_is_not_plain(self) -> None:
+        self.assertTrue(artwork.is_plain("gba"))
+        for name in ("gba\n", "gba\r\n", "g\nba", "", ".hidden", "a/b", "..", "a b"):
+            with self.subTest(name=name):
+                self.assertFalse(artwork.is_plain(name))
 
 
 class BuildTests(unittest.TestCase):
