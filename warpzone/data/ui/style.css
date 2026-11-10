@@ -692,15 +692,15 @@ dialog.modal[open] { animation: enter .2s ease-out both; }
 .macts { display: flex; justify-content: flex-end; gap: 10px; padding: 8px 16px 16px; }
 dialog.history { width: min(680px, calc(100vw - 24px)); }
 .hist { display: grid; gap: 6px; max-height: 32dvh; margin: 0 0 12px; padding: 0; overflow: auto; list-style: none; }
-.hrow {
+.hist-row {
   display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; width: 100%; padding: 8px 10px; text-align: left;
   background: #000; border: 2px solid var(--line); color: var(--text); font: 600 12px/1.4 var(--mono); cursor: pointer;
 }
-.hrow:hover, .hrow:focus-visible { border-color: var(--c); }
-.hrow.on { border-color: var(--c); box-shadow: 3px 3px 0 #000; }
-.hrow small { color: var(--mute); text-align: right; }
-.hrow span { grid-column: 1 / -1; color: var(--dim); }
-.hrow[disabled] { opacity: .5; cursor: not-allowed; }
+.hist-row:hover, .hist-row:focus-visible { border-color: var(--c); }
+.hist-row.on { border-color: var(--c); box-shadow: 3px 3px 0 #000; }
+.hist-row small { color: var(--mute); text-align: right; }
+.hist-row span { grid-column: 1 / -1; color: var(--dim); }
+.hist-row[disabled] { opacity: .5; cursor: not-allowed; }
 .hdetail { margin-top: 4px; }
 .plist h3 { margin: 8px 0 4px; font: 800 11px var(--mono); letter-spacing: .1em; text-transform: uppercase; }
 .plist.in h3 { color: var(--amber); }

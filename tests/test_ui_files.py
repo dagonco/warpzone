@@ -33,6 +33,29 @@ def normalize(path: str) -> str:
     return path.split("?", 1)[0]
 
 
+def top_level_rules(css: str) -> list[tuple[str, str]]:
+    """(selector, body) of each rule outside at-rules such as `@media`, comments removed."""
+    css = re.sub(r"/\*.*?\*/", "", css, flags=re.S)
+    rules: list[tuple[str, str]] = []
+    depth, outside, inside, selector = 0, "", "", ""
+    for ch in css:
+        if ch == "{":
+            if depth == 0:
+                selector, inside = outside.strip(), ""
+            depth += 1
+            outside = ""
+        elif ch == "}":
+            depth -= 1
+            if depth == 0 and not selector.startswith("@"):
+                rules.append((selector, inside))
+            outside = ""
+        elif depth == 0:
+            outside += ch
+        else:
+            inside += ch
+    return rules
+
+
 def design_endpoints() -> set[tuple[str, str]]:
     """(method, path) of every row of the design's endpoint table."""
     text = DESIGN.read_text(encoding="utf-8")
@@ -180,6 +203,21 @@ class UiFilesTest(unittest.TestCase):
 
     def test_the_placeholder_is_used_as_a_mask(self):
         self.assertIn("placeholder.svg", read("style.css"))
+
+    def test_a_class_has_one_layout(self):
+        # Two parts of the page once used the same class name with different layouts; the later
+        # rule silently rewrote the earlier one (the home rows became a two-column grid).
+        displays: dict[str, set[str]] = {}
+        for selector, body in top_level_rules(read("style.css")):
+            found = re.search(r"(?:^|;)\s*display\s*:\s*([^;]+)", body)
+            if not found:
+                continue
+            for one in selector.split(","):
+                one = one.strip()
+                if re.fullmatch(r"[a-z]*\.[\w-]+", one):
+                    displays.setdefault(one, set()).add(found.group(1).strip())
+        clashes = {name: sorted(values) for name, values in displays.items() if len(values) > 1}
+        self.assertEqual(clashes, {}, "one class name with two layouts; rename one of them")
 
     def test_package_data_includes_the_ui(self):
         pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
