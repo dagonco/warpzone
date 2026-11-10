@@ -167,7 +167,7 @@
   // ---- titles --------------------------------------------------------------------------------
 
   const REGION_CODES = {
-    USA: 'USA', Europe: 'EUR', Japan: 'JPN', World: 'WLD', Spain: 'ESP', France: 'FRA', Germany: 'GER',
+    USA: 'USA', Europe: 'EUR', Japan: 'JPN', World: 'WORLD', Spain: 'ESP', France: 'FRA', Germany: 'GER',
     Italy: 'ITA', Australia: 'AUS', Brazil: 'BRA', Korea: 'KOR', China: 'CHN', Asia: 'ASA',
     Canada: 'CAN', Netherlands: 'NED', Sweden: 'SWE', Russia: 'RUS', Taiwan: 'TWN',
   };

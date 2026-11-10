@@ -602,8 +602,18 @@ button.notch:disabled { cursor: not-allowed; opacity: .5; }
 .rating .bars i { background: #1c1738; }
 .rating .bars i.on { background: var(--amber); box-shadow: 0 0 5px var(--amber); }
 .rating b { font: 800 13px var(--mono); }
-.parts-list { display: grid; gap: 6px; }
-.parts-list li { min-width: 0; overflow-wrap: anywhere; font-size: 12px; }
+.parts-list { display: grid; gap: 10px; }
+.parts-list .part { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 16px; align-items: end; font-size: 12px; }
+.parts-list .part.has-role { grid-template-columns: 64px minmax(0, 1fr) auto; }
+.part-role { align-self: start; padding-top: 1px; font: 700 10px/1.6 var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--mute); }
+.part-path { display: grid; min-width: 0; }
+.part-dir { font: 500 10px/1.5 var(--mono); color: var(--mute); overflow-wrap: anywhere; }
+.part-name { overflow-wrap: anywhere; }
+.part-size { white-space: nowrap; text-align: right; font-variant-numeric: tabular-nums; color: var(--mute); }
+@media (max-width: 560px) {
+  .parts-list .part.has-role { grid-template-columns: minmax(0, 1fr) auto; }
+  .part.has-role .part-role { grid-column: 1 / -1; padding-top: 0; }
+}
 .vlist { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 260px), 1fr)); gap: 8px; }
 .vitem { display: flex; align-items: center; gap: 12px; min-width: 0; padding: 6px; background: #000; border: 2px solid var(--line); }
 .vitem:hover { border-color: var(--c); }

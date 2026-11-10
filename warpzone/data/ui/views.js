@@ -888,6 +888,48 @@
 
   // What the hub holds of the game's saves. Nothing when it found none: that says "not found",
   // not "the game has no save".
+  // What one part of a game is, from where it lives: the base game, an update, a DLC, a disc
+  // of a set, a playlist or cue sheet. A game of one part needs no label.
+  function partRole(path) {
+    const lower = path.toLowerCase();
+    if (/^extras\/[^/]+\/updates\//.test(lower) || /-update\/?$/.test(lower)) return 'Update';
+    if (/^extras\/[^/]+\/dlc\//.test(lower) || /^roms\/ps4\/dlc\//.test(lower)) return 'DLC';
+    if (/^roms\/psvita\/patch\//.test(lower)) return 'Update';
+    if (/^roms\/psvita\/license\//.test(lower)) return 'License';
+    if (lower.endsWith('.m3u')) return 'Playlist';
+    if (lower.endsWith('.cue') || lower.endsWith('.gdi')) return 'Index';
+    const disc = /\((?:disc|disk|cd)\s*(\d+)/i.exec(path);
+    if (disc) return 'Disc ' + disc[1];
+    const track = /\(track\s*(\d+)\)/i.exec(path);
+    if (track) return 'Track ' + track[1];
+    return 'Game';
+  }
+
+  // The Files panel: one row per part, its folder small above its name, its size in a column of
+  // its own, and the total in the heading.
+  function filesPanel(parts) {
+    if (!parts.length) return null;
+    const many = parts.length > 1;
+    const total = parts.reduce((n, p) => n + (p.size || 0), 0);
+    const rows = parts.map((p) => {
+      const role = many ? partRole(p.path) : '';
+      const folderish = role === 'Update' || role === 'DLC';
+      const clean = p.path.replace(/\/+$/, '');
+      const cut = clean.lastIndexOf('/');
+      const dir = cut >= 0 ? clean.slice(0, cut + 1) : '';
+      const name = (cut >= 0 ? clean.slice(cut + 1) : clean) + (folderish ? '/' : '');
+      return h('li', { class: 'part' + (many ? ' has-role' : '') },
+        many ? h('span', { class: 'part-role' }, role) : null,
+        h('span', { class: 'part-path', title: p.path },
+          dir ? h('span', { class: 'part-dir' }, dir) : null,
+          h('code', { class: 'part-name' }, name)),
+        h('span', { class: 'part-size' }, formatBytes(p.size)));
+    });
+    const head = plural(parts.length, 'part') + (many ? ' · ' + formatBytes(total) : '');
+    return h('section', { class: 'panel', 'aria-label': 'Files' }, h('h2', null, h('i'), 'Files', h('span', null, head)),
+      h('ul', { class: 'parts-list pbody' }, rows));
+  }
+
   function savesPanel(d) {
     const sv = d.saves;
     if (!sv || (!sv.data && !(sv.states > 0))) return null;
@@ -1021,8 +1063,7 @@
           h('section', { class: 'panel brief', 'aria-label': 'Briefing' }, h('h2', null, h('i'), 'Briefing', h('span', null, systemCode(sys))), h('div', { class: 'pbody' }, desc)),
           facts.length ? h('section', { class: 'panel', 'aria-label': 'Game data' }, h('h2', null, h('i'), 'Game data'), h('dl', { class: 'facts pbody' }, facts)) : null,
           savesPanel(d),
-          parts.length ? h('section', { class: 'panel', 'aria-label': 'Files' }, h('h2', null, h('i'), 'Files', h('span', null, plural(parts.length, 'part'))),
-            h('ul', { class: 'parts-list pbody' }, parts.map((p) => h('li', null, h('code', { title: p.path }, p.path), ' ', h('span', { class: 'mute' }, formatBytes(p.size)))))) : null),
+          filesPanel(parts)),
         ...[achievementsPanel(d, wall, (focus) => { paint(false); restoreFocus(focus); })].filter(Boolean),
         ...(others.length ? [h('section', { class: 'panel', 'aria-label': 'Other versions' }, h('h2', null, h('i'), 'Other versions', h('span', null, String(others.length))),
           h('div', { class: 'vlist pbody' }, others.map((v) => {
