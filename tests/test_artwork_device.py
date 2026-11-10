@@ -15,7 +15,7 @@ from test_artwork import source_xml
 from test_doctor import by_name, context
 from test_provision import reporter
 from test_saveconvert_device import make_profile
-from warpzone import artwork, provision_artwork, safefile, timers
+from warpzone import artwork, provision_artwork, safefile, settings_state, timers
 from warpzone.cli import main
 from warpzone.doctor import OK, WARN, Context, check_frontend
 from warpzone.model import device_specs
@@ -204,6 +204,27 @@ class GamelistTests(Art, unittest.TestCase):
         self.assertEqual(self.copies(), [])
         self.assertFalse((self.state / "backups").exists())
         self.assertFalse(any(str(self.out("gba")) in w for w in rep.warnings))
+
+    def test_when_the_copy_cannot_be_made_the_damaged_gamelist_is_left_alone(self) -> None:
+        self.own()
+        self.scraped("pokemini", MINI.replace("Casual", "Changed"))  # the other system is stale
+        with mock.patch.object(settings_state, "backup", side_effect=PermissionError("denied")):
+            rep, lines = self.ensure()
+        self.assertEqual(self.out("gba").read_bytes(), TRUNCATED)
+        (warning,) = rep.warnings
+        self.assertIn(str(self.out("gba")), warning)
+        self.assertIn("left alone", warning)
+        self.assertIn("denied", warning)
+        self.assertFalse(any(f"wrote {self.out('gba')}" in line for line in lines))
+        self.assertEqual(self.copies(), [])
+
+    def test_a_failed_copy_does_not_stop_the_other_systems(self) -> None:
+        self.own()
+        self.scraped("pokemini", MINI.replace("Casual", "Changed"))
+        with mock.patch.object(settings_state, "backup", side_effect=PermissionError("denied")):
+            _, lines = self.ensure()
+        self.assertIn(b"Changed", self.out("pokemonmini").read_bytes())
+        self.assertTrue(any(f"wrote {self.out('pokemonmini')}" in line for line in lines))
 
     def test_a_copy_of_a_second_run_is_not_made_when_the_first_fixed_the_file(self) -> None:
         self.own()

@@ -96,7 +96,7 @@ def unreadable_warning(item: artwork.Planned, copy: Path, *, restored: bool) -> 
         "only in that file are not in the new one"
     )
     if restored:
-        text += " (the plays and favourites play state had published come back)"
+        text += " (play state restores the play counts and favourites it had published)"
     return text
 
 
