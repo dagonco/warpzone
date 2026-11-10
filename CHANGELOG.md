@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ## [Unreleased]
 
+### Added
+
+- `warpzone catalog --dats [--dats-dir PATH] [--force] [--dry-run]` fills the DAT serials of the games already in the library that have none, from the DAT folder `inbox` uses, so the Flycast memory cards of Dreamcast games filed before serials were recorded can be matched to their game. It matches only by exact identity (the DAT name `inbox` stored, the SHA-1 and size of the file, the exact file name, or the exact names of the discs of an `.m3u`), leaves the rest unmatched, and writes only under `catalog/`.
+
 ## [0.4.0rc1] - 2026-11-10
 
 The library gets a web app. `warpzone serve` runs it on the hub: a catalog of the whole library with covers, videos, descriptions, achievements, play statistics, saves and the disk of each console, where you turn games and whole systems on and off per console by rewriting the device whitelists. Behind it are a catalog index of the library (`warpzone catalog`) and RetroAchievements hashes for far more systems, a hub container for a NAS with an old Python, and `inbox` support for PS4 updates and DLC. A console now also deletes what you turn off by itself, with a guard that holds back a suspicious removal.
