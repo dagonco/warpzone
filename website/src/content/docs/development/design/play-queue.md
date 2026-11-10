@@ -465,8 +465,9 @@ ended entries unless asked for more, so the size of the history does not weigh o
 ## What the page shows
 
 - **Game page:** a "Play queue" panel under the console switches, with an "Add to queue" button.
-  It opens a picker of the consoles that support the system, with the one used last (kept in a
-  cookie) preselected, and none as a choice. Before confirming, a dry run says what each console does: "Turns it on for deck (3.2 GB
+  It opens a picker where "Add to queue" is one click and no console is preselected; an optional
+  collapsed section, "Also put it on a console", lists the consoles that support the system.
+  Before confirming a console, a dry run says what it does: "Turns it on for deck (3.2 GB
   to download)", "Already on machine: it will stay there when you finish it". Once queued, the
   button becomes the entry's state, with "Playing", "Finished", "Dropped" and "Remove from queue",
   and each console's view under it.
@@ -566,15 +567,17 @@ the data and the writes in `store.js` and the tile mark in `components.js`):
   After any error the page loads the queue again; after a change the answer's `queue` replaces
   it. A switch or a lever (`POST /api/v1/changes`) does not touch the queue, but the page asks
   for the queue again afterwards, since the `view` of each claim depends on the whitelists.
-- **The picker** keeps the consoles chosen last in the cookie `wz_queue_dev` (a comma-separated
-  list, `-` for none), so it can preselect several; with no cookie it preselects the only console
-  that can take the game, else none. Its dry run runs again at every change of the selection and
-  fills one line under each chosen console from the game's state there (`off`: "Turns it on for
-  deck (3.2 GB to download)"; `on`: "Already on machine: it will stay there when you finish it";
-  `partial`: "Completes it on machine ... It will stay there when you finish it"). A console that
-  cannot take the game (a system it does not run, a whitelist that needs migration, an unknown
-  state, a game that cannot be listed, a console the entry already holds) is listed but disabled,
-  with the reason. The same picker adds consoles to an active entry (`devices`) and queues an
+- **The picker** makes the plain list the default path: "Add to queue" is one click and no
+  console is ever preselected (the main use is a backlog, and a console is optional). The
+  consoles are a collapsed section, "Also put it on a console"; opening it and ticking a
+  console runs the dry run again at every change of the selection and fills one line under each
+  chosen console from the game's state there (`off`: "Turns it on for deck (3.2 GB to
+  download)"; `on`: "Already on machine: it will stay there when you finish it"; `partial`:
+  "Completes it on machine ... It will stay there when you finish it"). A console that cannot
+  take the game (a system it does not run, a whitelist that needs migration, an unknown state,
+  a game that cannot be listed, a console the entry already holds) is listed but disabled, with
+  the reason. The page keeps no memory of the consoles chosen. The same dialog adds consoles to
+  an active entry (`devices`), with the list open since it is the point there, and queues an
   ended game again (`add`).
 - **The release dialog** opens when finishing, dropping or removing an entry, or taking one
   console off it, and the queue holds the game on a console the page can turn it off on. It

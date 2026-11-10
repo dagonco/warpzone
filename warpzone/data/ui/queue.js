@@ -22,7 +22,6 @@
 
   const HOME_ROWS = 10;      // active entries the home page lists before "Show all"
   const HISTORY_ROWS = 10;   // ended entries "Recently finished" lists before "Show all"
-  const COOKIE = 'wz_queue_dev';
 
   const AWARD_TEXT = {
     'beaten-softcore': ['You beat it', 'softcore'], 'beaten-hardcore': ['You beat it', 'hardcore'],
@@ -46,19 +45,6 @@
     let el = find(fk);
     if ((!el || el.disabled) && /^q-(up|down):/.test(fk)) el = find(fk.replace(/^q-(up|down):/, (_, d) => `q-${d === 'up' ? 'down' : 'up'}:`));
     if (el && !el.disabled) el.focus({ preventScroll: true });
-  }
-
-  // The consoles the user chose last (a display preference, kept in a plain cookie like the CRT
-  // switch): null when never chosen, [] for "none".
-  function lastConsoles() {
-    const m = new RegExp('(?:^|;\\s*)' + COOKIE + '=([^;]*)').exec(document.cookie);
-    if (!m) return null;
-    const v = decodeURIComponent(m[1]);
-    return v === '-' ? [] : v.split(',').filter(Boolean);
-  }
-
-  function rememberConsoles(names) {
-    document.cookie = `${COOKIE}=${names.length ? encodeURIComponent(names.join(',')) : '-'}; Path=/; Max-Age=31536000; SameSite=Strict`;
   }
 
   async function runOps(ops, message) {
@@ -107,9 +93,11 @@
     }
   }
 
-  // The picker: which consoles to turn the game on for (none is a choice). A dry run says what
-  // each chosen console would do before anything is written. With an active `entry` it adds
-  // consoles to it; otherwise it queues the game (again, when its entry had ended).
+  // The picker. Queueing a game is one click: no console is ever preselected, and the consoles
+  // are an optional, collapsed section ("Also put it on a console"). A dry run says what each
+  // console chosen would do before anything is written. With an active `entry` it adds consoles
+  // to it (the list is the point there, so it is open); otherwise it queues the game (again,
+  // when its entry had ended).
   async function openPicker(o) {
     if (!store.queueUsable()) { toast('The queue is not available, so it cannot be changed.', 'error'); return null; }
     const entry = o.entry && (o.entry.state === 'queued' || o.entry.state === 'playing') ? o.entry : null;
@@ -126,8 +114,7 @@
       return { name: d.name, st, why };
     });
     const usable = rows.filter((r) => !r.why).map((r) => r.name);
-    const last = lastConsoles();
-    const sel = new Set(entry ? [] : last === null ? (usable.length === 1 ? usable : []) : last.filter((n) => usable.includes(n)));
+    const sel = new Set();
     const name = parseTitle(o.title).name;
     const m = openModal(entry ? 'Add consoles' : 'Play queue', entry ? `Add consoles for ${name}` : `Queue ${name}`, systemColor(o.system));
     let dry = null;
@@ -153,13 +140,16 @@
     const boxes = new Map();
     const notes = new Map();
     const list = h('ul', { class: 'q-opts' }, rows.map((r) => {
-      const cb = h('input', { type: 'checkbox', checked: sel.has(r.name) || null, disabled: !!r.why || null, dataset: { fk: 'qp:' + r.name } });
+      const cb = h('input', { type: 'checkbox', disabled: !!r.why || null, dataset: { fk: 'qp:' + r.name } });
       cb.addEventListener('change', () => { if (cb.checked) sel.add(r.name); else sel.delete(r.name); check(); });
       const note = h('small', { class: 'q-note' }, r.why);
       boxes.set(r.name, cb);
       notes.set(r.name, note);
       return h('li', { class: 'q-opt' + (r.why ? ' off' : '') }, h('label', { class: 'q-check' }, cb, h('span', null, h('b', null, r.name), note)));
     }));
+    const consTitle = h('span', null, 'Also put it on a console');
+    const section = entry ? list : h('details', { class: 'q-cons' },
+      h('summary', { dataset: { fk: 'qp-more' } }, consTitle), list);
     const msg = h('p', { class: 'error-text', role: 'alert', hidden: true });
     const summary = h('p', { class: 'mute small' });
     const confirm = h('button', { type: 'button', class: 'btn primary', dataset: { fk: 'q-confirm' }, onclick: () => m.close([...sel]) }, entry ? 'Add consoles' : 'Add to queue');
@@ -168,9 +158,10 @@
       for (const r of rows) if (!r.why) notes.get(r.name).textContent = noteOf(r);
       msg.hidden = !error;
       msg.textContent = error;
+      consTitle.textContent = sel.size ? `Also put it on a console (${sel.size})` : 'Also put it on a console';
       summary.textContent = sel.size ? '' : entry
         ? 'Choose at least one console.'
-        : 'No console chosen: the game is queued without turning it on anywhere.';
+        : 'It goes on the list only: no console downloads it.';
       confirm.disabled = loading || !!error || (entry && !sel.size);
     }
 
@@ -187,20 +178,17 @@
       paint();
     }
 
-    m.body.replaceChildren(
-      h('p', { class: 'mute small' }, usable.length
-        ? 'Queueing a game for a console turns it on in that console\'s whitelist, so it is downloaded before you pick the console up.'
-        : 'No console can take this game, so it is queued without turning it on anywhere.'),
-      rows.length ? list : null, msg, summary);
+    const intro = entry ? 'Turning a game on for a console downloads it there before you pick the console up.'
+      : usable.length ? 'Adds it to your list. Optionally put it on a console too: that turns it on in the console\'s whitelist, so it is downloaded before you pick the console up.'
+        : 'Adds it to your list. No console can take this game right now.';
+    m.body.replaceChildren(h('p', { class: 'mute small' }, intro), usable.length || entry ? section : null, msg, summary);
     m.acts.replaceChildren(cancelBtn(m), confirm);
     paint();
     if (sel.size) check();
-    const first = usable.length ? boxes.get(usable[0]) : confirm;
-    first.focus();
+    (entry && usable.length ? boxes.get(usable[0]) : confirm).focus();
 
     const chosen = await m.done;
     if (!chosen) return null;
-    rememberConsoles(chosen);
     const where = chosen.length ? ` for ${chosen.join(', ')}` : '';
     return runOps(opsFor(), entry ? `Added ${chosen.join(', ')} to "${name}".` : `Queued "${name}"${where}.`);
   }
@@ -579,7 +567,7 @@
           h('button', { type: 'button', class: 'btn sm primary', dataset: { fk: 'q-again', write: '1' }, onclick: pickerFor(null) }, 'Queue again')));
     }
     return head('',
-      h('p', { class: 'mute small' }, 'Plan to play it next. Queueing it for a console turns it on there, so it is downloaded before you pick the console up.'),
+      h('p', { class: 'mute small' }, 'Plan to play it next. You can also put it on a console, so it is downloaded before you pick the console up.'),
       h('div', { class: 'q-actions q-pactions' },
         h('button', { type: 'button', class: 'btn sm primary', dataset: { fk: 'q-add', write: '1' }, onclick: pickerFor(null) }, 'Add to queue')));
   }

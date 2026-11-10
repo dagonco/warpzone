@@ -170,6 +170,14 @@ class UiFilesTest(unittest.TestCase):
         sent = set(re.findall(r"\bop: '([a-z]+)'", read("queue.js")))
         self.assertEqual(sent, set(queue._FIELDS))
 
+    def test_the_queue_picker_preselects_no_console(self):
+        # Queueing is one click and the consoles are optional: no console is ticked by default,
+        # and nothing is remembered between visits (no cookie, no storage).
+        text = read("queue.js")
+        self.assertNotIn("document.cookie", text)
+        self.assertIn("const sel = new Set();", text)
+        self.assertIn("Also put it on a console", text)
+
     def test_queue_classes_are_defined_and_prefixed(self):
         # CSS class names are global: the queue's start with `q-`, each one is styled, and no
         # other script uses a `q-` class (a shared name once broke every home shelf).
