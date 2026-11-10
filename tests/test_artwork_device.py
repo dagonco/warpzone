@@ -15,7 +15,7 @@ from test_artwork import source_xml
 from test_doctor import by_name, context
 from test_provision import reporter
 from test_saveconvert_device import make_profile
-from warpzone import artwork, provision_artwork, safefile
+from warpzone import artwork, provision_artwork, safefile, timers
 from warpzone.cli import main
 from warpzone.doctor import OK, WARN, Context, check_frontend
 from warpzone.model import device_specs
@@ -384,7 +384,7 @@ class TimerTests(Art, unittest.TestCase):
         self.assertTrue(any("systemctl --user daemon-reload" in w for w in rep.warnings))
 
     def test_the_unit_texts_are_pure(self) -> None:
-        service, timer = artwork.render_units("/p", "ark", None, "6h")
+        service, timer = timers.render_artwork_units("/p", "ark", None, "6h")
         self.assertIn("Type=oneshot", service)
         self.assertIn("OnUnitActiveSec=6h", timer)
         self.assertIn("WantedBy=timers.target", timer)

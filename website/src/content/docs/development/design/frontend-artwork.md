@@ -105,4 +105,16 @@ Like the ES-DE startup script it needs a Python that imports `warpzone` from out
 current folder. The user manager must run without a login session (`loginctl enable-linger`;
 dArkOS has it on).
 
+The text of the four background timers (this one, the play state, prune and ES-DE settings
+timers) is rendered by `timers.py` (pure), which also holds the unit names. Each service is
+`Type=oneshot` with `Nice=10` and `IOSchedulingClass=idle`, so a refresh, merge, prune or
+settings run does not compete with a game for the CPU or, on an I/O scheduler that honours the
+class, the disk. Every word of `ExecStart=` goes through one quoting function, `exec_word`:
+a word with anything but letters, digits and `_@+=:,./-` is double-quoted, with `\` and `"`
+escaped, and with `%` and `$` doubled because systemd expands `%h` and `$NAME` in `ExecStart=`
+(so a config path with a `$` reaches the command intact). `exec_command` reads a unit back the
+same way, and the updater's unit (`updatetimer.py`) uses the same function. A console that
+already has older units gets the new text from the next `provision device`, which rewrites a
+unit whose text differs.
+
 The doctor reports missing and stale gamelists and the timer (see [Doctor](/warpzone/development/design/doctor/)).

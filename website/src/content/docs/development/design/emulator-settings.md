@@ -444,7 +444,7 @@ latest changes).
 
 **The timer.** ES-DE is a Steam app that is closed most of the time, so its keys are applied
 by a `systemd --user` timer, not by hand. `provision device` installs `warpzone-settings`
-(`OnBootSec=5min`, `OnUnitActiveSec=15min`, `Nice=10`) for a device that subscribes to
+(`OnBootSec=5min`, `OnUnitActiveSec=15min`, `Nice=10`, `IOSchedulingClass=idle`) for a device that subscribes to
 `settings` and whose profile declares `esde`, and removes it for any other. The service runs
 
 ```

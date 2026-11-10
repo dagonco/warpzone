@@ -7,7 +7,7 @@ from pathlib import Path
 
 from support import API_KEY, DECK_ID, FakeProc, FakeSyncthing, config_data, device_probes
 from test_provision import reporter
-from warpzone import artwork
+from warpzone import timers
 from warpzone.config import parse_config
 from warpzone.probes import DeviceProbes
 from warpzone.profiles import load_profile
@@ -28,7 +28,7 @@ def device(**keys):
 
 class UnitTextTests(unittest.TestCase):
     def test_the_service_applies_only_esde_when_idle_and_quietly(self) -> None:
-        service, timer = artwork.render_settings_units("/opt/wz/bin/python", "deck", None)
+        service, timer = timers.render_settings_units("/opt/wz/bin/python", "deck", None)
         self.assertIn("Type=oneshot", service)
         self.assertIn(
             "ExecStart=/opt/wz/bin/python -m warpzone settings apply --device deck "
@@ -39,7 +39,7 @@ class UnitTextTests(unittest.TestCase):
         self.assertIn("OnUnitActiveSec=15min\n", timer)
 
     def test_a_non_default_config_is_named(self) -> None:
-        service, _ = artwork.render_settings_units("/p", "deck", Path("/srv/wz/config.toml"))
+        service, _ = timers.render_settings_units("/p", "deck", Path("/srv/wz/config.toml"))
         self.assertIn("--quiet --config /srv/wz/config.toml", service)
 
 
