@@ -15,10 +15,11 @@ import fnmatch
 import json
 import os
 import re
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -32,6 +33,7 @@ from warpzone.probes import REAL_PROBES, DeviceProbes
 from warpzone.profiles import Profile
 from warpzone.provision_folders import in_sync
 from warpzone.report import Reporter
+from warpzone.safefile import write_file
 from warpzone.syncthing import Client, SyncthingError, scrub
 
 GIB = 1024**3
@@ -136,6 +138,59 @@ def guard(totals: Mapping[str, tuple[int, int]]) -> list[str]:
     deletes nothing, in any folder (the caller decides that, this only names the folders).
     """
     return [folder for folder, (delete, held) in totals.items() if 2 * delete > held]
+
+
+GUARD_STATE = "prune-guard.json"
+_GUARD_STATE_VERSION = 1
+
+
+@dataclass(frozen=True)
+class GuardRefusal:
+    """What the last unattended run held back: when, and per folder the bytes it would have
+    deleted and the bytes the device holds there. No file or folder names."""
+
+    when: float
+    folders: tuple[tuple[str, int, int], ...]
+
+
+def guard_state_path(state_base: Path) -> Path:
+    """The file a guard refusal leaves; `state_base` is `~/.local/state/warpzone`."""
+    return state_base / GUARD_STATE
+
+
+def render_guard_state(refused: Mapping[str, tuple[int, int]], when: float) -> str:
+    """The text of the state file for the folders `guard` named: folder -> (delete, held)."""
+    return (
+        json.dumps(
+            {
+                "version": _GUARD_STATE_VERSION,
+                "time": int(when),
+                "folders": {
+                    folder: {"delete": delete, "held": held}
+                    for folder, (delete, held) in sorted(refused.items())
+                },
+            },
+            indent=2,
+        )
+        + "\n"
+    )
+
+
+def parse_guard_state(text: str) -> GuardRefusal | None:
+    """The refusal a state file records, or None when the text is not one (never raises)."""
+    try:
+        data = json.loads(text)
+        when = data["time"]
+        raw = data["folders"]
+        if not isinstance(when, int | float) or isinstance(when, bool) or not isinstance(raw, dict):
+            return None
+        folders = tuple(
+            (str(folder), int(entry["delete"]), int(entry["held"]))
+            for folder, entry in sorted(raw.items())
+        )
+    except (ValueError, KeyError, TypeError):
+        return None
+    return GuardRefusal(float(when), folders) if folders else None
 
 
 def _protected(rel: str, marker: str) -> bool:
@@ -403,6 +458,36 @@ def notify(url: str, payload: dict[str, Any], *, timeout: float = 10.0) -> None:
         raise PruneError(f"notification failed: {reason}") from None
 
 
+def record_guard_refusal(
+    state_base: Path, refused: Mapping[str, tuple[int, int]], when: float
+) -> None:
+    """Leave the refusal where `doctor` can see it (atomic, mode 0600)."""
+    write_file(guard_state_path(state_base), render_guard_state(refused, when).encode())
+
+
+def clear_guard_refusal(state_base: Path) -> None:
+    guard_state_path(state_base).unlink(missing_ok=True)
+
+
+def _track_refusal(
+    state_base: Path,
+    rep: Reporter,
+    refused: Mapping[str, tuple[int, int]],
+    when: float,
+    *,
+    settled: bool,
+) -> None:
+    """Record the guard's refusal, or clear an old one once a run settles without it. A write
+    that fails is a warning: the run itself did what it was asked."""
+    try:
+        if refused:
+            record_guard_refusal(state_base, refused, when)
+        elif settled:
+            clear_guard_refusal(state_base)
+    except OSError as exc:
+        rep.warn(f"cannot update {guard_state_path(state_base)}: {exc.strerror or exc}")
+
+
 def prune_device(
     cfg: Config,
     name: str,
@@ -421,6 +506,8 @@ def prune_device(
     grace: float = 5.0,
     probes: DeviceProbes = REAL_PROBES,
     unattended: bool = False,
+    state_base: Path | None = None,
+    now: Callable[[], float] = time.time,
 ) -> int:
     """Report (default) or delete leftovers in every whitelisted folder. Returns problems.
 
@@ -428,6 +515,9 @@ def prune_device(
     runs"): it has no size cap (`max_gib` and `force` do not apply), refuses to delete anything
     when a folder would lose more than half of what the device holds in it, and treats a
     folder that is still pulling as "try again later", not as a problem.
+
+    `state_base` (`~/.local/state/warpzone`) is where a guard refusal is recorded for `doctor`
+    and cleared by the next `--apply` run that is not refused; None records nothing.
     """
     if unattended and not apply:
         raise UsageError("--unattended needs --apply")
@@ -450,6 +540,8 @@ def prune_device(
     configured = {f["id"]: f for f in local.folders()}
     problems = 0
     busy: list[str] = []
+    skipped = 0
+    refused: dict[str, tuple[int, int]] = {}
     reports: list[FolderReport] = []
     for spec in specs:
         try:
@@ -467,6 +559,7 @@ def prune_device(
             if not unattended:
                 rep.warn(f"{spec.id}: skipped, {exc}")
                 problems += 1
+                skipped += 1
                 continue
             busy.append(spec.id)
             rep.out(f"{spec.id}: busy, still pulling; not pruned this time")
@@ -474,6 +567,7 @@ def prune_device(
         except PruneError as exc:
             rep.warn(f"{spec.id}: skipped, {exc}")
             problems += 1
+            skipped += 1
             continue
         print_report(report, rep, list_all=list_all and not unattended, summary_only=unattended)
         reports.append(report)
@@ -490,8 +584,10 @@ def prune_device(
             rep.out("not deleting anything while a folder is busy; the next run tries again")
             deleting = False
         else:
-            over = guard({r.folder_id: (r.bytes, r.held_bytes) for r in reports})
+            totals = {r.folder_id: (r.bytes, r.held_bytes) for r in reports}
+            over = guard(totals)
             if over:
+                refused = {folder: totals[folder] for folder in over}
                 rep.warn(
                     "refusing to delete anything: "
                     + ", ".join(
@@ -528,6 +624,15 @@ def prune_device(
                 )
     elif total_files and not apply:
         rep.out("report only: run again with --apply to delete")
+
+    if state_base is not None and apply:
+        _track_refusal(
+            state_base,
+            rep,
+            refused,
+            now(),
+            settled=not busy and not skipped and (deleting or total_files == 0),
+        )
 
     if notify_url:
         for report in reports:

@@ -120,6 +120,15 @@ for every problem, the exact fix for this platform.
   system list or a scraped file is unreadable. `Artwork timer` (only when the profile sets
   `refresh`) is `[ok]` when `warpzone-artwork.timer` is installed and `[! ]` otherwise.
   `judge_artwork` is pure.
+- **Unattended prune.** Group `Pruning`, on a device found through `wz-library` (as for the
+  frontend) whose config subscribes it to `library` without `auto_prune = false`. One line,
+  `Unattended prune`: `judge_prune_guard` (pure) is `[ok]` when `prune-guard.json` is not
+  in `~/.local/state/warpzone`, and `[! ]` when it is: the folders the timer's run refused to
+  touch because they would lose more than half of what the device holds, how long ago, and as
+  the fix `warpzone prune <name>` to review and `warpzone prune <name> --apply` by hand. A file
+  that does not parse is `[! ]` too, with the same fix, which rewrites it. The file and the
+  rules that write and clear it are in [Unattended runs](/warpzone/development/design/prune/#unattended-runs).
+  It is never `[!!]`: nothing is broken, a removal is waiting for a person.
 - **Exit codes.** `0` when no check is a problem, `1` otherwise.
 - **Install hints** live in one table in `warpzone/doctor.py` (`TOOLS` and the `*_HINTS`
   dicts), keyed by platform family: `macos`, `debian`, `fedora`, `arch`, `steamos`,

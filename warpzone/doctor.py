@@ -47,6 +47,7 @@ from warpzone import (
     inbox_vita_pkg,
     localst,
     model,
+    prune,
     ra,
     saveconvert_device,
     selfupdate,
@@ -108,6 +109,7 @@ G_SETTINGS = "Emulator settings"
 G_FRONTEND = "Frontend"
 G_RA = "RetroAchievements"
 G_UPDATE = "Updates"
+G_PRUNE = "Pruning"
 G_INBOX = "Inbox"
 G_WAY = "Where inbox runs"
 # The groups whose items only matter to the machine that runs `warpzone inbox`.
@@ -735,6 +737,8 @@ class ConfigState:
     play_state_devices: tuple[SettingsDevice, ...] = ()
     # The devices that subscribe to `library` and have not turned `self_update` off.
     update_devices: tuple[SettingsDevice, ...] = ()
+    # The devices that subscribe to `library` and have not turned `auto_prune` off.
+    prune_devices: tuple[SettingsDevice, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -817,6 +821,7 @@ def load_config_state(path: Path) -> ConfigState:
     frontend_devices: list[SettingsDevice] = []
     play_state_devices: list[SettingsDevice] = []
     update_devices: list[SettingsDevice] = []
+    prune_devices: list[SettingsDevice] = []
     try:
         if "hub" in data or "devices" in data:
             cfg = parse_config(data, set(available_profiles()))
@@ -846,6 +851,10 @@ def load_config_state(path: Path) -> ConfigState:
                     play_state_devices.append(
                         SettingsDevice(device.name, device.device_id, profile, device.folders)
                     )
+                if device.prunes_unattended:
+                    prune_devices.append(
+                        SettingsDevice(device.name, device.device_id, profile, device.folders)
+                    )
                 if "library" in device.folders and device.self_update:
                     update_devices.append(
                         SettingsDevice(
@@ -873,6 +882,7 @@ def load_config_state(path: Path) -> ConfigState:
     frontends = tuple(frontend_devices) if error is None else ()
     sharing = tuple(play_state_devices) if error is None else ()
     updating = tuple(update_devices) if error is None else ()
+    pruning = tuple(prune_devices) if error is None else ()
     return ConfigState(
         path,
         True,
@@ -886,6 +896,7 @@ def load_config_state(path: Path) -> ConfigState:
         frontends,
         sharing,
         updating,
+        pruning,
     )
 
 
@@ -2354,6 +2365,52 @@ def check_updater(ctx: Context) -> list[Result]:
     return results
 
 
+def judge_prune_guard(text: str | None, *, now: float, device: str) -> tuple[str, str, str]:
+    """(status, detail, fix) for the state file the unattended prune leaves when its half-of-device
+    guard held a removal back (`prune.guard_state_path`). `text` is None when there is no file:
+    nothing is waiting."""
+    if text is None:
+        return OK, "the unattended prune has nothing held back", ""
+    refusal = prune.parse_guard_state(text)
+    if refusal is None:
+        return (
+            WARN,
+            "the file the unattended prune leaves when it holds a removal back cannot be read",
+            f"run `warpzone prune {device}` to see what is left over, then "
+            f"`warpzone prune {device} --apply` by hand, which rewrites the file",
+        )
+    age = max(0, int(now - refusal.when))
+    ago = f"{age // 86400} day(s)" if age >= 86400 else f"{age // 3600} hour(s)"
+    folders = ", ".join(
+        f"{folder} would lose {prune.human(delete)} of the {prune.human(held)} it holds"
+        for folder, delete, held in refusal.folders
+    )
+    return (
+        WARN,
+        f"the unattended prune has refused to delete anything for {ago}: {folders}, more than "
+        "half, so the files a whitelist no longer lists stay on this device",
+        f"check the whitelist is what you meant, run `warpzone prune {device}` to review what "
+        f"it would delete, then `warpzone prune {device} --apply` by hand",
+    )
+
+
+def check_prune_guard(ctx: Context) -> list[Result]:
+    """On a device that runs the unattended prune: has its guard held a removal back?"""
+    p = ctx.probes
+    device = _local_device(ctx, ctx.config.prune_devices, "wz-library", "library")
+    if device is None:
+        return []
+    path = prune.guard_state_path(settings_state.state_dir(p.env, p.home).parent)
+    text = p.read_text(path) if p.is_file(path) else None
+    return [
+        Result(
+            "Unattended prune",
+            G_PRUNE,
+            *judge_prune_guard(text, now=p.now(), device=device.name),
+        )
+    ]
+
+
 def _scrub(text: str, key: str) -> str:
     return text.replace(key, "***") if key else text
 
@@ -2852,6 +2909,7 @@ CHECKS: tuple[Callable[[Context], list[Result]], ...] = (
     check_play_state,
     check_update_timer,
     check_updater,
+    check_prune_guard,
     check_inbox_way,
     check_tools,
     check_switch,
