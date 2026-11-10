@@ -19,6 +19,10 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 - `warpzone prune` no longer lists the files EmuDeck and the emulators write by themselves among the ignored files it kept (`roms/*/metadata.txt` and `systeminfo.txt`, `bios/PPSSPP`, every `readme.txt` under `bios/`, the Flycast files in `bios/dc`, and the other emulator-owned `bios/` folders the profile ignores). They are still kept, and now counted in one line, `N file(s) emulators and EmuDeck generate themselves`, so the files it lists are the unusual ones. See [Files the console generates](https://dagonco.github.io/warpzone/development/design/prune/#files-the-console-generates).
 
+### Fixed
+
+- `warpzone inbox` identifies NES dumps whose 16-byte iNES header differs from the one No-Intro lists. A file that starts with `NES\x1a` and matches no entry whole is tried again without its header against the DAT's headerless (`.unh`) entries by SHA-1, and on a match it is filed under the DAT's game name with its own header unchanged. Before, such a dump was reported as "no DAT match". See [Identification by content](https://dagonco.github.io/warpzone/development/design/inbox/).
+
 ## [0.4.0rc1] - 2026-11-10
 
 The library gets a web app. `warpzone serve` runs it on the hub: a catalog of the whole library with covers, videos, descriptions, achievements, play statistics, saves and the disk of each console, where you turn games and whole systems on and off per console by rewriting the device whitelists. Behind it are a catalog index of the library (`warpzone catalog`) and RetroAchievements hashes for far more systems, a hub container for a NAS with an old Python, and `inbox` support for PS4 updates and DLC. A console now also deletes what you turn off by itself, with a guard that holds back a suspicious removal.

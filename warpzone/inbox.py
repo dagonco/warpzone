@@ -81,6 +81,7 @@ DONE_KEEP_DAYS = 7
 SETTLE_SECONDS = 30  # an item changed more recently than this may still be copying
 COMPRESSED_GC = (".gcz",)  # .rvz and .wia are read by `inbox_dolphin`
 # Files that travel with a dump but are not part of any DAT; never identified.
+INES_MAGIC, INES_HEADER_BYTES = b"NES\x1a", 16
 ZIP_DATE = (1996, 12, 24, 23, 32, 0)  # fixed, so the same game always zips to the same bytes
 DOLPHIN_HINT = "dolphin-tool convert -f rvz -c zstd -l 5 -b 131072"
 _DATE_DIR = re.compile(r"^\d{4}-\d\d-\d\d$")
@@ -204,15 +205,26 @@ def default_cache_dir() -> Path:
 
 
 def fingerprint(path: Path, rel: str) -> FileInfo:
-    crc = 0
-    sha1 = hashlib.sha1()
-    size = 0
+    """Size, CRC32 and SHA-1 of a file; for one that starts with the iNES magic, also those
+    of the data after its 16-byte header, which `dat.match_dat` tries when the whole file
+    matches nothing."""
     with path.open("rb") as f:
+        head = f.read(INES_HEADER_BYTES)
+        ines = len(head) == INES_HEADER_BYTES and head.startswith(INES_MAGIC)
+        crc, sha1, size = zlib.crc32(head), hashlib.sha1(head), len(head)
+        body_crc, body_sha1, body_size = 0, hashlib.sha1(), 0
         while chunk := f.read(CHUNK):
             crc = zlib.crc32(chunk, crc)
             sha1.update(chunk)
             size += len(chunk)
-    return FileInfo(rel, size, f"{crc & 0xFFFFFFFF:08x}", sha1.hexdigest())
+            if ines:
+                body_crc = zlib.crc32(chunk, body_crc)
+                body_sha1.update(chunk)
+                body_size += len(chunk)
+    without_header = (
+        (body_size, f"{body_crc & 0xFFFFFFFF:08x}", body_sha1.hexdigest()) if ines else None
+    )
+    return FileInfo(rel, size, f"{crc & 0xFFFFFFFF:08x}", sha1.hexdigest(), without_header)
 
 
 def expand_compressed(

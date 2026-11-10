@@ -1,9 +1,11 @@
+import hashlib
 import json
 import os
 import tempfile
 import time
 import unittest
 import zipfile
+import zlib
 from datetime import UTC, date, datetime
 from pathlib import Path
 from unittest import mock
@@ -402,6 +404,54 @@ class LayoutTests(Base):
         empty.mkdir()
         with self.assertRaises(InboxError):
             run_inbox(Options(self.hub, empty, Tools()), Reporter(self.lines.append))
+
+
+class HeaderlessNesTests(Base):
+    BODY = b"wrecking crew data " * 400
+    DAT_ROM = ("Wrecking Crew (World).unh", BODY)
+
+    def setUp(self) -> None:
+        super().setUp()
+        write_dat(
+            self.dats / "no-intro",
+            "Nintendo - Nintendo Entertainment System",
+            [("Wrecking Crew (World)", [self.DAT_ROM])],
+        )
+
+    def test_fingerprint_hashes_the_data_after_an_ines_header(self) -> None:
+        path = self.tmp / "w.nes"
+        path.write_bytes(b"NES\x1a" + b"\x00" * 12 + self.BODY)
+        info = inbox.fingerprint(path, "w.nes")
+        want = (
+            len(self.BODY),
+            f"{zlib.crc32(self.BODY):08x}",
+            hashlib.sha1(self.BODY).hexdigest(),
+        )
+        self.assertEqual(info.without_header, want)
+        path.write_bytes(b"XXXX" + b"\x00" * 12 + self.BODY)
+        self.assertIsNone(inbox.fingerprint(path, "w.nes").without_header)
+
+    def test_a_dump_whose_header_differs_is_filed_as_it_is(self) -> None:
+        mine = b"NES\x1a\x05\x00\x00\x00" + b"\x01" * 8 + self.BODY
+        self.drop("w.nes", mine)
+        self.assertEqual(self.go(tools=Tools()), 0)
+        self.assertEqual(self.library(), ["nes/Wrecking Crew (World).zip"])
+        with zipfile.ZipFile(self.roms / "nes" / "Wrecking Crew (World).zip") as z:
+            self.assertEqual(z.namelist(), ["Wrecking Crew (World).nes"])
+            self.assertEqual(z.read("Wrecking Crew (World).nes"), mine)
+        self.assertEqual(self.review(), [])
+
+    def test_the_same_data_without_an_ines_header_goes_to_review(self) -> None:
+        self.drop("w.nes", b"XXXX" + b"\x01" * 12 + self.BODY)
+        self.go(tools=Tools())
+        self.assertEqual(self.library(), [])
+        self.assertIn("no DAT match", self.out)
+
+    def test_other_data_behind_an_ines_header_goes_to_review(self) -> None:
+        self.drop("w.nes", b"NES\x1a" + b"\x00" * 12 + b"not the game " * 300)
+        self.go(tools=Tools())
+        self.assertEqual(self.library(), [])
+        self.assertIn("no DAT match", self.out)
 
 
 class CartridgeTests(Base):
