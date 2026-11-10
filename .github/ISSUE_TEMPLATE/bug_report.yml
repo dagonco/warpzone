@@ -1,0 +1,57 @@
+name: Bug report
+description: Something warpzone does wrong, or a command that fails.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. Before you paste any output, **remove personal data**: API keys and tokens (warpzone never prints them, but your own logs or config might), Syncthing device IDs, hostnames, IP addresses, user names and home paths. Replace them with placeholders such as `<hub>` or `<device-id>`.
+  - type: input
+    id: version
+    attributes:
+      label: warpzone version
+      description: The output of `warpzone --version` on each machine involved.
+      placeholder: warpzone 0.3.0
+    validations:
+      required: true
+  - type: dropdown
+    id: where
+    attributes:
+      label: Where does it happen?
+      multiple: true
+      options:
+        - Hub (Linux or NAS)
+        - Hub container (Docker)
+        - Computer that runs inbox
+        - Console (SteamOS)
+        - Console (other Linux handheld)
+        - Library UI (warpzone serve)
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: system
+    attributes:
+      label: Operating system and Syncthing version
+      placeholder: SteamOS 3.x, Syncthing v2.x
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: The command you ran, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: output
+    attributes:
+      label: Output
+      description: The full output of the failing command, then `warpzone doctor` and `warpzone health` on the same machine, with personal data removed.
+      render: text
+  - type: textarea
+    id: config
+    attributes:
+      label: Relevant configuration
+      description: The parts of your config or whitelist that matter, with personal data removed.
+      render: toml
