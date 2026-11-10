@@ -55,11 +55,13 @@ COPY warpzone ./warpzone
 RUN pip wheel --no-cache-dir --no-deps --wheel-dir /wheels .
 
 
-# Stage 3: what runs. No compiler, no git, no package index access; one process.
+# Stage 3: what runs. No compiler and no git; one process. The only packages it installs are the
+# tools `warpzone inbox` needs, from Debian's own repository, with the apt lists removed in the
+# same layer.
 FROM python:3.14.10-slim-trixie@sha256:af8a5aa14780025dbfbcfbc81bd8a91ebd87711dd5b0f48ed71090949dd7cb1d
 
 LABEL org.opencontainers.image.title="warpzone hub" \
-      org.opencontainers.image.description="warpzone serve and warpzone catalog, with RAHasher" \
+      org.opencontainers.image.description="warpzone serve and warpzone catalog, with RAHasher, chdman and bsdtar" \
       org.opencontainers.image.source="https://github.com/dagonco/warpzone" \
       org.opencontainers.image.licenses="MIT"
 
@@ -67,6 +69,15 @@ ENV PIP_DISABLE_PIP_VERSION_CHECK=1
 COPY --from=wheel /wheels /wheels
 RUN pip install --no-cache-dir --no-index --no-deps /wheels/warpzone-*.whl \
  && rm -rf /wheels
+
+# The tools `warpzone inbox` runs in the container, as Debian packages (they land in /usr/bin, on
+# PATH): chdman, from mame-tools, converts discs to CHD; bsdtar, from libarchive-tools, unpacks
+# .7z and .rar. The tools Debian does not package (dolphin-tool, nsz, orbis-pkg-util, Vita3K) are
+# not in the image; see website/src/content/docs/setup/inbox.md ("Where inbox runs").
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends mame-tools libarchive-tools \
+ && rm -rf /var/lib/apt/lists/* \
+ && command -v chdman && command -v bsdtar
 
 # RAHasher is GPL-3.0 (RALibretro); it is built here from source and not part of the repository.
 COPY --from=rahasher /out/RAHasher /usr/local/bin/RAHasher

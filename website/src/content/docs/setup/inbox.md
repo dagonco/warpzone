@@ -46,12 +46,12 @@ Which tools exist in each place:
 
 | Tool | Needed for | On a computer | In the hub image |
 |---|---|---|---|
-| `chdman` | CHD conversions (`psx`, `ps2`, `saturn`, `dreamcast`) | install `mame-tools` or `rom-tools` | not in the image |
-| `bsdtar` | `.7z` and `.rar` archives | install `libarchive-tools` (ships with macOS) | not in the image |
+| `chdman` | CHD conversions (`psx`, `ps2`, `saturn`, `dreamcast`) | install `mame-tools` or `rom-tools` | `/usr/bin/chdman` (on `PATH`), from Debian's `mame-tools` |
+| `bsdtar` | `.7z` and `.rar` archives | install `libarchive-tools` (ships with macOS) | `/usr/bin/bsdtar` (on `PATH`), from Debian's `libarchive-tools` |
 | `RAHasher` | the RetroAchievements hash check | build it, set `rahasher` | `/usr/local/bin/RAHasher` |
 | `dolphin-tool`, `nsz`, `orbis-pkg-util`, `vita3k` | `.gcz`, Switch metadata, PS4 and Vita packages | install them | not in the image |
 
-An item that needs a tool the place lacks goes to `inbox/_revisar/` with the reason "missing tool"; the other items are filed. `.zip` archives, cartridge systems, `.rvz`, `.wia` and 3DS files need none of the missing tools. When the image gains a tool it is on the image's `PATH`, and this table is the place that says so.
+An item that needs a tool the place lacks goes to `inbox/_revisar/` with the reason "missing tool"; the other items are filed. `.zip` archives, cartridge systems, `.rvz`, `.wia` and 3DS files need none of the missing tools. `chdman` and `bsdtar` need no `[inbox]` setting in the container: inbox finds them on `PATH`. When the image gains a tool it is on the image's `PATH`, and this table is the place that says so.
 
 ### Running it in the container
 

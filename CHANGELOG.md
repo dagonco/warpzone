@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ## [Unreleased]
 
+### Added
+
+- The hub image ships `chdman` (Debian's `mame-tools`) and `bsdtar` (`libarchive-tools`), so `warpzone inbox` can convert discs to CHD and unpack `.7z` and `.rar` in the container. The image grows by roughly 40 to 60 MB; `dolphin-tool`, `nsz`, `orbis-pkg-util` and Vita3K are still not in it. Rebuild the image to get them. See [Where inbox runs](https://dagonco.github.io/warpzone/setup/inbox/#where-inbox-runs).
+
 ## [0.4.0rc1] - 2026-11-10
 
 The library gets a web app. `warpzone serve` runs it on the hub: a catalog of the whole library with covers, videos, descriptions, achievements, play statistics, saves and the disk of each console, where you turn games and whole systems on and off per console by rewriting the device whitelists. Behind it are a catalog index of the library (`warpzone catalog`) and RetroAchievements hashes for far more systems, a hub container for a NAS with an old Python, and `inbox` support for PS4 updates and DLC. A console now also deletes what you turn off by itself, with a guard that holds back a suspicious removal.
