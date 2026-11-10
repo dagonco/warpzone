@@ -86,7 +86,7 @@ Some emulators read keys and firmware from folders that EmuDeck turns into symli
 
 ## The inbox
 
-`inbox/` on the hub is the drop zone for new dumps. It is never synced. You drop files, folders or archives there and run `warpzone inbox` on a desktop that mounts the hub's share. It identifies each item against Redump and No-Intro DATs, converts what needs converting, and files it under `library/roms/<system>/`. It reports first and acts only with `--apply`, and it never overwrites. It also prints the whitelist line to add for each game ([Adding games](/warpzone/setup/inbox/)).
+`inbox/` on the hub is the drop zone for new dumps. It is never synced. You drop files, folders or archives there and run `warpzone inbox` on a computer that mounts the hub's share, or in the hub's container. It identifies each item against Redump and No-Intro DATs, converts what needs converting, and files it under `library/roms/<system>/`. It reports first and acts only with `--apply`, and it never overwrites. It also prints the whitelist line to add for each game ([Adding games](/warpzone/setup/inbox/)).
 
 ## The settings layer
 

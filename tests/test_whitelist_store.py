@@ -136,7 +136,9 @@ class SnapshotAndWriteTests(StoreCase):
         snap = whitelist_store.read(path)
         self.assertTrue(whitelist_store.write(self.root, "deck", b"first\n", snap).ok)
         self.assertEqual(path.read_bytes(), b"first\n")
-        self.assertFalse((self.root / "catalog").exists())  # nothing to back up
+        # An empty backup marks the write (`progress.written_at` reads its name).
+        (backup,) = whitelist_store.backups_dir(self.root, "deck").iterdir()
+        self.assertEqual(backup.read_bytes(), b"")
         self.assertFalse(whitelist_store.write(self.root, "deck", b"second\n", snap).ok)
         self.assertEqual(path.read_bytes(), b"first\n")
 
