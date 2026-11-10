@@ -294,15 +294,49 @@ def apply(kind: str, text: str, wants: Sequence[str], addon: str | None = None) 
 
 # ------------------------------------------------------------------ launch script
 
+SDL_APPIMAGE = "Shadps4-sdl.AppImage"
+LAUNCH_LOG = "shadps4-launch.log"  # in ~/.local/state/warpzone/, appended to by the script
+NO_VERSION_FIX = (
+    "open the shadPS4 Qt launcher, go to Version Manager, then download and select a version"
+)
+_SELECTED = re.compile(r"^versionSelected=(.*)$", re.MULTILINE)
+_VERSION_PATH = re.compile(r'"path"\s*:\s*"([^"]*)"')
+
 _LAUNCH_TEMPLATE = r"""#!/bin/bash
 # Written by warpzone provision device, which rewrites it. ES-DE runs it with the path of a
 # .desktop shortcut: it starts the selected shadPS4 emulator directly, which does not go
 # through the Qt launcher.
 ini=__INI__
 versions=__VERSIONS__
-sdl=Shadps4-sdl.AppImage
+sdl=__SDL__
+state=${XDG_STATE_HOME:-}
+case $state in /*) ;; *) state=$HOME/.local/state ;; esac
+log=$state/warpzone/__LOG__
 
-die() { echo "shadps4-launch: $*" >&2; exit 1; }
+# ES-DE does not show stderr, so a failure is also appended to the log and, in a graphical
+# session, shown in a dialog that closes by itself (zenity, else kdialog, else notify-send).
+notify() {
+  local title="warpzone: shadPS4 did not start" limit=
+  [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ] || return 0
+  command -v timeout >/dev/null 2>&1 && limit="timeout 60"
+  if command -v zenity >/dev/null 2>&1; then
+    $limit zenity --error --no-markup --timeout=60 --title="$title" --text="$1" >/dev/null 2>&1
+  elif command -v kdialog >/dev/null 2>&1; then
+    $limit kdialog --error "$1" --title "$title" >/dev/null 2>&1
+  elif command -v notify-send >/dev/null 2>&1; then
+    $limit notify-send -u critical -t 30000 "$title" "$1" >/dev/null 2>&1
+  fi
+  return 0
+}
+
+die() {
+  echo "shadps4-launch: $*" >&2
+  if mkdir -p "${log%/*}" 2>/dev/null; then
+    printf '%s %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$*" >>"$log" 2>/dev/null
+  fi
+  notify "$*"
+  exit 1
+}
 
 arg=$1
 [ -n "$arg" ] || die "usage: $0 <shortcut.desktop>"
@@ -336,7 +370,7 @@ if [ -z "$emu" ] && [ -r "$versions" ]; then
   done < <(grep -o '"path"[[:space:]]*:[[:space:]]*"[^"]*"' "$versions" |
     sed 's/^[^:]*:[[:space:]]*"//; s/"$//')
 fi
-[ -n "$emu" ] || die "no shadPS4 version found: open the shadPS4 launcher once and download one"
+[ -n "$emu" ] || die "no shadPS4 version found: __NO_VERSION_FIX__"
 
 exec "$emu" -f true -g "$eboot"
 """
@@ -348,9 +382,37 @@ def _sh_quote(value: str) -> str:
 
 def render_launch_script(qt_ini: str, versions: str) -> str:
     """The bash script text; `qt_ini` and `versions` are absolute paths of the Qt launcher."""
-    return _LAUNCH_TEMPLATE.replace("__INI__", _sh_quote(qt_ini)).replace(
-        "__VERSIONS__", _sh_quote(versions)
+    return (
+        _LAUNCH_TEMPLATE.replace("__INI__", _sh_quote(qt_ini))
+        .replace("__VERSIONS__", _sh_quote(versions))
+        .replace("__SDL__", SDL_APPIMAGE)
+        .replace("__LOG__", LAUNCH_LOG)
+        .replace("__NO_VERSION_FIX__", NO_VERSION_FIX)
     )
+
+
+def select_version(
+    ini_text: str | None,
+    versions_text: str | None,
+    resolve: Callable[[str], str | None],
+) -> str | None:
+    """The emulator the launch script would run, None when it finds none.
+
+    Mirrors the script: the `versionSelected=` line of the Qt launcher's `qt_ui.ini` first,
+    then the entries of `versions.json` in order, each through `resolve` (a path to the
+    AppImage when it is, or holds, an executable one; None otherwise). Test fixtures in
+    tests/test_shadps4_launch.py run both on the same files to keep them in step.
+    """
+    candidates: list[str] = []
+    if ini_text is not None and (match := _SELECTED.search(ini_text)):
+        candidates.append(match.group(1))
+    if versions_text is not None:
+        candidates += _VERSION_PATH.findall(versions_text)
+    for raw in candidates:
+        entry = raw.removesuffix("\r").removeprefix('"').removesuffix('"')
+        if entry and (found := resolve(entry)):
+            return found
+    return None
 
 
 def _find_entry(text: str, emulator: str) -> re.Match[str]:

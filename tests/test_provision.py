@@ -534,7 +534,7 @@ class DeviceTests(DeviceFixture):
             self.assertIn("wz-save-retroarch-saves", local.folders)
             self.assertNotIn("wz-save-dolphin-gc", local.folders)
             self.assertNotIn("wz-songs", local.folders)
-            self.assertEqual(sum("skipped" in w for w in rep.warnings), 35)
+            self.assertEqual(sum("skipped" in w for w in rep.warnings), 34)
 
     def bios_device(self, local, hub, **kwargs):
         self.hub_with_whitelists(hub)

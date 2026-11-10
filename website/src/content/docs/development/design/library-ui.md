@@ -505,6 +505,9 @@ with the genres, developer and year it shares with X; each is hidden when empty)
   the counts from the summary and leaves the tiles unmarked. The filter (all, unlocked, locked)
   exists only when the dates are known, and a long list shows the first 48 until asked.
 - **Search:** results grouped by title key across systems, with the same per-console switches.
+- **Play queue:** an "Up next" section on the home page, a "Play queue" panel on the game page
+  and a "Queued" mark on the tiles and search rows of queued games, all from
+  `GET /api/v1/queue`; see [Play queue](/warpzone/development/design/play-queue/#what-the-page-shows).
 - **Consoles:** the state of each console and what it holds.
 
 What the API does not provide is not drawn, not even as a placeholder (no high-score table, no

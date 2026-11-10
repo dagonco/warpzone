@@ -58,8 +58,36 @@ class ModelTests(unittest.TestCase):
         self.assertIn("wz-media", specs)
         self.assertIn("wz-esde", specs)
         self.assertNotIn("wz-songs", specs)
-        self.assertEqual(sum(1 for i in specs if i.startswith("wz-save-")), 36)
+        self.assertEqual(sum(1 for i in specs if i.startswith("wz-save-")), 35)
         self.assertIn("wz-save-ryujinx-user", specs)
+
+    def yarg_cfg(self, *folders: str):
+        data = config_data()
+        data["devices"]["deck"]["folders"] = list(folders)
+        return parse_config(data)
+
+    def test_yarg_data_travels_with_songs_not_saves(self) -> None:
+        both = self.by_id(device_specs(self.yarg_cfg("saves", "songs"), "deck", self.profile))
+        saves_only = self.by_id(device_specs(self.yarg_cfg("saves"), "deck", self.profile))
+        songs_only = self.by_id(device_specs(self.yarg_cfg("songs"), "deck", self.profile))
+        self.assertIn("wz-save-yarg-data", both)
+        self.assertIn("wz-songs", both)
+        self.assertNotIn("wz-save-yarg-data", saves_only)
+        self.assertIn("wz-save-ryujinx-user", saves_only)
+        self.assertIn("wz-save-yarg-data", songs_only)
+        self.assertEqual([i for i in songs_only if i.startswith("wz-save-")], ["wz-save-yarg-data"])
+        # The folder keeps its ID, path and type wherever it lands.
+        yarg = both["wz-save-yarg-data"]
+        self.assertEqual(yarg.path, "~/.config/unity3d/YARC/YARG/release")
+        self.assertEqual(yarg.type, "sendreceive")
+        self.assertTrue(yarg.skip_if_missing)
+
+    def test_hub_shares_yarg_data_only_with_the_devices_that_list_songs(self) -> None:
+        # In the default config the deck has saves without songs; the machine has both.
+        hub = self.by_id(hub_specs(self.cfg, self.profiles))
+        self.assertEqual(hub["wz-save-yarg-data"].devices, (MACHINE_ID,))
+        self.assertEqual(hub["wz-save-yarg-data"].path, "/data/games/saves/yarg/data")
+        self.assertEqual(hub["wz-save-ryujinx-user"].devices, (DECK_ID, MACHINE_ID))
 
     def test_device_folder_properties(self) -> None:
         specs = self.by_id(device_specs(self.cfg, "deck", self.profile))

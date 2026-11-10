@@ -163,9 +163,11 @@ ignore = ["!/*vmu_save_*.bin", "!/*nvmem*", "*"]
 # `custom/` in lowercase). The song cache and the list of bad songs hold absolute
 # paths of one machine, so they never sync, and neither do the *.bak copies YARG
 # leaves next to the profiles. scores/ holds a SQLite database: close the game on
-# one console before playing on another.
+# one console before playing on another. It travels with the `songs` group, so a
+# console without songs gets nothing of YARG.
 [saves.yarg-data]
 path = "~/.config/unity3d/YARC/YARG/release"
+group = "songs"
 ignore = [
   "(?d)/profiles/*.bak",
   "!/settings.json",

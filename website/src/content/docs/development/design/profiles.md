@@ -73,7 +73,12 @@ User profiles are synced so that a save keeps its owner on every console: a
 Switch save belongs to a profile ID, and the same ID must exist everywhere.
 
 The save key `<emu>-<kind>` maps to folder ID `wz-save-<emu>-<kind>` and hub
-path `saves/<emu>/<kind>`. A save folder with an `ignore` list gets those
+path `saves/<emu>/<kind>`. The optional `group` key of a `[saves.*]` entry (default `saves`,
+any folder group of the device config) says which group brings the folder: a device gets it
+only if it lists that group, and listing `saves` does not bring a folder of another group.
+`yarg-data` has `group = "songs"`, so a console that plays no songs receives nothing of YARG
+(and the hub does not show a folder that stays at 0% because YARG is not installed there).
+The folder ID, the hub path and the device path do not depend on the group. A save folder with an `ignore` list gets those
 patterns (after `#include patterns-common.stignore`).
 
 Save paths that do not exist on the device yet (the emulator was never opened,
@@ -337,6 +342,15 @@ changed; `provision device` backs the file up, refuses while ES-DE runs and uses
 write that fails if the file changed meanwhile. `doctor` compares the script with the text
 `provision` would write and reads the rule. The ES-DE startup scripts do not depend on any of
 this: if EmuDeck puts its entry back, only PS4 launching goes back to the Qt launcher.
+
+ES-DE shows nothing of a script's stderr, so every error the script ends with (no version,
+no `Exec=` line, a shortcut it cannot read) is also appended, with a timestamp, to
+`~/.local/state/warpzone/shadps4-launch.log` (`$XDG_STATE_HOME/warpzone/` when that is an
+absolute path; a log that cannot be written is ignored) and shown in a dialog when
+`DISPLAY` or `WAYLAND_DISPLAY` is set: `zenity --error`, else `kdialog --error`, else
+`notify-send`, all under `timeout 60` where `timeout` exists, so the script never waits for
+ever. None of them is a dependency; with none the error stays on stderr. `shadps4.select_version`
+is the pure twin of the script's lookup, used by `doctor` (`shadPS4 version`).
 
 ## Cemu paths
 

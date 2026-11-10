@@ -162,6 +162,12 @@ A dump that holds `sce_module/steroid.suprx` (a Vitamin dump) always goes to rev
 
 **Fix.** Change the core option as the `doctor` fix says (it names the menu path), keeping `VMU A1` or `All VMUs`. See [Dreamcast saves](/warpzone/guides/emudeck/#dreamcast-saves-retroarch-flycast).
 
+### A PS4 game does nothing when started
+
+**Cause.** The shadPS4 Qt launcher has no version installed or selected, so warpzone's launch script has no emulator to run. ES-DE shows nothing of the script's error.
+
+**Fix.** `doctor` shows it as `shadPS4 version`. Open the shadPS4 Qt launcher, go to Version Manager, then download and select a version. Failed launches are also logged in `~/.local/state/warpzone/shadps4-launch.log`. See [shadPS4 launch script](/warpzone/guides/emudeck/#shadps4-launch-script).
+
 ### EmuDeck undid a launcher or a setting
 
 **Cause.** EmuDeck can rewrite files that warpzone installs, such as ES-DE's `es_find_rules.xml` entry for shadPS4, on an update.

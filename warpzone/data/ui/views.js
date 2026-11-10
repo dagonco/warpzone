@@ -271,6 +271,7 @@
     const sysSec = h('section', { class: 'sec', 'aria-label': 'Systems' },
       h('div', { class: 'sechead' }, h('h2', null, h('i'), 'Systems'), h('span', { class: 'rule' }), sysNote), sysHost);
     const shelves = h('div', { class: 'shelves' });
+    const queueHome = W.queueUi.homeSection();
     const resumeHost = h('div', { class: 'hrow' });
     const resumeSec = h('section', { class: 'sec', 'aria-label': 'Continue playing', hidden: true }, sechead('Continue playing'), resumeHost);
     const unfinishedHost = h('div', { class: 'hrow' });
@@ -283,7 +284,7 @@
     const recordsSec = h('section', { class: 'sec records', 'aria-label': 'Records', hidden: true },
       sechead('Records'), h('div', { class: 'panel rec' }, recordsHost));
     const rescan = h('button', { class: 'btn', type: 'button', onclick: store.refreshCatalog, dataset: { fk: 'rescan' } }, 'Rescan the library');
-    const root = h('div', { class: 'page home' }, introHost, hero.node, stripSec, resumeSec, unfinishedSec, similarSec, sysSec, shelves, recordsSec,
+    const root = h('div', { class: 'page home' }, introHost, hero.node, stripSec, queueHome.node, resumeSec, unfinishedSec, similarSec, sysSec, shelves, recordsSec,
       h('div', { class: 'footer-actions' }, rescan,
         h('span', { class: 'mute' }, 'Runs the catalog scan on the hub now. It also runs by itself every few hours.')));
 
@@ -376,8 +377,9 @@
 
     function paintAll() {
       const fk = captureFocus();
-      paintIntro(); paintStrip(); paintResume(); paintRecs(); paintSystems(); paintShelves(); paintRecords();
+      paintIntro(); paintStrip(); queueHome.paint(); paintResume(); paintRecs(); paintSystems(); paintShelves(); paintRecords();
       loadExtras();
+      store.ensureQueue(15000);
       if (pickFeatured() || (featured && !view.heroStarted)) {
         view.heroStarted = true;
         hero.paint(false);
@@ -393,6 +395,7 @@
     Object.assign(view, {
       refresh: paintAll,
       listsChanged: paintAll,
+      queueChanged() { queueHome.paint(); },
       dispose() { hero.dispose(); },
     });
     return view;
@@ -665,7 +668,7 @@
       return h('div', { class: 'vrow', vars: ui.systemTint(g.system) },
         h('a', { href: ui.gameHref(g.system, g.id), dataset: { fk: 'g:' + g.id }, title: t.full },
           h('span', { class: 'sysb', title: systemName(g.system) }, systemCode(g.system)),
-          h('span', { class: 'vt' }, note)),
+          h('span', { class: 'vt' }, note), ui.queueMark(g.id)),
         ui.slots(ref));
     });
     return h('article', { class: 'group', vars: ui.systemTint(lead.system) },
@@ -1083,6 +1086,7 @@
         ...(t.full !== t.name ? [h('p', { class: 'rom' }, t.full)] : []),
         gameBadges(d, sys, t, locked),
         consolesPanel(d, ref),
+        W.queueUi.gamePanel(d, ref),
         ...[playPanel(d)].filter(Boolean));
       frame.rest.replaceChildren(
         h('div', { class: 'dgrid' },
@@ -1197,8 +1201,10 @@
     setMain(root, systemName(system));
     root.append(h('p', { class: 'loading-note' }, 'Loading...'));
     load(false);
+    store.ensureQueue(15000);
     return Object.assign(view, {
       refresh() { if (S.detail && S.detail.id === id) paint(false); },
+      queueChanged() { if (S.detail && S.detail.id === id) paint(false); },
       reload() { return load(true); },
       dispose() { const bar = $('#consolebar'); if (bar) bar.replaceChildren(); S.detail = null; },
     });
