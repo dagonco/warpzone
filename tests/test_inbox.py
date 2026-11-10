@@ -247,6 +247,12 @@ class PureTests(unittest.TestCase):
         self.assertEqual(match.game.roms, (Rom("Cool Hack.nes", 10, "0000abcd", "a" * 40),))
         self.assertEqual(match.files, (info,))
 
+    def test_unverified_match_can_take_the_name_of_the_archive(self) -> None:
+        info = dat.FileInfo("Big Name (World) (Unl).zip/Cool Hack.NES", 10, "0000abcd", "a" * 40)
+        match = unverified_match("nes", info, "Big Name (World) (Unl)")
+        self.assertEqual(match.game.name, "Big Name (World) (Unl)")
+        self.assertEqual(match.game.roms[0].name, "Big Name (World) (Unl).NES")
+
     def test_cue_and_gdi_references(self) -> None:
         self.assertEqual(
             cue_refs('FILE "a b.bin" BINARY\nFILE c.bin BINARY\n  TRACK 01 MODE1/2352'),
@@ -690,16 +696,39 @@ class UnverifiedTests(Base):
         stored = self.catalog_games("nes")["roms/nes/Homebrew Quest.zip"]
         self.assertEqual(stored["ra"]["hash"], stub_md5(self.HOMEBREW))
 
-    def test_an_archive_is_unpacked_and_the_rom_named_after_its_own_file(self) -> None:
+    def test_an_archive_with_one_rom_names_the_entry_and_the_member_after_the_archive(self) -> None:
         folder = self.inbox / "_unverified" / "nes"
         folder.mkdir(parents=True)
-        with zipfile.ZipFile(folder / "release 1.2.zip", "w") as z:
-            z.writestr("bin/Cool Hack.nes", self.HOMEBREW)
+        name = "Witch n' Wiz (World) (Aftermarket) (Unl)"
+        with zipfile.ZipFile(folder / f"{name}.zip", "w") as z:
+            z.writestr("bin/Witch n' Wiz.nes", self.HOMEBREW)
             z.writestr("readme.txt", b"hello")
-        age(folder / "release 1.2.zip")
+        age(folder / f"{name}.zip")
         self.assertEqual(self.go(tools=Tools()), 0)
-        self.assertEqual(self.library(), ["nes/Cool Hack.zip"])
-        self.assertEqual(self.done(), ["release 1.2.zip"])
+        self.assertEqual(self.library(), [f"nes/{name}.zip"])
+        self.assertIn(f"library/roms/nes/{name}.zip", self.out)
+        with zipfile.ZipFile(self.roms / "nes" / f"{name}.zip") as z:
+            self.assertEqual(z.namelist(), [f"{name}.nes"])
+            self.assertEqual(z.read(f"{name}.nes"), self.HOMEBREW)
+        self.assertEqual(self.done(), [f"{name}.zip"])
+
+    def test_an_archive_with_several_roms_keeps_the_name_of_each_member(self) -> None:
+        folder = self.inbox / "_unverified" / "nes"
+        folder.mkdir(parents=True)
+        with zipfile.ZipFile(folder / "collection.zip", "w") as z:
+            z.writestr("One.nes", self.HOMEBREW)
+            z.writestr("sub/Two.nes", self.HOMEBREW + b"two")
+        age(folder / "collection.zip")
+        self.assertEqual(self.go(tools=Tools()), 0)
+        self.assertEqual(self.library(), ["nes/One.zip", "nes/Two.zip"])
+
+    def test_a_folder_item_keeps_the_name_of_each_file(self) -> None:
+        folder = self.inbox / "_unverified" / "nes" / "My Folder"
+        folder.mkdir(parents=True)
+        (folder / "Only.nes").write_bytes(self.HOMEBREW)
+        age(folder)
+        self.assertEqual(self.go(tools=Tools()), 0)
+        self.assertEqual(self.library(), ["nes/Only.zip"])
 
     def test_a_rom_a_dat_knows_is_filed_the_normal_way(self) -> None:
         self.drop_in("nes", "my copy.nes", NES_ROM)

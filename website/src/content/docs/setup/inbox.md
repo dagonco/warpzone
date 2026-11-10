@@ -159,7 +159,7 @@ warpzone inbox --apply
 ```
 
 - The folder is a permission, not a shortcut. A file a DAT recognises is filed the normal way, under the DAT's name, and is not marked.
-- A file nothing recognises is filed as `library/roms/<system>/<file name>.zip`, with the rom inside under its own name (a rom inside an archive uses its own name, not the archive's). The report says `not in any DAT (filed from _unverified)`, and the game is marked `unverified` in the catalog.
+- A file nothing recognises is filed as `library/roms/<system>/<file name>.zip`, with the rom inside under the same name. A loose file keeps its own name. An archive that holds exactly one rom gives its name to both the entry and the rom inside, so name the archive the way you want the game called (`Witch n' Wiz (World) (Aftermarket) (Unl).zip` is filed as `Witch n' Wiz (World) (Aftermarket) (Unl).zip`, whatever the rom inside is called); an archive with several roms keeps the name of each rom. The report says `not in any DAT (filed from _unverified)`, and the game is marked `unverified` in the catalog.
 - Before filing, `inbox` checks that the file is plausibly for that system: an extension the system accepts (`.nes` for `nes`, `.gba` for `gba`, ...), not empty, and for `nes` the `NES` iNES header. A file that fails, or a system folder `inbox` cannot file without a DAT (discs, PSP, GameCube, anything not in the list above), goes to review with the reason; a file placed directly in `_unverified/`, outside a system folder, is left alone and the report names it.
 - Nothing is overwritten, the original goes to `_done/` and the RetroAchievements hash is computed as for any game. Whitelist lines are printed as usual.
 

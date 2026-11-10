@@ -188,9 +188,14 @@ verification.
   checks the code knows; the other systems are checked by extension alone. Sidecars (text,
   images, ...) travel with the item and are ignored, as always.
 - **Filing.** A file that passes becomes a `Unit` with `unverified` set, whose match is
-  built by `unverified_match`: a game named after the file (without its extension) with one
-  rom that is the file itself (its own base name, size, CRC32 and SHA-1; for a member of an
-  archive, the member's base name). Everything after that is the normal path of a cartridge
+  built by `unverified_match`: a game with one rom that is the file itself (its size, CRC32
+  and SHA-1). A loose file, or a file in a folder item, gives the game its own name without
+  the extension and the rom its own base name. When the item is an archive and exactly one
+  of its files is a rom to file, the game takes the archive's name without its extension (the
+  curated, No-Intro-style name the library follows; the member's name is often bare) and
+  the rom is named `<archive name><the member's extension>`, so the zip and its member
+  match as for a DAT game. An archive with several roms keeps the base name of each member.
+  Everything after that is the normal path of a cartridge
   game: `<name>.zip` in `library/roms/<system>/` holding the rom under its own file name, the
   copy to `.part`, the read-back and the size/CRC32 check, the re-check right before the
   rename, no overwrite (the same content is "already in the library", anything else is a

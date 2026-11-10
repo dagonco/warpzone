@@ -49,6 +49,7 @@ from warpzone.dat import (
     GameMatch,
 )
 from warpzone.inbox_core import (
+    ARCHIVE_EXTENSIONS,
     CHUNK,
     INES_MAGIC,
     SIDECAR_EXTENSIONS,
@@ -197,11 +198,14 @@ def plan_units(
     return units, problems
 
 
-def unverified_match(system: str, info: FileInfo) -> GameMatch:
+def unverified_match(system: str, info: FileInfo, stem: str | None = None) -> GameMatch:
     """A stand-in for a DAT match of a rom no DAT knows: a game named after the file, with
     one rom that is the file (its own name, size and hashes), so the same zipping and
-    checks as for a DAT game apply."""
+    checks as for a DAT game apply. With `stem` (the name of the archive that holds the
+    only rom), the game and the rom take that name, and the rom keeps its own extension."""
     base = re.split(r"[\\/]", info.path)[-1]
+    if stem:
+        base = stem + os.path.splitext(base)[1]
     rom = datmod.Rom(base, info.size, info.crc, info.sha1)
     return GameMatch(system, datmod.Game(os.path.splitext(base)[0], (rom,)), (info,))
 
@@ -713,7 +717,7 @@ def _identify_and_place(
         result.reasons.append("ambiguous DAT match, cannot tell apart: " + " | ".join(names))
     extra: list[Unit] = []
     if unverified and unmatched:
-        extra, unmatched = _unverified_units(unverified, by_rel, unmatched, result)
+        extra, unmatched = _unverified_units(unverified, item, by_rel, unmatched, result)
     if unmatched:
         shown = ", ".join(f.path for f in unmatched[:5]) + (", ..." if len(unmatched) > 5 else "")
         what = "no DAT match" if not matches else "files not in any DAT (the rest was placed)"
@@ -735,14 +739,19 @@ def _identify_and_place(
 
 def _unverified_units(
     system: str,
+    item: Path,
     staged: Mapping[str, Staged],
     unmatched: Sequence[FileInfo],
     result: ItemResult,
 ) -> tuple[list[Unit], list[FileInfo]]:
     """The files no DAT knows that were dropped in `_unverified/<system>/`: one unit for each
     that looks like a rom of the system, a review reason for each that does not. Returns the
-    units and the files not dealt with (none: each one is filed or explained)."""
+    units and the files not dealt with (none: each one is filed or explained).
+
+    When the item is an archive and exactly one of its files is a rom to file, the game takes
+    the archive's name (the curated one); otherwise each rom keeps its own file name."""
     units: list[Unit] = []
+    roms: list[FileInfo] = []
     for info in unmatched:
         with staged[info.path].path.open("rb") as f:
             head = f.read(INES_HEADER_BYTES)
@@ -750,9 +759,16 @@ def _unverified_units(
         if why:
             result.reasons.append(why)
             continue
-        match = unverified_match(system, info)
+        roms.append(info)
+    stem = os.path.splitext(item.name)[0] if _is_archive(item) and len(roms) == 1 else None
+    for info in roms:
+        match = unverified_match(system, info, stem)
         units.append(Unit(system, match.game.name + ".zip", (match,), unverified=True))
     return units, []
+
+
+def _is_archive(item: Path) -> bool:
+    return item.is_file() and item.suffix.lower() in ARCHIVE_EXTENSIONS
 
 
 # ------------------------------------------------------------------ inbox folder
