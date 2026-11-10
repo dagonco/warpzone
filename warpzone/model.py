@@ -159,21 +159,24 @@ def _defs_for(device: Device, profile: Profile) -> list[_Def]:
             "the play state lives in the gamelists that group brings"
         )
     for group in device.folders:
-        if group == "saves":
-            for save in profile.saves.values():
-                defs.append(
-                    _Def(
-                        f"wz-save-{save.emu}-{save.kind}",
-                        f"saves/{save.emu}/{save.kind}",
-                        "sendreceive",
-                        "sendreceive",
-                        device_path=save.path,
-                        fixed_ignores=save.ignore,
-                        save=True,
-                        skip_if_missing=True,
-                        create_when=save.create_when,
-                    )
+        # A save folder travels with `saves` unless its profile entry names another group.
+        for save in profile.saves.values():
+            if save.group != group:
+                continue
+            defs.append(
+                _Def(
+                    f"wz-save-{save.emu}-{save.kind}",
+                    f"saves/{save.emu}/{save.kind}",
+                    "sendreceive",
+                    "sendreceive",
+                    device_path=save.path,
+                    fixed_ignores=save.ignore,
+                    save=True,
+                    skip_if_missing=True,
+                    create_when=save.create_when,
                 )
+            )
+        if group == "saves":
             continue
         if group == "bios":
             for place in profile.bios.values():
