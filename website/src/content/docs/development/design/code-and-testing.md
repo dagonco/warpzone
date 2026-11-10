@@ -358,7 +358,10 @@ checks keep their names.
 
 - `lint`: ruff check + ruff format --check.
 - `typecheck`: mypy in strict mode on the `warpzone` package (`strict = true` in
-  `pyproject.toml`). The release workflow runs the same check before it builds.
+  `pyproject.toml`). The release workflow runs the same check before it builds. Its `verify` job
+  also refuses a tag whose SSH signature does not verify against `warpzone/data/allowed_signers`
+  (`scripts/verify_tag_signature.py`, tested by `tests/test_verify_tag_signature.py` with
+  throwaway repositories and keys).
 - `test`: unittest on Linux with Python 3.11 and 3.14 and on macOS with Python 3.14, without
   the updater script's tests (`WARPZONE_SKIP_UPDATER_SH=1`). The library UI's scripts are
   also parsed with node (`tests/test_ui_files.py`), skipped where node is not installed.
