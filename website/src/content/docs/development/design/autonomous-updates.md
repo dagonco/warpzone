@@ -536,9 +536,9 @@ The keys are `warpzone/data/allowed_signers` (the format of `ssh-keygen -Y`) **o
 known to work** (`good_sha`), read with `git show` into a temporary file at every tick. They
 travel with the version that is trusted, a release cannot change the keys that check it, and
 no file next to the script can be missing or swapped. A release signed by a trusted key can
-carry new keys, which apply from the moment a device is running it (rotation). The file ships
-with comments only: no key is in the repository until the maintainer adds one. When the running
-version has no such file, or no line in it that is not a comment, no signature is required
+carry new keys, which apply from the moment a device is running it (rotation). The file lists
+the project's release key. When the running version has no such file (an older release
+that predates it), or no line in it that is not a comment, no signature is required
 and the log says so; a file that cannot be read, or a missing `ssh-keygen` while there are
 keys, rejects every tag (fail closed). `WZ_ALLOWED_SIGNERS` replaces the file for tests.
 

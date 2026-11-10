@@ -11,8 +11,9 @@ device_id = "AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA"
 
 # Absolute path of the hub root on the HUB's filesystem (the folder that holds
 # library/, saves/, frontend/, songs/, tools/). Seen from the hub's Syncthing,
-# not from the machine running warpzone. The example is the Synology convention; use your own path.
-root = "/volume1/games"
+# not from the machine running warpzone. The path below is an example; use your own
+# (on a Synology NAS the share is usually under /volume1/).
+root = "/srv/games"
 
 # Base URL of the hub's Syncthing GUI/API. Enable the GUI on a LAN address of the hub.
 api_url = "http://nas.local:8384"

@@ -5,7 +5,7 @@
 
 Keep one game library on a home server and deliver it to every console you own, with saves that follow you from one device to the next.
 
-`warpzone` is a thin layer of conventions and automation on top of [Syncthing](https://syncthing.net). It never moves a byte of game data itself: it only configures Syncthing and keeps each device's setup honest.
+`warpzone` is a thin layer of conventions and automation on top of [Syncthing](https://syncthing.net). Syncthing does all the transfer between machines; warpzone configures it, files new games into the hub's library and removes from a device what its whitelist no longer allows.
 
 ## How it works
 

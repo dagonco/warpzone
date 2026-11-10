@@ -6,8 +6,8 @@ warpzone keeps one game library on a home server (the **hub**, typically a NAS)
 and delivers it to every console you own (the **devices**: Steam Deck, Steam
 Machine, a spare Mac...). Saves follow you from one device to the next. It is a
 thin layer of conventions and automation on top of [Syncthing](https://syncthing.net):
-warpzone never moves game data itself, it only configures Syncthing and keeps
-each device's copy honest.
+Syncthing does all the transfer between machines; warpzone configures it, files
+new games into the hub's library and removes from a device what its whitelist no longer allows.
 
 These pages are the contract for the implementation: a behaviour change updates the page
 that describes it in the same pull request. Anything not described here is out of scope.

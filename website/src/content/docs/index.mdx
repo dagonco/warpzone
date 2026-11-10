@@ -16,7 +16,7 @@ hero:
 
 import { Card, CardGrid } from '@astrojs/starlight/components';
 
-You have a NAS full of ROMs, a Steam Deck, maybe a Steam Machine, maybe a handheld on the shelf. Each one has its own copy of the games, its own idea of which games it wants and its own saves. warpzone is a thin layer of conventions and automation on top of [Syncthing](https://syncthing.net) that makes the server, called **the hub**, the single source of truth. It never moves a byte of game data itself: it configures Syncthing and keeps each device's setup honest.
+You have a home server full of ROMs and more than one console to play them on. Each one has its own copy of the games, its own idea of which games it wants and its own saves. warpzone is a thin layer of conventions and automation on top of [Syncthing](https://syncthing.net) that makes the server, called **the hub**, the single source of truth. Syncthing does all the transfer between machines; warpzone configures it, files new games into the hub's library and removes from a device what its whitelist no longer allows.
 
 ## The problem
 

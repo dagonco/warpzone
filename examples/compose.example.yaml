@@ -7,7 +7,7 @@
 #
 # Put next to this file:
 #   config/config.toml   the config from examples/config.example.toml, with in the tables:
-#                          [hub]    root = "/volume1/games"        (your games share, here a Synology path; the same as the mount below)
+#                          [hub]    root = "/srv/games"        (your games share; the same as the mount below)
 #                                   api_url = "http://192.168.1.10:8384"   (see "Network" below)
 #                                   api_key_file = "/config/hub.key"
 #                          [inbox]  rahasher = "/usr/local/bin/RAHasher"   (optional, RA hashes)
@@ -59,8 +59,9 @@ services:
     volumes:
       # The hub root, at the same path as `[hub] root` in the config, so one config is right
       # inside and outside the container. Read-write: the UI writes the whitelists and catalog/.
-      # CHANGE: /volume1/games is a Synology path; use your own games share on both sides.
-      - /volume1/games:/volume1/games
+      # CHANGE: /srv/games is an example; use your own games share on both sides (on a Synology NAS
+      # the share is usually under /volume1/).
+      - /srv/games:/srv/games
       # config.toml, hub.key and ui.token. Read-only.
       - ./config:/config:ro
 
