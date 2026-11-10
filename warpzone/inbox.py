@@ -487,6 +487,7 @@ def process_unit(
     res = UnitResult(unit.system, unit.entry, "planned" if not ctx.opts.apply else "placed")
     if len(unit.matches) == 1 and not unit.entry.endswith(".m3u"):
         res.dat = unit.matches[0].game.name
+    res.serials = tuple(dict.fromkeys(x for m in unit.matches for x in m.game.serials))
     sysdir = ctx.roms / unit.system
     dest = sysdir / unit.entry
     try:
@@ -838,6 +839,7 @@ def _update_catalog(opts: Options, rep: Reporter, results: Sequence[ItemResult])
     if not systems:
         return
     dat = {f"{u.library_folder}/{u.entry}": u.dat for u in placed if u.dat}
+    serials = {f"{u.library_folder}/{u.entry}": u.serials for u in placed if u.serials}
     ra_known = {
         f"{u.library_folder}/{u.entry}": (u.ra_hash, f"{u.library_folder}/{u.ra_of}")
         for u in placed
@@ -848,6 +850,7 @@ def _update_catalog(opts: Options, rep: Reporter, results: Sequence[ItemResult])
             opts.root,
             systems,
             dat=dat,
+            serials=serials,
             ra_known=ra_known,
             out=rep.out,
             warn=rep.warn,

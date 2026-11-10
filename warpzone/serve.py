@@ -417,7 +417,7 @@ class HubFiles:
         found = lib.by_id.get(game_id)
         if found is None:
             return saves_index.saves_response(saves_index.GameSaves())
-        return self._saves.game(lib, found[0], found[1].primary)
+        return self._saves.game(lib, found[0], found[1].primary, found[1].serials)
 
     def media_path(self, system: str, kind: str, name: str) -> Path | None:
         """The image file, or None when it is not a regular file inside its kind's folder

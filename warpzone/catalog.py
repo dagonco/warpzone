@@ -80,6 +80,7 @@ class Game:
     dat: str | None = None
     ra: Mapping[str, Any] | None = None
     flags: tuple[str, ...] = ()
+    serials: tuple[str, ...] = ()  # the DAT's serials (Redump), when `inbox` identified it
 
 
 def game_id(primary: str) -> str:
@@ -432,13 +433,14 @@ def merge(
     *,
     today: str,
     dat: Mapping[str, str] | None = None,
+    serials: Mapping[str, tuple[str, ...]] | None = None,
 ) -> list[Game]:
     """Derived games plus what only earlier runs and `inbox` know.
 
-    A file part keeps its stored sha1 while its size and mtime are unchanged. `added`, `dat`
-    and `ra` are kept for games that stay; a new game is `added` today. `dat` maps the
-    primary path of a game `inbox` just filed to its DAT name. Games no longer derived are
-    dropped.
+    A file part keeps its stored sha1 while its size and mtime are unchanged. `added`, `dat`,
+    `ra` and `serials` are kept for games that stay; a new game is `added` today. `dat` maps
+    the primary path of a game `inbox` just filed to its DAT name, `serials` to the DAT's
+    serials. Games no longer derived are dropped.
     """
     out = []
     for game in derived:
@@ -463,6 +465,7 @@ def merge(
                 added=(old.added if old and old.added else today),
                 dat=(dat or {}).get(game.primary) or (old.dat if old else None),
                 ra=old.ra if old else None,
+                serials=(serials or {}).get(game.primary) or (old.serials if old else ()),
             )
         )
     return out
@@ -536,6 +539,7 @@ def _game_json(game: Game) -> dict[str, Any]:
         "dat": game.dat,
         "ra": dict(game.ra) if game.ra is not None else None,
         "flags": list(game.flags),
+        "serials": list(game.serials),
     }
 
 
@@ -592,6 +596,7 @@ def _game_from_json(ident: str, raw: object) -> Game | None:
         return None
     built = tuple(p for p in parts if p is not None)
     added, dat, ra, flags = raw.get("added"), raw.get("dat"), raw.get("ra"), raw.get("flags")
+    serials = raw.get("serials")
     return Game(
         id=ident,
         title=title,
@@ -604,6 +609,9 @@ def _game_from_json(ident: str, raw: object) -> Game | None:
         dat=dat if isinstance(dat, str) else None,
         ra=ra if isinstance(ra, dict) else None,
         flags=tuple(f for f in flags if isinstance(f, str)) if isinstance(flags, list) else (),
+        serials=tuple(x for x in serials if isinstance(x, str))
+        if isinstance(serials, list)
+        else (),
     )
 
 

@@ -373,6 +373,7 @@ class UnitResult:
     folder: str = ""  # library folder when it is not roms/<system> (Switch updates, PS4 games)
     lines: list[str] = field(default_factory=list)  # whitelist lines, when `whitelist` is not it
     dat: str | None = None  # the DAT game name, when the unit is one DAT-identified file
+    serials: tuple[str, ...] = ()  # the DAT serials of the discs or file, for the catalog
     ra_hash: str | None = None  # RA hash of the placed file (the first disc), for the catalog
     ra_of: str = ""  # the file ra_hash is of, relative to the unit's library folder
 
