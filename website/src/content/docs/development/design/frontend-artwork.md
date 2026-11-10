@@ -90,7 +90,15 @@ devices' statistics from their ledgers instead, see [Play state](/warpzone/devel
 An entry the hub has no scrape for, but with user data on a ROM that is still there, is kept
 with just that data. Descriptive fields and images always come from the hub, so editing a
 description in the frontend's metadata editor is overwritten; edit the scrape on the hub.
-No backup is made: the hub copy is the source and user data is kept. A gamelist whose
+No backup is made of a gamelist that could be read, since its user data is carried over and
+the hub copy is the source. One that cannot be read (cut short by a power cut, an unusable
+encoding, over the size limit) has no user data to carry over, so `frontend refresh` first
+copies it to the settings backups (`~/.local/state/warpzone/settings/backups/emulationstation/gamelist-<system>/`,
+the newest 10 kept, like every other file warpzone edits), then writes the new gamelist, and
+warns with the reason and the path of the copy: the favourites, hidden marks and play counts
+that were only in that file are not in the new one (a device with `play-state` gets back the
+plays and favourites its last published ledger holds). With `--dry-run` it says it would keep
+a copy and writes none. While the frontend runs, nothing is copied or written. A gamelist whose
 content already matches (`artwork.same_content`: same entries and known fields, whatever the
 layout or the games listed without data) is not rewritten, so the frontend's own formatting
 survives and a second run changes nothing.
@@ -125,4 +133,4 @@ same way, and the updater's unit (`updatetimer.py`) uses the same function. A co
 already has older units gets the new text from the next `provision device`, which rewrites a
 unit whose text differs.
 
-The doctor reports missing and stale gamelists and the timer (see [Doctor](/warpzone/development/design/doctor/)).
+The doctor reports missing, unreadable and stale gamelists and the timer (see [Doctor](/warpzone/development/design/doctor/)).

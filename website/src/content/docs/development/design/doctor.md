@@ -115,8 +115,9 @@ for every problem, the exact fix for this platform.
   are pure. A device whose profile has `[artwork]` and whose config lists `frontend` gets two
   more lines. `Frontend artwork` plans the gamelists exactly as `frontend refresh` would
   (`artwork.plan_gamelists`, with the reads going through the probes) and is `[ok]` when every
-  gamelist is current, `[! ]` when some are missing or stale (named, with
-  `warpzone frontend refresh <name>` as the fix, frontend closed), when no scraped gamelist has
+  gamelist is current, `[! ]` when some are missing, unreadable or stale (named, with
+  `warpzone frontend refresh <name>` as the fix, frontend closed; for an unreadable one the
+  fix adds that the refresh keeps a copy first), when no scraped gamelist has
   arrived yet for the systems on the device (the sync is the thing to look at), or when the
   system list or a scraped file is unreadable. `Artwork timer` (only when the profile sets
   `refresh`) is `[ok]` when `warpzone-artwork.timer` is installed and `[! ]` otherwise.

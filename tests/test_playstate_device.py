@@ -427,6 +427,27 @@ class GeneratedTests(Art, unittest.TestCase):
         self.assertEqual(self.ledger().records[("gba", "Alpha (Europe).zip")].plays, 3)
         self.assertTrue(rep.warnings)
 
+    def test_an_unreadable_gamelist_counts_for_nothing_and_takes_no_play_back(self) -> None:
+        key = ("pokemini", "Pocket.zip")
+        self.sync()
+        self.save("pokemonmini", playcount=4, favorite="true")
+        self.sync()
+        published = (self.folder / "ark.jsonl").read_text(encoding="utf-8")
+        self.assertEqual(self.ledger().records[key].plays, 4)
+        self.out("pokemonmini").write_bytes(b"<gameList><game><path>./Pocket.z")
+        rep, _ = self.sync()
+        # The ledger still says what was played: no zero goes out to the other devices.
+        self.assertEqual(self.ledger().records[key].plays, 4)
+        self.assertEqual((self.folder / "ark.jsonl").read_text(encoding="utf-8"), published)
+        self.assertTrue(any("counts for nothing this time" in w for w in rep.warnings))
+        # The new gamelist is built from the ledger, so the plays and the favourite are back.
+        self.assertEqual(self.fields("pokemonmini")["./Pocket.zip"]["playcount"], "4")
+        self.assertEqual(self.fields("pokemonmini")["./Pocket.zip"]["favorite"], "true")
+        (copy,) = (self.state / "backups/emulationstation/gamelist-pokemonmini").iterdir()
+        self.assertEqual(copy.read_bytes(), b"<gameList><game><path>./Pocket.z")
+        self.sync()
+        self.assertEqual(self.ledger().records[key].plays, 4)
+
     def test_a_second_run_writes_nothing(self) -> None:
         self.peer("deck", ESDE_ID, {("gba", "Alpha (Europe).zip"): Record(plays=5)})
         self.sync()

@@ -492,6 +492,7 @@ def provision_device(
             dry_run=local.dry_run,
             probes=probes,
             play_state="play-state" in device.folders,
+            state_root=state_root,
         )
 
     # The refresh timer also converts saves, so a device that only syncs saves (no `frontend`)
