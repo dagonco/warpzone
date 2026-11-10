@@ -61,7 +61,7 @@ and states; Dolphin GC, Wii and states; DuckStation, PCSX2, melonDS, MAME, RMG
 Vita3K; ScummVM; PrimeHack (GC, Wii, states); Eden (`nand/user/save`, plus the
 user profiles in `nand/system/save/8000000000000010`); Ryujinx (`bis/user`
 restricted to `save` and `saveMeta`, plus the profiles in `bis/system/save`);
-Azahar (sdmc, states); shadPS4; Cemu (`mlc01/usr/save`); Xenia (Proton:
+Azahar (sdmc, states); shadPS4 (`home/1000/savedata`, the first user); Cemu (`mlc01/usr/save`); Xenia (Proton:
 `~/Emulation/roms/xbox360/content`, native: `~/.local/share/Xenia/content`;
 EmuDeck installs one or the other, and each has its own hub folder);
 Flycast (`vmu_save_*.bin` and the `nvmem` files only, from the folder that also
@@ -216,6 +216,17 @@ profile data, not code that tests the profile name.
 - **`create_when`** on a `[saves.*]` entry, with the meaning it has for `[bios.*]`: create
   the folder when that directory exists. RetroArch writes `saves/` and `states/` only on
   the first save, so without it the two folders would stay skipped until then.
+- **`previous_paths`** on a `[saves.*]` entry: earlier values of `path`. When Syncthing has
+  the folder at one of them, and that directory holds nothing but Syncthing's marker and
+  `.stignore` (or does not exist), `provision device` removes the folder from Syncthing and
+  adds it again at `path`, in the same run, unattended runs included. Removing a folder
+  deletes no file, and the new folder starts from a fresh index, so nothing can be read as a
+  mass delete. If the old directory holds anything, or the old path is not listed, the
+  refusal for a changed path applies (`provision_folders.can_move`, `is_move`, pure apart
+  from reading the directory). The new directory must exist (or be creatable with
+  `create_when`); until then the old folder is left as it is. `steamos-emudeck` uses it for
+  `shadps4-saves`, which moved from `~/.local/share/shadPS4/savedata` to
+  `~/.local/share/shadPS4/home/1000/savedata`.
 - **`[es_systems]`** (`source`, `override`, `prefix`, `process`; needs `paths.library`).
   The frontend reads `override` before `source`. `provision device` writes the override as
   the source with every `<path>` element that starts with `prefix` moved to

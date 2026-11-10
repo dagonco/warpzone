@@ -45,6 +45,14 @@ flatpak override --user --filesystem=~/.var/app/org.libretro.RetroArch com.githu
 
 `warpzone provision device` does this for you when the local Syncthing is the SyncThingy flatpak: it adds the missing overrides for every save and BIOS folder of the profile under `~/.var/app/<app>` whose emulator is installed, leaves the ones that already exist alone, and tells you to restart Syncthing. With `--dry-run` it only prints the command. An emulator you install later is picked up the next time you run `provision device`. A native Syncthing needs none of this. `warpzone doctor` checks the overrides and prints the command for each missing one.
 
+## shadPS4 saves
+
+shadPS4 keeps saves per user, in `~/.local/share/shadPS4/home/<user id>/savedata/<save title id>/`, and the first user is `1000`. The profile syncs `home/1000/savedata`. Older shadPS4 releases wrote to `~/.local/share/shadPS4/savedata/`, which is the folder earlier warpzone releases synced; v0.21 writes nothing there (the folder stays empty), and EmuDeck's `~/Emulation/saves/shadps4/saves` link still points at it. The profile syncs only the new folder, not both, and only user `1000`, so keep playing as the first user.
+
+**After upgrading warpzone**, run `warpzone provision device <name>` on each console (the updater timer does it by itself). If the console's `wz-save-shadps4-saves` folder is still at the old path, and that folder holds nothing, provision removes it from Syncthing and adds it again at the new path. It touches no file: removing a folder in Syncthing deletes nothing on disk. A console that has not written a save yet has no `home/1000/savedata` and keeps the old folder until it does; open a game once, then provision again. If the old folder does hold files (saves from an older shadPS4), provision refuses and changes nothing: move them into `home/1000/savedata/` by hand and run it again.
+
+**When both consoles already have saves in the new folder**, deal with it before the upgrade reaches the second one (a console with the updater timer provisions by itself). Once the folder is added at the new path, Syncthing merges the copies of the two consoles. A save that exists on one console only is copied to the other. A file with the same name on both and different content becomes a conflict: the newer one wins and the other is kept next to it as `*.sync-conflict-*`. That happens when both consoles played the same game. So, for each game both have (compare `ls ~/.local/share/shadPS4/home/1000/savedata` on the two), pick the console whose progress you want to keep, and on the other one close shadPS4 and move that game's folder aside, for example `mv ~/.local/share/shadPS4/home/1000/savedata/<save title id> ~/shadps4-saves-aside/`. Provision, wait for the sync, and check that the game loads with the progress you expect before deleting the copy you moved aside.
+
 ## The symlink gotcha
 
 EmuDeck exposes saves through symlinks under `~/Emulation/saves`. Syncthing never follows symlinks, so a folder pointed at the symlink syncs nothing and gives no error. The profile therefore points at the real directory of each emulator (for example RetroArch's saves under `~/.var/app/org.libretro.RetroArch/`). If you add a profile for another setup, resolve the links first (`readlink -f`).
@@ -148,7 +156,7 @@ xemu's disk image (`xbox_hdd.qcow2`, which holds that console's Xbox saves) is d
 
 ## Emulator settings
 
-The profile also declares the settings files of twelve emulators (language, region, graphics options), so a choice made on one console can reach the others. See [Emulator settings](/warpzone/setup/settings/).
+The profile also declares the settings files of thirteen emulators (language, region, graphics options), so a choice made on one console can reach the others. See [Emulator settings](/warpzone/setup/settings/).
 
 One caveat belongs here. The xemu EEPROM is shared as a whole file, which gives every console the same Xbox serial number and signing key. A console that already had its own EEPROM may reject saves signed with the old key that sit inside its own xemu HDD image (which stays per device, as above). Leave the EEPROM out at capture if that matters ([Emulator settings](/warpzone/setup/settings/#the-xbox-eeprom-caveat)).
 

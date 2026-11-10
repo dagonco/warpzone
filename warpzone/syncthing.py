@@ -164,6 +164,10 @@ class Client:
     def add_folder(self, folder: dict[str, Any]) -> None:
         self.request("POST", "/rest/config/folders", folder)
 
+    def remove_folder(self, folder_id: str) -> None:
+        """Remove a folder from Syncthing's configuration. Its files stay on disk."""
+        self.request("DELETE", f"/rest/config/folders/{urllib.parse.quote(folder_id)}")
+
     def patch_folder(self, folder_id: str, patch: dict[str, Any]) -> None:
         self.request("PATCH", f"/rest/config/folders/{urllib.parse.quote(folder_id)}", patch)
 

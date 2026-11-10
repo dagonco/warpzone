@@ -134,7 +134,7 @@ create_when = "~/Emulation/storage/xemu"
 - Patterns match the canonical key. `*` matches any run of characters and `?` one
   character; nothing else is special, so `[` is literal. Ids are `[a-z0-9-]+`.
 
-The shipped `steamos-emudeck` profile declares twelve emulators:
+The shipped `steamos-emudeck` profile declares thirteen emulators:
 
 | Emulator | File ids | Path | Format |
 |---|---|---|---|
@@ -150,9 +150,28 @@ The shipped `steamos-emudeck` profile declares twelve emulators:
 | `xemu` | `config` | `~/.var/app/app.xemu.xemu/data/xemu/xemu/xemu.toml` | `toml` |
 | `ryujinx` | `config` | `~/.config/Ryujinx/Config.json` | `json` |
 | `xenia` | `config` | `~/Emulation/roms/xbox360/xenia-canary.config.toml` | `toml` |
+| `shadps4` | `config`, `launcher` | `~/.local/share/shadPS4/config.json`, `~/.local/share/shadPS4QtLauncher/qt_ui.ini` | `json`, `ini` |
 
 Files that hold only a login (Dolphin's `RetroAchievements.ini`, PPSSPP's achievements
 token) are not declared at all.
+
+**shadPS4.** From v0.21 the emulator keeps its settings in `config.json` (tables `General`,
+`GPU`, `Vulkan`, `Input`, `Audio`, `Log`, `Debug`, `Network`; each value is a plain JSON
+scalar) and reads the older `config.toml` only once, to migrate it, while `config.json` is
+missing. A layer on the `toml` file would therefore change nothing on a current install, and
+the profile declares the JSON file instead. The Qt launcher keeps its own interface language
+in `qt_ui.ini` (a Qt settings file, group `[general_settings]`, key `guiLanguage`, such as
+`es_ES`), which is the second file. `known` has two keys: `General.console_language` (the PS4
+system language as an integer: 1 is English US, 3 is Spanish) and
+`[general_settings]guiLanguage`. These are noise, never shared: `General.install_dirs`,
+`General.addon_install_dir`, `General.home_dir`, `General.sys_modules_dir` and
+`General.font_dir` (paths; the install and DLC folders are set by the profile's `[shadps4]`
+table from each console's library path, see
+[shadPS4 install directories](/warpzone/development/design/profiles/#shadps4-install-directories)),
+the `Input`, `Debug` and `Log` tables, the audio device names, and the launcher's window,
+list, favourites and version-manager groups (which hold the selected emulator version and its
+path). Window size, full screen and `Vulkan.gpu_id` are `device`. The process names are those
+of `[shadps4]`, so a file is not written while the emulator or its launcher runs.
 
 ## Format handlers
 
@@ -194,7 +213,7 @@ The contract, tested for every handler:
 | `qt-ini` | Eden, Azahar | `[Section]Key`, with Qt's `\` and `%20` as written | raw text after `=`: quotes, escapes and `@Variant(...)` as written | as `ini` |
 | `retroarch-cfg` | `retroarch.cfg`, core `.opt` files | `key` | the text inside the quotes, or the bare value | at the end, as `key = "value"` |
 | `yaml-flat` | Vita3K | `key` | raw text after `: ` on a top-level `key: scalar` line | no |
-| `json` | Ryujinx | dotted path of objects, `hotkeys.screenshot` | typed scalar | no |
+| `json` | Ryujinx, shadPS4 | dotted path of objects, `hotkeys.screenshot` | typed scalar | no |
 | `toml` | melonDS, xemu | dotted path of tables and key, `Instance0.Firmware.Language` | typed scalar | after the table's last key; a missing table at the end |
 
 - `ini`: a key that appears twice in a section is `fixed` (PCSX2 writes `[Folders]SaveStates`

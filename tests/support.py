@@ -203,7 +203,7 @@ class FakeSyncthing:
                 code, payload = fake.route(self.command, url.path, query, body)
                 self._send(code, payload)
 
-            do_GET = do_POST = do_PATCH = _handle
+            do_GET = do_POST = do_PATCH = do_DELETE = _handle
 
         return Handler
 
@@ -227,6 +227,12 @@ class FakeSyncthing:
             if fid not in self.folders:
                 return 404, "No folder with given ID"
             self.folders[fid].update(body)
+            return 200, None
+        if path.startswith("/rest/config/folders/") and method == "DELETE":
+            fid = path.rsplit("/", 1)[1]
+            if self.folders.pop(fid, None) is None:
+                return 404, "No folder with given ID"
+            self.ignores.pop(fid, None)
             return 200, None
         if path == "/rest/db/ignores":
             if folder not in self.folders:

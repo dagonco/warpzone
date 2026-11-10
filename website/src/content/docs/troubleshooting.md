@@ -67,7 +67,7 @@ If you remove the line first, the console keeps its copy, and `prune` will repor
 
 **Cause.** The `wz-*` folder already exists in Syncthing with a different path than the config. Changing a folder's path would make Syncthing see a mass delete.
 
-**Fix.** Remove the folder in Syncthing (the files stay on disk), then run the provision command again. See [Safety](/warpzone/operation/safety/).
+**Fix.** Remove the folder in Syncthing (the files stay on disk), then run the provision command again. See [Safety](/warpzone/operation/safety/). If the message ends with `move them into ...`, the profile moved a save folder and the old directory still holds files: move them into the new directory first, then provision again; no manual removal is needed.
 
 ### `prune` deletes less than expected, or refuses
 

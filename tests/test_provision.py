@@ -21,7 +21,7 @@ from support import (
 )
 from warpzone import esde, provision_emulators, settings_state
 from warpzone.config import Config, parse_config
-from warpzone.model import hub_specs
+from warpzone.model import NO_VERSIONING, hub_specs
 from warpzone.probes import DeviceProbes
 from warpzone.profiles import Profile, load_profile
 from warpzone.provision import (
@@ -881,6 +881,110 @@ def _hub_specs():
     from warpzone.model import hub_specs
 
     return hub_specs(make_config(), PROFILES)
+
+
+class MovedSaveFolderTests(DeviceFixture):
+    """A save folder whose profile path moved (shadPS4 keeps saves per user now)."""
+
+    FOLDER = "wz-save-shadps4-saves"
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.old = self.home / ".local/share/shadPS4/savedata"
+        self.new = self.home / ".local/share/shadPS4/home/1000/savedata"
+        self.new.mkdir(parents=True)
+
+    def install(self, local: FakeSyncthing, hub: FakeSyncthing, path: Path) -> None:
+        """The device has the folder at `path`, as an older release left it."""
+        hub.folders[self.FOLDER] = {"id": self.FOLDER}
+        local.folders[self.FOLDER] = {
+            "id": self.FOLDER,
+            "path": str(path),
+            "type": "sendreceive",
+            "versioning": dict(NO_VERSIONING),
+            "paused": False,
+        }
+        local.ignores[self.FOLDER] = []
+
+    def folder_writes(self, local: FakeSyncthing) -> list[tuple[str, str, Any]]:
+        return [
+            w
+            for w in local.writes()
+            if self.FOLDER in w[1] or (w[2] or {}).get("id") == self.FOLDER
+        ]
+
+    def provision(self, local: FakeSyncthing, hub: FakeSyncthing, **kw: Any):
+        return self.run_device(local, hub, folders=["saves"], timeout=0.0, **kw)
+
+    def test_an_empty_old_folder_is_removed_and_added_at_the_new_path(self) -> None:
+        for unattended in (False, True):
+            with self.subTest(unattended=unattended):
+                self.old.mkdir(parents=True, exist_ok=True)
+                (self.old / ".stfolder").mkdir(exist_ok=True)
+                with FakeSyncthing(DECK_ID) as local, FakeSyncthing(HUB_ID) as hub:
+                    self.install(local, hub, self.old)
+                    _, lines = self.provision(local, hub, unattended=unattended)
+                    self.assertEqual(local.folders[self.FOLDER]["path"], str(self.new))
+                    deletes = [r for r in local.writes() if r[0] == "DELETE"]
+                    self.assertEqual(
+                        deletes, [("DELETE", f"/rest/config/folders/{self.FOLDER}", None)]
+                    )
+                    # Nothing but Syncthing's configuration changed: the old directory is as it was.
+                    self.assertEqual(sorted(p.name for p in self.old.iterdir()), [".stfolder"])
+                    self.assertTrue(any("moves from" in line for line in lines))
+
+    def test_a_second_run_writes_nothing(self) -> None:
+        with FakeSyncthing(DECK_ID) as local, FakeSyncthing(HUB_ID) as hub:
+            self.install(local, hub, self.old)
+            self.provision(local, hub)
+            for folder in local.folders.values():  # the markers Syncthing writes
+                (Path(folder["path"]) / ".stfolder").mkdir(parents=True, exist_ok=True)
+            local.requests.clear()
+            self.provision(local, hub, unattended=True)
+            self.assertEqual(self.folder_writes(local), [])
+
+    def test_an_old_folder_with_files_is_refused_and_untouched(self) -> None:
+        self.old.mkdir(parents=True)
+        (self.old / "CUSA00001").mkdir()
+        for unattended in (False, True):
+            with (
+                self.subTest(unattended=unattended),
+                FakeSyncthing(DECK_ID) as local,
+                FakeSyncthing(HUB_ID) as hub,
+            ):
+                self.install(local, hub, self.old)
+                with self.assertRaises(ProvisionError) as ctx:
+                    self.provision(local, hub, unattended=unattended)
+                self.assertEqual(self.folder_writes(local), [])
+                self.assertEqual(local.folders[self.FOLDER]["path"], str(self.old))
+                self.assertTrue((self.old / "CUSA00001").is_dir())
+        self.assertIn("move them into", str(ctx.exception))
+
+    def test_a_path_the_profile_never_retired_is_still_refused(self) -> None:
+        other = self.home / "elsewhere"
+        other.mkdir()
+        with FakeSyncthing(DECK_ID) as local, FakeSyncthing(HUB_ID) as hub:
+            self.install(local, hub, other)
+            with self.assertRaises(ProvisionError):
+                self.provision(local, hub)
+            self.assertEqual(self.folder_writes(local), [])
+
+    def test_the_old_folder_stays_until_the_new_directory_exists(self) -> None:
+        self.new.rmdir()
+        (self.new.parent).rmdir()
+        with FakeSyncthing(DECK_ID) as local, FakeSyncthing(HUB_ID) as hub:
+            self.install(local, hub, self.old)
+            rep, _ = self.provision(local, hub, unattended=True)
+            self.assertEqual(self.folder_writes(local), [])
+            self.assertEqual(local.folders[self.FOLDER]["path"], str(self.old))
+            self.assertTrue(any("skipped" in w for w in rep.warnings))
+
+    def test_a_dry_run_changes_nothing(self) -> None:
+        with FakeSyncthing(DECK_ID) as local, FakeSyncthing(HUB_ID) as hub:
+            self.install(local, hub, self.old)
+            self.provision(local, hub, dry_run=True)
+            self.assertEqual(self.folder_writes(local), [])
+            self.assertEqual(local.folders[self.FOLDER]["path"], str(self.old))
 
 
 class AdditivePlanTests(unittest.TestCase):

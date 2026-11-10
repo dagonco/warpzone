@@ -6,6 +6,7 @@ wait for files to arrive.
 
 from __future__ import annotations
 
+import os
 import time
 from collections.abc import Callable
 from typing import Any
@@ -24,6 +25,39 @@ class ProvisionError(WarpzoneError):
 
 def same_path(a: str, b: str) -> bool:
     return (a.rstrip("/") or "/") == (b.rstrip("/") or "/")
+
+
+def is_move(spec: FolderSpec, current: dict[str, Any]) -> bool:
+    """Whether Syncthing has the folder at a path the profile retired (pure)."""
+    have = current.get("path", "")
+    return not same_path(have, spec.path) and any(
+        same_path(have, old) for old in spec.previous_paths
+    )
+
+
+def holds_data(path: str, marker: str = ".stfolder") -> bool:
+    """Whether a directory holds anything besides Syncthing's marker and `.stignore`.
+
+    A directory that does not exist holds nothing; one that cannot be read, or is not a
+    directory, is taken to hold data."""
+    try:
+        names = os.listdir(path)
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return True
+    return any(name not in (marker, ".stignore") for name in names)
+
+
+def can_move(spec: FolderSpec, current: dict[str, Any]) -> bool:
+    """Whether the folder can be pointed at its new path without risk to any file.
+
+    Changing a folder's path in place would look like a mass delete, so a move is done by
+    removing the folder from Syncthing (the files stay on disk) and adding it again at the
+    new path. That is only safe when the retired path holds nothing a re-scan could lose.
+    """
+    marker = current.get("markerName") or ".stfolder"
+    return is_move(spec, current) and not holds_data(current.get("path", ""), marker)
 
 
 def _subset(wanted: Any, actual: Any) -> bool:
@@ -84,11 +118,16 @@ def upsert_folder(
         rep.note(spec.id, f"created at {spec.path}")
         return True
     if not same_path(current.get("path", ""), spec.path):
+        hint = (
+            f" The old folder still holds files: move them into {spec.path} first."
+            if is_move(spec, current)
+            else ""
+        )
         raise ProvisionError(
             f"{spec.id}: Syncthing has it at {current.get('path')!r} but the config says "
             f"{spec.path!r}. Changing a folder path would look like a mass delete, so "
             "warpzone refuses. Remove the folder in Syncthing first (files stay on disk), "
-            "then run provision again."
+            f"then run provision again.{hint}"
         )
     patch = folder_patch(spec, current)
     if patch:
@@ -210,12 +249,16 @@ def wait_for_files(
         )
 
 
-def unattended_refusals(spec: FolderSpec, current: dict[str, Any]) -> list[str]:
+def unattended_refusals(
+    spec: FolderSpec, current: dict[str, Any], *, moving: bool = False
+) -> list[str]:
     """Why an unattended run must not touch a folder Syncthing already has (pure).
 
     `type` decides what a folder does with changes: `receiveonly` to `sendreceive` would send
     a console's deletions to the hub. `versioning` decides what Syncthing keeps. Neither is
-    ever changed without a person, and neither is a failure a rollback could fix.
+    ever changed without a person, and neither is a failure a rollback could fix. A path
+    differs only for a person too, except for a `moving` folder (`can_move`): its old
+    directory is empty, so it is removed from Syncthing and added at the new path.
     """
     problems = []
     patch = folder_patch(spec, current)
@@ -225,9 +268,14 @@ def unattended_refusals(spec: FolderSpec, current: dict[str, Any]) -> list[str]:
         )
     if "versioning" in patch:
         problems.append(f"{spec.id}: versioning differs from the config")
-    if not same_path(current.get("path", ""), spec.path):
+    if not moving and not same_path(current.get("path", ""), spec.path):
         problems.append(
             f"{spec.id}: Syncthing has it at {current.get('path')!r}, not {spec.path!r}"
+            + (
+                f" and still holds files: move them into {spec.path} first"
+                if is_move(spec, current)
+                else ""
+            )
         )
     return problems
 
