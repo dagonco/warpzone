@@ -78,7 +78,14 @@ from warpzone.flatpak import (
 )
 from warpzone.model import ModelError
 from warpzone.paths import expand_home
-from warpzone.profiles import Profile, ProfileError, available_profiles, load_profile
+from warpzone.profiles import (
+    Profile,
+    ProfileError,
+    ShadPS4Dirs,
+    ShadPS4Launch,
+    available_profiles,
+    load_profile,
+)
 from warpzone.settings_layers import LayerError, conflict_copies, parse_layer, validate
 from warpzone.syncthing import _is_loopback
 from warpzone.versions import tag_key
@@ -1622,6 +1629,31 @@ def judge_shadps4_launch(
     return OK, f"ES-DE starts shadPS4 through {script}", ""
 
 
+def judge_shadps4_version(
+    *,
+    emulator: str | None,
+    games: bool,
+    looked_in: Sequence[str],
+    log: str,
+) -> tuple[str, str, str]:
+    """Verdict on the shadPS4 emulator version the launch script would run.
+
+    `emulator` is what `shadps4.select_version` finds (None when no version is installed or
+    selected), `games` whether the device holds PS4 games and `log` the file the script
+    appends its failures to. Without a version PS4 games do not start, and ES-DE shows
+    nothing of the script's error: a warning while there are no PS4 games yet, a problem when
+    there are.
+    """
+    if emulator is not None:
+        return OK, f"the launch script would run {emulator}", ""
+    why = (
+        f"no shadPS4 version is installed or selected (looked in {' and '.join(looked_in)}), "
+        "so PS4 games do not start"
+    )
+    fix = f"{shadps4.NO_VERSION_FIX}. Failed launches are logged in {log}"
+    return (FAIL if games else WARN), why, fix
+
+
 def judge_title_links(
     *,
     device: str,
@@ -1923,6 +1955,11 @@ def check_frontend(ctx: Context) -> list[Result]:
                 emulator=launch.emulator,
             )
             results.append(Result("shadPS4 launcher", G_FRONTEND, *verdict))
+            results.append(
+                Result(
+                    "shadPS4 version", G_FRONTEND, *_check_shadps4_version(p, dirs, launch, library)
+                )
+            )
     if (wiiu := profile.cemu) is not None:
         settings = Path(expand_home(wiiu.settings, p.home))
         mlc, game_path = (expand_home(x, p.home) for x in wiiu.wants(library))
@@ -1941,6 +1978,31 @@ def check_frontend(ctx: Context) -> list[Result]:
     if profile.links:
         results += _check_links(ctx, device)
     return results
+
+
+def _check_shadps4_version(
+    p: Probes, dirs: ShadPS4Dirs, launch: ShadPS4Launch, library: str
+) -> tuple[str, str, str]:
+    """Look up the emulator the way the launch script does, and whether PS4 games are here."""
+    qt_ini, versions = (Path(expand_home(x, p.home)) for x in (launch.qt_ini, launch.versions))
+
+    def resolve(entry: str) -> str | None:
+        # A version is an AppImage, or the folder that holds one.
+        path = Path(entry)
+        if p.is_dir(path):
+            path = path / shadps4.SDL_APPIMAGE
+        return str(path) if p.is_file(path) and p.is_executable(str(path)) else None
+
+    emulator = shadps4.select_version(
+        p.read_text(qt_ini) if p.is_file(qt_ini) else None,
+        p.read_text(versions) if p.is_file(versions) else None,
+        resolve,
+    )
+    games = any(p.list_dir(Path(d)) for d in dirs.wants(library))
+    log = settings_state.state_dir(p.env, p.home).parent / shadps4.LAUNCH_LOG
+    return judge_shadps4_version(
+        emulator=emulator, games=games, looked_in=[str(qt_ini), str(versions)], log=str(log)
+    )
 
 
 def _cemu_held(p: Probes, text: str | None, default_mlc: str, mlc: str) -> str | None:
