@@ -30,6 +30,7 @@ jobs:
   # manual runs run everything.
   changes:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     outputs:
       python: ${{ steps.diff.outputs.python }}
       updater: ${{ steps.diff.outputs.updater }}
@@ -59,8 +60,17 @@ jobs:
               .github/dependabot.yml | .github/workflows/docs.yml) ;;
               *) python=true ;;
               esac
+              # What tests/test_updater_sh.py depends on. updater.sh is the script under test
+              # and allowed_signers is the key file it verifies tags against. procs.py and
+              # versions.py are the modules the test imports (they import no other warpzone
+              # module), and __init__.py runs on those imports. tests/support.py is imported
+              # for FakeProc, and pyproject.toml is read by the package-data checks. The
+              # modules support.py itself imports are not listed: a break there is caught by
+              # the `test` jobs, which run for any change to the package.
               case $f in
-              warpzone/* | tests/test_updater_sh.py | tests/support.py | pyproject.toml) updater=true ;;
+              warpzone/data/updater.sh | warpzone/data/allowed_signers) updater=true ;;
+              warpzone/procs.py | warpzone/versions.py | warpzone/__init__.py) updater=true ;;
+              tests/test_updater_sh.py | tests/support.py | pyproject.toml) updater=true ;;
               .github/workflows/ci.yml) python=true; updater=true ;;
               esac
             done
@@ -71,6 +81,7 @@ jobs:
 
   lint:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -88,6 +99,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.python == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -102,6 +114,7 @@ jobs:
   test:
     needs: changes
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
@@ -201,6 +214,7 @@ jobs:
 
   secrets:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
       pull-requests: read

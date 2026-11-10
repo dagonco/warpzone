@@ -349,15 +349,19 @@ outside the code, such as new runner images or Python releases. `docs.yml` still
 
 On a pull request a first job, `changes`, looks at the files it changes. `test`, `typecheck`
 and `e2e` run only when something the tests read changes (code, tests, `pyproject.toml`,
-`examples/`, `CHANGELOG.md`, the design pages); `updater` only when the package, its tests or
-`pyproject.toml` change. `lint` and `secrets` always run, and a change to `ci.yml` runs
-everything. A skipped job counts as passed for the required checks; the matrix jobs skip
-their steps rather than the whole job, so their checks keep their names.
+`examples/`, `CHANGELOG.md`, the design pages); `updater` only when a file its tests use
+changes (`updater.sh`, `allowed_signers`, `procs.py`, `versions.py`, the package `__init__.py`,
+`tests/test_updater_sh.py`, `tests/support.py` or `pyproject.toml`). `lint` and `secrets`
+always run, and a change to `ci.yml` runs everything. A skipped job counts as passed for
+the required checks; the matrix jobs skip their steps rather than the whole job, so their
+checks keep their names.
 
 - `lint`: ruff check + ruff format --check.
-- `typecheck`: mypy on the `warpzone` package.
+- `typecheck`: mypy in strict mode on the `warpzone` package (`strict = true` in
+  `pyproject.toml`). The release workflow runs the same check before it builds.
 - `test`: unittest on Linux with Python 3.11 and 3.14 and on macOS with Python 3.14, without
-  the updater script's tests (`WARPZONE_SKIP_UPDATER_SH=1`).
+  the updater script's tests (`WARPZONE_SKIP_UPDATER_SH=1`). The library UI's scripts are
+  also parsed with node (`tests/test_ui_files.py`), skipped where node is not installed.
 - `updater`: `tests/test_updater_sh.py` on Ubuntu with dash as `sh` and on macOS.
 - `e2e`: ubuntu-latest, downloads a pinned Syncthing release, verifies its
   SHA-256 against a value committed in the workflow, runs the e2e test.

@@ -21,3 +21,6 @@ config.toml
 website/node_modules/
 website/dist/
 website/.astro/
+
+# Agent worktrees
+.claude/worktrees/

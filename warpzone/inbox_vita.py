@@ -139,8 +139,8 @@ def eboot_needs_license(head: bytes) -> bool:
     segments = struct.unpack_from("<Q", head, 0x58)[0]
     if app_info + 16 > len(head) or segments + 0x20 > len(head):
         raise bad
-    self_type = struct.unpack_from("<I", head, app_info + 12)[0]
-    encryption = struct.unpack_from("<Q", head, segments + 0x18)[0]
+    self_type: int = struct.unpack_from("<I", head, app_info + 12)[0]
+    encryption: int = struct.unpack_from("<Q", head, segments + 0x18)[0]
     return encryption != 2 and self_type == _SELF_TYPE_APP
 
 

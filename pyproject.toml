@@ -41,6 +41,7 @@ version = { attr = "warpzone.__version__" }
 [tool.mypy]
 python_version = "3.11"
 files = ["warpzone"]
+strict = true
 warn_unused_ignores = true
 warn_redundant_casts = true
 
