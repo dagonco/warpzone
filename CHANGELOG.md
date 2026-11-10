@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ## [Unreleased]
 
+### Fixed
+
+- `warpzone inbox` checks the free space before it unpacks or expands a big file, as it already did for a `.zip`. A `.7z` or `.rar` (the sizes come from `bsdtar -tvf`), a `.gcz` GameCube image (the size comes from its header) and a `.nsz` (at least its own size, as the exact one is not known) that does not fit in the work folder goes to review instead of filling the disk, which in the hub container can be the volume that holds the library. An archive with a member name that is not UTF-8 no longer stops the whole run with a traceback. See [Untrusted content](https://dagonco.github.io/warpzone/development/design/inbox/).
+
+### Security
+
+- `warpzone inbox` no longer builds a path from a name that a DAT gives. The game name of a Redump or No-Intro DAT, the set name of an arcade database and the rom names that become zip members were used as file names as they came, so a DAT with a game called `../../x` or `/some/path` made `inbox --apply` write outside `library/roms/<system>/`. A name that is empty, is `.` or `..`, or holds a `/`, a `\` or a control character now sends that game to review (`refused: the name '...' in the DAT has a path separator`) and nothing is written under it; the same check covers the file names of `inbox/_unverified/<system>/`. It takes a DAT crafted for it, in the DAT folder `inbox` reads or as a configured arcade database, and a file in the inbox that matches it.
+
 ## [0.4.0rc2] - 2026-11-10
 
 ### Added

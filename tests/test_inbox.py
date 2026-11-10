@@ -1,6 +1,9 @@
 import hashlib
 import json
 import os
+import shutil
+import struct
+import subprocess
 import tempfile
 import time
 import unittest
@@ -8,6 +11,7 @@ import zipfile
 import zlib
 from datetime import UTC, date, datetime
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 from inbox_support import CHDMAN, RAHASHER, age, make_hub, make_stub, stub_md5, write_dat
@@ -37,6 +41,7 @@ from warpzone.inbox_core import (
     extract_zip,
     find_tools,
     skip_name,
+    stage_item,
     unsafe_member,
     unsupported_reason,
     unverified_reason,
@@ -185,6 +190,24 @@ class PureTests(unittest.TestCase):
         for name in ("a.nes", "dir/a.nes", "..hidden", "a..b/c", "weird name (1).bin"):
             self.assertIsNone(unsafe_member(name), name)
 
+    def test_unsafe_entries(self) -> None:
+        unsafe_entry = inbox_core.unsafe_entry
+        for name in ("Adventure (USA)", ".hack (USA) (Disc 1)", "Pokémon (Spain)", "a..b", "..."):
+            self.assertIsNone(unsafe_entry(name), name)
+        for name in ("../x", "/abs/x", "dir/x", "dir\\x", "C:\\x"):
+            self.assertEqual(unsafe_entry(name), "a path separator", name)
+        for name in ("line\nbreak", "tab\there", "nul\0byte", "del\x7f"):
+            self.assertEqual(unsafe_entry(name), "a control character", name)
+        self.assertEqual(unsafe_entry(""), "no characters")
+        for name in (".", ".."):
+            self.assertEqual(unsafe_entry(name), "only dots", name)
+        self.assertEqual(inbox_core.printable("a\x1b[2Jb\nc"), "a?[2Jb?c")
+        self.assertIsNone(inbox_core.refused_name("Adventure (USA).zip", "the DAT"))
+        self.assertEqual(
+            inbox_core.refused_name("../x\n", "the DAT"),
+            "refused: the name '../x?' in the DAT has a path separator",
+        )
+
     def test_purge_only_picks_old_date_folders(self) -> None:
         names = [
             "2026-10-19",
@@ -330,6 +353,16 @@ class PureTests(unittest.TestCase):
             )
 
 
+def gcz_header(data_size: int) -> bytes:
+    """The 32-byte header of a GCZ: magic, sub type, compressed size, data size, block size,
+    block count (little-endian)."""
+    return struct.pack("<IIQQII", 0xB10BC001, 0, 0, data_size, 0x8000, 1)
+
+
+def _usage(*, free: int) -> SimpleNamespace:
+    return SimpleNamespace(total=free + 1, used=1, free=free)
+
+
 class ArchiveTests(unittest.TestCase):
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
@@ -371,16 +404,27 @@ class ArchiveTests(unittest.TestCase):
         with self.assertRaises(inbox_core.ItemFailure):
             extract_zip(bad, self.tmp / "out")
 
-    def stub_bsdtar(self, listing: str, *, link: bool = False) -> str:
+    def stub_bsdtar(self, listing: str, *, link: bool = False, size: int = 1) -> str:
+        """A bsdtar that lists `listing` for -tf, one ls-style line per name (each `size` bytes)
+        for -tvf, and logs the first argument of every call to `bsdtar.log`."""
         source = (
             "import os, sys\n"
             "a = sys.argv[1:]\n"
+            f"open({str(self.tmp / 'bsdtar.log')!r}, 'a').write(a[0] + '\\n')\n"
             f"if a[0] == '-tf':\n    print({listing!r}); sys.exit(0)\n"
+            "if a[0] == '-tvf':\n"
+            f"    for n in {listing!r}.splitlines():\n"
+            f"        print('-rw-r--r--  0 0      0   %10d Nov 10 19:41 %s' % ({size}, n))\n"
+            "    sys.exit(0)\n"
             "dest = a[a.index('-C') + 1]\n"
             "open(os.path.join(dest, 'x.bin'), 'w').write('x')\n"
             + ("os.symlink('/etc/passwd', os.path.join(dest, 'l'))\n" if link else "")
         )
         return make_stub(self.tmp / "bin", "bsdtar", source)
+
+    def bsdtar_calls(self) -> list[str]:
+        log = self.tmp / "bsdtar.log"
+        return log.read_text().splitlines() if log.exists() else []
 
     def test_bsdtar_lists_before_it_extracts(self) -> None:
         archive = self.tmp / "a.7z"
@@ -392,6 +436,87 @@ class ArchiveTests(unittest.TestCase):
         self.assertFalse((self.tmp / "bad/x.bin").exists())
         with self.assertRaises(inbox_core.ItemFailure):
             extract_bsdtar(self.stub_bsdtar("x.bin", link=True), archive, self.tmp / "link")
+
+    def test_bsdtar_refuses_an_archive_that_does_not_fit_before_extracting(self) -> None:
+        archive = self.tmp / "a.7z"
+        archive.write_bytes(b"7z")
+        bsdtar = self.stub_bsdtar("big.iso", size=5000)
+        with (
+            mock.patch("shutil.disk_usage", return_value=_usage(free=1000)),
+            self.assertRaises(inbox_core.ItemFailure) as ctx,
+        ):
+            extract_bsdtar(bsdtar, archive, self.tmp / "out")
+        self.assertIn("not enough free space", str(ctx.exception))
+        self.assertNotIn("-xf", self.bsdtar_calls())
+        self.assertFalse((self.tmp / "out/x.bin").exists())
+
+    def test_bsdtar_sums_every_member_and_leaves_5_percent_of_room(self) -> None:
+        archive = self.tmp / "a.7z"
+        archive.write_bytes(b"7z")
+        bsdtar = self.stub_bsdtar("a.bin\nb.bin", size=500)  # 1000 bytes in all
+        with (
+            mock.patch("shutil.disk_usage", return_value=_usage(free=1049)),
+            self.assertRaises(inbox_core.ItemFailure),
+        ):
+            extract_bsdtar(bsdtar, archive, self.tmp / "no")
+        with mock.patch("shutil.disk_usage", return_value=_usage(free=1050)):
+            extract_bsdtar(bsdtar, archive, self.tmp / "yes")
+        self.assertTrue((self.tmp / "yes/x.bin").exists())
+
+    def test_bsdtar_fails_closed_when_a_member_size_cannot_be_read(self) -> None:
+        archive = self.tmp / "a.7z"
+        archive.write_bytes(b"7z")
+        for line in ("garbage", "-rw-r--r--  0 0 0 12K Nov 10 19:41 x.bin"):
+            source = (
+                "import sys\n"
+                "a = sys.argv[1:]\n"
+                "print('x.bin' if a[0] == '-tf' else " + repr(line) + ")\n"
+            )
+            bsdtar = make_stub(self.tmp / "bin2", "bsdtar", source)
+            with self.assertRaises(inbox_core.ItemFailure, msg=line) as ctx:
+                extract_bsdtar(bsdtar, archive, self.tmp / "out")
+            self.assertIn("a.7z: cannot read the member sizes", str(ctx.exception))
+        self.assertFalse((self.tmp / "out/x.bin").exists())
+
+    def test_bsdtar_with_a_non_utf8_member_name_fails_or_works_as_an_item(self) -> None:
+        archive = self.tmp / "a.7z"
+        archive.write_bytes(b"7z")
+        source = (
+            "import os, sys\n"
+            "a = sys.argv[1:]\n"
+            "if a[0] == '-tf':\n"
+            "    sys.stdout.buffer.write(b'caf\\xe9.bin\\n'); sys.exit(0)\n"
+            "if a[0] == '-tvf':\n"
+            "    sys.stdout.buffer.write(b'-rw-r--r--  0 0 0 1 Nov 10 19:41 caf\\xe9.bin\\n')\n"
+            "    sys.exit(0)\n"
+            "dest = a[a.index('-C') + 1]\n"
+            "open(os.path.join(dest, 'x.bin'), 'w').write('x')\n"
+            "sys.stderr.buffer.write(b'warning caf\\xe9\\n')\n"
+        )
+        bsdtar = make_stub(self.tmp / "bin3", "bsdtar", source)
+        work = self.tmp / "work"
+        work.mkdir()
+        files, _notes, failures = stage_item(archive, work, Tools(bsdtar=bsdtar))
+        self.assertEqual([f.rel for f in files], ["a.7z/x.bin"])
+        self.assertEqual(failures, [])
+
+    @unittest.skipUnless(shutil.which("bsdtar"), "needs a real bsdtar")
+    def test_the_real_bsdtar_listing_is_summed_even_with_spaces_in_names(self) -> None:
+        src = self.tmp / "src"
+        (src / "sub dir").mkdir(parents=True)
+        (src / "sub dir" / "a file -> x.txt").write_bytes(b"hello\n")
+        (src / "big.bin").write_bytes(bytes(5000))
+        archive = self.tmp / "real.7z"
+        made = subprocess.run(
+            ["bsdtar", "--format", "7zip", "-cf", str(archive), "-C", str(src), "."],
+            capture_output=True,
+            check=False,
+        )
+        if made.returncode != 0:
+            self.skipTest("this bsdtar cannot write 7z")
+        self.assertEqual(inbox_core.bsdtar_unpacked_size("bsdtar", archive), 5006)
+        extract_bsdtar("bsdtar", archive, self.tmp / "out")
+        self.assertEqual((self.tmp / "out/big.bin").stat().st_size, 5000)
 
     def test_sidecar_must_name_the_games_files(self) -> None:
         def staged(*names: str) -> dict[str, Staged]:
@@ -625,6 +750,94 @@ class CartridgeTests(Base):
         self.go(tools=Tools())
         self.assertEqual(self.library(), [])
         self.assertIn("skipped symbolic link", self.out)
+
+
+class DatNameTests(Base):
+    """A name in a DAT comes from outside: it names a file in the system folder or nothing.
+
+    Every unsafe name here holds the word `escape`, and the dropped items do not, so a file
+    written anywhere under the test's folder because of the name is found by that word."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        (self.hub / "outside").mkdir()  # three levels above roms/<system>/
+        (self.tmp / "elsewhere").mkdir()  # outside the hub root
+
+    def nes_dat(self, game: str, rom_name: str = "dump.nes") -> None:
+        folder = self.dats / "no-intro"
+        games = [(game, [(rom_name, NES_ROM)])]
+        write_dat(folder, "Nintendo - Nintendo Entertainment System", games)
+
+    def psp_dat(self, game: str) -> None:
+        write_dat(self.dats / "redump", "Sony - PlayStation Portable", [(game, [("d.iso", ISO)])])
+
+    def escaped(self) -> list[str]:
+        return sorted(
+            str(p.relative_to(self.tmp))
+            for p in self.tmp.rglob("*escape*")
+            if self.dats not in p.parents
+        )
+
+    def assert_refused(self, item: str, why: str) -> None:
+        """Report and apply both send the item to review, and nothing was written for it."""
+        before = self.tree()
+        self.assertEqual(self.go(apply=False, tools=Tools()), 1, self.out)
+        self.assertIn("REVIEW", self.out)
+        self.assertNotIn("would place", self.out)
+        self.assertEqual(self.tree(), before, "report only changes nothing in the hub")
+        self.assertEqual(self.go(tools=Tools()), 1, self.out)
+        self.assertEqual(self.escaped(), [])
+        self.assertEqual(self.library(), [])
+        self.assertIn(why, self.reason(item))
+        self.assertNotIn("whitelist:", self.out)
+
+    def test_a_game_name_with_parent_folders_stays_out_of_the_hub(self) -> None:
+        self.psp_dat("../../../outside/escape")
+        self.drop("dump.iso", ISO)  # an image is copied as it is: the bytes are the sender's
+        self.assert_refused("dump.iso", "a path separator")
+
+    def test_an_absolute_game_name_stays_out_of_the_disk(self) -> None:
+        self.nes_dat(str(self.tmp / "elsewhere" / "escape"))
+        self.psp_dat(str(self.tmp / "elsewhere" / "escape-too"))
+        self.drop("dump.nes", NES_ROM)
+        self.drop("dump.iso", ISO)
+        self.assertEqual(self.go(tools=Tools()), 2, self.out)
+        self.assertEqual(self.escaped(), [])
+        self.assertEqual(self.library(), [])
+        self.assertEqual(
+            self.review(),
+            ["dump.iso", "dump.iso.reason.txt", "dump.nes", "dump.nes.reason.txt"],
+        )
+
+    def test_a_rom_name_with_parent_folders_never_becomes_a_zip_member(self) -> None:
+        self.nes_dat("Clean Name (USA)", rom_name="../../../outside/escape.nes")
+        self.drop("dump.nes", NES_ROM)
+        self.assert_refused("dump.nes", "a path separator")
+
+    def test_a_game_name_with_a_line_break_is_refused(self) -> None:
+        self.nes_dat("escape\nline")
+        self.drop("dump.nes", NES_ROM)
+        self.assert_refused("dump.nes", "a control character")
+
+    def test_the_reason_shows_the_name_without_its_control_characters(self) -> None:
+        self.nes_dat("escape\x1b[2Jline")
+        self.drop("dump.nes", NES_ROM)
+        self.assertEqual(self.go(apply=False, tools=Tools()), 1, self.out)
+        self.assertNotIn("\x1b", self.out)
+
+    def test_a_safe_name_next_to_an_unsafe_one_is_still_filed(self) -> None:
+        folder = self.dats / "no-intro"
+        write_dat(
+            folder,
+            "Nintendo - Nintendo Entertainment System",
+            [("../escape", [("a.nes", SPIRIT_ROM)]), ("Adventure (USA)", [("b.nes", NES_ROM)])],
+        )
+        self.drop("good.nes", NES_ROM)
+        self.drop("bad.nes", SPIRIT_ROM)
+        self.assertEqual(self.go(tools=Tools()), 1, self.out)
+        self.assertEqual(self.library(), ["nes/Adventure (USA).zip"])
+        self.assertEqual(self.escaped(), [])
+        self.assertEqual(self.done(), ["good.nes"])
 
 
 class UnverifiedTests(Base):
@@ -1083,7 +1296,7 @@ class FileSystemTests(Base):
         self.assertIn("dolphin-tool convert -f rvz -c zstd -l 5 -b 131072", self.out)
 
     def test_gcz_gamecube_image_needs_dolphin_tool_and_is_kept_as_it_is(self) -> None:
-        gcz = b"\x01\xc0\x0b\xb1 compressed container"
+        gcz = gcz_header(len(GC_ISO)) + b" compressed container"
         self.drop("cube.gcz", gcz)
         self.assertEqual(self.go(tools=Tools()), 1)
         self.assertIn("needs dolphin-tool", self.reason("cube.gcz"))
@@ -1100,6 +1313,39 @@ class FileSystemTests(Base):
         self.assertEqual(self.library(), ["gc/Cube Game (USA).gcz"])
         self.assertEqual((self.roms / "gc" / "Cube Game (USA).gcz").read_bytes(), gcz)
         self.assertNotIn("could be converted", self.out)
+
+    def test_gcz_that_does_not_fit_is_a_failure_and_dolphin_tool_never_runs(self) -> None:
+        log = self.tmp / "dolphin.log"
+        source = f"open({str(log)!r}, 'a').write('ran\\n')\n"
+        dolphin = make_stub(self.bin, "dolphin-tool", source)
+        gcz = self.tmp / "wii.gcz"
+        gcz.write_bytes(gcz_header(4700 * 2**20) + b"x" * 100)
+        work = self.tmp / "gcz-work"
+        work.mkdir()
+        tools = Tools(dolphin_tool=dolphin)
+        with mock.patch("shutil.disk_usage", return_value=_usage(free=2**30)):
+            out, failures = inbox.expand_compressed([Staged(gcz, "wii.gcz")], work, tools)
+        self.assertEqual(out, [])
+        self.assertEqual(len(failures), 1)
+        self.assertIn("wii.gcz: not enough free space", failures[0])
+        self.assertIn("4700 MiB", failures[0])
+        self.assertFalse(log.exists())
+
+    def test_gcz_check_skips_a_file_without_the_magic_and_lets_dolphin_tool_reject_it(self) -> None:
+        log = self.tmp / "dolphin.log"
+        source = f"open({str(log)!r}, 'a').write('ran\\n')\nimport sys\nsys.exit(1)\n"
+        dolphin = make_stub(self.bin, "dolphin-tool", source)
+        gcz = self.tmp / "bad.gcz"
+        gcz.write_bytes(b"not a gcz at all, but long enough to hold a header of 24 bytes")
+        work = self.tmp / "gcz-work"
+        work.mkdir()
+        with mock.patch("shutil.disk_usage", return_value=_usage(free=0)):
+            out, failures = inbox.expand_compressed(
+                [Staged(gcz, "bad.gcz")], work, Tools(dolphin_tool=dolphin)
+            )
+        self.assertEqual(out, [])
+        self.assertIn("dolphin-tool could not read it", failures[0])
+        self.assertTrue(log.exists())
 
     def test_part_file_from_an_earlier_crash_is_replaced(self) -> None:
         (self.roms / "nes" / "Adventure (USA).zip.part").write_bytes(b"half")

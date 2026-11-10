@@ -126,7 +126,7 @@ vita_zrif = "~/keys/PSV_GAMES.tsv"            # optional: zRIF keys for PS Vita 
 
 ## What it does for each item
 
-1. **Unpacks** `.zip` (and `.7z` / `.rar` with `bsdtar`) into a local work folder, never onto the share. Archive members are untrusted: absolute paths, `..` and symbolic links are refused.
+1. **Unpacks** `.zip` (and `.7z` / `.rar` with `bsdtar`) into a local work folder, never onto the share. Archive members are untrusted: absolute paths, `..` and symbolic links are refused. The names a DAT gives are untrusted too: a game, set or rom name that is not a plain file name (it holds a `/`, a `\` or a control character, or is `.` or `..`) sends that game to review and nothing is written under it.
 2. **Identifies by content**, whatever the files are called: size and CRC32 (and SHA1, when the DAT has it) against the Redump and No-Intro DATs of [libretro-database](https://github.com/libretro/libretro-database) (`metadat/redump`, `metadat/no-intro`). A game matches when all its DAT roms are present. DATs are parsed only when needed and cached in `$XDG_CACHE_HOME/warpzone/dats`.
 3. **Converts** to what the library already holds:
 

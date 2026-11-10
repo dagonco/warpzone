@@ -4,6 +4,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 from inbox_support import make_stub
@@ -476,6 +477,24 @@ class CompressedTests(SwitchBase):
         self.assertEqual([c.split()[0] for c in calls], ["-i", "-D", "-V"])
         self.assertIn("compressed: it is decompressed", self.out)
         self.assertEqual(self.done(), ["pack.nsz"])
+
+    def test_nsz_that_cannot_fit_is_reviewed_before_nsz_decompresses_it(self) -> None:
+        nsz = make_nsz(make_nsp(MK8))
+        self.drop("big.nsz", nsz)
+        usage = SimpleNamespace(total=1, used=0, free=int(len(nsz) * 1.05) - 1)
+        with mock.patch("shutil.disk_usage", return_value=usage):
+            self.assertEqual(self.go(), 1, self.out)
+        self.assertIn("not enough free space", self.reason("big.nsz"))
+        self.assertNotIn("-D", [c.split()[0] for c in self.nsz_calls()])
+        self.assertEqual(self.files("roms"), [])
+
+    def test_nsz_that_has_the_room_for_the_lower_bound_is_decompressed(self) -> None:
+        nsz = make_nsz(make_nsp(MK8))
+        self.drop("fits.nsz", nsz)
+        usage = SimpleNamespace(total=1, used=0, free=int(len(nsz) * 1.05) + 1)
+        with mock.patch("shutil.disk_usage", return_value=usage):
+            self.assertEqual(self.go(), 0, self.out)
+        self.assertIn("-D", [c.split()[0] for c in self.nsz_calls()])
 
     def test_a_nsz_equal_to_a_nsp_already_there(self) -> None:
         nsp = make_nsp(MK8)

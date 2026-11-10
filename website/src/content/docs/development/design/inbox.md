@@ -48,7 +48,12 @@ The contract:
   with `zipfile`, `.7z` and `.rar` with `bsdtar`; archives inside archives up to two
   levels). A member with an absolute path, a `..` component or a NUL byte, or a symbolic
   link, makes the whole item go to review, and nothing is extracted before every name is
-  checked. A cue or gdi is followed only if every file it names is a file of the item.
+  checked. The free space is checked before extracting too: the sum of the member sizes
+  (from the zip directory, or from the fifth column of `bsdtar -tvf`; the names are taken
+  from `-tf`, never from that listing) plus 5% must fit in the work folder, or the item
+  goes to review, and so does an archive with a listing line that has no decimal size. A
+  member name that is not UTF-8 is read with replacement characters and never stops the
+  run. A cue or gdi is followed only if every file it names is a file of the item.
   Symbolic links in the inbox are skipped.
 - **Identification by content.** Every file that is not a sidecar (`.cue`, `.gdi`,
   `.txt`, images, ...) is read once for size, CRC32 and SHA1, and looked up in the
@@ -86,7 +91,10 @@ The contract:
   `psp`: the plain `.iso`, copied and its CRC32 checked against the DAT. `gc`: an
   `.iso` stays an `.iso` (the report prints the `dolphin-tool convert -f rvz -c zstd
   -l 5 -b 131072` command; warpzone never converts it); a `.gcz` is identified by
-  expanding it with `dolphin-tool convert -f iso` into the work folder and the compressed
+  expanding it with `dolphin-tool convert -f iso` into the work folder (the image size is
+  read from the GCZ header, and the conversion does not start unless that size plus 5%
+  fits in the work folder; a file without the GCZ magic skips the check and is rejected
+  by `dolphin-tool`) and the compressed
   file itself is what gets placed, as `<game>.gcz`. An `.rvz` or `.wia` never gets here:
   it is read by its header (see [Compressed Wii and GameCube images](#compressed-wii-and-gamecube-images)). Cartridge systems: a
   `<game>.zip` with the rom under its DAT name, always the same bytes for the same game.
@@ -95,6 +103,16 @@ The contract:
   `<game>.m3u` playlist; GameCube discs stay loose files, as in the library. A game is
   placed only when every disc the DAT lists is in the item (`incomplete multi-disc`
   otherwise); a disc that is the only one its DAT lists is a plain game.
+- **Names are untrusted too.** A DAT is a file from outside, like an archive, and its
+  names become paths: the game name is the entry in `library/roms/<system>/` and each rom
+  name a member of the zip. Before anything is prepared, `unsafe_names` checks the entry
+  and every game and rom name of the game with `unsafe_entry` (pure). A name that is
+  empty, is `.` or `..`, or holds a `/`, a `\` or a control character must be a plain
+  file name and is not: the game goes to review with
+  `refused: the name '<name>' in the DAT has a path separator` and nothing is written
+  under that name, while the other games of the item are filed as usual. The name of a
+  rom from `_unverified/` is the file's own and gets the same check (`in the item`).
+  Control characters are printed as `?` in the report and in the reason file.
 - **RetroAchievements (optional).** With `[inbox] rahasher` set, the RA hash of the
   source (the cue, gdi, iso or rom; a Redump cue of a Dreamcast disc is turned into a
   temporary gdi, which RAHasher needs) is compared with the hash of the result (the
@@ -113,7 +131,7 @@ The contract:
   Items with anything that could not be placed go to `inbox/_revisar/` with
   `<item>.reason.txt` (no DAT match, ambiguous match, files not in any DAT, incomplete
   multi-disc, conversion or verify failed, RA hash changed, conflict, missing tool,
-  unsafe archive, not supported yet). Games of such an item that could be placed are
+  unsafe archive, a DAT name that is not a plain file name, not supported yet). Games of such an item that could be placed are
   placed; running the item again reports them as already in the library. Names that are
   taken get ` (2)`, ` (3)`, ... On every `--apply` run, folders of `_done` whose name is a
   date older than 7 days are deleted; nothing else in `_done` is touched, and a symbolic
@@ -152,7 +170,7 @@ The contract:
 - **Exit code.** `0` when every item is placed or already in the library; `1` when any
   item went to review; `2` for a usage or configuration error.
 
-The decisions (`skip_name`, `unsafe_member`, `select_purge`, `plan_units`,
+The decisions (`skip_name`, `unsafe_member`, `unsafe_entry`, `select_purge`, `plan_units`,
 `destination_verdict`, `whitelist_line`, `resolve_refs`, `unsupported_reason`,
 `unverified_reason`, `unverified_match`,
 `match_dat`, `group_discs`, `parse_dat`) are pure and unit-tested; conversions are
@@ -245,7 +263,9 @@ blawar/titledb and filed under the library's existing conventions. The code is i
   `<Bundle> (part N of M)`. A standalone entry (no `ids`, or only its own) names the DLC
   itself.
 - **Compressed files.** `.nsz` is decompressed with `nsz -D --keys <keys> -o <work>` only
-  with `--apply`; the report only reads it with `-i`. `nsz` exits 0 on some damaged
+  with `--apply`; the report only reads it with `-i`. Before `-D` the work folder must have
+  free space of at least the size of the `.nsz` plus 5%, a lower bound (the `.nsp` is never
+  smaller; the exact size would need the NCZ section tables); a smaller folder is a review. `nsz` exits 0 on some damaged
   inputs, so the output is accepted only if `nsz` exited 0 and printed `[DONE]`, its PFS0
   header parses (magic, entry table, member bounds), and `nsz -V` exits 0 and prints
   `[VERIFIED]`. Anything else is a review and the partial output is deleted with the work
@@ -738,7 +758,10 @@ registry (`inbox.kind_handlers()`; a handler has `validate`, `claims` and `proce
   still placed and a note tells the user to copy it from `roms/mame/`; warpzone never
   copies BIOS files.
 - **Name and placement.** The result is `library/roms/mame/<set>.zip`, the set name of the
-  database that decided, whatever the file was called; the bytes are the original's. It is
+  database that decided, whatever the file was called; the bytes are the original's. The
+  set name comes from the database, so it gets the same check as a DAT's game name
+  (`unsafe_entry`): one that is not a plain file name sends the zip to review and nothing
+  is written. It is
   copied to `<name>.part`, read back and compared member by member, then renamed. If the
   name exists, equal members mean "already in the library" and different ones a review
   (conflict, nothing replaced). `roms/arcade/` is never written. The whitelist line is

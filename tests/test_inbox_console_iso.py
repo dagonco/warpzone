@@ -471,6 +471,8 @@ class ArchiveTests(FlowBase):
             "import shutil, sys\n"
             "a = sys.argv[1:]\n"
             f"if a[0] == '-tf':\n    print({WUA_NAME!r}); sys.exit(0)\n"
+            "if a[0] == '-tvf':\n"
+            f"    print('-rw-r--r--  0 0 0 1 Nov 10 19:41 ' + {WUA_NAME!r}); sys.exit(0)\n"
             "dest = a[a.index('-C') + 1]\n"
             f"shutil.copy({str(payload)!r}, dest + '/' + {WUA_NAME!r})\n"
         )
@@ -489,6 +491,8 @@ class ArchiveTests(FlowBase):
             "import shutil, sys\n"
             "a = sys.argv[1:]\n"
             f"if a[0] == '-tf':\n    print({PS3_NAME!r}); sys.exit(0)\n"
+            "if a[0] == '-tvf':\n"
+            f"    print('-rw-r--r--  0 0 0 1 Nov 10 19:41 ' + {PS3_NAME!r}); sys.exit(0)\n"
             "dest = a[a.index('-C') + 1]\n"
             f"shutil.copy({str(payload)!r}, dest + '/' + {PS3_NAME!r})\n"
         )
