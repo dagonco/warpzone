@@ -283,6 +283,7 @@ warpzone inbox --apply
 ```
 warpzone catalog [--config PATH] [--root PATH] [--dry-run]
                  [--ra-hash [--rahasher PATH]] [--ra-lists [--force]]
+                 [--dats [--dats-dir PATH] [--force]]
 ```
 
 Builds and updates the catalog index: one `catalog/systems/<system>.json` per system folder of `library/roms/`, at the hub root and outside every Syncthing folder, so no console receives it. Each file lists the games of the system, the library paths each game needs (its parts), its size and its SHA-1 where it is a file. The first run reads every file of the library once to hash it; after that a run only looks at sizes and dates. Games that are gone from the library are dropped, and what `inbox` recorded about a game (its filing date, DAT name and RetroAchievements hash) is kept. It writes only under `catalog/`, never touches `library/`, and does not rewrite a file whose games did not change. `warpzone inbox --apply` updates the index by itself for the systems it placed games in, so this command is for the first run and for games added or removed by hand. See [The catalog index](/warpzone/development/design/library-ui/#the-catalog-index).
@@ -296,9 +297,11 @@ Builds and updates the catalog index: one `catalog/systems/<system>.json` per sy
 | `--rahasher PATH` | `[inbox] rahasher` | The RAHasher for `--ra-hash` (built with CHD support). Only valid with `--ra-hash`. |
 | `--ra-lists` | off | Download the RetroAchievements game list of each console the library has into `catalog/ra/<console id>.json`. Needs `RA_API_KEY` in the environment. |
 | `--ra-achievements` | off | Download the achievements of the library's RA games, the badge images and, with `[ra] user` in the config, that user's progress, into `catalog/ra/`. Needs `RA_API_KEY` and the lists from `--ra-lists`. |
-| `--force` | off | With `--ra-lists` or `--ra-achievements`, download again even if the cached copy is recent. |
+| `--dats` | off | Fill the `serials` of the games that have none from the DATs, by exact identity. See "DAT serials" below. |
+| `--dats-dir PATH` | `[inbox] dats_dir` | The DAT folder for `--dats`, the one `inbox` reads. Only valid with `--dats`. |
+| `--force` | off | With `--ra-lists` or `--ra-achievements`, download again even if the cached copy is recent. With `--dats`, also look at the games that already have serials and replace them when the DAT gives other ones. |
 
-Exit `0` when it finished; `1` when a system file could not be read or written, or kept changing under it (the other systems are still written), or when a RetroAchievements list could not be downloaded and none was cached; `2` when the hub root has no `library/roms/` folder, `--ra-hash` has no usable RAHasher, `--ra-lists` or `--ra-achievements` has no `RA_API_KEY`, or `--rahasher` or `--force` is used without the option it belongs to.
+Exit `0` when it finished; `1` when a system file could not be read or written, or kept changing under it (the other systems are still written), or when a RetroAchievements list could not be downloaded and none was cached; `2` when the hub root has no `library/roms/` folder, `--ra-hash` has no usable RAHasher, `--ra-lists` or `--ra-achievements` has no `RA_API_KEY`, or `--dats` has no DAT folder (neither `--dats-dir` nor `[inbox] dats_dir`) or none with DATs warpzone knows, or `--rahasher`, `--dats-dir` or `--force` is used without the option it belongs to. `--dats` exits `1` too when a system file kept changing or could not be written; games it could not match do not make it fail.
 
 ### RetroAchievements
 
@@ -308,6 +311,16 @@ Each game can carry the RetroAchievements (RA) hash of its main file (for a `.m3
 
 `--ra-achievements` works from the cached lists. For each library game RA has achievements for it downloads the achievement list (kept 14 days), then the images of every badge, locked and unlocked. With `[ra] user` set it also downloads your completion progress (kept 5 hours) and, for each game you have played, the dates you unlocked each achievement (again only when the progress says something changed). It calls RA one request at a time with a pause between two; a failed call is reported by its kind and the pass goes on, and three failures in a row stop it. A first pass over a large library takes a while and can be stopped and run again; `warpzone serve` does a bounded share of it on every background run, so it also catches up by itself.
 
+### DAT serials
+
+A game can carry the serials its Redump DAT lists (the disc's product number, for example `T-45001D-05`), which is how the [saves index](/warpzone/development/design/library-ui/#saves-per-game) finds the Flycast memory card of a Dreamcast game. `warpzone inbox --apply` records them for the games it files. `--dats` is the pass for the games that were filed before that, or by hand. It reads the same DAT folder `inbox` uses (`[inbox] dats_dir`, or `--dats-dir`) through the same parse cache, and for every system whose DAT lists serials it looks at the games that have none. A game is matched only by exact identity, never by a fuzzy name:
+
+1. the DAT game name `inbox` stored for it (`dat` in the catalog), when a DAT game has exactly that name;
+2. else the SHA-1 and size of its main file against the DAT games that have a single rom (a disc kept as an `.iso`, for instance; a CHD never matches this way, as its hash is not the DAT's);
+3. else, for a multi-disc `.m3u` folder, each disc named in its playlist by exact name against the DAT game names (`inbox` names a disc file after its DAT game), and the game gets the union of the serials of all its discs. If any disc is not found the game gets none.
+
+A name or hash that the DATs list with different serials is not guessed at. A game with no exact match stays without serials and is counted as unmatched (the first 20 are named). `--dats` runs the normal scan first, then writes only the `serials` of `catalog/systems/<system>.json`, with the same guarded write as the scan, and not at all for a file whose games would not change. It prints, per system, how many games were filled, already had serials, or matched nothing, and `no DAT with serials` for a system whose DATs are missing or list none. A game that has serials is left alone unless you pass `--force`, which replaces its serials only when the DAT gives it a single, different answer. With `--dry-run` it says how many games it would fill and writes nothing.
+
 ```bash
 warpzone catalog --dry-run
 warpzone catalog
@@ -315,6 +328,8 @@ warpzone catalog --ra-hash --dry-run
 warpzone catalog --ra-hash
 RA_API_KEY=... warpzone catalog --ra-lists
 RA_API_KEY=... warpzone catalog --ra-achievements
+warpzone catalog --dats --dry-run
+warpzone catalog --dats
 ```
 
 ## `warpzone serve`

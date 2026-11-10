@@ -39,6 +39,7 @@ from warpzone.profiles import Profile, ProfileError, available_profiles, load_pr
 # client) is imported inside the command that needs it, so `settings apply`, which ES-DE runs
 # at every start, loads none of it (see "Speed" in development/design/emulator-settings.md).
 if TYPE_CHECKING:
+    from warpzone.dat import DatLibrary
     from warpzone.report import Reporter
     from warpzone.syncthing import Client
 
@@ -319,9 +320,23 @@ def _build_parser() -> argparse.ArgumentParser:
         "run --ra-lists first)",
     )
     cat.add_argument(
+        "--dats",
+        action="store_true",
+        help="fill the DAT serials (Redump) of the games that have none, by exact DAT name or "
+        "SHA-1 (what lets a Flycast memory card be matched to a game filed before serials "
+        "were recorded)",
+    )
+    cat.add_argument(
+        "--dats-dir",
+        type=Path,
+        metavar="PATH",
+        help="the DAT folder for --dats (default: [inbox] dats_dir)",
+    )
+    cat.add_argument(
         "--force",
         action="store_true",
-        help="with --ra-lists or --ra-achievements, download again whatever the age",
+        help="with --ra-lists or --ra-achievements, download again whatever the age; with "
+        "--dats, replace serials a game already has when the DAT gives it other ones",
     )
 
     wlst = sub.add_parser("whitelist", help="the device whitelists on the hub")
@@ -579,8 +594,12 @@ def _catalog(args: argparse.Namespace, rep: Reporter) -> int:
 
     if args.rahasher and not args.ra_hash:
         raise CatalogError("--rahasher only works together with --ra-hash")
-    if args.force and not (args.ra_lists or args.ra_achievements):
-        raise CatalogError("--force only works together with --ra-lists or --ra-achievements")
+    if args.dats_dir and not args.dats:
+        raise CatalogError("--dats-dir only works together with --dats")
+    if args.force and not (args.ra_lists or args.ra_achievements or args.dats):
+        raise CatalogError(
+            "--force only works together with --ra-lists, --ra-achievements or --dats"
+        )
     root = args.root
     if root is None:
         root = Path(_load(args)[0].hub.root)
@@ -591,6 +610,7 @@ def _catalog(args: argparse.Namespace, rep: Reporter) -> int:
     key = os.environ.get(ra.KEY_ENV) or None
     if (args.ra_lists or args.ra_achievements) and not key:  # before the scan: costs nothing
         raise CatalogError(f"no RetroAchievements key: set {ra.KEY_ENV} in the environment")
+    dat_library = _dat_library(args) if args.dats else None
     results = catalog_store.run_catalog(root, dry_run=args.dry_run, out=rep.out, ra_hasher=hasher)
     failed = any(r.failed for r in results)
     if args.ra_lists:
@@ -603,6 +623,15 @@ def _catalog(args: argparse.Namespace, rep: Reporter) -> int:
             warn=rep.warn,
         )
         failed = failed or any(r.failed for r in lists)
+    if dat_library is not None:
+        serials = catalog_store.run_dats(
+            root,
+            dat_library.load,
+            force=args.force,
+            dry_run=args.dry_run,
+            out=rep.out,
+        )
+        failed = failed or any(r.failed for r in serials)
     if args.ra_achievements:
         found = ra_store.run_ra_achievements(
             root,
@@ -615,6 +644,24 @@ def _catalog(args: argparse.Namespace, rep: Reporter) -> int:
         )
         failed = failed or found.failed
     return EXIT_RUNTIME if failed else EXIT_OK
+
+
+def _dat_library(args: argparse.Namespace) -> DatLibrary:
+    """The DATs `catalog --dats` reads: the folder `inbox` uses, through its parse cache."""
+    from warpzone import inbox
+    from warpzone.catalog_store import CatalogError
+    from warpzone.dat import DatLibrary
+
+    configured = load_inbox_settings(_config_path(args)).dats_dir
+    folder = args.dats_dir or (Path(configured) if configured else None)
+    if folder is None:
+        raise CatalogError("no DATs: pass --dats-dir or set `dats_dir` in the [inbox] table")
+    if not folder.is_dir():
+        raise CatalogError(f"DAT folder not found: {folder}")
+    library = DatLibrary(folder, inbox.default_cache_dir())
+    if not library.systems():
+        raise CatalogError(f"no Redump or No-Intro DATs warpzone knows in {folder}")
+    return library
 
 
 def _inbox(args: argparse.Namespace, rep: Reporter) -> int:
