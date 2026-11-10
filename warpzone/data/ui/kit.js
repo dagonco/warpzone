@@ -118,17 +118,8 @@
     dreamcast: 'Sega Dreamcast', segacd: 'Sega CD', sega32x: 'Sega 32X', xbox: 'Xbox',
     xbox360: 'Xbox 360', arcade: 'Arcade', mame: 'MAME', fbneo: 'FinalBurn Neo',
     neogeo: 'Neo Geo', pcengine: 'PC Engine', tg16: 'TurboGrafx-16', atari2600: 'Atari 2600',
-    atari7800: 'Atari 7800', lynx: 'Atari Lynx', ngp: 'Neo Geo Pocket', model2: 'Sega Model 2',
-  };
-
-  // The short badge of a system, used where the full name does not fit. The full name goes in a
-  // title attribute or beside it where there is room.
-  const SYSTEM_CODES = {
-    mastersystem: 'SMS', megadrive: 'MD', genesis: 'GEN', gamegear: 'GG', psvita: 'VITA',
-    segacd: 'SCD', sega32x: '32X', dreamcast: 'DC', saturn: 'SAT', pcengine: 'PCE',
-    atari2600: '2600', atari7800: '7800', xbox360: 'X360', neogeo: 'NEO', fbneo: 'FBN',
-    famicom: 'FC', n3ds: '3DS', wiiu: 'WIIU', mame: 'MAME', model2: 'MDL2', ngp: 'NGP',
-    switch: 'NSW', arcade: 'ARC', psp: 'PSP', ps3: 'PS3', ps4: 'PS4',
+    atari7800: 'Atari 7800', lynx: 'Atari Lynx', atarilynx: 'Atari Lynx',
+    pokemini: 'Pokémon Mini', c64: 'Commodore 64', ngp: 'Neo Geo Pocket', model2: 'Sega Model 2',
   };
 
   function systemName(id) {
@@ -137,9 +128,11 @@
     return pretty.length <= 4 ? pretty.toUpperCase() : pretty.replace(/\b\w/g, (c) => c.toUpperCase());
   }
 
+  // The short badge of a system, used where the full name does not fit (the full name goes in a
+  // title attribute or beside it): its folder name (`roms/<system>`), as the
+  // library, ES-DE and the whitelists name it, never cut.
   function systemCode(id) {
-    if (SYSTEM_CODES[id]) return SYSTEM_CODES[id];
-    return id.length <= 5 ? id.toUpperCase() : id.slice(0, 4).toUpperCase();
+    return id.toUpperCase();
   }
 
   // One neon accent per system: fixed for the common ones, stable by name for the rest.
