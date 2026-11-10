@@ -12,7 +12,7 @@ RetroArch, Dolphin, PrimeHack (GC, Wii, states), DuckStation, PCSX2, melonDS, PP
 
 YARG syncs `custom/` in lowercase, as YARG on Linux writes it, and ignores the `*.bak` files it leaves in `profiles/`. If the hub holds the content under `saves/yarg/data/Custom`, rename it to `custom`.
 
-YARG's data comes with the `songs` group, not with `saves`: a console that lists `saves` but not `songs` gets nothing of YARG. If you stop listing `songs` on a console that had YARG, the hub keeps sharing `wz-save-yarg-data` with it until you remove the console from that folder in the hub's Syncthing (warpzone never removes a device from a folder); no file is deleted on either side.
+YARG's data comes with the `songs` group, not with `saves`: a console that lists `saves` but not `songs` gets nothing of YARG. If you stop listing `songs` on a console that had YARG, the next `warpzone provision hub` stops sharing `wz-save-yarg-data` and `wz-songs` with it, as long as another console still lists `songs`; no file is deleted on either side. If no console lists `songs`, nothing subscribes to those folders any more: `provision hub` only reports them and the hub keeps sharing them, so remove the console from them in the hub's Syncthing. Either way, remove the folders in the console's Syncthing (the files stay) so the hub stops showing them as offers.
 
 ## Syncthing on the console
 

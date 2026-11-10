@@ -71,7 +71,7 @@ comes from `WARPZONE_UI_TOKEN` or `[serve] token_file` and is never printed eith
 | Command | Runs on | Does |
 |---|---|---|
 | `warpzone check` | anywhere | Validates config + profiles, reports which whitelists are missing on the hub (via `GET /rest/db/browse`), never writes. Exit 1 if any are missing; `--offline` skips the hub. Where it can read a device's whitelist (the hub root with `--root`, or the device's own library folder), it also reports a whitelist that names a system in the device's `exclude_systems` (exit 1), see [Supported systems](/warpzone/development/design/library-ui/#supported-systems). |
-| `warpzone provision hub` | anywhere that reaches the hub API | Adds every configured device to the hub, creates/updates every `wz-*` folder on the hub and shares it with the devices that subscribe to it, sets the hub ignores. A newly created whitelisted folder first lets only the whitelists through and waits for them (`--timeout`, default 120 s) before the full scan, see "Hub bootstrap". Idempotent. `--additive` does only the creation of the `wz-*` folders the hub lacks, never a whitelisted one and never a change to a folder the hub has, see [Hub folders from a console](/warpzone/development/design/autonomous-updates/#hub-folders-from-a-console-auto_hub). |
+| `warpzone provision hub` | anywhere that reaches the hub API | Adds every configured device to the hub, creates/updates every `wz-*` folder on the hub and shares it with the devices that subscribe to it and stops sharing it with a configured device that no longer does (no file is deleted), sets the hub ignores. A newly created whitelisted folder first lets only the whitelists through and waits for them (`--timeout`, default 120 s) before the full scan, see "Hub bootstrap". Idempotent. `--additive` does only the creation of the `wz-*` folders the hub lacks, never a whitelisted one and never a change to a folder the hub has, see [Hub folders from a console](/warpzone/development/design/autonomous-updates/#hub-folders-from-a-console-auto_hub). |
 | `warpzone provision device <name>` | on the device | Reads the local Syncthing API key from the local `config.xml` (searching the default locations, including the SyncThingy flatpak; `--syncthing-config PATH` overrides), adds the hub device, creates the subscribed folders with the bootstrap above (`--timeout SECONDS`). With `auto_hub = true` it first creates on the hub the folders of the device that the hub lacks (see [Hub folders from a console](/warpzone/development/design/autonomous-updates/#hub-folders-from-a-console-auto_hub)). `--unattended` is for a run nobody watches and changes the rules as described in [Autonomous updates](/warpzone/development/design/autonomous-updates/); it exits `3` when a write waits for the menu to close. When that Syncthing is the SyncThingy flatpak it first grants it the missing `flatpak override --user --filesystem=~/.var/app/<app>` for every folder under `~/.var/app` (flatpak hides other apps' data), and asks for a Syncthing restart. When the device subscribes to `settings`, it installs the ES-DE startup script that runs `settings apply` (see [ES-DE startup script](/warpzone/development/design/emulator-settings/#es-de-startup-script)). When the device subscribes to `library` and its profile has `[es_systems]` or `[retroarch]`, it also writes the frontend's system list override and pins RetroArch's paths (see [Frontend and RetroArch overrides](/warpzone/development/design/profiles/#frontend-and-retroarch-overrides)). When the profile has `[shadps4]` it also lists the PS4 games folder in shadPS4's install directories (see [shadPS4 install directories](/warpzone/development/design/profiles/#shadps4-install-directories)). When the profile has `[cemu]` it also sets Cemu's MLC path and adds the library's Wii U folder to its game paths (see [Cemu paths](/warpzone/development/design/profiles/#cemu-paths)). When the profile has `[links.*]` and the device lists `library`, it links the library games into the emulator's game folder and installs the ES-DE startup script that keeps them linked (see [Title links](/warpzone/development/design/title-links/)). When it lists `frontend` and the profile has `[artwork]`, it limits the artwork folders to the systems on the device, writes the gamelists and installs the refresh timer (see [Frontend artwork](/warpzone/development/design/frontend-artwork/)). When it lists `library` and `auto_prune` is not `false`, it installs the unattended prune timer (see [Unattended runs](/warpzone/development/design/prune/#unattended-runs)). Idempotent. |
 | `warpzone frontend refresh [device]` | on the device | For a device whose profile has `[artwork]` and that lists `frontend`: widens the artwork folders' ignores to the systems that have games now (when the local Syncthing is found) and rewrites the frontend's gamelists from the synced ES-DE data, only while the frontend is closed. `--dry-run` prints what it would do. See [Frontend artwork](/warpzone/development/design/frontend-artwork/). |
 | `warpzone play-state sync <device>` | on the device | For a device with ES-DE that lists `play-state`: publishes what its gamelists say and merges the other devices' ledgers into them, only while ES-DE is closed or starting (`--frontend-starting`, which its startup script passes). `--dry-run`, `--quiet`. Needs no network. See [Play state](/warpzone/development/design/play-state/). |
@@ -162,6 +162,10 @@ convergent like the others: it edits one line of the device's config (with a bac
 `config.toml.bak-<date>`) and `channel=` in the updater's settings, and takes `--dry-run`, which
 it accepts only with `--channel`.
 
+Taking a device off a hub folder is convergent, not destructive: no file is deleted or moved
+on either side, the same run with the device subscribed shares it again, and only a person runs
+it.
+
 `serve` is a server, not a run: it writes only on request, one device whitelist at a time,
 with the convergent rule's safeguards (a backup of the file it replaces, refused when the file
 changed since the client read it, a re-check right before the rename) and a `dry_run` on every
@@ -179,8 +183,9 @@ re-check right before acting.
 - Existing `wz-*` folders are updated in place with `PATCH`, only for the keys
   warpzone owns (`label`, `path`, `type`, `devices`, `versioning`,
   `fsWatcherEnabled`, and `rescanIntervalS` on whitelisted device folders).
-  Unknown keys are left alone. `devices` is merged: devices
-  already on the folder are kept, missing ones are added.
+  Unknown keys are left alone. `devices` is merged: missing
+  subscribers are added; on the hub a configured device that no longer subscribes is taken
+  out; every other entry is kept with all its fields.
 - Folders not prefixed `wz-` are never touched.
 - Changing a folder's `path` on an existing folder is refused (it would make
   Syncthing see a mass delete); the user is told to remove the folder first. The one
@@ -188,4 +193,4 @@ re-check right before acting.
   old directory is empty or fully on the hub: it is removed from Syncthing and added again
   at the new path, after a second check right before (see `previous_paths` in
   `development/design/profiles.md`).
-- Devices are only ever added, never removed, by warpzone.
+- Devices are never removed from Syncthing by warpzone; only `provision hub` takes a configured device off a hub `wz-*` folder it no longer subscribes to.

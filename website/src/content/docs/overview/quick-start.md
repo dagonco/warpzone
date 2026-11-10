@@ -65,7 +65,7 @@ warpzone provision hub --dry-run    # prints the REST calls it would make, makes
 warpzone provision hub
 ```
 
-`check` validates the config and lists whitelists that are missing on the hub. `provision hub` adds every configured device and creates the `wz-*` folders on the hub. It is idempotent: run it again whenever you add a device.
+`check` validates the config and lists whitelists that are missing on the hub. `provision hub` adds every configured device and creates the `wz-*` folders on the hub. It is idempotent: run it again whenever you add a device or change a device's `folders`.
 
 ## 5. Install and provision the console
 

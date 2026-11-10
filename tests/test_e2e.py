@@ -316,6 +316,7 @@ rescan_seconds = 10
         self.assertEqual(hub_save.read_text(), "save data")
 
         self.settings_scenario(root)
+        self.unshare_scenario(config, cfg, root, hub_id, deck_id)
 
         self.wz("status", *cfg)
 
@@ -512,6 +513,64 @@ rescan_seconds = 10
         hub_layer = root / "settings/deck.toml"
         wait_for(hub_layer.exists, "the device layer to reach the hub")
         self.assertEqual(hub_layer.read_text(), DEVICE_LAYER)
+
+    def unshare_scenario(
+        self, config: Path, cfg: list[str], root: Path, hub_id: str, deck_id: str
+    ) -> None:
+        """A device that stops subscribing to a group is taken off the hub folder; no file goes.
+
+        A second configured device keeps `wz-settings` described after the deck leaves it (a hub
+        folder no device subscribes to is only reported, never changed). It never runs: its
+        Syncthing starts once for its ID and stops."""
+        third = Instance("third", self.base)
+        self.addCleanup(third.stop)
+        third.start()
+        third_id = third.client().my_id()
+        third.stop()
+
+        original = config.read_text()
+        with_third = (
+            original
+            + f"""
+[devices.third]
+device_id = "{third_id}"
+profile = "steamos-emudeck"
+folders = ["settings"]
+"""
+        )
+        without_settings = with_third.replace(
+            'folders = ["library", "saves", "bios", "settings"]',
+            'folders = ["library", "saves", "bios"]',
+        )
+        self.assertNotEqual(without_settings, with_third)
+
+        def shared_with() -> set[str]:
+            folder = next(f for f in self.hub.client().folders() if f["id"] == "wz-settings")
+            return {d["deviceID"] for d in folder["devices"]}
+
+        config.write_text(with_third)
+        self.wz("provision", "hub", *cfg)
+        self.assertEqual(shared_with(), {hub_id, deck_id, third_id})
+
+        config.write_text(without_settings)
+        out = self.wz("provision", "hub", "--dry-run", *cfg)
+        self.assertIn("would stop sharing with deck", out)
+        self.assertEqual(shared_with(), {hub_id, deck_id, third_id})  # the dry run wrote nothing
+
+        self.wz("provision", "hub", *cfg)
+        self.assertEqual(shared_with(), {hub_id, third_id})
+        # Nothing is deleted on either side: the deck keeps the folder and its files.
+        self.assertIn("wz-settings", {f["id"] for f in self.deck.client().folders()})
+        layers = self.home / ".local/share/warpzone/settings"
+        self.assertEqual((layers / "common.toml").read_text(), COMMON_LAYER)
+        self.assertEqual((layers / "deck.toml").read_text(), DEVICE_LAYER)
+        self.assertEqual((root / "settings/common.toml").read_text(), COMMON_LAYER)
+
+        # Subscribing again shares the folder again.
+        config.write_text(with_third)
+        self.wz("provision", "hub", *cfg)
+        self.assertEqual(shared_with(), {hub_id, deck_id, third_id})
+        config.write_text(original)
 
     def bios_scenario(self, emulation: Path, cemu: Path, keys_target: Path) -> None:
         """A placement delivers into the emulator's own folder, the library stays out of it."""

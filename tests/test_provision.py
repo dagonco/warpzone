@@ -32,8 +32,13 @@ from warpzone.provision import (
     provision_device,
     provision_hub,
 )
-from warpzone.provision_folders import wait_for_files
-from warpzone.provision_hub import additive_plan, provision_hub_additive
+from warpzone.provision_folders import folder_patch, wait_for_files
+from warpzone.provision_hub import (
+    additive_plan,
+    provision_hub_additive,
+    unclaimed,
+    unsubscribed,
+)
 from warpzone.report import Reporter
 from warpzone.runners import run_import_check
 from warpzone.syncthing import Client
@@ -303,7 +308,7 @@ class HubTests(unittest.TestCase):
             self.assertIn("hub.device_id", str(ctx.exception))
             self.assertEqual(fake.writes(), [])
 
-    def test_updates_only_owned_keys_and_never_removes_devices(self) -> None:
+    def test_updates_only_owned_keys_and_keeps_devices_the_config_does_not_know(self) -> None:
         with FakeSyncthing(HUB_ID) as fake:
             cfg = make_config(fake.url)
             run_hub(cfg, PROFILES, Client(fake.url, API_KEY), reporter()[0])
@@ -322,6 +327,194 @@ class HubTests(unittest.TestCase):
             run_hub(cfg, PROFILES, Client(fake.url, API_KEY), reporter()[0])
             sent = next(b for m, p, b in fake.writes() if m == "PATCH")["devices"]
             self.assertEqual([d["deviceID"] for d in sent], ["OTHER-ID", DECK_ID])
+
+    def unshare_setup(self, fake: FakeSyncthing) -> Config:
+        """A hub provisioned from the test config, with the deck also on the YARG folder."""
+        cfg = make_config(fake.url)
+        run_hub(cfg, PROFILES, Client(fake.url, API_KEY), reporter()[0])
+        names = ["patterns-common.stignore", "patterns-deck.stignore", "patterns-machine.stignore"]
+        fake.browse = {fid: names for fid in fake.folders}  # no missing-whitelist warnings
+        fake.folders["wz-save-yarg-data"]["devices"] = [
+            {"deviceID": HUB_ID},
+            {"deviceID": MACHINE_ID},
+            {"deviceID": DECK_ID},
+        ]
+        fake.requests.clear()
+        return cfg
+
+    @staticmethod
+    def shared_with(fake: FakeSyncthing, folder_id: str) -> list[str]:
+        return [d["deviceID"] for d in fake.folders[folder_id]["devices"]]
+
+    def test_yarg_data_is_unshared_from_a_device_without_songs(self) -> None:
+        with FakeSyncthing(HUB_ID) as fake:
+            cfg = self.unshare_setup(fake)
+            rep, lines = reporter()
+            run_hub(cfg, PROFILES, Client(fake.url, API_KEY), rep)
+            patches = [(p, b) for m, p, b in fake.writes() if m == "PATCH"]
+            self.assertEqual(
+                patches,
+                [
+                    (
+                        "/rest/config/folders/wz-save-yarg-data",
+                        {"devices": [{"deviceID": HUB_ID}, {"deviceID": MACHINE_ID}]},
+                    )
+                ],
+            )
+            self.assertEqual(self.shared_with(fake, "wz-save-yarg-data"), [HUB_ID, MACHINE_ID])
+            line = next(ln for ln in lines if ln.startswith("wz-save-yarg-data:"))
+            self.assertIn(
+                "stopped sharing with deck (no longer subscribes; no file is deleted)", line
+            )
+            self.assertEqual(rep.warnings, [])
+
+    def test_a_device_that_drops_a_group_is_unshared_from_its_folders(self) -> None:
+        with FakeSyncthing(HUB_ID) as fake:
+            data = config_data(fake.url)
+            run_hub(parse_config(data), PROFILES, Client(fake.url, API_KEY), reporter()[0])
+            data["devices"]["machine"]["folders"] = ["library", "songs"]
+            fake.requests.clear()
+            run_hub(parse_config(data), PROFILES, Client(fake.url, API_KEY), reporter()[0])
+            saves = {f for f in fake.folders if f.startswith("wz-save-")} - {"wz-save-yarg-data"}
+            self.assertIn("wz-save-ryujinx-user", saves)
+            for folder_id in saves:
+                self.assertEqual(self.shared_with(fake, folder_id), [DECK_ID], folder_id)
+            self.assertEqual(self.shared_with(fake, "wz-save-yarg-data"), [MACHINE_ID])
+            self.assertEqual(self.shared_with(fake, "wz-library"), [DECK_ID, MACHINE_ID])
+            patched = {p.rsplit("/", 1)[1] for m, p, b in fake.writes() if m == "PATCH"}
+            self.assertEqual(patched, saves)
+
+    def test_kept_entries_keep_their_fields(self) -> None:
+        with FakeSyncthing(HUB_ID) as fake:
+            cfg = self.unshare_setup(fake)
+            hub_entry = {"deviceID": HUB_ID, "introducedBy": "", "encryptionPassword": ""}
+            machine_entry = {
+                "deviceID": MACHINE_ID,
+                "introducedBy": "SOME-INTRODUCER",
+                "encryptionPassword": "fake-secret",  # gitleaks:allow (test fixture)
+            }
+            fake.folders["wz-save-yarg-data"]["devices"] = [
+                hub_entry,
+                {"deviceID": DECK_ID},
+                machine_entry,
+            ]
+            rep, _ = reporter()
+            run_hub(cfg, PROFILES, Client(fake.url, API_KEY), rep)
+            self.assertEqual(
+                fake.folders["wz-save-yarg-data"]["devices"], [hub_entry, machine_entry]
+            )
+            self.assertEqual(rep.warnings, [])
+
+    def test_dry_run_shows_the_removal_and_leaks_no_secret(self) -> None:
+        secret = "fake-secret"  # gitleaks:allow (test fixture)
+        with FakeSyncthing(HUB_ID) as fake:
+            cfg = self.unshare_setup(fake)
+            fake.folders["wz-save-yarg-data"]["devices"][1]["encryptionPassword"] = secret
+            sink: list[str] = []
+            rep, lines = reporter()
+            client = Client(fake.url, API_KEY, label="hub", dry_run=True, sink=sink.append)
+            run_hub(cfg, PROFILES, client, rep)
+            self.assertEqual(fake.writes(), [])
+            self.assertTrue(
+                any("PATCH /rest/config/folders/wz-save-yarg-data" in ln for ln in sink), sink
+            )
+            line = next(ln for ln in lines if ln.startswith("wz-save-yarg-data:"))
+            self.assertIn("dry-run: would stop sharing with deck", line)
+            everything = "\n".join([*sink, *lines, *rep.warnings])
+            self.assertNotIn(secret, everything)
+            self.assertNotIn(API_KEY, everything)
+            self.assertEqual(
+                self.shared_with(fake, "wz-save-yarg-data"), [HUB_ID, MACHINE_ID, DECK_ID]
+            )
+
+    def test_the_removal_is_decided_again_right_before_the_write(self) -> None:
+        with FakeSyncthing(HUB_ID) as fake:
+            cfg = self.unshare_setup(fake)
+            original = fake.route
+            reads: list[int] = []
+
+            def route(method, path, query, body):
+                result = original(method, path, query, body)
+                if (method, path) == ("GET", "/rest/config/folders"):
+                    reads.append(1)
+                    if len(reads) == 1:
+                        # The first read still lists the deck; now someone takes it off by
+                        # hand. The folder is replaced, so the answer just built is unchanged.
+                        folder = fake.folders["wz-save-yarg-data"]
+                        devices = [d for d in folder["devices"] if d["deviceID"] != DECK_ID]
+                        fake.folders["wz-save-yarg-data"] = {**folder, "devices": devices}
+                return result
+
+            fake.route = route
+            rep, lines = reporter()
+            run_hub(cfg, PROFILES, Client(fake.url, API_KEY), rep)
+            self.assertGreaterEqual(len(reads), 2)
+            self.assertEqual([w for w in fake.writes() if "wz-save-yarg-data" in w[1]], [])
+            self.assertEqual(self.shared_with(fake, "wz-save-yarg-data"), [HUB_ID, MACHINE_ID])
+            line = next(ln for ln in lines if ln.startswith("wz-save-yarg-data:"))
+            self.assertNotIn("stop", line)
+
+    def test_a_wz_folder_no_device_subscribes_to_is_reported_and_left_alone(self) -> None:
+        with FakeSyncthing(HUB_ID) as fake:
+            cfg = make_config(fake.url)
+            run_hub(cfg, PROFILES, Client(fake.url, API_KEY), reporter()[0])
+            old = {
+                "id": "wz-old",
+                "path": "/data/games/old",
+                "type": "sendreceive",
+                "devices": [{"deviceID": HUB_ID}, {"deviceID": DECK_ID}],
+            }
+            fake.folders["wz-old"] = dict(old)
+            fake.requests.clear()
+            rep, _ = reporter()
+            run_hub(cfg, PROFILES, Client(fake.url, API_KEY), rep)
+            self.assertEqual(
+                [w for w in rep.warnings if "wz-old" in w],
+                [
+                    "wz-old: no device in the config subscribes to it, still shared with deck "
+                    "(left as it is; remove them from it in the hub's Syncthing if they "
+                    "should not have it)"
+                ],
+            )
+            self.assertEqual(fake.folders["wz-old"], old)
+            self.assertFalse([w for w in fake.writes() if "wz-old" in w[1]])
+
+    def test_an_auto_accepting_device_is_unshared_with_a_warning(self) -> None:
+        with FakeSyncthing(HUB_ID) as fake:
+            cfg = self.unshare_setup(fake)
+            for device in fake.devices:
+                if device["deviceID"] == DECK_ID:
+                    device["autoAcceptFolders"] = True
+            rep, _ = reporter()
+            run_hub(cfg, PROFILES, Client(fake.url, API_KEY), rep)
+            self.assertEqual(self.shared_with(fake, "wz-save-yarg-data"), [HUB_ID, MACHINE_ID])
+            self.assertEqual(
+                rep.warnings,
+                [
+                    "wz-save-yarg-data: deck may be shared again by the hub's Syncthing "
+                    "(auto-accept or an introducer); turn that off for deck on the hub"
+                ],
+            )
+
+    def test_a_dropped_entry_with_an_introducer_warns_too(self) -> None:
+        with FakeSyncthing(HUB_ID) as fake:
+            cfg = self.unshare_setup(fake)
+            fake.folders["wz-save-yarg-data"]["devices"][2]["introducedBy"] = "SOME-INTRODUCER"
+            rep, _ = reporter()
+            run_hub(cfg, PROFILES, Client(fake.url, API_KEY), rep)
+            self.assertEqual(self.shared_with(fake, "wz-save-yarg-data"), [HUB_ID, MACHINE_ID])
+            self.assertEqual(len(rep.warnings), 1)
+            self.assertIn("deck may be shared again", rep.warnings[0])
+
+    def test_a_second_run_after_a_removal_writes_nothing(self) -> None:
+        with FakeSyncthing(HUB_ID) as fake:
+            cfg = self.unshare_setup(fake)
+            run_hub(cfg, PROFILES, Client(fake.url, API_KEY), reporter()[0])
+            fake.requests.clear()
+            rep, lines = reporter()
+            run_hub(cfg, PROFILES, Client(fake.url, API_KEY), rep)
+            self.assertEqual(fake.writes(), [])
+            self.assertIn("wz-save-yarg-data: unchanged", lines)
 
     def test_foreign_folders_are_never_touched(self) -> None:
         with FakeSyncthing(HUB_ID) as fake:
@@ -1074,6 +1267,108 @@ class MovedSaveFolderTests(DeviceFixture):
             self.assertEqual(local.folders[self.FOLDER]["path"], str(self.old))
 
 
+class UnsubscribedTests(unittest.TestCase):
+    """Which devices a hub folder stops being shared with (pure), and how it is applied."""
+
+    NAMES: ClassVar[dict[str, str]] = {DECK_ID: "deck", MACHINE_ID: "machine"}
+
+    @staticmethod
+    def spec(folder_id: str = "wz-save-yarg-data"):
+        # Subscribed to by the machine only.
+        return {s.id: s for s in _hub_specs()}[folder_id]
+
+    @staticmethod
+    def current(*ids: str) -> dict[str, Any]:
+        return {"devices": [{"deviceID": i} for i in ids]}
+
+    def test_a_known_device_that_no_longer_subscribes_is_returned(self) -> None:
+        current = self.current(HUB_ID, DECK_ID, MACHINE_ID)
+        self.assertEqual(unsubscribed(self.spec(), current, self.NAMES), (DECK_ID,))
+        nobody = dataclasses.replace(self.spec(), devices=())
+        current = self.current(MACHINE_ID, HUB_ID, DECK_ID)
+        # In the folder's order.
+        self.assertEqual(unsubscribed(nobody, current, self.NAMES), (MACHINE_ID, DECK_ID))
+
+    def test_a_subscriber_is_never_returned(self) -> None:
+        current = self.current(HUB_ID, MACHINE_ID)
+        self.assertEqual(unsubscribed(self.spec(), current, self.NAMES), ())
+
+    def test_a_device_the_config_does_not_know_is_never_returned(self) -> None:
+        current = self.current(HUB_ID, "OTHER-ID", MACHINE_ID)
+        self.assertEqual(unsubscribed(self.spec(), current, self.NAMES), ())
+
+    def test_the_hubs_own_entry_is_never_returned(self) -> None:
+        # The hub is never one of the config's devices, whoever the spec lists.
+        nobody = dataclasses.replace(self.spec(), devices=())
+        current = self.current(HUB_ID)
+        self.assertEqual(unsubscribed(nobody, current, self.NAMES), ())
+        cfg = make_config()
+        self.assertNotIn(HUB_ID, {d.device_id for d in cfg.devices.values()})
+
+    def test_a_folder_without_the_prefix_returns_nothing(self) -> None:
+        photos = dataclasses.replace(self.spec(), id="photos")
+        current = self.current(HUB_ID, DECK_ID, MACHINE_ID)
+        self.assertEqual(unsubscribed(photos, current, self.NAMES), ())
+
+    def test_a_folder_without_devices_returns_nothing(self) -> None:
+        self.assertEqual(unsubscribed(self.spec(), {}, self.NAMES), ())
+        self.assertEqual(unsubscribed(self.spec(), {"devices": None}, self.NAMES), ())
+        self.assertEqual(unsubscribed(self.spec(), {"devices": []}, self.NAMES), ())
+
+    def test_folder_patch_drops_only_the_given_devices_and_keeps_every_field(self) -> None:
+        spec = self.spec()
+        hub = {"deviceID": HUB_ID, "introducedBy": "", "encryptionPassword": ""}
+        machine = {
+            "deviceID": MACHINE_ID,
+            "introducedBy": "SOME-INTRODUCER",
+            "encryptionPassword": "fake-secret",  # gitleaks:allow (test fixture)
+            "extra": 1,
+        }
+        current = {**spec.body(), "devices": [hub, {"deviceID": DECK_ID}, machine]}
+        patch = folder_patch(spec, current, drop=(DECK_ID,))
+        self.assertEqual(patch, {"devices": [hub, machine]})
+
+    def test_folder_patch_without_drop_never_removes(self) -> None:
+        # What `provision device` and the unattended checks call.
+        spec = self.spec()
+        current = {**spec.body(), "devices": [{"deviceID": HUB_ID}, {"deviceID": DECK_ID}]}
+        patch = folder_patch(spec, current)
+        self.assertEqual(
+            patch["devices"],
+            [{"deviceID": HUB_ID}, {"deviceID": DECK_ID}, {"deviceID": MACHINE_ID}],
+        )
+        current["devices"].append({"deviceID": MACHINE_ID})
+        self.assertEqual(folder_patch(spec, current), {})
+
+    def test_folder_patch_adds_and_drops_in_one_list(self) -> None:
+        spec = self.spec()
+        current = {**spec.body(), "devices": [{"deviceID": DECK_ID}, {"deviceID": HUB_ID}]}
+        patch = folder_patch(spec, current, drop=(DECK_ID,))
+        self.assertEqual(patch, {"devices": [{"deviceID": HUB_ID}, {"deviceID": MACHINE_ID}]})
+
+    def test_unclaimed_reports_a_wz_folder_shared_with_a_config_device(self) -> None:
+        existing = {
+            "wz-old": self.current(HUB_ID, DECK_ID, "OTHER-ID", MACHINE_ID),
+            "wz-tools": self.current(HUB_ID, DECK_ID),
+        }
+        self.assertEqual(
+            unclaimed(_hub_specs(), existing, self.NAMES),
+            (
+                "wz-old: no device in the config subscribes to it, still shared with "
+                "deck, machine (left as it is; remove them from it in the hub's Syncthing "
+                "if they should not have it)",
+            ),
+        )
+
+    def test_unclaimed_ignores_foreign_and_unshared_folders(self) -> None:
+        existing = {
+            "photos": self.current(HUB_ID, DECK_ID),  # not ours
+            "wz-old": self.current(HUB_ID, "OTHER-ID"),  # no config device on it
+            "wz-empty": {"devices": None},
+        }
+        self.assertEqual(unclaimed(_hub_specs(), existing, self.NAMES), ())
+
+
 class AdditivePlanTests(unittest.TestCase):
     """The decision of `provision hub --additive`, with no network."""
 
@@ -1122,6 +1417,24 @@ class AdditivePlanTests(unittest.TestCase):
         self.assertIn(f"not {tools.path!r}", text)
         self.assertIn("type 'sendreceive'", text)
         self.assertIn("not shared with deck", text)
+
+    def test_a_device_that_no_longer_subscribes_is_a_difference(self) -> None:
+        yarg = {s.id: s for s in _hub_specs()}["wz-save-yarg-data"]
+        existing = {
+            "wz-save-yarg-data": {
+                "path": yarg.path,
+                "type": yarg.type,
+                "devices": [{"deviceID": MACHINE_ID}, {"deviceID": DECK_ID}],
+            }
+        }
+        plan = self.plan(existing)
+        self.assertEqual(
+            plan.differences,
+            (
+                "wz-save-yarg-data: still shared on the hub with deck "
+                "(no longer subscribed in the config)",
+            ),
+        )
 
     def test_only_limits_the_run_to_those_folders(self) -> None:
         plan = self.plan(only={"wz-tools", "wz-library"})
@@ -1186,6 +1499,27 @@ class AdditiveHubTests(unittest.TestCase):
             self.assertEqual(fake.ignores["wz-tools"], ["custom"])
             self.assertFalse([w for w in fake.writes() if "wz-tools/" in w[1]])
             self.assertTrue(any("wz-tools" in w and "/elsewhere" in w for w in rep.warnings))
+
+    def test_a_device_that_no_longer_subscribes_is_reported_and_kept(self) -> None:
+        with FakeSyncthing(HUB_ID) as fake:
+            self.additive(fake)
+            fake.folders["wz-save-yarg-data"]["devices"].append({"deviceID": DECK_ID})
+            fake.requests.clear()
+            created, rep, _ = self.additive(fake)
+            self.assertEqual(created, [])
+            self.assertEqual(fake.writes(), [])
+            self.assertEqual(
+                [d["deviceID"] for d in fake.folders["wz-save-yarg-data"]["devices"]],
+                [MACHINE_ID, DECK_ID],
+            )
+            self.assertEqual(
+                [w for w in rep.warnings if "yarg" in w],
+                [
+                    "wz-save-yarg-data: still shared on the hub with deck "
+                    "(no longer subscribed in the config) (left as it is; "
+                    "`warpzone provision hub` changes it)"
+                ],
+            )
 
     def test_the_second_run_writes_nothing(self) -> None:
         with FakeSyncthing(HUB_ID) as fake:

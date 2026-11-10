@@ -30,7 +30,7 @@ It is built so that a mistake costs as little as possible ([Safety](/warpzone/op
 
 - Commands that change files report first and act only with `--apply` (`prune`, `inbox`). `provision` has `--dry-run`, which prints the Syncthing calls it would make and sends none.
 - The library is receive-only on devices, so a delete or an edit on a console never propagates to the hub.
-- Devices are only ever added, folders not prefixed `wz-` are never touched, and a changed folder path is refused.
+- Devices are never removed from Syncthing (a console that stops subscribing to a folder keeps its files), folders not prefixed `wz-` are never touched, and a changed folder path is refused.
 - `inbox` only adds files and never overwrites; what it cannot place goes to `inbox/_revisar/` with a reason.
 - API keys are never printed or logged, and are redacted from dry-run output.
 

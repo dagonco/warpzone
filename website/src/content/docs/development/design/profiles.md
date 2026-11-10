@@ -77,7 +77,7 @@ path `saves/<emu>/<kind>`. The optional `group` key of a `[saves.*]` entry (defa
 any folder group of the device config) says which group brings the folder: a device gets it
 only if it lists that group, and listing `saves` does not bring a folder of another group.
 `yarg-data` has `group = "songs"`, so a console that plays no songs receives nothing of YARG
-(and the hub does not show a folder that stays at 0% because YARG is not installed there).
+(and once `provision hub` has run, the hub does not show a folder that stays at 0% because YARG is not installed there, as long as another device still lists `songs`).
 The folder ID, the hub path and the device path do not depend on the group. A save folder with an `ignore` list gets those
 patterns (after `#include patterns-common.stignore`).
 

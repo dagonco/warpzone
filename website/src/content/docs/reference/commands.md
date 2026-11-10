@@ -100,9 +100,9 @@ warpzone check --offline
 warpzone provision hub [--config PATH] [--dry-run] [--timeout SECONDS] [--additive]
 ```
 
-Configures the hub's Syncthing through its REST API: checks that the API belongs to the device named in `[hub]`, adds every configured device, creates or updates every `wz-*` folder and shares it with the devices that subscribe to it, and sets the hub's ignores. It is idempotent: run it once, then again whenever you add a device or a folder group.
+Configures the hub's Syncthing through its REST API: checks that the API belongs to the device named in `[hub]`, adds every configured device, creates or updates every `wz-*` folder and shares it with the devices that subscribe to it, stops sharing it with a configured device that no longer subscribes (nothing is deleted; a `wz-*` folder no device subscribes to is only reported), and sets the hub's ignores. It is idempotent: run it once, then again whenever you add a device or a folder group.
 
-With `--additive` it does much less: it only creates the `wz-*` folders the hub lacks, and only those that are not whitelisted (`wz-library` and `wz-songs` are left to a plain `provision hub`, with a warning). A folder the hub has is never changed, and where it differs from the config (path, type, a device it is not shared with) the run only warns, and so it does for a `wz-*` folder the hub has paused (it stays paused; `provision hub` finishes it). A missing folder is not created at a path another hub folder already uses. It is what a device with `auto_hub = true` does for itself, so it is safe to run from anywhere.
+With `--additive` it does much less: it only creates the `wz-*` folders the hub lacks, and only those that are not whitelisted (`wz-library` and `wz-songs` are left to a plain `provision hub`, with a warning). A folder the hub has is never changed, and where it differs from the config (path, type, a device it is not shared with, a device it is shared with that no longer subscribes) the run only warns, and so it does for a `wz-*` folder the hub has paused (it stays paused; `provision hub` finishes it). A missing folder is not created at a path another hub folder already uses. It is what a device with `auto_hub = true` does for itself, so it is safe to run from anywhere.
 
 | Option | Default | Meaning |
 |---|---|---|
