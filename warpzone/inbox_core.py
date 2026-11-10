@@ -278,7 +278,7 @@ class Staged:
     origin: Path | None = None  # the .gcz image this was expanded from
 
 
-def _free_space_check(dest: Path, needed: int) -> None:
+def free_space_check(dest: Path, needed: int) -> None:
     if shutil.disk_usage(dest).free < needed * 1.05:
         raise ItemFailure(f"not enough free space in {dest} to unpack ({needed // 2**20} MiB)")
 
@@ -295,7 +295,7 @@ def extract_zip(archive: Path, dest: Path) -> None:
                     raise ItemFailure(f"{archive.name}: refused, a member has {why}")
                 if (info.external_attr >> 16) & 0o170000 == 0o120000:
                     raise ItemFailure(f"{archive.name}: refused, it contains a symbolic link")
-            _free_space_check(dest, sum(i.file_size for i in infos))
+            free_space_check(dest, sum(i.file_size for i in infos))
             for info in infos:
                 target = (root / info.filename).resolve()
                 if root not in target.parents and target != root:
@@ -310,10 +310,39 @@ def extract_zip(archive: Path, dest: Path) -> None:
         raise ItemFailure(f"{archive.name}: cannot unpack ({exc})") from exc
 
 
+def bsdtar_unpacked_size(bsdtar: str, archive: Path) -> int:
+    """The sum of the member sizes in `bsdtar -tvf`, an ls-style listing whose fifth
+    column is the size. Names are never read from it: they may hold spaces and ` -> `. A
+    line that has no decimal size fails the item.
+
+    The locale is left as it is: the columns before the name do not depend on it, and in the
+    C locale libarchive cannot convert a name that is not ASCII, which fails the listing."""
+    listing = subprocess.run(
+        [bsdtar, "-tvf", str(archive)],
+        capture_output=True,
+        text=True,
+        check=False,
+        errors="replace",
+    )
+    if listing.returncode != 0:
+        raise ItemFailure(f"{archive.name}: cannot read ({tail(listing.stderr)})")
+    total = 0
+    for line in listing.stdout.splitlines():
+        fields = line.split(None, 5)
+        if len(fields) < 5 or not (fields[4].isascii() and fields[4].isdigit()):
+            raise ItemFailure(f"{archive.name}: cannot read the member sizes")
+        total += int(fields[4])
+    return total
+
+
 def extract_bsdtar(bsdtar: str, archive: Path, dest: Path) -> None:
     dest.mkdir(parents=True, exist_ok=True)
     listing = subprocess.run(
-        [bsdtar, "-tf", str(archive)], capture_output=True, text=True, check=False
+        [bsdtar, "-tf", str(archive)],
+        capture_output=True,
+        text=True,
+        check=False,
+        errors="replace",
     )
     if listing.returncode != 0:
         raise ItemFailure(f"{archive.name}: cannot read ({tail(listing.stderr)})")
@@ -321,11 +350,13 @@ def extract_bsdtar(bsdtar: str, archive: Path, dest: Path) -> None:
         why = unsafe_member(member)
         if why:
             raise ItemFailure(f"{archive.name}: refused, a member has {why}")
+    free_space_check(dest, bsdtar_unpacked_size(bsdtar, archive))
     done = subprocess.run(
         [bsdtar, "-xf", str(archive), "-C", str(dest), "--no-same-owner", "--no-same-permissions"],
         capture_output=True,
         text=True,
         check=False,
+        errors="replace",
     )
     if done.returncode != 0:
         raise ItemFailure(f"{archive.name}: cannot unpack ({tail(done.stderr)})")

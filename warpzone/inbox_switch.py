@@ -546,6 +546,14 @@ def decompress(env: SwitchEnv, source: Path, scratch: Path) -> Path:
     assert env.nsz and env.keys
     out = scratch / "dec"
     out.mkdir(parents=True, exist_ok=True)
+    # A lower bound only: the .nsp is never smaller than the .nsz it comes from. The exact
+    # size needs the NCZ section tables, which are not read here.
+    least = source.stat().st_size
+    if shutil.disk_usage(out).free < least * 1.05:
+        raise SwitchError(
+            f"{source.name}: not enough free space in {out} to decompress "
+            f"(at least {least // 2**20} MiB)"
+        )
     code, text = run_nsz([env.nsz, "-D", "--keys", str(env.keys), "-o", str(out), str(source)])
     produced = sorted(out.glob("*.nsp"))
     if code != 0 or "[DONE]" not in text or len(produced) != 1:

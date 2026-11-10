@@ -48,7 +48,12 @@ The contract:
   with `zipfile`, `.7z` and `.rar` with `bsdtar`; archives inside archives up to two
   levels). A member with an absolute path, a `..` component or a NUL byte, or a symbolic
   link, makes the whole item go to review, and nothing is extracted before every name is
-  checked. A cue or gdi is followed only if every file it names is a file of the item.
+  checked. The free space is checked before extracting too: the sum of the member sizes
+  (from the zip directory, or from the fifth column of `bsdtar -tvf`; the names are taken
+  from `-tf`, never from that listing) plus 5% must fit in the work folder, or the item
+  goes to review, and so does an archive with a listing line that has no decimal size. A
+  member name that is not UTF-8 is read with replacement characters and never stops the
+  run. A cue or gdi is followed only if every file it names is a file of the item.
   Symbolic links in the inbox are skipped.
 - **Identification by content.** Every file that is not a sidecar (`.cue`, `.gdi`,
   `.txt`, images, ...) is read once for size, CRC32 and SHA1, and looked up in the
@@ -86,7 +91,10 @@ The contract:
   `psp`: the plain `.iso`, copied and its CRC32 checked against the DAT. `gc`: an
   `.iso` stays an `.iso` (the report prints the `dolphin-tool convert -f rvz -c zstd
   -l 5 -b 131072` command; warpzone never converts it); a `.gcz` is identified by
-  expanding it with `dolphin-tool convert -f iso` into the work folder and the compressed
+  expanding it with `dolphin-tool convert -f iso` into the work folder (the image size is
+  read from the GCZ header, and the conversion does not start unless that size plus 5%
+  fits in the work folder; a file without the GCZ magic skips the check and is rejected
+  by `dolphin-tool`) and the compressed
   file itself is what gets placed, as `<game>.gcz`. An `.rvz` or `.wia` never gets here:
   it is read by its header (see [Compressed Wii and GameCube images](#compressed-wii-and-gamecube-images)). Cartridge systems: a
   `<game>.zip` with the rom under its DAT name, always the same bytes for the same game.
@@ -255,7 +263,9 @@ blawar/titledb and filed under the library's existing conventions. The code is i
   `<Bundle> (part N of M)`. A standalone entry (no `ids`, or only its own) names the DLC
   itself.
 - **Compressed files.** `.nsz` is decompressed with `nsz -D --keys <keys> -o <work>` only
-  with `--apply`; the report only reads it with `-i`. `nsz` exits 0 on some damaged
+  with `--apply`; the report only reads it with `-i`. Before `-D` the work folder must have
+  free space of at least the size of the `.nsz` plus 5%, a lower bound (the `.nsp` is never
+  smaller; the exact size would need the NCZ section tables); a smaller folder is a review. `nsz` exits 0 on some damaged
   inputs, so the output is accepted only if `nsz` exited 0 and printed `[DONE]`, its PFS0
   header parses (magic, entry table, member bounds), and `nsz -V` exits 0 and prints
   `[VERIFIED]`. Anything else is a review and the partial output is deleted with the work

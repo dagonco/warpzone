@@ -66,6 +66,7 @@ from warpzone.inbox_core import (
     copy_verified,
     crc_of,
     destination_verdict,
+    free_space_check,
     next_free,
     printable,
     refused_name,
@@ -86,6 +87,7 @@ UNVERIFIED_DIR = "_unverified"  # holds <system>/ folders of roms no DAT knows
 DONE_KEEP_DAYS = 7
 SETTLE_SECONDS = 30  # an item changed more recently than this may still be copying
 COMPRESSED_GC = (".gcz",)  # .rvz and .wia are read by `inbox_dolphin`
+GCZ_MAGIC = 0xB10BC001
 # Files that travel with a dump but are not part of any DAT; never identified.
 INES_HEADER_BYTES = 16
 ZIP_DATE = (1996, 12, 24, 23, 32, 0)  # fixed, so the same game always zips to the same bytes
@@ -246,6 +248,20 @@ def fingerprint(path: Path, rel: str) -> FileInfo:
     return FileInfo(rel, size, f"{crc & 0xFFFFFFFF:08x}", sha1.hexdigest(), without_header)
 
 
+def gcz_data_size(path: Path) -> int | None:
+    """The size of the image inside a GCZ, from its header (little-endian: u32 magic
+    0xB10BC001, u32 sub type, u64 compressed size, u64 data size, ...), or None when the
+    file does not start with the magic, which `dolphin-tool` then rejects."""
+    try:
+        with path.open("rb") as f:
+            head = f.read(24)
+    except OSError:
+        return None
+    if len(head) < 24 or int.from_bytes(head[:4], "little") != GCZ_MAGIC:
+        return None
+    return int.from_bytes(head[16:24], "little")
+
+
 def expand_compressed(
     staged: list[Staged], work: Path, tools: Tools
 ) -> tuple[list[Staged], list[str]]:
@@ -261,6 +277,13 @@ def expand_compressed(
         if not tools.dolphin_tool:
             failures.append(f"{s.rel}: needs dolphin-tool to identify a .gcz GameCube image")
             continue
+        size = gcz_data_size(s.path)
+        if size is not None:
+            try:
+                free_space_check(work, size)
+            except ItemFailure as exc:
+                failures.append(f"{s.rel}: {exc}")
+                continue
         iso = next_free(work, "d") / (s.path.stem + ".iso")
         iso.parent.mkdir(parents=True)
         proc = subprocess.run(
@@ -268,6 +291,7 @@ def expand_compressed(
             capture_output=True,
             text=True,
             check=False,
+            errors="replace",
         )
         if proc.returncode != 0 or not iso.is_file():
             failures.append(f"{s.rel}: dolphin-tool could not read it ({tail(proc.stderr)})")
