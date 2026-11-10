@@ -7,8 +7,8 @@ import this module and never `inbox.py`, so the imports between the inbox module
 cycle. This module imports no other inbox module.
 
 The pure decisions here (`skip_name`, `unsafe_member`, `whitelist_line`,
-`unsupported_reason`, `destination_verdict`, `vita3k_executable`) have no I/O; the rest
-touches the disk or runs a tool. See development/design/inbox.md.
+`unsupported_reason`, `unverified_reason`, `destination_verdict`, `vita3k_executable`) have no
+I/O; the rest touches the disk or runs a tool. See development/design/inbox.md.
 """
 
 from __future__ import annotations
@@ -50,6 +50,20 @@ UNSUPPORTED_EXTENSIONS = {
     ".pkg": "PS3",
     ".rap": "PS3",
 }
+# The cartridge systems `inbox` files without a DAT when the user drops a rom in
+# `inbox/_unverified/<system>/`, and the extensions each one accepts.
+UNVERIFIED_EXTENSIONS: dict[str, tuple[str, ...]] = {
+    "nes": (".nes",),
+    "snes": (".sfc", ".smc"),
+    "n64": (".z64", ".n64", ".v64"),
+    "gb": (".gb",),
+    "gbc": (".gbc", ".gb"),
+    "gba": (".gba",),
+    "genesis": (".md", ".gen", ".smd", ".bin"),
+    "mastersystem": (".sms",),
+    "gamegear": (".gg",),
+}
+INES_MAGIC = b"NES\x1a"
 _DATA_SHA1 = re.compile(r"^\s*Data SHA1:\s*([0-9a-f]{40})\s*$", re.IGNORECASE | re.MULTILINE)
 _SHA1 = re.compile(r"^\s*SHA1:\s*([0-9a-f]{40})\s*$", re.IGNORECASE | re.MULTILINE)
 
@@ -93,6 +107,27 @@ def unsupported_reason(rels: Sequence[str]) -> str | None:
             kind = "Xbox"
         if kind:
             return f"not supported by inbox yet ({kind}: {rel})"
+    return None
+
+
+def unverified_reason(system: str, name: str, head: bytes, size: int) -> str | None:
+    """Why a file dropped in `_unverified/<system>/` cannot be filed as a rom of that system,
+    or None when it looks like one: the system is a cartridge system `inbox` stores, the
+    extension is one the system accepts, the file is not empty and, for `nes`, it starts with
+    the iNES magic. `head` is the start of the file."""
+    base = re.split(r"[\\/]", name)[-1]
+    extensions = UNVERIFIED_EXTENSIONS.get(system)
+    if extensions is None:
+        return (
+            f"{base}: cannot be filed from _unverified/{system}/ (inbox files only these "
+            f"systems without a DAT: {', '.join(UNVERIFIED_EXTENSIONS)})"
+        )
+    if os.path.splitext(base)[1].lower() not in extensions:
+        return f"{base}: not a {'/'.join(extensions)} file, so not a {system} rom"
+    if size == 0:
+        return f"{base}: empty file"
+    if system == "nes" and not head.startswith(INES_MAGIC):
+        return f"{base}: no iNES header (NES\\x1a), so not a nes rom"
     return None
 
 
@@ -376,6 +411,7 @@ class UnitResult:
     serials: tuple[str, ...] = ()  # the DAT serials of the discs or file, for the catalog
     ra_hash: str | None = None  # RA hash of the placed file (the first disc), for the catalog
     ra_of: str = ""  # the file ra_hash is of, relative to the unit's library folder
+    unverified: bool = False  # filed from `_unverified/<system>/`: no DAT knows it
 
     @property
     def path(self) -> str:

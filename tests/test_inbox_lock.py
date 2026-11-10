@@ -86,9 +86,9 @@ class LockTests(Base):
         seen: list[LockInfo | None] = []
         real = inbox.process_item
 
-        def spy(ctx, item, number):  # type: ignore[no-untyped-def]
+        def spy(ctx, item, number, unverified=None):  # type: ignore[no-untyped-def]
             seen.append(inbox_lock.parse(self.lock.read_text()))
-            return real(ctx, item, number)
+            return real(ctx, item, number, unverified)
 
         with mock.patch.object(inbox, "process_item", spy):
             self.assertEqual(self.go(), 0, self.out)
@@ -171,9 +171,9 @@ class LockTests(Base):
         self.drop("a.nes", NES_ROM)
         real = inbox.process_item
 
-        def steal(ctx, item, number):  # type: ignore[no-untyped-def]
+        def steal(ctx, item, number, unverified=None):  # type: ignore[no-untyped-def]
             self.put_lock(host="desktop-b", pid=77)
-            return real(ctx, item, number)
+            return real(ctx, item, number, unverified)
 
         with mock.patch.object(inbox, "process_item", steal):
             self.go()

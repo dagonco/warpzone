@@ -23,7 +23,9 @@ from warpzone.inbox import (
     resolve_refs,
     run_inbox,
     scan,
+    scan_unverified,
     select_purge,
+    unverified_match,
 )
 from warpzone.inbox_core import (
     InboxError,
@@ -37,6 +39,7 @@ from warpzone.inbox_core import (
     skip_name,
     unsafe_member,
     unsupported_reason,
+    unverified_reason,
     whitelist_line,
 )
 from warpzone.report import Reporter
@@ -224,6 +227,26 @@ class PureTests(unittest.TestCase):
         self.assertEqual(destination_verdict(True, False), "conflict")
         self.assertEqual(destination_verdict(True, None), "conflict")
 
+    def test_unverified_reason_checks_the_extension_and_the_header(self) -> None:
+        ines = b"NES\x1a" + b"\x00" * 12
+        self.assertIsNone(unverified_reason("nes", "Hack.nes", ines, 100))
+        self.assertIsNone(unverified_reason("nes", "dir/Hack.NES", ines, 100))
+        self.assertIsNone(unverified_reason("gba", "Mine.gba", b"\x00" * 16, 100))
+        self.assertIn("not a .nes", unverified_reason("nes", "Mine.gba", b"\x00" * 16, 100) or "")
+        self.assertIn(
+            "iNES", unverified_reason("nes", "Hack.nes", b"XXXX" + b"\x00" * 12, 100) or ""
+        )
+        self.assertIn("empty", unverified_reason("gba", "Mine.gba", b"", 0) or "")
+        self.assertIn("cannot", unverified_reason("atari2600", "g.bin", b"x", 1) or "")
+        self.assertIn("cannot", unverified_reason("psx", "g.bin", b"x", 1) or "")
+
+    def test_unverified_match_describes_the_file_as_it_is(self) -> None:
+        info = dat.FileInfo("pack.zip/dir/Cool Hack.nes", 10, "0000abcd", "a" * 40)
+        match = unverified_match("nes", info)
+        self.assertEqual((match.system, match.game.name), ("nes", "Cool Hack"))
+        self.assertEqual(match.game.roms, (Rom("Cool Hack.nes", 10, "0000abcd", "a" * 40),))
+        self.assertEqual(match.files, (info,))
+
     def test_cue_and_gdi_references(self) -> None:
         self.assertEqual(
             cue_refs('FILE "a b.bin" BINARY\nFILE c.bin BINARY\n  TRACK 01 MODE1/2352'),
@@ -388,7 +411,7 @@ class LayoutTests(Base):
         self.drop("folder", {"a.bin": b"1"})
         for name in (".hidden", ".DS_Store", "@eaDir"):
             (self.inbox / name).write_bytes(b"")
-        for name in ("_revisar", "_done", "_anything", "@eaDir2"):
+        for name in ("_revisar", "_done", "_anything", "_unverified", "@eaDir2"):
             (self.inbox / name).mkdir()
         (self.inbox / "_file.zip").write_bytes(b"1")
         self.assertEqual(
@@ -596,6 +619,158 @@ class CartridgeTests(Base):
         self.go(tools=Tools())
         self.assertEqual(self.library(), [])
         self.assertIn("skipped symbolic link", self.out)
+
+
+class UnverifiedTests(Base):
+    """`inbox/_unverified/<system>/`: files no DAT knows, filed when the user says so."""
+
+    HOMEBREW = b"NES\x1a\x01\x01" + b"\x00" * 10 + b"homebrew quest " * 200
+
+    def drop_in(self, system: str, name: str, content: bytes) -> Path:
+        folder = self.inbox / "_unverified" / system
+        folder.mkdir(parents=True, exist_ok=True)
+        path = folder / name
+        path.write_bytes(content)
+        age(path)
+        return path
+
+    def catalog_games(self, system: str) -> dict:
+        data = json.loads((self.hub / "catalog" / "systems" / f"{system}.json").read_text())
+        return {g["primary"]: g for g in data["games"].values()}
+
+    def test_scan_unverified_lists_only_the_children_of_system_folders(self) -> None:
+        self.drop_in("nes", "a.nes", b"1")
+        self.drop_in("gba", "b.gba", b"1")
+        (self.inbox / "_unverified" / "nes" / ".hidden").write_bytes(b"")
+        (self.inbox / "_unverified" / "stray.nes").write_bytes(b"1")
+        found = scan_unverified(self.inbox)
+        self.assertEqual(
+            [(p.relative_to(self.inbox).as_posix(), s) for p, s in found],
+            [("_unverified/gba/b.gba", "gba"), ("_unverified/nes/a.nes", "nes")],
+        )
+        self.assertEqual([p.name for p in scan(self.inbox)], [])
+
+    def test_a_homebrew_rom_is_filed_under_its_own_name_and_marked_in_the_catalog(self) -> None:
+        self.drop_in("nes", "Homebrew Quest.nes", self.HOMEBREW)
+        before = self.tree()
+        self.assertEqual(self.go(apply=False, tools=Tools()), 0)
+        self.assertEqual(self.tree(), before)
+        self.assertIn("would place (unverified)", self.out)
+        self.assertIn("library/roms/nes/Homebrew Quest.zip", self.out)
+
+        self.assertEqual(self.go(tools=Tools(), now=lambda: CatalogHookTests.NOW), 0)
+        self.assertEqual(self.library(), ["nes/Homebrew Quest.zip"])
+        with zipfile.ZipFile(self.roms / "nes" / "Homebrew Quest.zip") as z:
+            self.assertEqual(z.namelist(), ["Homebrew Quest.nes"])
+            self.assertEqual(z.read("Homebrew Quest.nes"), self.HOMEBREW)
+        self.assertIn("not in any DAT (filed from _unverified)", self.out)
+        self.assertIn("!/roms/nes/Homebrew Quest.zip", self.out)
+        self.assertEqual(self.done(), ["Homebrew Quest.nes"])
+        self.assertEqual(self.review(), [])
+        game = self.catalog_games("nes")["roms/nes/Homebrew Quest.zip"]
+        self.assertIsNone(game["dat"])
+        self.assertIn("unverified", game["flags"])
+
+    def test_the_mark_survives_a_later_catalog_run(self) -> None:
+        from warpzone import catalog_store
+
+        self.drop_in("nes", "Homebrew Quest.nes", self.HOMEBREW)
+        self.go(tools=Tools(), now=lambda: CatalogHookTests.NOW)
+        catalog_store.update_after_inbox(
+            self.hub, {"nes"}, dat={}, out=lambda t: None, warn=lambda t: None
+        )
+        self.assertIn(
+            "unverified", self.catalog_games("nes")["roms/nes/Homebrew Quest.zip"]["flags"]
+        )
+
+    def test_the_ra_hash_is_computed_as_for_any_game(self) -> None:
+        self.drop_in("nes", "Homebrew Quest.nes", self.HOMEBREW)
+        self.go(tools=Tools(rahasher=self.rahasher), now=lambda: CatalogHookTests.NOW)
+        self.assertIn(stub_md5(self.HOMEBREW), self.out)
+        stored = self.catalog_games("nes")["roms/nes/Homebrew Quest.zip"]
+        self.assertEqual(stored["ra"]["hash"], stub_md5(self.HOMEBREW))
+
+    def test_an_archive_is_unpacked_and_the_rom_named_after_its_own_file(self) -> None:
+        folder = self.inbox / "_unverified" / "nes"
+        folder.mkdir(parents=True)
+        with zipfile.ZipFile(folder / "release 1.2.zip", "w") as z:
+            z.writestr("bin/Cool Hack.nes", self.HOMEBREW)
+            z.writestr("readme.txt", b"hello")
+        age(folder / "release 1.2.zip")
+        self.assertEqual(self.go(tools=Tools()), 0)
+        self.assertEqual(self.library(), ["nes/Cool Hack.zip"])
+        self.assertEqual(self.done(), ["release 1.2.zip"])
+
+    def test_a_rom_a_dat_knows_is_filed_the_normal_way(self) -> None:
+        self.drop_in("nes", "my copy.nes", NES_ROM)
+        self.assertEqual(self.go(tools=Tools(), now=lambda: CatalogHookTests.NOW), 0)
+        self.assertEqual(self.library(), ["nes/Adventure (USA).zip"])
+        self.assertNotIn("not in any DAT", self.out)
+        game = self.catalog_games("nes")["roms/nes/Adventure (USA).zip"]
+        self.assertEqual(game["dat"], "Adventure (USA)")
+        self.assertNotIn("unverified", game["flags"])
+
+    def test_a_known_and_an_unknown_rom_in_one_item_are_both_filed(self) -> None:
+        folder = self.inbox / "_unverified" / "nes"
+        (folder / "pack").mkdir(parents=True)
+        (folder / "pack" / "a.nes").write_bytes(NES_ROM)
+        (folder / "pack" / "Mine.nes").write_bytes(self.HOMEBREW)
+        age(folder / "pack")
+        self.assertEqual(self.go(tools=Tools()), 0)
+        self.assertEqual(self.library(), ["nes/Adventure (USA).zip", "nes/Mine.zip"])
+
+    def test_content_that_is_not_for_the_system_goes_to_review(self) -> None:
+        self.drop_in("nes", "fake.nes", b"not a nes rom " * 50)
+        self.drop_in("nes", "wrong.gba", b"NES\x1a" + b"\x00" * 100)
+        self.assertEqual(self.go(tools=Tools()), 2)
+        self.assertEqual(self.library(), [])
+        self.assertEqual(
+            self.review(), ["fake.nes", "fake.nes.reason.txt", "wrong.gba", "wrong.gba.reason.txt"]
+        )
+        self.assertIn("iNES", self.reason("fake.nes"))
+        self.assertIn("not a .nes", self.reason("wrong.gba"))
+        self.assertTrue((self.inbox / "_unverified" / "nes").is_dir())
+
+    def test_an_unknown_system_folder_goes_to_review(self) -> None:
+        self.drop_in("atari2600", "game.bin", b"some rom " * 50)
+        self.drop_in("psx", "disc.bin", b"some disc " * 50)
+        self.assertEqual(self.go(tools=Tools()), 2)
+        self.assertEqual(self.library(), [])
+        self.assertIn("atari2600", self.reason("game.bin"))
+        self.assertIn("cannot", self.reason("game.bin"))
+        self.assertIn("cannot", self.reason("disc.bin"))
+
+    def test_a_file_outside_a_system_folder_is_not_an_item(self) -> None:
+        stray = self.inbox / "_unverified" / "stray.nes"
+        stray.parent.mkdir()
+        stray.write_bytes(self.HOMEBREW)
+        age(stray)
+        self.assertEqual(self.go(tools=Tools()), 0)
+        self.assertEqual(self.library(), [])
+        self.assertTrue(stray.exists())
+        self.assertIn("stray.nes", self.out)
+
+    def test_a_different_file_with_that_name_is_never_replaced(self) -> None:
+        target = self.roms / "nes" / "Mine.zip"
+        with zipfile.ZipFile(target, "w") as z:
+            z.writestr("Mine.nes", b"somebody else's game")
+        before = target.read_bytes()
+        self.drop_in("nes", "Mine.nes", self.HOMEBREW)
+        self.assertEqual(self.go(tools=Tools()), 1)
+        self.assertEqual(target.read_bytes(), before)
+        self.assertEqual(self.library(), ["nes/Mine.zip"])
+        self.assertEqual(self.review(), ["Mine.nes", "Mine.nes.reason.txt"])
+        self.assertIn("already in the library", self.reason("Mine.nes"))
+
+    def test_the_same_file_again_is_already_in_the_library(self) -> None:
+        self.drop_in("nes", "Mine.nes", self.HOMEBREW)
+        self.go(tools=Tools())
+        target = self.roms / "nes" / "Mine.zip"
+        stamp = (target.stat().st_mtime_ns, target.read_bytes())
+        self.drop_in("nes", "Mine.nes", self.HOMEBREW)
+        self.assertEqual(self.go(tools=Tools()), 0)
+        self.assertIn("already in the library", self.out)
+        self.assertEqual((target.stat().st_mtime_ns, target.read_bytes()), stamp)
 
 
 class PurgeTests(Base):
