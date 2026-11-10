@@ -525,19 +525,24 @@ run: the UI never guesses what a hand edit meant.
 
 Every read hands out an `etag`, the SHA-256 of the file's bytes (`"absent"` for a missing file).
 A write names, for each device it touches, the `etag` it was computed from. The server holds one
-lock for all whitelist writes and, inside it, for each device:
+lock for all whitelist writes and, inside it, for each device (the slow reads of the catalog and
+the hub happen before the lock is taken, and the questions to the hub's Syncthing after it is
+released, so a slow or down Syncthing never holds up a write):
 
 1. Reads the file again and compares its SHA-256 with the given `etag`; a mismatch refuses the
    whole request (`stale`) before any file is written.
 2. Applies the change to the model of what it just read and checks the effect (above).
 3. Copies the current file to `catalog/whitelists/<device>/<UTC time>.stignore` (the 50 newest
-   are kept per device).
+   are kept per device). A file that did not exist leaves an empty backup: the time in the name
+   is what [progress](#progress) reads as the time of the write, so a whitelist the UI creates is
+   `pending` like any other edit.
 4. Writes the rendered file with `safefile.atomic_write` and the stamp taken in step 1, which
    compares once more right before the rename. Its temporary file sits beside the whitelist for
    the length of the write only.
-5. Asks the hub's Syncthing to scan that one file (`POST /rest/db/scan?folder=wz-library&sub=
-   patterns-<device>.stignore`) so the devices hear of it at once; a failed scan is a warning,
-   since the hub's watcher picks the file up anyway.
+
+Once the lock is released, the server asks the hub's Syncthing to scan each file it wrote
+(`POST /rest/db/scan?folder=wz-library&sub=patterns-<device>.stignore`) so the devices hear of
+it at once; a failed scan is a warning, since the hub's watcher picks the file up anyway.
 
 A missing file (`etag` `"absent"`) is created, for a configured device that lists `library`.
 
@@ -635,9 +640,14 @@ never prints, logs or echoes it.
 - The page asks for the token once and sends it to `POST /api/v1/session` (`{"token": "..."}`).
   A right token answers `204` with a cookie `wz_session=<HMAC-SHA256 of the token over
   "warpzone-ui-session">; HttpOnly; SameSite=Strict; Path=/; Max-Age=2592000` (30 days); a
-  wrong one answers `401` after a wait (see below). The cookie needs no server state, survives a
-  restart and stops working when the token changes or when it expires; the next request then
-  answers `401` and the page asks for the token again. There is no logout route: the page keeps
+  wrong one answers `401` after a wait (see below). The value is `<expires>.<mac>`: `expires` is
+  the Unix time the session ends (the login time plus the `Max-Age`, 30 days) and `mac` the
+  HMAC-SHA256 under the token of `"warpzone-ui-session.<expires>"`. The server keeps no state
+  and checks both on every request, so the session ends at `expires` even if the browser keeps
+  sending the cookie, a changed `expires` breaks the mac, and a cookie made by an older version
+  (no expiry) is not accepted. It survives a restart and stops working when the token changes
+  or when it expires; the next request then answers `401` and the page asks for the token
+  again. There is no logout route: the page keeps
   no token and the cookie is `HttpOnly`, so ending a session means clearing the cookie or
   changing the token.
 - A client that is not a browser (the Decky plugin) sends `Authorization: Bearer <token>`.
@@ -957,7 +967,9 @@ last two when they apply):
 `library`, `GET /rest/system/connections` (is it connected) and `GET /rest/db/completion?folder=
 wz-library&device=<id>` (`completion`, `needBytes`, `needItems`, `remoteState`). The answers are
 cached for 15 seconds, since a completion over a large folder costs the hub a walk of its
-database. `progress.state` (pure) turns them into one state per device:
+database. A failed question (`503 hub-unreachable`) is cached for 5 seconds as well, so a down
+Syncthing is not asked again by every poll of every open page; the first poll after that asks
+again. `progress.state` (pure) turns them into one state per device:
 
 | State | When |
 |---|---|
@@ -974,7 +986,7 @@ database. `progress.state` (pure) turns them into one state per device:
 ```
 
 The write time comes from the newest backup in `catalog/whitelists/<device>/` (the server keeps
-no other state). Progress is per console, not per game. Before this is relied on, the e2e test
+no other state); a whitelist the UI created has an empty backup for that. Progress is per console, not per game. Before this is relied on, the e2e test
 must show how the hub counts files a device ignores: if a whitelisted device never reaches
 `completion` 100 because the hub counts its ignored files as needed, `downloading` is computed
 instead from `GET /rest/db/remoteneed?folder=wz-library&device=<id>` filtered through the
