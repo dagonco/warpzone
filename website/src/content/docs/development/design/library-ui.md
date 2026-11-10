@@ -1094,7 +1094,12 @@ warpzone runs on the hub in a container, because a NAS's own Python is often old
 image (`docker/Dockerfile`) is a slim official Python image pinned by digest, with warpzone
 installed from the checkout the image is built from (a release tag, as a wheel, with no index
 access) and RAHasher built with CHD support in a separate stage from RALibretro, pinned by tag and
-commit; only its binary reaches the last stage, at `/usr/local/bin/RAHasher` (the other tools of `inbox` are not in the image; see
+commit; only its binary reaches the last stage, at `/usr/local/bin/RAHasher`. The last stage also
+installs `mame-tools` (`chdman`) and `libarchive-tools` (`bsdtar`) with `apt-get install
+--no-install-recommends` and removes the apt lists in the same layer, so `inbox` can convert discs
+and unpack `.7z` and `.rar` there. They land in `/usr/bin`, on `PATH`, so `doctor` needs no path
+for them. The other tools of `inbox` (`dolphin-tool`, `nsz`, `orbis-pkg-util`, Vita3K) are not
+packaged for Debian and are not in the image (see
 [where inbox runs](/warpzone/setup/inbox/#where-inbox-runs)). The entry point is `warpzone` and the default
 command `serve`, so `docker compose run --rm warpzone catalog ...` runs the other commands. The
 image runs as a non-root user and the Compose file sets `user:` to the uid and gid that own the

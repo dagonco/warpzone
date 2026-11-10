@@ -43,7 +43,8 @@ for every problem, the exact fix for this platform.
   image does not ship it" (run inbox on a computer, or build the image with it) instead of
   an install command, since the root of a container is read-only and rebuilt from the
   image; `chdman` and `bsdtar` stay `[!!]` there as on a computer, so an image without them
-  fails. `Hub root for inbox` is `[! ]` when `[inbox] root` is unset but `[hub] root` is
+  fails (the image ships both from Debian packages, in `/usr/bin`, so `PATH` finds them and
+  `IMAGE_TOOL_PATHS` lists only the tools outside `PATH`). `Hub root for inbox` is `[! ]` when `[inbox] root` is unset but `[hub] root` is
   there, because `inbox` needs its own `root` (the same path as `[hub] root` in the
   container). `Work folder` is `[! ]` when `work_dir` is unset (`/tmp` is memory in the
   container) or is not a mounted folder, and the missing-DATs fix says to mount a folder.
