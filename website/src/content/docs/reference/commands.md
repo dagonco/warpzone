@@ -13,7 +13,7 @@ warpzone --version                # prints "warpzone X.Y.Z" and exits 0
 
 ## Reading this page
 
-**Where a command runs.** `catalog`, `serve` and `whitelist migrate` run where the hub root is mounted. `check`, `provision hub`, `status`, `render-ignores`, `bios` and `inbox` run on any machine that can reach what they need (the hub's Syncthing API, or the library on a disk). `provision device`, `prune`, `frontend refresh`, `play-state sync`, `links sync`, `saves convert`, `settings`, `self-update` and `health` run on a console, because they read its local Syncthing and write its files. `doctor` runs anywhere and only queries the local Syncthing on `127.0.0.1`.
+**Where a command runs.** `catalog`, `serve`, `whitelist migrate` and `whitelist restore` run where the hub root is mounted. `check`, `provision hub`, `status`, `render-ignores`, `bios` and `inbox` run on any machine that can reach what they need (the hub's Syncthing API, or the library on a disk). `provision device`, `prune`, `frontend refresh`, `play-state sync`, `links sync`, `saves convert`, `settings`, `self-update` and `health` run on a console, because they read its local Syncthing and write its files. `doctor` runs anywhere and only queries the local Syncthing on `127.0.0.1`.
 
 **What changes files.** Commands report first and act only when you ask:
 
@@ -21,13 +21,13 @@ warpzone --version                # prints "warpzone X.Y.Z" and exits 0
 |---|---|
 | `check`, `status`, `render-ignores`, `bios`, `doctor`, `health`, `settings audit` | No. Read only. |
 | `prune`, `inbox` | Report only. They delete or move files only with `--apply`. |
-| `provision hub`, `provision device`, `frontend refresh`, `play-state sync`, `links sync`, `saves convert`, `settings apply`, `settings capture`, `catalog`, `whitelist migrate` | Yes, and each accepts `--dry-run` to show what it would do and change nothing. |
+| `provision hub`, `provision device`, `frontend refresh`, `play-state sync`, `links sync`, `saves convert`, `settings apply`, `settings capture`, `catalog`, `whitelist migrate`, `whitelist restore` | Yes, and each accepts `--dry-run` to show what it would do and change nothing. |
 | `serve` | Only on request: it rewrites a device's `patterns-<device>.stignore` (with a backup of the old file), and writes `catalog/` when it runs `catalog`. It has no `--dry-run`; every change request can set `dry_run` instead. |
 | `self-update` | Yes: it runs one tick of the updater, which can switch the checkout to a newer release. It has no `--dry-run`. |
 
 **`--config PATH`.** Almost every leaf command takes `--config PATH`: the private config file. Without it warpzone uses `$WARPZONE_CONFIG`, then `$XDG_CONFIG_HOME/warpzone/config.toml`, then `~/.config/warpzone/config.toml`. The option goes after the full command (`warpzone provision hub --config FILE`, not before `provision`). `self-update` is the exception: it needs no config and takes only `--now`.
 
-**`--dry-run`.** For commands that talk to Syncthing (`provision`, `frontend refresh`) it prints the REST calls it would make (method, path and JSON body, with API keys redacted) and sends no write; it still sends the `GET` requests it needs to work out the difference. For `play-state sync`, `links sync`, `saves convert`, `settings` and `whitelist migrate`, it says what it would do and writes nothing.
+**`--dry-run`.** For commands that talk to Syncthing (`provision`, `frontend refresh`) it prints the REST calls it would make (method, path and JSON body, with API keys redacted) and sends no write; it still sends the `GET` requests it needs to work out the difference. For `play-state sync`, `links sync`, `saves convert`, `settings`, `whitelist migrate` and `whitelist restore`, it says what it would do and writes nothing.
 
 **Safety rule.** Never delete or overwrite user data without checking again right before acting. See [Safety](/warpzone/operation/safety/) and [Pruning what a device no longer whitelists](/warpzone/setup/whitelists/#pruning-what-a-device-no-longer-whitelists).
 
@@ -54,6 +54,7 @@ Every error warpzone raises on purpose derives from one base class and carries i
 | [`render-ignores`](#warpzone-render-ignores) | Print the ignore lines a device would get. |
 | [`prune`](#warpzone-prune) | Report or delete files a device no longer whitelists. |
 | [`whitelist migrate`](#warpzone-whitelist-migrate) | Convert hand-written device whitelists to the library UI's format. |
+| [`whitelist restore`](#warpzone-whitelist-restore) | List the backups of a device's whitelist, or write one back. |
 | [`bios`](#warpzone-bios) | Which BIOS and firmware files a library has, lacks or has wrong. |
 | [`inbox`](#warpzone-inbox) | Identify, convert and file new games. |
 | [`catalog`](#warpzone-catalog) | Build and update the catalog index of the library on the hub. |
@@ -230,6 +231,34 @@ warpzone whitelist migrate --dry-run
 warpzone whitelist migrate deck
 ```
 
+## `warpzone whitelist restore`
+
+```
+warpzone whitelist restore <device> [backup] [--config PATH] [--root PATH] [--dry-run]
+```
+
+Every change to a device's whitelist (the library UI, `whitelist migrate`, a restore) keeps the file it replaced as `catalog/whitelists/<device>/<UTC time>.stignore` on the hub, the 50 newest. This command brings one of them back. It runs where the hub root is mounted. See [History and restore](/warpzone/development/design/library-ui/#history-and-restore).
+
+Without `backup` it lists the backups, newest first, each with its time and how it differs from the current whitelist ("2 path(s) back on, 1 path(s) off", "same as the current whitelist"). With `backup`, given as its name or the start of it (`20261106T1000`) when that is enough to tell it from the others, it prints the unified diff against the current whitelist, the paths the restore turns on and off, and a warning when paths come back on: the console will download them again, including games or systems you took off it since. Then it writes the backup over the whitelist, after saving the current file as a new backup (so a restore can be undone with another restore), and asks the hub's Syncthing to scan the file (a failure there is a warning). It writes only if the whitelist is still the file it read; if it changed meanwhile, nothing is written.
+
+An empty backup, taken when the whitelist did not exist yet, is refused: an empty whitelist lets every file through. A backup made before `whitelist migrate` can be restored, and leaves the whitelist hand-written again.
+
+| Option | Default | Meaning |
+|---|---|---|
+| `device` | required | A device name from the config. |
+| `backup` | list them | The backup to restore. |
+| `--config PATH` | see above | The private config file. |
+| `--root PATH` | `[hub] root` | The hub root as mounted on this machine. |
+| `--dry-run` | off | Print the diff and the paths and write nothing. |
+
+Exit `0` when the backups were listed, the file was restored, or the backup is already the current file; `1` when the restore was refused (an empty backup, or the whitelist changed meanwhile) or the backup does not exist; `2` for an invalid config or an unknown device.
+
+```bash
+warpzone whitelist restore deck
+warpzone whitelist restore deck 20261106T1000 --dry-run
+warpzone whitelist restore deck 20261106T1000
+```
+
 ## `warpzone bios`
 
 ```
@@ -271,7 +300,7 @@ Identifies the new games dropped in `inbox/` against the Redump and No-Intro DAT
 
 With `--apply`, once the games are filed, it updates the [catalog index](#warpzone-catalog) for the systems it placed games in; if that fails it prints a warning and the files stay filed (run `warpzone catalog` later).
 
-The external tools (`chdman`, `bsdtar`, `rahasher`, ...) come from the `[inbox]` table or `PATH`. The environment variable `RA_API_KEY`, when set, is used for RetroAchievements lookups. Without a `--root` or `--dats` (and no value in the config) it stops with exit `2`, and so does a hub root without `inbox/` and `library/roms/`. With `--apply` only one run works on a hub's inbox at a time, through the lock file `inbox/.warpzone.lock`; a second run exits `2` naming the host, process and start time that hold it. Exit `0` when every item was placed (or would be); `1` when some items need attention.
+It runs on a computer that mounts the hub's share or in the hub container ([the two ways](/warpzone/setup/inbox/#where-inbox-runs)). The external tools (`chdman`, `bsdtar`, `rahasher`, ...) come from the `[inbox]` table or `PATH`; in the container that means the tools of the image, and the paths in `[inbox]` are paths inside the container. The environment variable `RA_API_KEY`, when set, is used for RetroAchievements lookups. Without a `--root` or `--dats` (and no value in the config) it stops with exit `2`, and so does a hub root without `inbox/` and `library/roms/`. With `--apply` only one run works on a hub's inbox at a time, through the lock file `inbox/.warpzone.lock`; a second run exits `2` naming the host, process and start time that hold it. Exit `0` when every item was placed (or would be); `1` when some items need attention.
 
 ```bash
 warpzone inbox
@@ -283,6 +312,7 @@ warpzone inbox --apply
 ```
 warpzone catalog [--config PATH] [--root PATH] [--dry-run]
                  [--ra-hash [--rahasher PATH]] [--ra-lists [--force]]
+                 [--dats [--dats-dir PATH] [--force]]
 ```
 
 Builds and updates the catalog index: one `catalog/systems/<system>.json` per system folder of `library/roms/`, at the hub root and outside every Syncthing folder, so no console receives it. Each file lists the games of the system, the library paths each game needs (its parts), its size and its SHA-1 where it is a file. The first run reads every file of the library once to hash it; after that a run only looks at sizes and dates. Games that are gone from the library are dropped, and what `inbox` recorded about a game (its filing date, DAT name and RetroAchievements hash) is kept. It writes only under `catalog/`, never touches `library/`, and does not rewrite a file whose games did not change. `warpzone inbox --apply` updates the index by itself for the systems it placed games in, so this command is for the first run and for games added or removed by hand. See [The catalog index](/warpzone/development/design/library-ui/#the-catalog-index).
@@ -296,9 +326,11 @@ Builds and updates the catalog index: one `catalog/systems/<system>.json` per sy
 | `--rahasher PATH` | `[inbox] rahasher` | The RAHasher for `--ra-hash` (built with CHD support). Only valid with `--ra-hash`. |
 | `--ra-lists` | off | Download the RetroAchievements game list of each console the library has into `catalog/ra/<console id>.json`. Needs `RA_API_KEY` in the environment. |
 | `--ra-achievements` | off | Download the achievements of the library's RA games, the badge images and, with `[ra] user` in the config, that user's progress, into `catalog/ra/`. Needs `RA_API_KEY` and the lists from `--ra-lists`. |
-| `--force` | off | With `--ra-lists` or `--ra-achievements`, download again even if the cached copy is recent. |
+| `--dats` | off | Fill the `serials` of the games that have none from the DATs, by exact identity. See "DAT serials" below. |
+| `--dats-dir PATH` | `[inbox] dats_dir` | The DAT folder for `--dats`, the one `inbox` reads. Only valid with `--dats`. |
+| `--force` | off | With `--ra-lists` or `--ra-achievements`, download again even if the cached copy is recent. With `--dats`, also look at the games that already have serials and replace them when the DAT gives other ones. |
 
-Exit `0` when it finished; `1` when a system file could not be read or written, or kept changing under it (the other systems are still written), or when a RetroAchievements list could not be downloaded and none was cached; `2` when the hub root has no `library/roms/` folder, `--ra-hash` has no usable RAHasher, `--ra-lists` or `--ra-achievements` has no `RA_API_KEY`, or `--rahasher` or `--force` is used without the option it belongs to.
+Exit `0` when it finished; `1` when a system file could not be read or written, or kept changing under it (the other systems are still written), or when a RetroAchievements list could not be downloaded and none was cached; `2` when the hub root has no `library/roms/` folder, `--ra-hash` has no usable RAHasher, `--ra-lists` or `--ra-achievements` has no `RA_API_KEY`, or `--dats` has no DAT folder (neither `--dats-dir` nor `[inbox] dats_dir`) or none with DATs warpzone knows, or `--rahasher`, `--dats-dir` or `--force` is used without the option it belongs to. `--dats` exits `1` too when a system file kept changing or could not be written; games it could not match do not make it fail.
 
 ### RetroAchievements
 
@@ -308,6 +340,17 @@ Each game can carry the RetroAchievements (RA) hash of its main file (for a `.m3
 
 `--ra-achievements` works from the cached lists. For each library game RA has achievements for it downloads the achievement list (kept 14 days), then the images of every badge, locked and unlocked. With `[ra] user` set it also downloads your completion progress (kept 5 hours) and, for each game you have played, the dates you unlocked each achievement (again only when the progress says something changed). It calls RA one request at a time with a pause between two; a failed call is reported by its kind and the pass goes on, and three failures in a row stop it. A first pass over a large library takes a while and can be stopped and run again; `warpzone serve` does a bounded share of it on every background run, so it also catches up by itself.
 
+### DAT serials
+
+A game can carry the serials its Redump DAT lists (the disc's product number, for example `T-45001D-05`), which is how the [saves index](/warpzone/development/design/library-ui/#saves-per-game) finds the Flycast memory card of a Dreamcast game. `warpzone inbox --apply` records them for the games it files. `--dats` is the pass for the games that were filed before that, or by hand. It reads the same DAT folder `inbox` uses (`[inbox] dats_dir`, or `--dats-dir`) through the same parse cache, and for every system whose DAT lists serials it looks at the games that have none. A game is matched only by exact identity, never by a fuzzy name:
+
+1. the DAT game name `inbox` stored for it (`dat` in the catalog), when a DAT game has exactly that name;
+2. else the SHA-1 and size of its main file against the DAT games that have a single rom (a disc kept as an `.iso`, for instance; a CHD never matches this way, as its hash is not the DAT's);
+3. else, for a single file, its name without the extension against the DAT game names, exactly and with the same case (`inbox` names a file after its DAT game, so a single `.chd` filed before `dat` was recorded is found this way);
+4. else, for a multi-disc `.m3u` folder, each disc named in its playlist by exact name against the DAT game names, and the game gets the union of the serials of all its discs. If any disc is not found the game gets none.
+
+A name or hash that the DATs list with different serials is not guessed at. A game the DAT identifies but lists no serial for (common in No-Intro DATs) stays as it is and is counted as `no serial in DAT`. A game no DAT identifies exactly stays without serials and is counted as `unmatched`, and the first 20 are named. `--dats` runs the normal scan first, then writes only the `serials` of `catalog/systems/<system>.json`, with the same guarded write as the scan, and not at all for a file whose games would not change. It prints, per system, how many games were filled, already had serials, have no serial in their DAT, or matched nothing (for example `nes: 0 to fill, 0 already had, 101 no serial in DAT, 2 unmatched`), and `no DAT with serials` for a system whose DATs are missing or list none. A game that has serials is left alone unless you pass `--force`, which replaces its serials only when the DAT gives it a single, different answer. With `--dry-run` it says how many games it would fill and writes nothing.
+
 ```bash
 warpzone catalog --dry-run
 warpzone catalog
@@ -315,6 +358,8 @@ warpzone catalog --ra-hash --dry-run
 warpzone catalog --ra-hash
 RA_API_KEY=... warpzone catalog --ra-lists
 RA_API_KEY=... warpzone catalog --ra-achievements
+warpzone catalog --dats --dry-run
+warpzone catalog --dats
 ```
 
 ## `warpzone serve`
@@ -325,7 +370,7 @@ warpzone serve [--config PATH] [--listen HOST:PORT]
 
 Serves the library UI (the static page in `warpzone/data/ui/`) and its JSON API from one port, with `http.server`. It runs where the hub root is mounted, normally in the hub's container, and stays up until it is stopped (Ctrl-C or `SIGTERM`). It reads `[hub]` (the root and the Syncthing API), `[devices.*]`, `[serve]` and `[inbox] rahasher`. See [HTTP API](/warpzone/development/design/library-ui/#http-api) for the endpoints.
 
-The UI rewrites device whitelists and nothing else in the library: each request that turns games or systems on or off for a device replaces `library/patterns-<device>.stignore`, after copying the old file to `catalog/whitelists/<device>/` (the 50 newest are kept), and asks the hub's Syncthing to scan it. A request is refused when the whitelist changed since the client read it, and a device whose whitelist is not in the UI's format is refused until `warpzone whitelist migrate` has run. While it runs, the server also updates the catalog in a background thread: at start and every 6 hours (`catalog`, with RAHasher when `[inbox] rahasher` is set), and `catalog --ra-lists` once a day when `RA_API_KEY` is set.
+The UI rewrites device whitelists and nothing else in the library: each request that turns games or systems on or off for a device replaces `library/patterns-<device>.stignore`, after copying the old file to `catalog/whitelists/<device>/` (an empty copy when there was none; the 50 newest are kept), and asks the hub's Syncthing to scan it. A request is refused when the whitelist changed since the client read it, and a device whose whitelist is not in the UI's format is refused until `warpzone whitelist migrate` has run. While it runs, the server also updates the catalog in a background thread: at start and every 6 hours (`catalog`, with RAHasher when `[inbox] rahasher` is set), and `catalog --ra-lists` once a day when `RA_API_KEY` is set.
 
 | Option | Default | Meaning |
 |---|---|---|

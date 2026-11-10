@@ -23,23 +23,101 @@ from typing import Any, TypeVar
 
 from warpzone import __version__
 
-# RetroAchievements console ids, by warpzone system.
+# RetroAchievements console ids (rcheevos `rc_consoles.h`, the numbers RAHasher and the web API
+# use), by the ES-DE system folder name under `library/roms/`. Only consoles RAHasher can hash
+# and RA has sets for are listed; when ES-DE has several folders for one RA console, each one
+# the library might use is listed (Genesis and Mega Drive, PC Engine and TurboGrafx-16, ...).
+# Not listed on purpose: Wii, Wii U, Xbox and PS3 (RA has no sets), and consoles RAHasher
+# cannot hash (Atari 5200, Atari ST, Amiga, X68000, CD-i, ...).
 CONSOLE_IDS: dict[str, int] = {
-    "psx": 12,
-    "ps2": 21,
-    "saturn": 39,
-    "dreamcast": 40,
-    "psp": 41,
-    "gc": 16,
+    # Nintendo
     "nes": 7,
+    "famicom": 7,
+    "fds": 81,
     "snes": 3,
-    "genesis": 1,
+    "sfc": 3,
+    "snesna": 3,
     "n64": 2,
     "gb": 4,
     "gbc": 6,
     "gba": 5,
+    "nds": 18,
+    "n3ds": 62,
+    "gc": 16,
+    "virtualboy": 28,
+    "pokemini": 24,
+    # Sony
+    "psx": 12,
+    "ps2": 21,
+    "psp": 41,
+    # Sega
+    "genesis": 1,
+    "megadrive": 1,
+    "megadrivejp": 1,
+    "segacd": 9,
+    "megacd": 9,
+    "sega32x": 10,
     "mastersystem": 11,
     "gamegear": 15,
+    "sg-1000": 33,
+    "saturn": 39,
+    "saturnjp": 39,
+    "dreamcast": 40,
+    # NEC
+    "pcengine": 8,
+    "tg16": 8,
+    "supergrafx": 8,
+    "pcenginecd": 76,
+    "tg-cd": 76,
+    "pcfx": 49,
+    # SNK
+    "ngp": 14,
+    "ngpc": 14,
+    "neogeocd": 56,
+    # Atari
+    "atari2600": 25,
+    "atari7800": 51,
+    "atarijaguar": 17,
+    "atarijaguarcd": 77,
+    "atarilynx": 13,
+    # Bandai and others
+    "wonderswan": 53,
+    "wonderswancolor": 53,
+    "3do": 43,
+    "colecovision": 44,
+    "intellivision": 45,
+    "vectrex": 46,
+    "odyssey2": 23,
+    "videopac": 23,
+    "channelf": 57,
+    "supervision": 63,
+    "megaduck": 69,
+    "arcadia": 73,
+    "vc4000": 74,
+    "scv": 55,
+    # Arcade (RA files Neo Geo cartridge systems and the CPS boards under Arcade)
+    "arcade": 27,
+    "mame": 27,
+    "fbneo": 27,
+    "neogeo": 27,
+    "cps1": 27,
+    "cps2": 27,
+    "cps3": 27,
+    # Computers and fantasy consoles
+    "dos": 26,
+    "msx": 29,
+    "msx2": 29,
+    "msxturbor": 29,
+    "c64": 30,
+    "oric": 32,
+    "amstradcpc": 37,
+    "apple2": 38,
+    "pc88": 47,
+    "zxspectrum": 59,
+    "tic80": 65,
+    "arduboy": 71,
+    "wasm4": 72,
+    "uzebox": 80,
 }
 API_URL = "https://retroachievements.org/API/API_GetGameList.php"
 GAME_EXTENDED_URL = "https://retroachievements.org/API/API_GetGameExtended.php"

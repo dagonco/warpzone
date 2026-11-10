@@ -4,7 +4,7 @@ title: "Adding new games: the inbox"
 
 How `warpzone inbox` identifies, converts and files new dumps, including Switch, 3DS, Wii and GameCube `.rvz`, PS3, PS4, PS Vita, Xbox, Xbox 360, Wii U and arcade.
 
-Drop new dumps (files, folders or archives) in `inbox/` on the hub's share and run `warpzone inbox` on a desktop machine that mounts it (the NAS is too weak for conversions). Without `--apply` it only reports:
+Drop new dumps (files, folders or archives) in `inbox/` on the hub's share and run `warpzone inbox`, either on a computer that mounts the share or in the hub's container ([the two ways](#where-inbox-runs)). Conversions are heavy, so a computer is the usual choice. Without `--apply` it only reports:
 
 ```
 $ warpzone inbox
@@ -26,9 +26,88 @@ items: 2; games to place: 2, already in the library: 0; items for review: 0
 report only: run again with --apply to convert and place
 ```
 
+## Where inbox runs
+
+The command and its result are the same in both places; what differs is where the tools come from and what the `[inbox]` paths mean.
+
+- **On a computer that mounts the hub's share** (a desktop or laptop). You install the tools there, keep the DATs in a folder there, and `[inbox] root` is where the share is mounted on that computer. This is the usual way: conversions use that computer's processor, and the files cross the network once.
+- **In the hub's container**, the one from [the hub container guide](/warpzone/setup/hub-container/). The tools come from the image, the share is read where it lives (no network), and every path in `[inbox]` is a path inside the container. Use it when you have no computer to spare, or for work that needs no conversion. A NAS processor is slow with `chdman`.
+
+| | On a computer | In the hub container |
+|---|---|---|
+| Tools | installed by you (Homebrew, apt, ...), found on `PATH` or at the `[inbox]` paths | shipped by the image, at the image's paths |
+| Config | the config file of that computer | the config folder mounted at `/config` (`WARPZONE_CONFIG`) |
+| `[inbox] root` | where the share is mounted on that computer | the hub root as mounted in the container: the same path as `[hub] root` |
+| `dats_dir` | a clone of libretro-database on that computer | a folder you mount into the container (the image holds no DATs) |
+| `rahasher` | the RAHasher you built, optional | `"/usr/local/bin/RAHasher"`, the copy in the image; inbox uses it only when this is set |
+| `work_dir` | optional (the system temp folder) | set it to a mounted folder: the container's `/tmp` is memory |
+
+Which tools exist in each place:
+
+| Tool | Needed for | On a computer | In the hub image |
+|---|---|---|---|
+| `chdman` | CHD conversions (`psx`, `ps2`, `saturn`, `dreamcast`) | install `mame-tools` or `rom-tools` | `/usr/bin/chdman` (on `PATH`), from Debian's `mame-tools` |
+| `bsdtar` | `.7z` and `.rar` archives | install `libarchive-tools` (ships with macOS) | `/usr/bin/bsdtar` (on `PATH`), from Debian's `libarchive-tools` |
+| `RAHasher` | the RetroAchievements hash check | build it, set `rahasher` | `/usr/local/bin/RAHasher` |
+| `dolphin-tool`, `nsz`, `orbis-pkg-util`, `vita3k` | `.gcz`, Switch metadata, PS4 and Vita packages | install them | not in the image |
+
+An item that needs a tool the place lacks goes to `inbox/_revisar/` with the reason "missing tool"; the other items are filed. `.zip` archives, cartridge systems, `.rvz`, `.wia` and 3DS files need none of the missing tools. `chdman` and `bsdtar` need no `[inbox]` setting in the container: inbox finds them on `PATH`. When the image gains a tool it is on the image's `PATH`, and this table is the place that says so.
+
+### Running it in the container
+
+Add a service for it to `compose.yaml`, next to `warpzone`. It repeats the mounts and limits of that service, adds the DATs and a work folder, and a profile keeps `docker compose up -d` from starting it:
+
+```yaml
+  warpzone-inbox:
+    image: warpzone:local
+    profiles: ["inbox"]
+    user: "1000:1000"               # the same uid and gid as the warpzone service
+    # group_add: ["101"]            # if the warpzone service needs it
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 2g                   # more than the server: conversions and archives
+    volumes:
+      - /volume1/games:/volume1/games     # the hub root (a Synology path as an example), read-write, same path as [hub] root
+      - ./config:/config:ro
+      - ./dats:/dats:ro                   # a clone of libretro-database (see below)
+      - ./work:/work                      # unpacked archives and conversions: room for a few GiB
+    env_file:
+      - ./warpzone.env                    # RA_API_KEY, to look RA hashes up
+    environment:
+      XDG_CACHE_HOME: /work/cache         # the parsed DATs are cached here
+```
+
+In the same `config.toml` the container reads (`/config/config.toml`):
+
+```toml
+[inbox]
+root = "/volume1/games"                       # the hub root as mounted in the container (example path)
+dats_dir = "/dats/libretro-database/metadat"  # redump/ and no-intro/ inside
+work_dir = "/work/tmp"
+rahasher = "/usr/local/bin/RAHasher"          # optional
+```
+
+Make the `dats` and `work` folders next to `compose.yaml` (`work` writable by the service's uid), and clone the DATs there: `git clone --depth 1 --filter=blob:none --sparse https://github.com/libretro/libretro-database dats/libretro-database && git -C dats/libretro-database sparse-checkout set metadat/redump metadat/no-intro`. warpzone never downloads them. Then, from the folder with `compose.yaml`:
+
+```bash
+docker compose run --rm warpzone-inbox inbox            # report only
+docker compose run --rm warpzone-inbox inbox --apply
+docker compose run --rm warpzone-inbox doctor           # checks the image's tools and the mounts
+```
+
+`docker compose run` starts a second container from the service for one command, so the server can keep running; the lock described below keeps two `--apply` runs from working on the inbox at once. To use the running server's container instead, mount the same `dats` and `work` folders in the `warpzone` service, raise its `mem_limit`, and run `docker compose exec warpzone warpzone inbox`.
+
+`warpzone doctor` tells which way it is running by itself (inside a container it checks the image's tools and the mounted folders; elsewhere the tools on `PATH` or at the configured paths), so the same command is right in both places. See [the doctor guide](/warpzone/operation/doctor/).
+
 ## Configuration
 
-Set the `[inbox]` table of the config (see [`examples/config.example.toml`](https://github.com/dagonco/warpzone/blob/main/examples/config.example.toml)). With `--root` and `--dats` it needs no config file.
+Set the `[inbox]` table of the config (see [`examples/config.example.toml`](https://github.com/dagonco/warpzone/blob/main/examples/config.example.toml)). The example below is for a computer; in the container the same keys hold paths inside it, as in [Running it in the container](#running-it-in-the-container). With `--root` and `--dats` it needs no config file.
 
 ```toml
 [inbox]

@@ -93,7 +93,7 @@ class DockerfileTest(unittest.TestCase):
     def test_final_stage_has_no_build_tools_and_is_not_root(self):
         final = stages(self.text)[-1]
         joined = "\n".join(final)
-        for word in ("apt-get", "build-essential", "gcc", "git ", "curl", "make "):
+        for word in ("build-essential", "gcc", "git ", "curl", "make "):
             self.assertNotIn(word, joined, f"{word!r} in the final stage")
         users = [line.split()[1] for line in final if line.startswith("USER ")]
         self.assertEqual(len(users), 1)
@@ -101,6 +101,20 @@ class DockerfileTest(unittest.TestCase):
         self.assertIn("COPY --from=rahasher /out/RAHasher /usr/local/bin/RAHasher", joined)
         self.assertEqual(final[-1], 'CMD ["serve"]')
         self.assertIn('ENTRYPOINT ["warpzone"]', final)
+
+    def test_final_stage_installs_only_the_inbox_tools_and_cleans_apt(self):
+        final = stages(self.text)[-1]
+        runs = [line for line in final if "apt-get" in line]
+        self.assertEqual(len(runs), 1, runs)
+        run = runs[0]
+        self.assertIn("apt-get update", run)
+        self.assertIn("apt-get install -y --no-install-recommends", run)
+        self.assertIn("rm -rf /var/lib/apt/lists/*", run)
+        self.assertLess(run.index("apt-get install"), run.index("rm -rf /var/lib/apt/lists"))
+        install = run.split("apt-get install", 1)[1].split("&&")[0]
+        packages = [w for w in install.split() if not w.startswith("-")]
+        # chdman is in mame-tools, bsdtar in libarchive-tools (Debian trixie).
+        self.assertEqual(sorted(packages), ["libarchive-tools", "mame-tools"])
 
     def test_installs_the_checkout_not_a_download(self):
         self.assertIn("COPY warpzone ./warpzone", self.text)

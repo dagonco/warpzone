@@ -273,11 +273,17 @@
     const shelves = h('div', { class: 'shelves' });
     const resumeHost = h('div', { class: 'hrow' });
     const resumeSec = h('section', { class: 'sec', 'aria-label': 'Continue playing', hidden: true }, sechead('Continue playing'), resumeHost);
+    const unfinishedHost = h('div', { class: 'hrow' });
+    const unfinishedSec = h('section', { class: 'sec', 'aria-label': 'Unfinished', hidden: true }, sechead('Unfinished'), unfinishedHost);
+    const similarHost = h('div', { class: 'hrow' });
+    const similarHead = h('h2', null, h('i'), '');
+    const similarSec = h('section', { class: 'sec', 'aria-label': 'Because you play', hidden: true },
+      h('div', { class: 'sechead' }, similarHead, h('span', { class: 'rule' })), similarHost);
     const recordsHost = h('div', { class: 'rec-grid' });
     const recordsSec = h('section', { class: 'sec records', 'aria-label': 'Records', hidden: true },
       sechead('Records'), h('div', { class: 'panel rec' }, recordsHost));
     const rescan = h('button', { class: 'btn', type: 'button', onclick: store.refreshCatalog, dataset: { fk: 'rescan' } }, 'Rescan the library');
-    const root = h('div', { class: 'page home' }, introHost, hero.node, stripSec, resumeSec, sysSec, shelves, recordsSec,
+    const root = h('div', { class: 'page home' }, introHost, hero.node, stripSec, resumeSec, unfinishedSec, similarSec, sysSec, shelves, recordsSec,
       h('div', { class: 'footer-actions' }, rescan,
         h('span', { class: 'mute' }, 'Runs the catalog scan on the hub now. It also runs by itself every few hours.')));
 
@@ -316,6 +322,21 @@
       resumeHost.replaceChildren(...items.map(ui.resumeCard));
     }
 
+    // The two recommendation shelves come from /recommendations; a shelf with no games is not there.
+    function paintRecs() {
+      const unfinished = (S.recs && S.recs.unfinished) || [];
+      unfinishedSec.hidden = !unfinished.length;
+      unfinishedHost.replaceChildren(...unfinished.map((r) => ui.recCard(r, 'unfinished')));
+      const similar = S.recs && S.recs.similar;
+      similarSec.hidden = !similar;
+      if (similar) {
+        const t = parseTitle(similar.to.name || similar.to.title);
+        similarSec.setAttribute('aria-label', `Because you play ${t.name}`);
+        similarHead.replaceChildren(h('i'), `Because you play ${t.name}`);
+        similarHost.replaceChildren(...similar.games.map((r) => ui.recCard(r, 'similar')));
+      }
+    }
+
     function paintRecords() {
       const blocks = [S.ra ? raRecords(S.ra) : null, S.ra ? raSystems(S.ra) : null, playRecords()].filter(Boolean);
       recordsSec.hidden = !blocks.length;
@@ -326,7 +347,7 @@
       store.loadHomeExtras().then((asked) => {
         if (!asked || view.dead) return;
         const fk = captureFocus();
-        paintResume(); paintRecords();
+        paintResume(); paintRecs(); paintRecords();
         restoreFocus(fk);
       });
     }
@@ -355,7 +376,7 @@
 
     function paintAll() {
       const fk = captureFocus();
-      paintIntro(); paintStrip(); paintResume(); paintSystems(); paintShelves(); paintRecords();
+      paintIntro(); paintStrip(); paintResume(); paintRecs(); paintSystems(); paintShelves(); paintRecords();
       loadExtras();
       if (pickFeatured() || (featured && !view.heroStarted)) {
         view.heroStarted = true;
@@ -587,7 +608,12 @@
           ui.diskMeter(d),
           wl === 'missing' ? h('p', { class: 'note warn' }, 'This console has no whitelist yet. The first change made here creates it.') : null,
           wl === 'needs-migration' ? h('p', { class: 'note warn' }, `Its whitelist is not in the format the UI manages. On the hub run "warpzone whitelist migrate ${d.name}", then reload.`) : null,
-          excluded.length ? h('p', { class: 'mute small' }, 'Does not run: ', excluded.map(systemName).join(', ')) : null),
+          excluded.length ? h('p', { class: 'mute small' }, 'Does not run: ', excluded.map(systemName).join(', ')) : null,
+          h('button', {
+            type: 'button', class: 'btn sm', dataset: { fk: 'hist:' + d.name },
+            title: 'The earlier versions of this whitelist, with a restore',
+            onclick: () => store.hooks.openHistory(d.name),
+          }, 'History')),
         h('div', { class: 'dev-levers' }, S.systems.map((s) => ui.lever(s.system, d.name, { compact: true }))));
     }
 

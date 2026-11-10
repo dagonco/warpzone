@@ -12,7 +12,7 @@ data. `examples/config.example.toml` documents every key.
 [hub]
 name = "nas"
 device_id = "XXXXXXX-..."
-root = "/volume1/games"                    # path on the hub's filesystem
+root = "/volume1/games"                    # path on the hub's filesystem (a Synology path as an example)
 api_url = "http://nas.local:8384"
 api_key_file = "~/.config/warpzone/hub.key"  # or api_key = "..."
 addresses = ["tcp://nas.local:22000"]        # optional, default ["dynamic"]
@@ -56,7 +56,7 @@ token_file = "/config/ui.token"              # optional; else WARPZONE_UI_TOKEN
 user = "ExampleUser"                         # optional; the RA user whose progress is shown
 ```
 
-`warpzone inbox` reads only the `[inbox]` table, so a desktop that only files games
+`warpzone inbox` reads only the `[inbox]` table, so a computer (or the hub container) that only files games
 needs no `[hub]` or `[devices]`. API keys are never printed, logged or included in
 error messages; the RetroAchievements key is read from `RA_API_KEY`, never from a file.
 `warpzone serve` reads `[hub]`, `[devices.*]`, `[serve]`, `[ra]` and `[inbox] rahasher`; its token
@@ -77,11 +77,12 @@ comes from `WARPZONE_UI_TOKEN` or `[serve] token_file` and is never printed eith
 | `warpzone links sync <device>` | on the device | For a profile with `[links.*]` and a device that lists `library`: makes each rule's `target` hold a symlink per library title, never while the emulator runs (see [Title links](/warpzone/development/design/title-links/)). `--dry-run` only says what it would do, `--quiet` prints nothing. ES-DE runs it at startup. |
 | `warpzone saves convert <device>` | on the device | For a profile with `[save_convert.*]` and a device that lists `saves`: reconciles the hub's raw saves with the emulator's own files (DraStic's `.dsv`), never while the emulator runs, with a backup before any overwrite (see [Save conversion](/warpzone/development/design/save-conversion/)). `--dry-run` only says what it would do, `--quiet` prints nothing. EmulationStation runs it around the emulator and `frontend refresh` runs it on the timer. |
 | `warpzone prune [device]` | on the device | Reports, and with `--apply` deletes, the files of the whitelisted folders that the device no longer whitelists (see [Pruning](/warpzone/development/design/prune/)). Report only by default. `--apply --unattended` is what the prune timer runs: no size cap, the half-of-device guard instead (see [Unattended runs](/warpzone/development/design/prune/#unattended-runs)). |
-| `warpzone catalog` | where the hub root is mounted (the hub's container) | Builds and updates the catalog index in `catalog/` from `library/` (see [The catalog index](/warpzone/development/design/library-ui/#the-catalog-index)). `--root PATH` (default `[hub] root`), `--dry-run`. `--ra-hash` hashes the games that lack an RA hash with RAHasher (`--rahasher PATH`, else `[inbox] rahasher`); `--ra-lists` refreshes the cached RA game lists (`RA_API_KEY`; `--force` ignores their age). |
+| `warpzone catalog` | where the hub root is mounted (the hub's container) | Builds and updates the catalog index in `catalog/` from `library/` (see [The catalog index](/warpzone/development/design/library-ui/#the-catalog-index)). `--root PATH` (default `[hub] root`), `--dry-run`. `--ra-hash` hashes the games that lack an RA hash with RAHasher (`--rahasher PATH`, else `[inbox] rahasher`); `--ra-lists` refreshes the cached RA game lists (`RA_API_KEY`; `--force` ignores their age); `--dats [--dats-dir PATH]` fills the DAT `serials` of games that have none from the DAT folder of `inbox`. |
 | `warpzone whitelist migrate [device ...]` | where the hub root is mounted | Converts hand-written `patterns-<device>.stignore` files into the library UI's format, proving on the hub's tree that the included paths stay the same, with a backup of each file it replaces (see [The migration](/warpzone/development/design/library-ui/#the-migration)). `--root PATH`, `--dry-run`. Exit 1 if any file was refused. |
+| `warpzone whitelist restore <device> [backup]` | where the hub root is mounted | Lists the backups of a device's whitelist, or writes one back after showing its diff against the current file and the paths it turns on and off, with a backup of the file it replaces and a re-check right before the write (see [History and restore](/warpzone/development/design/library-ui/#history-and-restore)). `--root PATH`, `--dry-run`. Exit 1 if refused. |
 | `warpzone serve` | in the hub's container | Serves the library UI and its JSON API (see [Library UI](/warpzone/development/design/library-ui/)). Writes only device whitelists, the catalog and the whitelist backups, on request. Runs until stopped; exit 2 without a token or when `[hub] root` has no `library/.stfolder`. |
 | `warpzone bios` | on a device or the hub | Reports which BIOS and firmware files a library has, lacks or has wrong (see [BIOS check](/warpzone/development/design/bios/)). Read-only. Exit 1 if a required item is missing or wrong. |
-| `warpzone inbox` | a desktop that mounts the hub's share | Identifies, converts and files new games dropped in `inbox/` (see [Inbox](/warpzone/development/design/inbox/)). Report only by default, `--apply` acts. Exit 1 if any item needs review. |
+| `warpzone inbox` | a computer that mounts the hub's share, or the hub's container | Identifies, converts and files new games dropped in `inbox/` (see [Inbox](/warpzone/development/design/inbox/)). Report only by default, `--apply` acts. Exit 1 if any item needs review. |
 | `sh <clone>/warpzone/data/updater.sh install <device>` | on the device, from a fresh `git clone` | The one way to install a device: checks out the best release of the channel, makes the venv next to the clone, and runs `provision device` (see [Self-update](/warpzone/development/design/self-update/)). |
 | `warpzone self-update` | on the device | Runs one tick of the updater script's live copy (`sh ~/.local/share/warpzone/updater/updater.sh tick`), as the timer does, and exits with its code (see [Self-update](/warpzone/development/design/self-update/)); `--now` passes `--now` (`--fetch-now` to an older live copy). Needs no config. Without a live copy it says so and exits 1. `--channel stable\|rc [--dry-run]` runs no tick: it sets the device's channel in its config and in the updater's settings. |
 | `warpzone health [device]` | on the device | Checks that this version works here: loads the config and the profiles, runs `settings apply`, `play-state sync`, `links sync` and `frontend refresh` as dry runs within the 15 seconds ES-DE gives its startup scripts, and checks that the startup scripts and the units exist with an interpreter that imports warpzone (see [`warpzone health`](/warpzone/development/design/autonomous-updates/#warpzone-health)). Writes no user data, needs no DATs or tools. Exit 0 when it works, 1 when a check failed. |
@@ -148,7 +149,8 @@ which they edit on one key or one line, with a backup first and never while that
 They are `provision hub`, `provision device`, `frontend refresh`, `play-state sync`,
 `links sync`, `saves convert`, `settings apply`, `settings capture` (which writes only the keys the user
 chooses), `catalog` (which writes only `catalog/`) and `whitelist migrate` (which keeps a backup
-of each whitelist and proves the included paths unchanged). `--dry-run` says what they would do and writes nothing. `self-update` is the
+of each whitelist and proves the included paths unchanged) and `whitelist restore` (which keeps a backup
+of the whitelist it replaces). `--dry-run` says what they would do and writes nothing. `self-update` is the
 timer's own convergent step and takes no `--dry-run`: it moves the clone to a release that
 passes the checks, and goes back to the last good one when it fails (see
 [Self-update](/warpzone/development/design/self-update/)). `self-update --channel stable|rc` is
@@ -159,7 +161,7 @@ it accepts only with `--channel`.
 `serve` is a server, not a run: it writes only on request, one device whitelist at a time,
 with the convergent rule's safeguards (a backup of the file it replaces, refused when the file
 changed since the client read it, a re-check right before the rename) and a `dry_run` on every
-request instead of `--dry-run`.
+request instead of `--dry-run`. Its restore of a whitelist backup is the same guarded write.
 
 **Read-only commands** never write user data: `check`, `bios`, `doctor`, `health`, `status`,
 `render-ignores` and `settings audit`.

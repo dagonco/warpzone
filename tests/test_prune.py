@@ -29,9 +29,13 @@ from warpzone.prune import (
     apply_folder,
     classify,
     guard,
+    guard_state_path,
+    is_generated,
     notify,
+    parse_guard_state,
     parse_time,
     prune_device,
+    render_guard_state,
     rescan,
 )
 from warpzone.report import Reporter
@@ -113,6 +117,60 @@ class ClassifyTests(unittest.TestCase):
     def test_symlink_has_no_size_or_mtime_to_compare(self) -> None:
         info = ignored_info(hub_copy(size=99, kind=LINK, modified="?"))
         self.assertIs(self.verdict(info, kind="symlink"), Verdict.LEFTOVER)
+
+
+class GeneratedTests(unittest.TestCase):
+    def test_what_emudeck_and_emulators_write_is_recognised(self) -> None:
+        for path in (
+            "roms/psx/metadata.txt",
+            "roms/psx/systeminfo.txt",
+            "bios/readme.txt",
+            "bios/PPSSPP/ppge_atlas.zim",
+            "bios/PPSSPP/assets/lang/es_ES.ini",
+            "bios/mame/readme.txt",
+            "bios/dc/readme.txt",
+            "bios/dc/vmu_save_A1.bin",
+            "bios/dc/vmu_save_B2.bin",
+            "bios/dc/dc_nvmem.bin",
+            "bios/dc/vulkan_pipeline.cache",
+            "bios/dc/data/sub/file.bin",
+            "bios/HdPacks/pack/a.png",
+            "bios/Mupen64plus/mupen64plus.cfg",
+            "bios/fbneo/hiscore.dat",
+            "bios/kronos/a",
+            "bios/same_cdi/a",
+            "bios/ryujinx/a",
+            "bios/shadps4/a",
+            "bios/yuzu/a",
+            "bios/mame2003-plus/hiscore.dat",
+            "bios/mame2003-plus/artwork/x/y.png",
+        ):
+            with self.subTest(path=path):
+                self.assertTrue(is_generated(path))
+
+    def test_everything_else_stays_unusual(self) -> None:
+        for path in (
+            "roms/psx/mine.txt",
+            "roms/psx/sub/metadata.txt",
+            "roms/metadata.txt",
+            "metadata.txt",
+            "roms/psx/Metadata.txt",
+            "bios/scph5501.bin",
+            "bios/dc/dc_boot.bin",
+            "bios/dc/vmu_save_A1.sav",
+            "bios/dc/my_vmu_save_A1.bin",
+            "bios/dc/sub/vmu_save_A1.bin",
+            "bios/mame2003-plus/samples/a.wav",
+            "bios/mame2003-plus/artwork",
+            "bios/PPSSPP",
+            "bios/HdPacks",
+            "bios/PPSSPPx/a",
+            "bios/other/readme.md",
+            "saves/psx/vmu_save_A1.bin",
+            "media/psx/readme.txt",
+        ):
+            with self.subTest(path=path):
+                self.assertFalse(is_generated(path))
 
 
 class Device:
@@ -242,6 +300,38 @@ class PruneDeviceTests(unittest.TestCase):
         self.assertIn("roms/n64/mine.txt (the hub does not have it)", out)
         self.assertIn("roms/n64/patched.z64 (its size differs from the hub copy)", out)
         self.assertIn("1 file(s) not known to Syncthing", out)
+
+    def test_generated_files_are_counted_apart_and_kept(self) -> None:
+        d = self.dev
+        generated = [
+            d.put("roms/psx/metadata.txt", info=ignored_info(None)),
+            d.put("roms/psx/systeminfo.txt", info=ignored_info(None)),
+            d.put("bios/PPSSPP/ppge_atlas.zim", info=ignored_info(None)),
+            d.put("bios/dc/vmu_save_A1.bin", info=ignored_info(None)),
+        ]
+        unusual = d.put("roms/n64/mine.txt", info=ignored_info(None))
+        # The hub has a different copy of one: that is not "generated", it is listed.
+        edited = d.put("roms/nes/metadata.txt", info=ignored_info(hub_copy(size=99)))
+
+        self.assertEqual(d.prune(apply=True), 0)
+
+        for survivor in (*generated, unusual, edited):
+            self.assertTrue(survivor.exists(), survivor)
+        out = "\n".join(d.lines)
+        self.assertIn("wz-library: kept 2 ignored file(s) the hub cannot restore", out)
+        self.assertIn("roms/n64/mine.txt (the hub does not have it)", out)
+        self.assertIn("roms/nes/metadata.txt (its size differs from the hub copy)", out)
+        self.assertIn("wz-library: 4 file(s) emulators and EmuDeck generate themselves", out)
+        for path in ("roms/psx/metadata.txt", "bios/PPSSPP", "vmu_save"):
+            self.assertNotIn(path, out)
+
+    def test_only_generated_files_print_no_kept_line(self) -> None:
+        d = self.dev
+        d.put("roms/psx/metadata.txt", info=ignored_info(None))
+        d.prune()
+        out = "\n".join(d.lines)
+        self.assertNotIn("cannot restore", out)
+        self.assertIn("wz-library: 1 file(s) emulators and EmuDeck generate themselves", out)
 
     def test_directory_flagged_ignored_only_by_its_own_scan_is_removed(self) -> None:
         d = self.dev
@@ -428,6 +518,110 @@ class GuardTests(unittest.TestCase):
         self.assertEqual(guard(totals), ["big", "bigger"])
 
 
+class GuardStateTests(unittest.TestCase):
+    """The pure part of the trace a guard refusal leaves for `doctor`."""
+
+    def test_a_refusal_round_trips(self) -> None:
+        text = render_guard_state({"wz-songs": (5, 5), "wz-library": (80, 100)}, 1_700_000_000.9)
+        refusal = parse_guard_state(text)
+        assert refusal is not None
+        self.assertEqual(refusal.when, 1_700_000_000)
+        self.assertEqual(refusal.folders, (("wz-library", 80, 100), ("wz-songs", 5, 5)))
+
+    def test_it_holds_sizes_and_folder_ids_only(self) -> None:
+        text = render_guard_state({"wz-library": (80, 100)}, 1)
+        self.assertEqual(set(json.loads(text)), {"version", "time", "folders"})
+        self.assertEqual(json.loads(text)["folders"], {"wz-library": {"delete": 80, "held": 100}})
+
+    def test_text_that_is_not_a_refusal_is_none(self) -> None:
+        for text in (
+            "",
+            "not json",
+            "[]",
+            "{}",
+            '{"time": 1}',
+            '{"time": 1, "folders": {}}',
+            '{"time": "x", "folders": {"a": {"delete": 1, "held": 1}}}',
+            '{"time": 1, "folders": {"a": {"delete": 1}}}',
+            '{"time": 1, "folders": {"a": 3}}',
+            '{"time": true, "folders": {"a": {"delete": 1, "held": 1}}}',
+        ):
+            self.assertIsNone(parse_guard_state(text), text)
+
+
+class GuardTraceTests(unittest.TestCase):
+    """`prune_device` leaves a trace of a guard refusal and clears it on the next good run."""
+
+    def setUp(self) -> None:
+        self.dev = Device(self)
+        self.base = self.dev.home / "state"
+        self.path = guard_state_path(self.base)
+
+    def run_prune(self, *, unattended: bool = True, **kw: Any) -> int:
+        return self.dev.prune(
+            apply=True, unattended=unattended, state_base=self.base, now=lambda: 1234.0, **kw
+        )
+
+    def refuse(self) -> None:
+        self.dev.put("roms/n64/a.z64", "12345")
+        self.dev.put("roms/nes/mario.nes", "abcd", info=wanted_info(4))
+        self.assertEqual(self.run_prune(), 1)
+
+    def test_a_refusal_is_recorded_with_the_folders_and_sizes(self) -> None:
+        self.refuse()
+        refusal = parse_guard_state(self.path.read_text())
+        assert refusal is not None
+        self.assertEqual((refusal.when, refusal.folders), (1234.0, (("wz-library", 5, 9),)))
+        self.assertEqual(oct(self.path.stat().st_mode & 0o777), "0o600")
+
+    def test_the_next_run_that_deletes_clears_it(self) -> None:
+        self.refuse()
+        self.dev.put("roms/nes/big.nes", "x" * 50, info=wanted_info(50))
+        self.assertEqual(self.run_prune(), 0)
+        self.assertFalse(self.path.exists())
+
+    def test_a_run_with_nothing_to_delete_clears_it(self) -> None:
+        self.refuse()
+        (self.dev.root / "roms/n64/a.z64").unlink()
+        self.assertEqual(self.run_prune(), 0)
+        self.assertFalse(self.path.exists())
+
+    def test_a_busy_run_leaves_it_alone(self) -> None:
+        self.refuse()
+        with mock.patch.object(Client, "scan", return_value=False):
+            self.assertEqual(self.run_prune(), 0)
+        self.assertTrue(self.path.exists())
+
+    def test_a_report_only_run_leaves_it_alone(self) -> None:
+        self.refuse()
+        self.dev.prune(state_base=self.base)
+        self.assertTrue(self.path.exists())
+
+    def test_a_manual_apply_that_deletes_clears_it(self) -> None:
+        self.refuse()
+        self.assertEqual(self.run_prune(unattended=False), 0)
+        self.assertFalse(self.path.exists())
+
+    def test_the_size_cap_of_an_attended_run_is_not_a_guard_refusal(self) -> None:
+        self.dev.put("roms/n64/a.z64", "12345")
+        self.assertEqual(self.run_prune(unattended=False, max_gib=0), 1)
+        self.assertFalse(self.path.exists())
+
+    def test_without_a_state_folder_nothing_is_written(self) -> None:
+        self.dev.put("roms/n64/a.z64", "12345")
+        self.dev.put("roms/nes/mario.nes", "abcd", info=wanted_info(4))
+        self.assertEqual(self.dev.prune(apply=True, unattended=True), 1)
+        self.assertFalse(self.base.exists())
+
+    def test_a_state_folder_that_cannot_be_written_is_a_warning(self) -> None:
+        blocked = self.dev.home / "blocked"
+        blocked.write_text("a file, not a folder")
+        self.dev.put("roms/n64/a.z64", "12345")
+        self.dev.put("roms/nes/mario.nes", "abcd", info=wanted_info(4))
+        self.assertEqual(self.dev.prune(apply=True, unattended=True, state_base=blocked), 1)
+        self.assertTrue(any("cannot update" in w for w in self.dev.warnings))
+
+
 class UnattendedTests(unittest.TestCase):
     def setUp(self) -> None:
         self.dev = Device(self)
@@ -568,6 +762,17 @@ class UnattendedTests(unittest.TestCase):
         self.assertIn("kept 1 ignored file(s)", out)
         self.assertNotIn("roms/n64", out)
         self.assertNotIn("mine.txt", out)
+
+    def test_unattended_output_counts_generated_files_without_names(self) -> None:
+        d = self.dev
+        d.put("roms/psx/metadata.txt", info=ignored_info(None))
+        d.put("bios/PPSSPP/a.zim", info=ignored_info(None))
+        self.run_prune()
+        out = "\n".join(d.lines)
+        self.assertIn("wz-library: 2 file(s) emulators and EmuDeck generate themselves", out)
+        self.assertNotIn("cannot restore", out)
+        self.assertNotIn("PPSSPP", out)
+        self.assertNotIn("metadata", out)
 
     def test_it_needs_apply(self) -> None:
         with self.assertRaises(UsageError):

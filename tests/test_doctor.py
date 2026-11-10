@@ -13,7 +13,7 @@ from unittest import mock
 
 from support import API_KEY, DECK_ID, HUB_ID
 from test_cli import run
-from warpzone import __version__, doctor, esde, selfupdate, updatetimer
+from warpzone import __version__, doctor, esde, prune, selfupdate, updatetimer
 from warpzone.doctor import (
     FAIL,
     GIB,
@@ -33,6 +33,8 @@ from warpzone.doctor import (
     check_flycast,
     check_game_mode,
     check_hub,
+    check_inbox_way,
+    check_prune_guard,
     check_ra,
     check_settings,
     check_switch,
@@ -50,6 +52,7 @@ from warpzone.doctor import (
     judge_flycast_vmus,
     judge_game_mode,
     judge_last_apply,
+    judge_prune_guard,
     judge_settings_layers,
     judge_unit_state,
     judge_update_timer,
@@ -113,6 +116,8 @@ def make_probes(
         "python": (3, 12, 1),
         "is_executable": lambda path: path in executables or path in found.values(),
         "disk_free": lambda path: (500 * GIB, 400 * GIB),
+        # The machine running the tests may itself be a container.
+        "in_container": lambda: False,
     }
     values.update(overrides)
     return Probes(**values)
@@ -817,6 +822,134 @@ class HubTests(TmpCase):
         self.assertEqual(results[0].status, OK)
 
 
+class HubContainerTests(TmpCase):
+    """`inbox` in the hub container: the image's tools, and what has to be mounted."""
+
+    IN_CONTAINER: ClassVar[dict] = {"in_container": lambda: True}
+    CHDMAN = doctor.TOOLS[0]
+    RAHASHER = next(t for t in doctor.TOOLS if t.key == "RAHasher")
+    IMAGE_RAHASHER = "/usr/local/bin/RAHasher"
+
+    def test_the_real_probe_reads_the_runtime_markers(self) -> None:
+        with mock.patch("os.path.exists", side_effect=lambda p: p == "/run/.containerenv"):
+            self.assertTrue(doctor._in_container())
+        with mock.patch("os.path.exists", return_value=False):
+            self.assertFalse(doctor._in_container())
+
+    def test_image_paths_count_only_in_the_container(self) -> None:
+        self.assertEqual(doctor.known_tool_paths(self.RAHASHER, True)[0], self.IMAGE_RAHASHER)
+        self.assertNotIn(self.IMAGE_RAHASHER, doctor.known_tool_paths(self.RAHASHER, False))
+        self.assertEqual(doctor.known_tool_paths(self.CHDMAN, True), ())
+
+    def test_configured_image_rahasher_is_ok(self) -> None:
+        cfg = f'[inbox]\nroot = "/mnt/hub"\nrahasher = "{self.IMAGE_RAHASHER}"\n'
+        ctx = context(self.tmp, cfg, executables=[self.IMAGE_RAHASHER], **self.IN_CONTAINER)
+        r = check_tool(ctx, self.RAHASHER)
+        self.assertEqual(r.status, OK)
+        self.assertIn(self.IMAGE_RAHASHER, r.detail)
+
+    def test_image_rahasher_not_configured_says_to_set_it(self) -> None:
+        # Not on PATH (a shell without /usr/local/bin), but where the image puts it.
+        ctx = context(self.tmp, INBOX_ONLY, executables=[self.IMAGE_RAHASHER], **self.IN_CONTAINER)
+        r = check_tool(ctx, self.RAHASHER)
+        self.assertEqual(r.status, WARN)
+        self.assertIn(self.IMAGE_RAHASHER, r.detail)
+        self.assertIn(f'rahasher = "{self.IMAGE_RAHASHER}"', r.fix)
+
+    def test_image_rahasher_is_not_looked_for_on_a_computer(self) -> None:
+        ctx = context(self.tmp, INBOX_ONLY, executables=[self.IMAGE_RAHASHER])
+        self.assertEqual(check_tool(ctx, self.RAHASHER).status, OPTIONAL)
+
+    def test_a_tool_the_image_lacks_fails_with_the_image_fix_not_an_install_command(self) -> None:
+        ctx = context(self.tmp, INBOX_ONLY, system="Linux", os_release=DEBIAN, **self.IN_CONTAINER)
+        r = check_tool(ctx, self.CHDMAN)
+        self.assertEqual(r.status, FAIL)
+        self.assertIn("does not ship it", r.fix)
+        self.assertNotIn("apt", r.fix)
+
+    def test_a_tool_on_the_image_path_is_found_by_path(self) -> None:
+        ctx = context(
+            self.tmp, INBOX_ONLY, tools={"chdman": "/usr/bin/chdman"}, **self.IN_CONTAINER
+        )
+        r = check_tool(ctx, self.CHDMAN)
+        self.assertEqual(r.status, OK)
+        self.assertIn("/usr/bin/chdman", r.detail)
+
+    def test_a_tool_of_the_image_that_cannot_run_points_at_the_image(self) -> None:
+        def boom(command: Sequence[str]) -> RunOutput:
+            raise OSError(8, "Exec format error")
+
+        ctx = context(
+            self.tmp,
+            INBOX_ONLY,
+            tools={"chdman": "/usr/bin/chdman"},
+            run=boom,
+            **self.IN_CONTAINER,
+        )
+        r = check_tool(ctx, self.CHDMAN)
+        self.assertEqual(r.status, FAIL)
+        self.assertIn("build the image again", r.fix)
+
+    def test_the_computer_hints_are_unchanged_outside_the_container(self) -> None:
+        ctx = context(self.tmp, INBOX_ONLY, system="Linux", os_release=DEBIAN)
+        self.assertEqual(check_tool(ctx, self.CHDMAN).fix, "sudo apt install mame-tools")
+
+    def test_no_dats_says_to_mount_them(self) -> None:
+        r = check_dats(context(self.tmp, INBOX_ONLY, **self.IN_CONTAINER))[0]
+        self.assertEqual(r.status, FAIL)
+        self.assertIn("mount that folder into the container", r.fix)
+        r = check_dats(context(self.tmp, INBOX_ONLY))[0]
+        self.assertNotIn("container", r.fix)
+
+    def test_nothing_to_say_without_an_inbox_table(self) -> None:
+        self.assertEqual(check_inbox_way(context(self.tmp, **self.IN_CONTAINER)), [])
+
+    def test_on_a_computer_it_says_so(self) -> None:
+        r = check_inbox_way(context(self.tmp, INBOX_ONLY))
+        self.assertEqual(len(r), 1)
+        self.assertEqual(r[0].status, OK)
+        self.assertIn("on a computer", r[0].detail)
+
+    def test_in_the_container_it_says_so_and_checks_the_work_folder(self) -> None:
+        work = self.tmp / "work"
+        work.mkdir()
+        cfg = f'[inbox]\nroot = "/mnt/hub"\nwork_dir = "{work}"\n'
+        results = check_inbox_way(context(self.tmp, cfg, **self.IN_CONTAINER))
+        self.assertIn("in the hub container", by_name(results, "Where inbox runs").detail)
+        self.assertEqual(by_name(results, "Work folder").status, OK)
+
+    def test_no_work_folder_warns_that_tmp_is_memory(self) -> None:
+        results = check_inbox_way(context(self.tmp, INBOX_ONLY, **self.IN_CONTAINER))
+        r = by_name(results, "Work folder")
+        self.assertEqual(r.status, WARN)
+        self.assertIn("memory", r.detail)
+
+    def test_a_work_folder_that_is_not_mounted_warns(self) -> None:
+        cfg = f'[inbox]\nroot = "/mnt/hub"\nwork_dir = "{self.tmp / "gone"}"\n'
+        results = check_inbox_way(context(self.tmp, cfg, **self.IN_CONTAINER))
+        self.assertEqual(by_name(results, "Work folder").status, WARN)
+
+    def test_inbox_root_unset_with_a_hub_root_warns_and_names_the_value(self) -> None:
+        cfg = '[hub]\nroot = "/data/games"\n[inbox]\ndats_dir = "/dats"\n'
+        results = check_inbox_way(context(self.tmp, cfg, **self.IN_CONTAINER))
+        r = by_name(results, "Hub root for inbox")
+        self.assertEqual(r.status, WARN)
+        self.assertIn('root = "/data/games"', r.fix)
+
+    def test_inbox_root_set_has_no_such_warning(self) -> None:
+        cfg = '[hub]\nroot = "/data/games"\n[inbox]\nroot = "/data/games"\n'
+        names = [r.name for r in check_inbox_way(context(self.tmp, cfg, **self.IN_CONTAINER))]
+        self.assertNotIn("Hub root for inbox", names)
+
+    def test_the_hub_root_fallback_names_the_container(self) -> None:
+        root = self.tmp / "hub"
+        root.mkdir()
+        cfg = f'[hub]\nroot = "{root}"\n[inbox]\n'
+        r = check_hub(context(self.tmp, cfg, **self.IN_CONTAINER))[0]
+        self.assertEqual(r.status, WARN)
+        self.assertIn("mounted in this container", r.fix)
+
+
 class RaTests(TmpCase):
     def test_set_key_is_reported_without_its_value(self) -> None:
         r = check_ra(context(self.tmp, env={"RA_API_KEY": RA_KEY}))[0]
@@ -864,6 +997,7 @@ class EndToEndTests(TmpCase):
                 doctor.G_BASE,
                 doctor.G_CONFIG,
                 doctor.G_SYNCTHING,
+                doctor.G_WAY,
                 doctor.G_TOOLS,
                 doctor.G_SWITCH,
                 doctor.G_DATS,
@@ -2052,6 +2186,100 @@ class UpdaterCheckTests(TmpCase):
 
     def test_runs_with_the_other_checks(self) -> None:
         self.assertIn(check_updater, doctor.CHECKS)
+
+
+class PruneGuardJudgeTests(unittest.TestCase):
+    def judge(self, text, now=NOW):
+        return judge_prune_guard(text, now=now, device="deck")
+
+    def refusal(self, when=NOW - 7200, folders=None):
+        return prune.render_guard_state(folders or {"wz-library": (80 * 1024, 100 * 1024)}, when)
+
+    def test_no_file_is_ok(self) -> None:
+        status, _, fix = self.judge(None)
+        self.assertEqual((status, fix), (OK, ""))
+
+    def test_a_refusal_is_a_warning_with_the_review_and_apply_hint(self) -> None:
+        status, detail, fix = self.judge(self.refusal())
+        self.assertEqual(status, WARN)
+        self.assertIn("2 hour(s)", detail)
+        self.assertIn("wz-library would lose 80.0 KiB of the 100.0 KiB it holds", detail)
+        self.assertIn("`warpzone prune deck`", fix)
+        self.assertIn("`warpzone prune deck --apply` by hand", fix)
+
+    def test_it_counts_days_after_the_first_day(self) -> None:
+        self.assertIn("3 day(s)", self.judge(self.refusal(NOW - 3 * 86400 - 5))[1])
+
+    def test_every_folder_that_was_held_back_is_named(self) -> None:
+        folders = {"wz-library": (9, 10), "wz-songs": (5, 5)}
+        detail = self.judge(self.refusal(folders=folders))[1]
+        self.assertIn("wz-library", detail)
+        self.assertIn("wz-songs", detail)
+
+    def test_a_clock_that_went_back_does_not_give_a_negative_age(self) -> None:
+        self.assertIn("0 hour(s)", self.judge(self.refusal(NOW + 600))[1])
+
+    def test_an_unreadable_file_is_a_warning(self) -> None:
+        status, detail, fix = self.judge("not json")
+        self.assertEqual(status, WARN)
+        self.assertIn("cannot be read", detail)
+        self.assertIn("warpzone prune deck --apply", fix)
+
+
+class PruneGuardCheckTests(TmpCase):
+    def setUp(self) -> None:
+        super().setUp()
+        self.home = self.tmp / "home"
+        folder = self.home / ".config/syncthing"
+        folder.mkdir(parents=True)
+        (folder / "config.xml").write_text(
+            f'<configuration><folder id="wz-library" path="{self.home}/Emulation/">'
+            f'<device id="{HUB_ID}"/></folder><device id="{DECK_ID}" name="x"/>'
+            f"<gui><address>127.0.0.1:8384</address><apikey>{ST_KEY}</apikey></gui>"
+            "</configuration>"
+        )
+        self.config = FULL.replace(
+            "BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB", DECK_ID
+        )
+        self.state = prune.guard_state_path(self.home / ".local/state/warpzone")
+
+    def check(self, **kw):
+        return check_prune_guard(
+            context(
+                self.tmp,
+                kw.pop("config", self.config),
+                system="Linux",
+                home=self.home,
+                now=lambda: NOW,
+                **kw,
+            )
+        )
+
+    def test_no_file_is_one_ok_line(self) -> None:
+        (result,) = self.check()
+        self.assertEqual(
+            (result.name, result.group, result.status), ("Unattended prune", "Pruning", OK)
+        )
+
+    def test_a_refusal_file_is_a_warning(self) -> None:
+        self.state.parent.mkdir(parents=True)
+        self.state.write_text(prune.render_guard_state({"wz-library": (9, 10)}, NOW - 60))
+        (result,) = self.check()
+        self.assertEqual(result.status, WARN)
+        self.assertIn("warpzone prune deck", result.fix)
+
+    def test_silent_when_the_config_turns_the_timer_off(self) -> None:
+        off = self.config.replace(
+            'folders = ["library", "saves"]', 'folders = ["library", "saves"]\nauto_prune = false'
+        )
+        self.assertEqual(self.check(config=off), [])
+
+    def test_silent_on_a_machine_that_is_not_that_device(self) -> None:
+        (self.home / ".config/syncthing/config.xml").unlink()
+        self.assertEqual(self.check(), [])
+
+    def test_runs_with_the_other_checks(self) -> None:
+        self.assertIn(check_prune_guard, doctor.CHECKS)
 
 
 RA_APP = "org.libretro.RetroArch"

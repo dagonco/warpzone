@@ -66,12 +66,13 @@ warpzone/
   provision_scripts.py  the ES-DE startup scripts, turning ES-DE's event scripts on, the Options menu entries
   provision_timers.py  the artwork, play state and unattended prune systemd user timers
   provision_updater.py  the autonomous update: settings file, live updater script, its timer
-  prune.py           leftover detection (pure `classify`), the unattended guard (pure `guard`), delete, webhook
+  prune.py           leftover detection (pure `classify`), the unattended guard (pure `guard`) and the state file of its refusal, delete, webhook
   bios.py            BIOS manifest, local overrides, pure `judge_*`, disk checks
   whitelist.py       managed whitelists: escape, parse, render, normalize, changes, matcher,
                      effect, migration parsing and classification, unsupported systems (pure)
+  whitelist_history.py  the backups of a whitelist: names, comparison, diff, what a restore refuses (pure)
   whitelist_store.py whitelist files on the hub: read with a stamp, backups, guarded write,
-                     hub scan, `whitelist migrate` and its proof walk
+                     hub scan, `whitelist migrate` and its proof walk, `whitelist restore`
   dat.py             Redump / No-Intro DAT parsing, cache, matching, disc grouping (pure)
   inbox_core.py      what the inbox pipeline and its handlers share: errors, options, results, staging
   inbox_lock.py      the `inbox/.warpzone.lock` file that keeps two `--apply` runs apart
@@ -122,6 +123,7 @@ warpzone/
   ra_data.py         RA achievements, the user's progress and their JSON cache files; the merge and totals (pure)
   ra_store.py        `catalog --ra-achievements`: achievements, progress and badge downloads, cache reads
   library_api.py     the library UI's API as pure functions: validation, `plan_changes`, responses
+  recommend.py       the home page's recommendation shelves: unfinished games, games like a recent one (pure)
   progress.py        per-device progress states from the hub's completion (pure)
   saves_index.py     saves per game for the library API: exact matching of the hub's `saves/` to games
                      (pure), the listing and its short cache

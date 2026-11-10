@@ -26,6 +26,7 @@
     catalog: null,          // {ready, running, last_run, systems, games, updated} from /catalog
     recent: null,           // the games played most recently (/recent), or null when there are none
     ra: null,               // the RetroAchievements records (/ra/summary), or null when there are none
+    recs: null,             // {unfinished: [...], similar: {to, games} | null} (/recommendations), or null when both are empty
     searchResult: null,     // {q, groups} from the API
     detail: null,           // {id, data}: the game page being shown
     busy: false,
@@ -39,6 +40,7 @@
     progressChanged() {},   // a progress answer (or failure) arrived
     detailChanged(id) {},   // a write touched this game: load its page data again
     confirmSystem() { return Promise.resolve(false); },
+    openHistory(deviceName) {}, // the backups of a console's whitelist, with a restore
     reset() {},             // the whole catalog was loaded again: drop what was derived from it
   };
 
@@ -93,8 +95,8 @@
     try { S.catalog = await api.catalog(); } catch (err) { if (err.code === 'unauthorized') throw err; S.catalog = null; }
   }
 
-  // What the home page shows beyond the catalog: the recently played games and the records. Both
-  // are optional (no ledgers, no RetroAchievements user): a failure or an empty answer leaves the
+  // What the home page shows beyond the catalog: the recently played games, the recommendation
+  // shelves and the records. All are optional (no ledgers, no RetroAchievements user): a failure or an empty answer leaves the
   // field null and the page shows nothing for it. Asked again at most every 30 seconds; resolves
   // true when it asked.
   let homeAskedAt = 0;
@@ -103,10 +105,15 @@
   async function loadHomeExtras(force) {
     if (!force && Date.now() - homeAskedAt < 30000) return false;
     homeAskedAt = Date.now();
-    const [recent, summary] = await Promise.all([orNull(api.recent(12)), orNull(api.raSummary())]);
+    const [recent, summary, recs] = await Promise.all([orNull(api.recent(12)), orNull(api.raSummary()), orNull(api.recommendations())]);
     const games = recent && Array.isArray(recent.games) ? recent.games.filter((g) => g && g.id && g.system) : [];
     S.recent = games.length ? games : null;
     S.ra = summary && summary.total && summary.user && summary.fetched ? summary : null;
+    const valid = (g) => g && g.id && g.system;
+    const unfinished = recs && Array.isArray(recs.unfinished) ? recs.unfinished.filter(valid) : [];
+    const similar = recs && recs.similar && valid(recs.similar.to) && Array.isArray(recs.similar.games)
+      ? { to: recs.similar.to, games: recs.similar.games.filter(valid) } : null;
+    S.recs = unfinished.length || (similar && similar.games.length) ? { unfinished, similar: similar && similar.games.length ? similar : null } : null;
     return true;
   }
 
@@ -351,6 +358,20 @@
     });
   }
 
+  // A backup written over a console's whitelist. `etag` is the file the diff was shown against:
+  // if the whitelist changed since, the server refuses it (stale) and nothing is written.
+  // Resolves the server's answer, or null after an error (already shown).
+  function restoreBackup(deviceName, name, etag) {
+    return guarded(async () => {
+      const res = await api.restore(deviceName, { backup: name, expect: etag, dry_run: false });
+      S.etags[deviceName] = res.etag;
+      S.searchResult = null;
+      await reloadAll();
+      progressSoon();
+      return res;
+    });
+  }
+
   // ===== the catalog scan ==================================================================
 
   // A refresh runs on the hub for a while: poll /catalog until it ends, then load what it found.
@@ -398,6 +419,6 @@
     loadDevices, loadCatalog, loadSystems, loadHomeExtras, ensureList, preloadLists, reloadAll,
     device, system, excludes, isManaged, allBlocked, gameState, coverage, holdings, patchState,
     schedulePoll, pollProgress, progressSoon,
-    changeGame, changeSystem, watchCatalog, refreshCatalog, plural,
+    changeGame, changeSystem, restoreBackup, watchCatalog, refreshCatalog, plural,
   };
 })();

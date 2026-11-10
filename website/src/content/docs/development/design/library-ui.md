@@ -12,7 +12,8 @@ it).
 
 Underneath, the UI does one thing: it rewrites `library/patterns-<device>.stignore`. It never
 deletes, moves or renames anything in the library. What it writes is limited to the device
-whitelists, the catalog index (`catalog/`) and the backups of the whitelists it replaced.
+whitelists, the catalog index (`catalog/`) and the backups of the whitelists it replaced. It can also
+put one of those backups back (see [History and restore](#history-and-restore)).
 Removing a game from a console reaches the console through the normal path: Syncthing delivers
 the new whitelist, the console's rescan applies it, and the console's prune timer deletes the
 leftovers (see [Removal reaches the console](#removal-reaches-the-console)).
@@ -36,8 +37,7 @@ These were decided before the design and are not reopened here:
    whitelist that names one.
 5. The progress of each console is read on the hub from `GET /rest/db/completion`; no console
    API key is needed.
-6. warpzone runs on the hub in a container (the same image planned for running `inbox` on the
-   hub).
+6. warpzone runs on the hub in a container (the same image `inbox` can run in on the hub).
 7. The catalog stores the RetroAchievements hash of each game and a cached copy of RA's game
    lists per console.
 8. A catalog index built by `warpzone catalog`, and updated by `inbox` when it files a game, is
@@ -62,7 +62,7 @@ Syncthing folder, so no console receives it and the hub's filesystem snapshots c
 ├── ra/user/summary.json       the user's completion progress, cached
 ├── ra/user/games/<id>.json    when the user unlocked each achievement of one game, cached
 ├── ra/badges/<name>[_lock].png  badge images, cached
-└── whitelists/<device>/       backups of the whitelists the UI and the migration replaced
+└── whitelists/<device>/       backups of the whitelists the UI, the migration and a restore replaced
 ```
 
 Each file is UTF-8 JSON written with sorted keys, so the same catalog always gives the same
@@ -99,6 +99,7 @@ several, and a game is on for a console only when every part is.
       "size": 3221225993,
       "added": "2026-10-28",
       "dat": null,
+      "serials": [],
       "ra": null,
       "flags": []
     }
@@ -121,7 +122,13 @@ several, and a game is on for a console only when every part is.
 - `size`: the sum of the parts. `added`: the date `inbox` filed it, or the date a scan first saw
   it; a later scan keeps it.
 - `dat`: the DAT game name when `inbox` identified the game by DAT, else `null`. A scan never
-  looks DATs up (the hub has none, and a CHD's hash is not the DAT's).
+  looks DATs up (the hub has none, and a CHD's hash is not the DAT's); only the opt-in
+  [`catalog --dats`](#dat-serials) pass does, and it fills `serials`, not `dat`.
+- `serials`: the serials the DAT lists for the game (Redump's `serial`; a disc listed once per
+  serial gathers them all, and a multi-disc game those of all its discs), in file order, or `[]`.
+  Set by `inbox` like `dat`, kept by a scan, filled for older games by
+  [`catalog --dats`](#dat-serials), and absent in files written before it existed (read as `[]`). A value with commas is split. The [saves index](#saves-per-game) uses them to find a
+  Dreamcast game's memory card.
 - `ra`: see [RetroAchievements](#retroachievements).
 - `flags`: `unlistable` when a part cannot be written as a whitelist line (see
   [Escaping](#escaping)); the UI shows such a game and refuses to change it.
@@ -194,11 +201,56 @@ Switch update filed by `inbox` lands in the right game exactly as a scan would p
 failure to update the index is a warning in the inbox report, never a reason to send an item to
 review: the next `catalog` run picks the game up.
 
+### DAT serials
+
+`inbox` records the DAT serials of the games it files. The games that were already in the library
+have none, and a scan cannot know them (the hub has no DATs and a CHD's hash is not the DAT's).
+`warpzone catalog --dats [--dats-dir PATH] [--force] [--dry-run]` fills them in, as a pass of its
+own after the scan, from the DAT folder `inbox` uses (`[inbox] dats_dir`, or `--dats-dir`),
+through `inbox`'s parse cache (`dat.DatLibrary`).
+
+- **Which games:** those with no `serials`, in every system whose DATs list serials (in practice
+  the Redump ones; the pass does not name any system). With `--force` the others too: a single
+  exact match that differs replaces their serials, no match keeps them.
+- **Exact identity only** (`catalog.dat_serials`, pure). In this order: the `dat` name `inbox`
+  stored, when a DAT game has exactly that name; else the SHA-1 and size of the primary file part
+  against the DAT games that have one rom; else, for a single file, its name without the
+  extension against the DAT game names (`inbox` names a file after its DAT game, so a single CHD
+  filed before `dat` was recorded is found this way); else, for an `.m3u` folder, each disc named
+  in the playlist inside it, by exact name against the DAT game names, with the union of the
+  discs' serials in disc order, all discs needed. Nothing is
+  compared case-insensitively or cleaned up. A key the DATs give two different serial lists is
+  not guessed at. A game the DAT identifies but gives no serial (most No-Intro games) is left as it
+  is and counted as `no serial in DAT`; one no DAT identifies is left without serials and counted
+  as unmatched. The decision is `catalog.identify` (serials, `()` for no serial in the DAT, or
+  None), and `fill_serials` sorts the games into filled, had, no serial and unmatched.
+- **Writes:** only the `serials` of `catalog/systems/<system>.json`, with the scan's guarded atomic
+  write and its changed-since-read check (read again, up to three tries, then a `conflict`). A
+  file whose games would not change is not written, and `--dry-run` writes nothing (the DAT parse
+  cache, which is not user data, is the one thing a dry run may still write).
+- **Output and exit code:** per system, `filled / already had / no serial in DAT / unmatched` (`to
+  fill` instead of `filled` in a dry run), `no DAT with serials` for a system whose DATs are
+  missing or list none, and the first unmatched games by path (the `no serial in DAT` games are
+  only counted). Exit `1` when a system file could not be read or written, `2` for a
+  usage error (no usable DAT folder, `--dats-dir` or `--force` without `--dats`), as for the other
+  passes; neither unmatched games nor games with no serial in their DAT are a failure.
+
 ### RetroAchievements
 
 A game's `ra` is `null` or `{"hash": "<32 hex>", "of": "<part path>", "size": N, "mtime": T}`:
 the RA hash of one part (the primary part; for an `.m3u` folder, its first disc), and the size
 and mtime that part had when it was hashed. A part that changed since is hashed again.
+
+`ra.CONSOLE_IDS` maps the ES-DE system folder name under `roms/` to RA's console id (the numbers
+of rcheevos, which RAHasher and the web API share). It holds the consoles RAHasher can hash and
+RA has sets for: the Nintendo, Sony, Sega, NEC, SNK, Atari and Bandai systems, the classic
+consoles (3DO, ColecoVision, Intellivision, Vectrex, Odyssey 2, ...), arcade (`arcade`, `mame`,
+`fbneo`, `neogeo`, `cps1` to `cps3`: RA files them all under Arcade), and some home computers and
+fantasy consoles (`dos`, `msx`, `c64`, `zxspectrum`, `tic80`, ...). When ES-DE has several folder
+names for one RA console, each is listed (`genesis` and `megadrive`, `pcengine` and `tg16`,
+`ngp` and `ngpc`, ...). Not listed: Wii, Wii U, Xbox and PS3 (no sets), Switch, PS4 and Vita
+(RA has no console for them), and consoles RAHasher cannot hash (Atari 5200, Atari ST, Amiga,
+CD-i). A system outside the table has no hash, no list and the `no-list` state.
 
 - `inbox` writes it when `[inbox] rahasher` is set: it is the hash of the result, which it
   already compares with the source's.
@@ -323,17 +375,33 @@ game has no save".
 ### What is matched
 
 `saves_index.match_game` (pure) takes the index of the listing, the system and the primary path of
-the game. The catalog records no game IDs beyond what the paths carry, so only these are matched:
+the game, and the DAT serials the catalog holds for it. The catalog records no other game IDs
+beyond what the paths carry, so only these are matched:
 
 | Emulator folder | Matched by | Counts as |
 |---|---|---|
 | `retroarch/saves` | the stem of the primary part (`Game.chd`, `Game.cue` and the `Game.m3u` folder of a multi-disc game all give `Game`, the name RetroArch loads) plus `.srm`, `.rtc`, `.sav`, `.mcr`, `.mcd`, `.eep`, `.fla`, `.sra`, `.mpk`, `.nv` or `.dsv` | save data |
 | `retroarch/states` | the stem plus `.state`, `.state<N>` or `.state.auto` (the `.png` thumbnails are not counted) | one state each |
 | `melonds/saves`, `melonds/states` | the stem of a `nds` game plus `.sav`; plus `.ml<N>` | data; states |
-| `flycast/saves` | the stem of a `dreamcast`, `naomi`, `naomi2` or `atomiswave` game: `<stem>_vmu_save_<A-D><1-4>.bin` (per-game VMU) or `<stem>.nvmem`, `<stem>.nvmem2` (arcade flash) | data |
+| `flycast/saves` | an arcade game (`naomi`, `naomi2`, `atomiswave`): the primary file's name **with its extension** plus `_vmu_save_A1.bin`, `.nvmem`, `.nvmem2` or `-main.nvmem` (`game.zip.nvmem`); a `dreamcast` game: its disc's product number (see below) plus `_vmu_save_A1.bin`, or, when the disc header has none, the primary file's name with its extension plus the same suffix | data |
 | `vita3k/saves` | the folder `<TITLEID>` equals the folder name of `roms/psvita/app/<TITLEID>` | data |
 | `shadps4/saves` | the folder `<user>/<CUSAnnnnn>` equals the name of `roms/ps4/games/<CUSAnnnnn>` (also its `-UPDATE` folder) | data |
 | `eden/saves` | the folder `<account>/<profile>/<TitleID>` equals the `[<TitleID>]` of the Switch game's file name (hex, any case) | data |
+
+Flycast keeps port A1's card per game (its `PerGameVmu` option is on by default); the other
+ports use the shared `vmu_save_<port>.bin`, which belongs to no game. A console game's card is
+named after `settings.content.gameId`, the `product_number` field of the disc's header (10
+bytes) with trailing spaces and NULs cut and anything after a NUL dropped, each of ` /\:*?|<>"`
+replaced by `_`; an arcade game's after `settings.content.fileName`, the content file's name
+with its extension. Warpzone never reads a disc image. For a Dreamcast game it compares the
+game's `serials` with the card's name instead, keeping only the letters and digits of both
+sides, because Redump spells the same number with other separators (`T-45001D-05` in the DAT,
+`T-45001D05` in the header, `T7016D  50` becoming `T7016D__50` in the file name). Any one serial
+may match. A disc whose Redump serial is not its header's number (a bare `51064` for
+`MK-51064`, or a catalog number such as `952-0158-50`) gets no match from that serial, and
+neither does a game with no `serials` (filed before the field existed and not yet filled by
+`catalog --dats`, or not identified in a DAT): both show no saves,
+which is "not found" like the rest.
 
 RetroArch's save files can sit in a subfolder of the hub folder when the player sorts them by core
 or by content folder; two levels are looked into. Two rules keep a stem from being taken for
@@ -348,8 +416,11 @@ below it is not a save.
 ### What is not matched
 
 - **Shared memory cards:** PCSX2 (`Mcd001.ps2`), DuckStation (`shared_card_*.mcd`), Dolphin's GC
-  memory cards, Flycast's shared `vmu_save_*.bin` and `dc_nvmem.bin`, and RetroArch cores that
-  share one card between games. A card holds many games.
+  memory cards, Flycast's shared `vmu_save_<port>.bin` (every port but A1) and `dc_nvmem.bin`,
+  and RetroArch cores that share one card between games. A card holds many games.
+- **Dreamcast cards of games with no `serials`** (known limit): not filed by `inbox` since the
+  field existed (`warpzone catalog --dats` fills those it can identify exactly), or with a Redump
+  serial that differs from the disc's header number.
 - **Emulators that name saves by an ID the catalog does not record:** Dolphin (game ID and Wii
   title), PCSX2 and DuckStation states and per-game cards (serial), PPSSPP (disc ID), RPCS3 (PS3
   title ID), Azahar (3DS title ID), Cemu (Wii U title ID) and Xenia (title ID). They can be added
@@ -378,7 +449,10 @@ request to another origin; dynamic styling sets CSS custom properties from scrip
 - **Home:** a "Now showing" carousel of games that have art, the state and download progress of
   each console (from `/api/v1/progress`) with its disk as a bar of used and free space (from
   `disk`; nothing for a console that reported none), a "Continue playing" row (from
-  `/api/v1/recent`: cover, name, the console that played it last and when), the systems with
+  `/api/v1/recent`: cover, name, the console that played it last and when), the two
+[recommendation shelves](#recommendations) from `/api/v1/recommendations` ("Unfinished", with
+when the game was last played, its play time and its achievements, and "Because you play X",
+with the genres, developer and year it shares with X; each is hidden when empty), the systems with
   their coverage per console, the newest games and, at the very end and with little weight, a
   records panel: the RetroAchievements points, games played, beaten and mastered and the
   achievements unlocked (from `/api/v1/ra/summary`), the share unlocked per system, and the most
@@ -514,21 +588,74 @@ run: the UI never guesses what a hand edit meant.
 
 Every read hands out an `etag`, the SHA-256 of the file's bytes (`"absent"` for a missing file).
 A write names, for each device it touches, the `etag` it was computed from. The server holds one
-lock for all whitelist writes and, inside it, for each device:
+lock for all whitelist writes and, inside it, for each device (the slow reads of the catalog and
+the hub happen before the lock is taken, and the questions to the hub's Syncthing after it is
+released, so a slow or down Syncthing never holds up a write):
 
 1. Reads the file again and compares its SHA-256 with the given `etag`; a mismatch refuses the
    whole request (`stale`) before any file is written.
 2. Applies the change to the model of what it just read and checks the effect (above).
 3. Copies the current file to `catalog/whitelists/<device>/<UTC time>.stignore` (the 50 newest
-   are kept per device).
+   are kept per device). A file that did not exist leaves an empty backup: the time in the name
+   is what [progress](#progress) reads as the time of the write, so a whitelist the UI creates is
+   `pending` like any other edit.
 4. Writes the rendered file with `safefile.atomic_write` and the stamp taken in step 1, which
    compares once more right before the rename. Its temporary file sits beside the whitelist for
    the length of the write only.
-5. Asks the hub's Syncthing to scan that one file (`POST /rest/db/scan?folder=wz-library&sub=
-   patterns-<device>.stignore`) so the devices hear of it at once; a failed scan is a warning,
-   since the hub's watcher picks the file up anyway.
+
+Once the lock is released, the server asks the hub's Syncthing to scan each file it wrote
+(`POST /rest/db/scan?folder=wz-library&sub=patterns-<device>.stignore`) so the devices hear of
+it at once; a failed scan is a warning, since the hub's watcher picks the file up anyway.
 
 A missing file (`etag` `"absent"`) is created, for a configured device that lists `library`.
+
+### History and restore
+
+Every write above keeps the file it replaced, so a device's whitelist has a history: the 50
+newest backups in `catalog/whitelists/<device>/`, named by the UTC time of the write
+(`20261106T100000.123456Z.stignore`). A restore writes one of them back. It is a whitelist write
+like any other, so everything in [Reading, the conflict check and writing](#reading-the-conflict-check-and-writing)
+holds: the same lock, the `etag` of the file as the caller saw it, a backup of the file being
+replaced (so a restore can itself be undone, and it is a write for [progress](#progress)), the
+atomic write that re-checks the stamp, and the scan after the lock is released. Nothing is
+restored from a path the caller gives: a backup is named by its exact file name, which must
+match the pattern above and exist in that device's folder.
+
+The decisions are pure (`whitelist_history`, and `library_api.plan_restore` on top of it):
+
+- **List.** The backup names, newest first; a file in the folder that is not named like a backup
+  is not one. Each is compared with the current file.
+- **Compare.** The paths the two files name, read as lines (`!/path` turns a path on, `/path`
+  leaves it out; comments, `#include` and `*` are not paths). The paths a restore turns **on**
+  are those with a `!` line in the backup and none in the current file, plus those the current
+  file excludes and the backup does not; the paths it turns **off** are the reverse. This is a
+  comparison of lines, not of files: a path below a folder that is on is not looked up. For
+  managed files, the API also gives the games it turns on and off and the bytes (`on`, `off`,
+  `bytes_on`, `bytes_off`, from `whitelist.effect` on the two models; null when either file is
+  hand-written and unreadable). The unified diff of the two texts goes with it.
+- **Warn.** A restore that turns paths on says so: the console downloads them again, and they
+  may be games or systems that were taken off it since.
+- **Refuse.** An empty backup is the file as it was before the whitelist existed (the write that
+  created it left an empty backup, to record the time). Written back it would be an empty ignore
+  file, which lets every file through, so it is listed but cannot be restored (`not-restorable`).
+- **Same file.** A backup equal to the current file writes nothing and makes no backup.
+
+A backup of a hand-written whitelist (from before [the migration](#the-migration)) can be
+restored. The UI marks it (`managed: false`) and the file is not managed again until the next
+`warpzone whitelist migrate`.
+
+`warpzone whitelist restore <device> [backup]` does the same from the command line, where the hub
+root is mounted. Without a backup it lists them, newest first, each with its time and how it
+differs from the current file. With one (its name, or the start of it when that is enough to
+tell it from the others) it prints the unified diff, the paths that turn on and off and the
+warning, then writes; `--dry-run` stops before the write. It refuses, and exits 1, when the
+file changed since it read it.
+
+In the page, each console on the Consoles view has a History button. It opens a dialog with the
+backups, newest first; picking one loads its diff, the games it would turn back on and off and
+what that downloads or frees, and a Restore button that sends the `etag` the diff was computed
+from. A whitelist that changed in the meantime is refused (`stale`) and the dialog shows the
+list again.
 
 ### Supported systems
 
@@ -624,9 +751,14 @@ never prints, logs or echoes it.
 - The page asks for the token once and sends it to `POST /api/v1/session` (`{"token": "..."}`).
   A right token answers `204` with a cookie `wz_session=<HMAC-SHA256 of the token over
   "warpzone-ui-session">; HttpOnly; SameSite=Strict; Path=/; Max-Age=2592000` (30 days); a
-  wrong one answers `401` after a wait (see below). The cookie needs no server state, survives a
-  restart and stops working when the token changes or when it expires; the next request then
-  answers `401` and the page asks for the token again. There is no logout route: the page keeps
+  wrong one answers `401` after a wait (see below). The value is `<expires>.<mac>`: `expires` is
+  the Unix time the session ends (the login time plus the `Max-Age`, 30 days) and `mac` the
+  HMAC-SHA256 under the token of `"warpzone-ui-session.<expires>"`. The server keeps no state
+  and checks both on every request, so the session ends at `expires` even if the browser keeps
+  sending the cookie, a changed `expires` breaks the mac, and a cookie made by an older version
+  (no expiry) is not accepted. It survives a restart and stops working when the token changes
+  or when it expires; the next request then answers `401` and the page asks for the token
+  again. There is no logout route: the page keeps
   no token and the cookie is `HttpOnly`, so ending a session means clearing the cookie or
   changing the token.
 - A client that is not a browser (the Decky plugin) sends `Authorization: Bearer <token>`.
@@ -665,8 +797,12 @@ outside the home goes through the user's own reverse proxy with TLS, which is ou
 | `GET /api/v1/ra/summary` | the library's RetroAchievements games and the user's [progress](#achievements) in them, per system and in all |
 | `GET /api/v1/ra/badges/{badge}/{variant}` | a cached RA badge image (`variant` is `unlocked` or `locked`), or `404` |
 | `GET /api/v1/recent?limit=N` | the games played most recently on any device, newest first |
+| `GET /api/v1/recommendations` | the [Unfinished](#recommendations) shelf and the "Because you play" shelf of the home page |
 | `GET /api/v1/progress` | the [progress state](#progress) of each device |
 | `GET /api/v1/catalog` | whether the catalog is built, and the state of the background run |
+| `GET /api/v1/devices/{device}/backups` | the device's whitelist [backups](#history-and-restore), newest first, each compared with the current file, and the current `etag` |
+| `GET /api/v1/devices/{device}/backups/{name}` | one backup: its diff against the current file, the paths and games a restore turns on and off |
+| `POST /api/v1/devices/{device}/restore` | writes a backup over the device's whitelist |
 | `POST /api/v1/changes` | turns games and systems on and off |
 | `POST /api/v1/catalog/refresh` | starts a `catalog` run now (`202`; `409` while one runs) |
 
@@ -785,6 +921,86 @@ is `400 bad-request`) answers the games with a last played time, newest first, t
 
 `device` is the device whose ledger has that `last`; two devices of one replica share it, and
 the one whose name sorts last is named. `plays` and `playtime` are the totals above.
+
+#### Recommendations
+
+`GET /api/v1/recommendations` answers the two shelves of the home page. It reads only what the
+hub already has (the play-state ledgers above, the RetroAchievements cache of
+[Achievements and progress](#achievements-and-progress) and the gamelist fields `genre`,
+`developer` and `releasedate`) and never makes a request to another machine. A game missing a
+piece of data just does not qualify for the rule that needs it. The rules are pure functions in
+`recommend.py`; `library_api` collects the data into one candidate per game.
+
+```json
+{"unfinished": [{"id": "5d0c1f3a9b2e7c48", "system": "psx", "title": "Example Game",
+                 "name": "Example Game", "cover": true, "last": 1790000000, "plays": 3,
+                 "playtime": 7200, "ra": {"unlocked": 12, "total": 40}}],
+ "similar": {"to": {"id": "a1b2c3d4e5f60718", "system": "snes", "title": "Other Game",
+                    "name": "Other Game", "cover": true},
+             "games": [{"id": "0f9e8d7c6b5a4321", "system": "gba", "title": "Tiny",
+                        "name": "Tiny", "cover": false, "genres": ["Platform"],
+                        "developer": "Example Studio", "year": 1996}]}}
+```
+
+`unfinished` is a list and `similar` is `null` when its shelf is empty (the page hides an empty
+shelf). In `unfinished`, `last` is the UTC epoch of the last activity (below) and `ra` is `null`
+for a game RetroAchievements has no achievements for. In `similar.games`, `genres` are the
+genres shared with `similar.to` (as the game's own gamelist spells them), `developer` is the
+developer when it is the seed's too (else `null`), and `year` is the game's release year when it
+is within 5 years of the seed's (else `null`).
+
+What every rule reads, for each catalog game:
+
+- **Play:** the `totals` of [`play`](#endpoints) (plays, play time, last played).
+- **RetroAchievements:** the unlocked count (the larger of the softcore and hardcore counts of
+  the user's progress line), the achievements available, the highest award and the date of the
+  last unlock (read to the day, UTC). It counts only when the cached progress is of the
+  configured `[ra] user`; without a user, a cache or a game on RA these are all zero.
+- **Gamelist:** `genre` split at commas, slashes and semicolons, `developer` (compared ignoring
+  case and repeated spaces) and the first four digits of `releasedate` (a year from 1950 to
+  2100; anything else is no year). A game with no genre, no developer, no play record and no
+  unlocks is not looked at.
+- **Availability:** a game is *on a console* when some console shows it `on` or `partial`;
+  else it *fits* when some console that takes the system (`off`, not `unsupported`, not
+  `unknown`) has a disk report (see [Disk space](#disk-space)) with at least as many bytes free
+  as the game's `size`, and the UI can switch the game (no `unlistable` flag); else it is
+  neither. Consoles that never reported a disk contribute only the first case.
+- **Activity:** the later of the last play and the last unlock date, ignoring any time more than
+  a day ahead of the server (a wrong clock). A game with no date has no activity date.
+
+**Unfinished** lists games the user started and left:
+
+1. *Started:* at least 600 seconds of play time, or at least one unlocked achievement. A play
+   count alone does not count (a frontend that records no play time would make every launched
+   game look started).
+2. *Left:* the activity date is at least 14 days before now. What was touched more recently is
+   in "Continue playing".
+3. *Not finished:* the user has no award (beaten, completed or mastered) for the game and has
+   not unlocked every achievement. If any version of the same title key (another system) is
+   finished, none of them is listed.
+4. Order: on a console, then fits, then neither; within each, the most recent activity first,
+   then the most play time, then the title (ignoring case), the system and the id.
+5. One game per title key (the best placed of a title that exists on several systems), at most
+   12.
+
+**Because you play X** is one shelf that starts from one game, the *seed*:
+
+1. The seed is the game with the most recent activity that has a genre or a developer, provided
+   the activity is at most 90 days old; ties go to the most play time, then title and id. With
+   no such game there is no shelf (`similar` is `null`).
+2. A candidate resembles the seed when it shares at least one genre (ignoring case) or has the
+   same developer. Its score is 3 for each shared genre, 3 for the same developer, and for the
+   release year 2 when it is within 2 years of the seed's or 1 when within 5. A year never
+   makes a match on its own.
+3. Left out: any game with a play, play time or unlocked achievement of its own; any title key
+   in which another version has any of those; the seed's title key; and every title key of the
+   Unfinished shelf, so the two shelves never show the same title.
+4. Order: on a console, then fits, then neither; within each, the higher score first, then the
+   title (ignoring case), the system and the id.
+5. One game per title key, at most 12. The shelf is shown only when it has games.
+
+The order never depends on the order the catalog was read in, so two requests over the same data
+give the same shelves.
 
 #### Achievements
 
@@ -905,6 +1121,33 @@ endpoint takes a `Range` header with one range:
 chunks of 64 KiB and never holds more than one chunk; `HEAD` sends the headers only. A client
 that closes the connection in the middle (a player seeking) is not an error.
 
+The backup endpoints (see [History and restore](#history-and-restore)):
+
+```json
+{"device": "deck", "etag": "sha256:…",
+ "backups": [{"name": "20261106T100000.123456Z.stignore", "time": "2026-11-06T10:00:00Z",
+              "size": 412, "empty": false, "same": false, "included": 2, "excluded": 0,
+              "summary": "2 path(s) back on"}]}
+```
+
+`GET …/backups/{name}` answers the same fields as a restore, below, without `written`. `POST
+…/restore` takes `{"backup": "<name>", "expect": "sha256:…", "dry_run": false}` (`expect` is the
+`etag` of the current whitelist, required) and answers:
+
+```json
+{"device": "deck", "backup": "20261106T100000.123456Z.stignore", "time": "2026-11-06T10:00:00Z",
+ "etag": "sha256:…", "same": false, "managed": true,
+ "diff": ["--- current", "+++ 20261106T100000.123456Z", "@@ -4,0 +5 @@", "+!/roms/psx"],
+ "included": ["roms/psx"], "excluded": [], "on": ["<game id>"], "off": [],
+ "bytes_on": 5368709120, "bytes_off": 0, "warning": "restoring turns 1 path(s) back on: …",
+ "written": true, "dry_run": false}
+```
+
+`etag` is the new file's once `written`, else the current one; `warnings` (a failed scan) appears
+when there is one. The errors are those of any whitelist write, in this order: `bad-request` (the
+shape), `not-found` (an unknown device, or a backup that is not in its folder), `not-restorable`
+(an empty backup), `expect-missing` and `stale`, and `write-failed`.
+
 ### Validation and errors
 
 `library_api.plan_changes` (pure) takes the request, the config, the profiles, the catalog and
@@ -931,6 +1174,7 @@ last two when they apply):
 | 409 | `covered` | a part stays off under an exclusion of a parent folder |
 | 409 | `cannot-apply` | the change would not reach its state or would change other games |
 | 409 | `unlistable` | a part's path cannot be written as a whitelist line |
+| 409 | `not-restorable` | restoring a backup that is empty (taken before the whitelist existed) |
 | 409 | `catalog-running` | `catalog/refresh` while a run is in progress |
 | 412 | `stale` | an `expect` differs from the file as it is now |
 | 422 | `unsupported` | turning on a system in the device's `exclude_systems` |
@@ -946,7 +1190,9 @@ last two when they apply):
 `library`, `GET /rest/system/connections` (is it connected) and `GET /rest/db/completion?folder=
 wz-library&device=<id>` (`completion`, `needBytes`, `needItems`, `remoteState`). The answers are
 cached for 15 seconds, since a completion over a large folder costs the hub a walk of its
-database. `progress.state` (pure) turns them into one state per device:
+database. A failed question (`503 hub-unreachable`) is cached for 5 seconds as well, so a down
+Syncthing is not asked again by every poll of every open page; the first poll after that asks
+again. `progress.state` (pure) turns them into one state per device:
 
 | State | When |
 |---|---|
@@ -963,7 +1209,7 @@ database. `progress.state` (pure) turns them into one state per device:
 ```
 
 The write time comes from the newest backup in `catalog/whitelists/<device>/` (the server keeps
-no other state). Progress is per console, not per game. Before this is relied on, the e2e test
+no other state); a whitelist the UI created has an empty backup for that. Progress is per console, not per game. Before this is relied on, the e2e test
 must show how the hub counts files a device ignores: if a whitelisted device never reaches
 `completion` 100 because the hub counts its ignored files as needed, `downloading` is computed
 instead from `GET /rest/db/remoteneed?folder=wz-library&device=<id>` filtered through the
@@ -1012,8 +1258,13 @@ warpzone runs on the hub in a container, because a NAS's own Python is often old
 image (`docker/Dockerfile`) is a slim official Python image pinned by digest, with warpzone
 installed from the checkout the image is built from (a release tag, as a wheel, with no index
 access) and RAHasher built with CHD support in a separate stage from RALibretro, pinned by tag and
-commit; only its binary reaches the last stage, at `/usr/local/bin/RAHasher` (the "inbox on the
-hub" work will add its tools to the same image). The entry point is `warpzone` and the default
+commit; only its binary reaches the last stage, at `/usr/local/bin/RAHasher`. The last stage also
+installs `mame-tools` (`chdman`) and `libarchive-tools` (`bsdtar`) with `apt-get install
+--no-install-recommends` and removes the apt lists in the same layer, so `inbox` can convert discs
+and unpack `.7z` and `.rar` there. They land in `/usr/bin`, on `PATH`, so `doctor` needs no path
+for them. The other tools of `inbox` (`dolphin-tool`, `nsz`, `orbis-pkg-util`, Vita3K) are not
+packaged for Debian and are not in the image (see
+[where inbox runs](/warpzone/setup/inbox/#where-inbox-runs)). The entry point is `warpzone` and the default
 command `serve`, so `docker compose run --rm warpzone catalog ...` runs the other commands. The
 image runs as a non-root user and the Compose file sets `user:` to the uid and gid that own the
 games share. An example Compose file is `examples/compose.example.yaml`, and the steps are in
@@ -1040,17 +1291,19 @@ As everywhere in warpzone, a pure function decides and a thin layer touches the 
 network:
 
 - **Pure:** `catalog.derive`, `catalog.system_roots`, `catalog.title_key`, `catalog.search`,
-  `catalog.ra_state`, the catalog's JSON encoding and merge; `ra_data` (the achievement
+  `catalog.ra_state`, the catalog's JSON encoding and merge; `recommend` (the two shelves' rules);
+  `ra_data` (the achievement
   cache's encoding, `game_view`, `summary_view`) and the parsers of `ra.py`; `whitelist.escape`, `unescape`,
   `parse`, `parse_hand`, `render`, `normalize`, `apply`, `decide`, `decide_lines`, `effect`,
-  `unsupported` and the migration's classification; `library_api.plan_changes` and every
+  `unsupported` and the migration's classification; `whitelist_history` (backup names, the
+  comparison of two files, the diff, what a restore refuses and warns about); `library_api.plan_changes` and every
   response builder (the play statistics included: `game_play`, `attach_play`, `recent_response`);
   `saves_index.build_index`, `match_game` and `saves_response`; `progress.state`; `prune.guard`;
   `diskstatus` (`measure`, `should_write`, `render`, `parse`, `stale`, `api_disk`).
 - **I/O:** `catalog_store` (the walk, hashing, RAHasher and the RA download through `ra.py`, the
   guarded writes), `diskstatus_io` (the disk report's write on a console and read on the hub),
   `whitelist_store` (reading with a stamp, backups, the guarded write, the hub
-  scan, the migration's walk), `saves_index.scan` and `SavesCache` (the listing of `saves/` and its
+  scan, the migration's walk, the restore), `saves_index.scan` and `SavesCache` (the listing of `saves/` and its
   60-second cache), `serve` (sockets, sessions, the lock, the background runs, the
   caches).
 
@@ -1061,7 +1314,8 @@ and without a licence, Switch with updates and DLC and an unclaimed folder, `.m3
 special character and refusal of unlistable names; the migration on hand-written files
 (shadowed lines, redundant exclusions, a file refused for a wildcard, a file refused by the
 proof); the API against a fake hub root and the fake Syncthing (auth, origin, `stale`,
-`not-managed`, `unsupported`, dry runs, a `*` change with a skipped device); and the progress
+`not-managed`, `unsupported`, dry runs, a `*` change with a skipped device; the backups listed and
+restored, an empty one refused); and the progress
 states; the disk report (when to write, parsing damaged and foreign files, staleness, the writer
 on a fake disk and the two jobs that call it, the hub reader and the API with missing, stale and
 damaged files). The e2e test adds the matcher check above and the completion check.

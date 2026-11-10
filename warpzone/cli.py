@@ -39,6 +39,7 @@ from warpzone.profiles import Profile, ProfileError, available_profiles, load_pr
 # client) is imported inside the command that needs it, so `settings apply`, which ES-DE runs
 # at every start, loads none of it (see "Speed" in development/design/emulator-settings.md).
 if TYPE_CHECKING:
+    from warpzone.dat import DatLibrary
     from warpzone.report import Reporter
     from warpzone.syncthing import Client
 
@@ -319,9 +320,23 @@ def _build_parser() -> argparse.ArgumentParser:
         "run --ra-lists first)",
     )
     cat.add_argument(
+        "--dats",
+        action="store_true",
+        help="fill the DAT serials (Redump) of the games that have none, by exact DAT name or "
+        "SHA-1 (what lets a Flycast memory card be matched to a game filed before serials "
+        "were recorded)",
+    )
+    cat.add_argument(
+        "--dats-dir",
+        type=Path,
+        metavar="PATH",
+        help="the DAT folder for --dats (default: [inbox] dats_dir)",
+    )
+    cat.add_argument(
         "--force",
         action="store_true",
-        help="with --ra-lists or --ra-achievements, download again whatever the age",
+        help="with --ra-lists or --ra-achievements, download again whatever the age; with "
+        "--dats, replace serials a game already has when the DAT gives it other ones",
     )
 
     wlst = sub.add_parser("whitelist", help="the device whitelists on the hub")
@@ -347,6 +362,29 @@ def _build_parser() -> argparse.ArgumentParser:
         "--dry-run",
         action="store_true",
         help="print the new files and the dropped lines, write nothing",
+    )
+
+    wl_restore = wl_sub.add_parser(
+        "restore",
+        parents=[common],
+        help="list the backups of a device's whitelist, or restore one (run where the hub root "
+        "is mounted)",
+    )
+    wl_restore.add_argument("device", metavar="device", help="a device name from the config")
+    wl_restore.add_argument(
+        "backup",
+        nargs="?",
+        help="the backup to restore (its name, or the start of it); without it, list them",
+    )
+    wl_restore.add_argument(
+        "--root",
+        type=Path,
+        help="the hub root as mounted on this machine (default: [hub] root in the config)",
+    )
+    wl_restore.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="show the diff and the paths it turns on and off, write nothing",
     )
 
     sv_ui = sub.add_parser(
@@ -579,8 +617,12 @@ def _catalog(args: argparse.Namespace, rep: Reporter) -> int:
 
     if args.rahasher and not args.ra_hash:
         raise CatalogError("--rahasher only works together with --ra-hash")
-    if args.force and not (args.ra_lists or args.ra_achievements):
-        raise CatalogError("--force only works together with --ra-lists or --ra-achievements")
+    if args.dats_dir and not args.dats:
+        raise CatalogError("--dats-dir only works together with --dats")
+    if args.force and not (args.ra_lists or args.ra_achievements or args.dats):
+        raise CatalogError(
+            "--force only works together with --ra-lists, --ra-achievements or --dats"
+        )
     root = args.root
     if root is None:
         root = Path(_load(args)[0].hub.root)
@@ -591,6 +633,7 @@ def _catalog(args: argparse.Namespace, rep: Reporter) -> int:
     key = os.environ.get(ra.KEY_ENV) or None
     if (args.ra_lists or args.ra_achievements) and not key:  # before the scan: costs nothing
         raise CatalogError(f"no RetroAchievements key: set {ra.KEY_ENV} in the environment")
+    dat_library = _dat_library(args) if args.dats else None
     results = catalog_store.run_catalog(root, dry_run=args.dry_run, out=rep.out, ra_hasher=hasher)
     failed = any(r.failed for r in results)
     if args.ra_lists:
@@ -603,6 +646,15 @@ def _catalog(args: argparse.Namespace, rep: Reporter) -> int:
             warn=rep.warn,
         )
         failed = failed or any(r.failed for r in lists)
+    if dat_library is not None:
+        serials = catalog_store.run_dats(
+            root,
+            dat_library.load,
+            force=args.force,
+            dry_run=args.dry_run,
+            out=rep.out,
+        )
+        failed = failed or any(r.failed for r in serials)
     if args.ra_achievements:
         found = ra_store.run_ra_achievements(
             root,
@@ -615,6 +667,24 @@ def _catalog(args: argparse.Namespace, rep: Reporter) -> int:
         )
         failed = failed or found.failed
     return EXIT_RUNTIME if failed else EXIT_OK
+
+
+def _dat_library(args: argparse.Namespace) -> DatLibrary:
+    """The DATs `catalog --dats` reads: the folder `inbox` uses, through its parse cache."""
+    from warpzone import inbox
+    from warpzone.catalog_store import CatalogError
+    from warpzone.dat import DatLibrary
+
+    configured = load_inbox_settings(_config_path(args)).dats_dir
+    folder = args.dats_dir or (Path(configured) if configured else None)
+    if folder is None:
+        raise CatalogError("no DATs: pass --dats-dir or set `dats_dir` in the [inbox] table")
+    if not folder.is_dir():
+        raise CatalogError(f"DAT folder not found: {folder}")
+    library = DatLibrary(folder, inbox.default_cache_dir())
+    if not library.systems():
+        raise CatalogError(f"no Redump or No-Intro DATs warpzone knows in {folder}")
+    return library
 
 
 def _inbox(args: argparse.Namespace, rep: Reporter) -> int:
@@ -848,10 +918,22 @@ def _health(args: argparse.Namespace, rep: Reporter) -> int:
 def _whitelist(args: argparse.Namespace, cfg: Config) -> int:
     from warpzone import whitelist_store
 
+    root = args.root or Path(cfg.hub.root)
+    if args.whitelist_command == "restore":
+        refused = whitelist_store.restore_device(
+            root,
+            _device(cfg, args.device),
+            args.backup,
+            dry_run=args.dry_run,
+            now=None,
+            out=print,
+            scan_client=lambda: _hub_client(cfg),
+            warn=lambda text: _eprint(f"warning: {text}"),
+        )
+        return 1 if refused else 0
     names = [_device(cfg, n) for n in args.devices] or [
         n for n, d in sorted(cfg.devices.items()) if "library" in d.folders
     ]
-    root = args.root or Path(cfg.hub.root)
     return whitelist_store.migrate(
         root,
         names,
@@ -963,6 +1045,7 @@ def _run(args: argparse.Namespace) -> int:
             notify_url=args.notify_url,
             rescan_timeout=args.timeout,
             unattended=args.unattended,
+            state_base=settings_state.state_dir().parent,
         )
         return EXIT_RUNTIME if problems else EXIT_OK
 

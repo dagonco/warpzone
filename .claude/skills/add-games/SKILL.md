@@ -7,7 +7,7 @@ description: Use when the user wants to add new games, ROMs, disc images, Switch
 
 Every new game goes through `warpzone inbox`, without exception. It identifies the dump by content, converts it to the format the library holds, verifies it, places it and files the original. Reference: [inbox.md](../../../website/src/content/docs/setup/inbox.md).
 
-`inbox` reports first and acts only with `--apply`. It runs on a desktop machine that mounts the hub's share (the NAS is too weak for conversions), not on a console.
+`inbox` reports first and acts only with `--apply`. It runs on a computer that mounts the hub's share (the usual way, since a NAS is slow at conversions) or in the hub's container, not on a console; the two ways and their tools are in [inbox.md](../../../website/src/content/docs/setup/inbox.md#where-inbox-runs), and `warpzone doctor` checks the one in use.
 
 ## Hard rules
 

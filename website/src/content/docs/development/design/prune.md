@@ -68,7 +68,8 @@ delete:
    followed. The subtree of any other Syncthing folder nested in the root (the
    save folders under `~/Emulation`) is skipped.
 
-Files that are ignored but fail 4 or 5 are listed as kept, with the reason. After
+Files that are ignored but fail 4 or 5 are listed as kept, with the reason; the expected
+ones are only counted (see [Files the console generates](#files-the-console-generates)). After
 deleting, directories that held deleted files, that Syncthing flags ignored, and
 that are now empty are removed (`rmdir`, so a non-empty one is never touched).
 
@@ -79,8 +80,9 @@ The default is report only. `--apply` deletes. A run that would delete more than
 [Unattended runs](#unattended-runs)).
 
 Output is a per-folder summary (leftover files and bytes, grouped by the first
-two path levels; `--list` prints every file), the files kept and why, and the
-count of files Syncthing does not know. Exit codes are those of the other
+two path levels; `--list` prints every file), the unusual files kept and why, one line with
+the count of files the console generates by itself, and the count of files Syncthing does not
+know. Exit codes are those of the other
 commands: `0` ok (a report with leftovers is still `0`), `1` for a runtime
 error, a folder that was skipped as unsafe, a refused cap or files that could not
 be deleted, `2` for usage or config errors.
@@ -91,6 +93,30 @@ JSON object per folder that has leftovers: `{"device", "folder", "files", "bytes
 Assistant webhook. The URL may embed a secret, so it is never printed, and a
 failed notification is a warning, not a failure of the run. No API key or path
 appears in the payload.
+
+## Files the console generates
+
+EmuDeck and some emulators write files into the library that the hub never has, and the
+profile's `[library] ignore` list ignores them, so on every run they are ignored files the hub
+cannot restore. Listing hundreds of them hides the few kept files that matter. `prune.is_generated`
+(pure, no I/O) recognises them by path, relative to the folder root, with exact, case-sensitive
+matching per path segment:
+
+- `roms/<system>/metadata.txt` and `roms/<system>/systeminfo.txt` (one level below `roms`).
+- Any `readme.txt` at any depth under `bios/`.
+- Everything under `bios/PPSSPP`, `bios/HdPacks`, `bios/Mupen64plus`, `bios/fbneo`,
+  `bios/kronos`, `bios/same_cdi`, `bios/ryujinx`, `bios/shadps4` and `bios/yuzu`.
+- RetroArch's Flycast files directly in `bios/dc`: `vmu_save_*.bin`, `dc_nvmem.bin` and
+  `vulkan_pipeline.cache`, plus everything under `bios/dc/data`.
+- `bios/mame2003-plus/hiscore.dat` and everything under `bios/mame2003-plus/artwork`.
+
+The list mirrors the profile's ignores, so a new ignore for a file an emulator writes by itself
+is added to both. A file counts here only when its verdict is "the hub does not have it": a
+matching file the hub does have in a different state is still listed as kept. These files are
+still kept, never deleted; they are reported as one line, `<folder>: N file(s) emulators and
+EmuDeck generate themselves`, in the normal and in the unattended output. The `kept ... ignored
+file(s) the hub cannot restore` line then counts only the other files. The `--notify-url`
+payload is unchanged.
 
 ## Unattended runs
 
@@ -111,6 +137,19 @@ rule above still holds, file by file, with the re-check right before each delete
   was emptied by mistake, or a library folder that briefly looks wrong, from wiping a console. A
   removal it refuses stays until the user runs `prune --apply` by hand, where the size cap and
   `--force` apply as usual; a device that holds a single game can only lose it that way.
+- **A refusal leaves a trace.** Nobody reads the journal of the timer, so when `guard` names a
+  folder the run writes `~/.local/state/warpzone/prune-guard.json` (next to the updater's
+  state, mode 0600, replaced atomically through `safefile.write_file`): `version`, `time`
+  (seconds since the epoch) and, per folder id, the bytes it would have deleted and the bytes the
+  device holds. No file or folder names. `prune.render_guard_state` and `prune.parse_guard_state`
+  are the pure ends of it; `record_guard_refusal` and `clear_guard_refusal` touch the disk. Any
+  `--apply` run that goes on to settle clears the file: no folder was skipped or busy, and it
+  either deleted or had nothing to delete (a manual `prune --apply` after the review does it). A
+  report-only run, a busy or skipped run, and a refusal by the attended size cap leave it as it
+  was. `prune_device` takes the state folder as `state_base` (the CLI passes
+  `~/.local/state/warpzone`; None records nothing), and a failed write is a warning, not a
+  failure of the run. `doctor` reads the file (see [Doctor](/warpzone/development/design/doctor/)).
+  `health` does not: it decides whether a version works, and a refusal says nothing about that.
 - **Busy is not a failure.** A full scan that gets no answer in time ("rescan queued", see
   [Syncthing API surface](/warpzone/development/design/code-and-testing/#syncthing-api-surface-used))
   means the device is still pulling: the run deletes nothing and exits 0, and the next tick tries

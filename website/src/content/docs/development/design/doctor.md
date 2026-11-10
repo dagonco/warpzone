@@ -29,6 +29,27 @@ for every problem, the exact fix for this platform.
   something that is not a file (`inbox` refuses to start) and `[ok]` otherwise. A config that does not load,
   a configured tool path that is not executable, a tool that cannot run, a local
   Syncthing whose API does not answer, and Python older than 3.11 are always problems.
+- **Where inbox runs.** `warpzone inbox` runs on a computer that mounts the hub's share
+  or in the hub container (see [Inbox](/warpzone/development/design/inbox/)), and with an
+  `[inbox]` table `doctor` checks the way in use, found from the machine and never asked.
+  The probe `Probes.in_container` is true when the runtime left a marker in the root of the
+  container (`/.dockerenv` for Docker, `/run/.containerenv` for Podman); tests replace it.
+  `Where inbox runs` says which way it found. On a computer the tool checks are the ones
+  above (the `[inbox]` path, else `PATH`) with the install command of the platform as fix.
+  In the container they differ in four ways. The tools are the image's: besides `PATH`, a
+  tool is looked for where the image puts it (`IMAGE_TOOL_PATHS`, today
+  `/usr/local/bin/RAHasher`; `known_tool_paths` is pure), and `RAHasher` found there with
+  no `[inbox] rahasher` is `[! ]` with the line to set. A missing tool has the fix "this hub
+  image does not ship it" (run inbox on a computer, or build the image with it) instead of
+  an install command, since the root of a container is read-only and rebuilt from the
+  image; `chdman` and `bsdtar` stay `[!!]` there as on a computer, so an image without them
+  fails (the image ships both from Debian packages, in `/usr/bin`, so `PATH` finds them and
+  `IMAGE_TOOL_PATHS` lists only the tools outside `PATH`). `Hub root for inbox` is `[! ]` when `[inbox] root` is unset but `[hub] root` is
+  there, because `inbox` needs its own `root` (the same path as `[hub] root` in the
+  container). `Work folder` is `[! ]` when `work_dir` is unset (`/tmp` is memory in the
+  container) or is not a mounted folder, and the missing-DATs fix says to mount a folder.
+  Image tools that cannot run (a wrong architecture) are `[!!]` with "build the image
+  again".
 - **Game Mode (SteamOS).** With a local Syncthing on SteamOS, `Game Mode` says whether
   Syncthing runs without a desktop session. Game Mode starts no desktop session, so
   `~/.config/autostart/*.desktop` entries never run there; only a systemd user unit
@@ -100,6 +121,15 @@ for every problem, the exact fix for this platform.
   system list or a scraped file is unreadable. `Artwork timer` (only when the profile sets
   `refresh`) is `[ok]` when `warpzone-artwork.timer` is installed and `[! ]` otherwise.
   `judge_artwork` is pure.
+- **Unattended prune.** Group `Pruning`, on a device found through `wz-library` (as for the
+  frontend) whose config subscribes it to `library` without `auto_prune = false`. One line,
+  `Unattended prune`: `judge_prune_guard` (pure) is `[ok]` when `prune-guard.json` is not
+  in `~/.local/state/warpzone`, and `[! ]` when it is: the folders the timer's run refused to
+  touch because they would lose more than half of what the device holds, how long ago, and as
+  the fix `warpzone prune <name>` to review and `warpzone prune <name> --apply` by hand. A file
+  that does not parse is `[! ]` too, with the same fix, which rewrites it. The file and the
+  rules that write and clear it are in [Unattended runs](/warpzone/development/design/prune/#unattended-runs).
+  It is never `[!!]`: nothing is broken, a removal is waiting for a person.
 - **Exit codes.** `0` when no check is a problem, `1` otherwise.
 - **Install hints** live in one table in `warpzone/doctor.py` (`TOOLS` and the `*_HINTS`
   dicts), keyed by platform family: `macos`, `debian`, `fedora`, `arch`, `steamos`,

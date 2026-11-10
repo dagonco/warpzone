@@ -22,7 +22,7 @@
   'use strict';
 
   const W = window.WZ;
-  const { humanError, formatBytes, h, $, $$, plural, debounce, icon, tint, systemName, systemCode, systemColor,
+  const { humanError, formatBytes, formatMoment, timeAgo, h, $, $$, plural, debounce, icon, tint, systemName, systemCode, systemColor,
     consoleCode, api, store, ui, views } = W;
   const { S, toast } = store;
 
@@ -283,6 +283,131 @@
     });
   }
 
+  // ===== the history of a console's whitelist ==============================================
+
+  // The backups the hub keeps of a console's whitelist (one per write): pick one to see its diff
+  // against the current file and the games it would turn on and off, then restore it. The
+  // restore carries the etag the diff was shown against, so a whitelist that changed meanwhile
+  // is refused by the server, never overwritten.
+  const PATHS_SHOWN = 30;
+
+  async function openHistory(deviceName) {
+    const dlg = $('#history');
+    const st = { list: null, name: null, detail: null, error: '', loading: false };
+
+    function pathList(title, cls, paths) {
+      if (!paths.length) return null;
+      const more = paths.length - PATHS_SHOWN;
+      return h('div', { class: 'plist ' + cls },
+        h('h3', null, `${title} (${paths.length})`),
+        h('ul', null, paths.slice(0, PATHS_SHOWN).map((p) => h('li', null, p)),
+          more > 0 ? h('li', { class: 'mute' }, `and ${more.toLocaleString('en-US')} more`) : null));
+    }
+
+    function detailBlock(d) {
+      const n = (x) => x.toLocaleString('en-US');
+      return h('div', { class: 'hdetail' },
+        d.warning ? h('p', { class: 'note warn' }, d.warning + '.') : null,
+        d.managed ? null : h('p', { class: 'note warn' },
+          `This version is not in the format the UI manages. After restoring it the UI cannot change ${deviceName} until you run "warpzone whitelist migrate ${deviceName}" on the hub.`),
+        d.on || d.off ? h('dl', { class: 'mstat' },
+          h('div', null, h('dt', null, 'Games back on'), h('dd', null, n((d.on || []).length))),
+          h('div', null, h('dt', null, 'To download'), h('dd', null, formatBytes(d.bytes_on) || '0 B')),
+          h('div', null, h('dt', null, 'Games off'), h('dd', null, n((d.off || []).length), h('small', null, ` / ${formatBytes(d.bytes_off) || '0 B'}`)))) : null,
+        pathList('Back on', 'in', d.included || []),
+        pathList('Taken off', 'out', d.excluded || []),
+        d.diff.length
+          ? h('pre', { class: 'diff', tabindex: '0', 'aria-label': 'Changes from the current whitelist to this version' },
+            d.diff.map((line) => h('span', { class: line.startsWith('+') ? 'add' : line.startsWith('-') ? 'del' : line.startsWith('@') ? 'hunk' : '' }, line + '\n')))
+          : h('p', { class: 'mute small' }, 'The text is the same as the current whitelist.'));
+    }
+
+    function row(b) {
+      const picked = st.name === b.name;
+      return h('li', null, h('button', {
+        type: 'button', class: 'hrow' + (picked ? ' on' : ''), 'aria-pressed': String(picked), disabled: b.empty || null,
+        dataset: { fk: 'hb:' + b.name }, onclick: () => pick(b.name),
+      }, h('b', { title: formatMoment(b.time) }, formatMoment(b.time) || b.name), h('small', null, timeAgo(b.time)),
+      h('span', null, b.summary)));
+    }
+
+    function paint() {
+      const backups = st.list ? st.list.backups : [];
+      const current = st.detail;
+      const canRestore = !!current && !current.same;
+      const fk = document.activeElement && dlg.contains(document.activeElement) ? document.activeElement.dataset.fk : null;
+      const restoreBtn = h('button', {
+        type: 'button', class: 'btn primary', disabled: canRestore ? null : true,
+        onclick: restore,
+      }, 'Restore');
+      dlg.className = 'modal history';
+      setTintOn(dlg, '#38f9ff');
+      dlg.replaceChildren(h('div', { class: 'modal-inner' },
+        h('div', { class: 'mh' }, h('i'), 'History'),
+        h('div', { class: 'mb' },
+          h('h2', { id: 'history-title' }, `Whitelist of ${deviceName}`),
+          h('p', { class: 'mute small' }, 'Every change keeps the file it replaced. Restoring one writes it back, after keeping the current file as a backup too.'),
+          st.error ? h('p', { class: 'error-text', role: 'alert' }, st.error) : null,
+          !st.list ? h('p', { class: 'mute' }, 'Loading...')
+            : backups.length ? h('ul', { class: 'hist' }, backups.map(row))
+              : h('p', { class: 'mute' }, 'No backups yet.'),
+          st.loading ? h('p', { class: 'mute small' }, 'Loading this version...') : null,
+          current ? detailBlock(current) : null),
+        h('div', { class: 'macts' },
+          h('button', { type: 'button', class: 'btn', onclick: () => dlg.close() }, 'Close'),
+          st.name ? restoreBtn : null)));
+      const again = fk && $(`[data-fk="${CSS.escape(fk)}"]`, dlg);
+      if (again) again.focus({ preventScroll: true });
+    }
+
+    async function loadList() {
+      try {
+        st.list = await api.backups(deviceName);
+        st.error = '';
+      } catch (err) {
+        st.error = humanError(err);
+      }
+      paint();
+    }
+
+    async function pick(name) {
+      st.name = name;
+      st.detail = null;
+      st.loading = true;
+      st.error = '';
+      paint();
+      try {
+        const d = await api.backup(deviceName, name);
+        if (st.name !== name) return;
+        st.detail = d;
+      } catch (err) {
+        if (st.name === name) st.error = humanError(err);
+      }
+      st.loading = false;
+      paint();
+    }
+
+    async function restore() {
+      const d = st.detail;
+      if (!d) return;
+      const res = await store.restoreBackup(deviceName, d.backup, d.etag);
+      if (res) {
+        dlg.close();
+        toast(`Restored the whitelist of ${deviceName} to ${formatMoment(d.time) || d.backup}.` +
+          (d.warning ? ' The console will download what came back on.' : ''), 'ok');
+        return;
+      }
+      // Refused or failed: the error is shown; look at the file as it is now.
+      st.detail = null;
+      st.name = null;
+      await loadList();
+    }
+
+    paint();
+    dlg.showModal();
+    await loadList();
+  }
+
   function setTintOn(el, color) { for (const [k, v] of Object.entries(tint(color))) el.style.setProperty('--' + k, v); }
 
   // ===== keyboard and gamepad ==============================================================
@@ -461,6 +586,7 @@
       progressChanged() { ui.paintProgress(); },
       detailChanged(id) { if (V.view && V.view.kind === 'game' && V.view.id === id && V.view.reload) V.view.reload(); },
       confirmSystem,
+      openHistory,
       reset() { views.resetFeatured(); },
     });
     api.onUnauthorized(() => showLogin(''));
@@ -487,6 +613,8 @@
 
     const confirmDlg = $('#confirm');
     confirmDlg.addEventListener('click', (e) => { if (e.target === confirmDlg) confirmDlg.close(); });
+    const historyDlg = $('#history');
+    historyDlg.addEventListener('click', (e) => { if (e.target === historyDlg) historyDlg.close(); });
     document.addEventListener('click', (e) => {
       // The brand link also clears a search that is showing while the route is already home.
       if (e.target.closest && e.target.closest('.brand') && V.q) { search.value = ''; V.q = ''; }
