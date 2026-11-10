@@ -10,6 +10,7 @@
  *   kit.js         DOM builder, pixel icons, names and colours of systems and consoles
  *   store.js       the data, the progress poll and the writes
  *   components.js  art, tiles, slots, levers, system cards, console status
+ *   queue.js       the play queue: the Up next section, the game's queue panel and their dialogs
  *   views.js       the pages
  *   app.js         this file: the frame (header, rail, bottom bar), router, dialogs, keyboard
  *                  and gamepad navigation, login, boot
@@ -574,6 +575,7 @@
     V.route = parseRoute();
     renderRoute();
     store.pollProgress();
+    store.loadQueue();
     store.preloadLists();
     store.watchCatalog(S.catalog && S.catalog.running ? 1500 : 60000);
   }
@@ -588,6 +590,10 @@
       confirmSystem,
       openHistory,
       reset() { views.resetFeatured(); },
+      queueChanged() {
+        ui.paintQueueMarks(document);
+        if (V.view && V.view.queueChanged) V.view.queueChanged();
+      },
     });
     api.onUnauthorized(() => showLogin(''));
     $('#login').addEventListener('cancel', (e) => e.preventDefault());
@@ -595,7 +601,7 @@
     window.addEventListener('popstate', () => { V.pop = true; });
     window.addEventListener('hashchange', renderRoute);
     document.addEventListener('keydown', onKey);
-    document.addEventListener('visibilitychange', () => { if (!document.hidden && S.devices.length) store.schedulePoll(200); });
+    document.addEventListener('visibilitychange', () => { if (!document.hidden && S.devices.length) { store.schedulePoll(200); store.ensureQueue(30000); } });
     for (const b of $$('[data-crt]')) b.addEventListener('click', () => setCrt(!document.body.classList.contains('crt'), true));
     setCrt(!/(?:^|;\s*)wz_crt=0/.test(document.cookie), false);
     renderBnav();

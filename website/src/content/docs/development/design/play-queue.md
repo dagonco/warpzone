@@ -2,13 +2,13 @@
 title: "Play queue"
 ---
 
-**Status: the file, the inferred states and the HTTP API are implemented; the page (the Queue
-button, the Up next section) is not yet.** This is the design of the play queue of the
+**Status: implemented: the file, the inferred states, the HTTP API and the page (the Queue
+panel of the game page, the Up next section).** This is the design of the play queue of the
 [library UI](/warpzone/development/design/library-ui/), with the maintainer's answers to the
 review's questions recorded in [Decisions](#decisions). It is the contract for the code in
-`queue.py`, `queue_store.py` and the two routes of `serve.py`, and for the page that comes next.
+`queue.py`, `queue_store.py`, the two routes of `serve.py` and `data/ui/queue.js`.
 [Implementation notes](#implementation-notes) lists the places where the code settled something
-the design left open.
+the design left open, and [The page](#the-page) the same for the UI.
 
 The play queue is an ordered list of the games the user wants to play next, kept on the hub and
 shown by the library UI: a "Queue" button on each game page and an "Up next" section on the home
@@ -464,9 +464,9 @@ ended entries unless asked for more, so the size of the history does not weigh o
 
 ## What the page shows
 
-- **Game page:** a "Queue" button beside the console switches. It opens a picker of the consoles
-  that support the system, with the one used last (kept in a cookie) preselected, and none as a
-  choice. Before confirming, a dry run says what each console does: "Turns it on for deck (3.2 GB
+- **Game page:** a "Play queue" panel under the console switches, with an "Add to queue" button.
+  It opens a picker of the consoles that support the system, with the one used last (kept in a
+  cookie) preselected, and none as a choice. Before confirming, a dry run says what each console does: "Turns it on for deck (3.2 GB
   to download)", "Already on machine: it will stay there when you finish it". Once queued, the
   button becomes the entry's state, with "Playing", "Finished", "Dropped" and "Remove from queue",
   and each console's view under it.
@@ -481,8 +481,8 @@ ended entries unless asked for more, so the size of the history does not weigh o
   history. When `size` passes 90% of `limit` the section says the queue file is nearly full and
   how to make room. The section is absent when the queue is empty and
   the file is `absent`; a `damaged` or `newer` file shows one line saying so and nothing else.
-- **System grid and search:** a small "queued" mark on the tiles of queued games, from the queue
-  the page already loaded.
+- **System grid and search:** a small "Queued" mark (or "Playing") on the tiles and search rows
+  of queued games, from the queue the page already loaded.
 - **Release dialog:** as in [Releasing is asked](#releasing-is-asked-never-automatic).
 - **Conflicts:** a `stale` answer reloads the queue and the devices and says the queue changed
   elsewhere, as the switches do.
@@ -553,6 +553,57 @@ Where the code settled something this page left open, or reads it more narrowly:
   names `catalog/`, the log the hub root.
 - **The file** is compact JSON with sorted keys; entries of other owners are kept as parsed and
   written back identically.
+
+## The page
+
+Where the page settled something this page left open (all of it is in `data/ui/queue.js`, with
+the data and the writes in `store.js` and the tile mark in `components.js`):
+
+- **Every write is one `POST /api/v1/queue`** with the `etag` the page last saw as `expect_queue`
+  and, as `expect`, the whitelist `etag` of every console the operations name. A dialog that
+  needs numbers sends a dry run first; the write that follows takes the `etag`s current at that
+  moment, so a change made elsewhere while the dialog was open is a `stale`, never an overwrite.
+  After any error the page loads the queue again; after a change the answer's `queue` replaces
+  it. A switch or a lever (`POST /api/v1/changes`) does not touch the queue, but the page asks
+  for the queue again afterwards, since the `view` of each claim depends on the whitelists.
+- **The picker** keeps the consoles chosen last in the cookie `wz_queue_dev` (a comma-separated
+  list, `-` for none), so it can preselect several; with no cookie it preselects the only console
+  that can take the game, else none. Its dry run runs again at every change of the selection and
+  fills one line under each chosen console from the game's state there (`off`: "Turns it on for
+  deck (3.2 GB to download)"; `on`: "Already on machine: it will stay there when you finish it";
+  `partial`: "Completes it on machine ... It will stay there when you finish it"). A console that
+  cannot take the game (a system it does not run, a whitelist that needs migration, an unknown
+  state, a game that cannot be listed, a console the entry already holds) is listed but disabled,
+  with the reason. The same picker adds consoles to an active entry (`devices`) and queues an
+  ended game again (`add`).
+- **The release dialog** opens when finishing, dropping or removing an entry, or taking one
+  console off it, and the queue holds the game on a console the page can turn it off on. It
+  runs a dry run with every such console in `release` and draws the answer: a console in
+  `skipped` (`covered`, `claimed`) has no checkbox and says why it stays; the others have a
+  checked box ("Remove from deck", with the bytes freed and "gone within about an hour"). A
+  console the user unticks goes in `keep`. Consoles where the game was there before are listed
+  as staying. A console the queue holds but cannot release (a console that left the config, a
+  state that is not known, a game that left the library) goes in `keep` without being asked.
+  With no console that can be released there is nothing to ask and the request goes straight
+  out, with every held claim named in `keep`. A pending console (the view `not-released`, from
+  a release whose whitelist write failed) counts as held, so the dialog offers it again.
+- **Up next** lists the first 10 active entries and a "Show all N" button for the rest. Each
+  entry has "Up" and "Down" (`move`, to the neighbouring position; disabled at the ends), "Finished",
+  "Dropped" and "Remove", and under its name one line per console: its progress from
+  `/api/v1/progress` when the view is `on`, "not on the console yet" with "Turn on" for `not-on`,
+  "still on the console" with "Remove" for `not-released`, and the plain state otherwise. The
+  suggestion has "Yes" (the same dialog as "Finished") and "Not now" (`dismiss`). A `moved`
+  entry lists its candidates as buttons; one opens a confirmation (what a relink keeps and
+  ends) before `relink` is sent. A `missing` entry has only "Remove".
+- **Recently finished** is a collapsed list of the first 10 ended entries the page has, with
+  "Show all N" (asks for `history=N`, at most 10000, and keeps that number for later loads),
+  "Queue again" per game and "Forget" (`remove` of an ended entry), which is the way to make
+  room when the file is nearly full.
+- **The game page** adds to the entry's state the buttons "Playing" (or "Back to queued"),
+  "Finished", "Dropped" and "Remove from queue", "Add a console", and "Take off" on each console
+  where the claim is open (the release dialog for a console the queue holds, a plain `keep`
+  otherwise). The panel says "N of M" for the position and has no move buttons.
+- **There is no page of its own:** the queue is the section of the home page.
 
 ## Out of scope
 

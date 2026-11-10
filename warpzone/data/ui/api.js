@@ -42,7 +42,7 @@
     if (res.ok) return data;
     const e = (data && data.error) || {};
     const err = new ApiError(res.status, e.code || 'http-' + res.status, e.message || res.statusText,
-      { device: e.device, game: e.game, body: data });
+      { device: e.device, game: e.game, queue: e.queue === true, body: data });
     if (res.status === 401 && path !== '/api/v1/session' && unauthorizedHook) unauthorizedHook();
     throw err;
   }
@@ -65,6 +65,9 @@
     recent: (limit) => request('GET', `/api/v1/recent?limit=${encodeURIComponent(limit)}`),
     raSummary: () => request('GET', '/api/v1/ra/summary'),
     recommendations: () => request('GET', '/api/v1/recommendations'),
+    // The play queue and the one write that changes it; `history` is how many ended entries to list.
+    queue: (history) => request('GET', `/api/v1/queue?history=${encodeURIComponent(history)}`),
+    queueChange: (body) => request('POST', '/api/v1/queue', body),
     // An image URL, not a request: the browser loads it (lazily) through an <img>.
     mediaUrl: (id, kind) => `/api/v1/games/${encodeURIComponent(id)}/media/${kind}`,
     // The same for a cached RetroAchievements badge; `variant` is 'unlocked' or 'locked'.
@@ -83,7 +86,7 @@
       case 'bad-origin':
         return 'The server refused the change because the page was opened from a different address than the one it answers on. Open the page from the server address itself.';
       case 'not-found':
-        return 'That console, system, game or image no longer exists. The page was reloaded.' + where;
+        return 'That console, system, game, queue entry or image no longer exists. The page was reloaded.' + where;
       case 'not-managed':
         return `The whitelist of ${dev || 'a console'} is not in the format the UI manages. On the hub run "warpzone whitelist migrate ${dev || '<console>'}" first, then reload.`;
       case 'covered':
@@ -95,14 +98,36 @@
       case 'not-restorable':
         return 'That backup is empty (it was taken before the whitelist existed), so it cannot be restored: an empty whitelist would let every file through.' + where;
       case 'stale':
+        if (err.info.queue) return 'The queue changed since this page loaded it (another tab or the command line). Nothing was written; the page reloaded the queue. Check it and try again.';
         return `The whitelist of ${dev || 'a console'} changed since this page loaded it (another tab, the command line or another change). Nothing was written; the page reloaded the current state. Check it and try again.`;
       case 'unsupported':
         return `${dev || 'This console'} does not support that system, so it cannot be turned on there.`;
       case 'expect-missing':
+        if (err.info.queue) return 'The page did not know the current version of the queue. It reloaded; try again.';
         return 'The page did not know the current version of a console whitelist. It reloaded; try again.' + where;
+      case 'already-queued':
+        return 'That game is already in the queue (or the target already has an entry). The page reloaded the queue.';
+      case 'not-held':
+        return `The queue does not hold that game on ${dev || 'that console'} (it was there before the game was queued, or the game left the library). The page reloaded the queue; keep the console instead of removing the game from it.`;
+      case 'in-sync':
+        return `${dev || 'That console'} already matches the queue; there was nothing to repair. The page reloaded the queue.`;
+      case 'queue-damaged':
+        return 'The queue file on the hub cannot be read (it is damaged or written by a newer warpzone), so the queue cannot be changed from here. It is never overwritten: restore one of the files in catalog/queue-backups/ on the hub.';
+      case 'queue-full':
+        return 'The queue already has 200 active entries. Finish, drop or remove some before adding more.';
+      case 'queue-too-large':
+        return 'The queue file would pass its size limit (4 MiB), so nothing was written. Remove ended entries from the history or games from collections, then try again.';
       case 'catalog-running':
         return 'A catalog scan is already running on the hub.';
       case 'write-failed':
+        if (err.info.queue) {
+          return err.info.body && err.info.body.devices
+            ? 'The consoles were changed, but the server could not remove the entry from the queue file, so it is still in the queue. Remove it again.'
+            : 'The server could not write the queue file. Nothing was changed; check the hub\'s disk and try again.';
+        }
+        if (err.info.body && err.info.body.queue === true) {
+          return `The queue was saved, but the server could not write the whitelist of ${dev || 'a console'}. The entry shows what is left to do: press "Turn on" or "Remove" on it to try again.`;
+        }
         return `The server could not write the whitelist of ${dev || 'a console'}. Nothing of it was changed; check the hub's disk and try again.`;
       case 'read-failed':
         return `The server could not read a whitelist${where}. On the hub, check the permissions of the library folder for the user the server runs as.`;

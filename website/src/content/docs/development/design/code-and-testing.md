@@ -137,6 +137,7 @@ warpzone/
   data/ui/api.js     its API client: requests, error messages, title key port
   data/ui/store.js   its state: catalog, coverage per console, progress poll, changes
   data/ui/components.js  its shared pieces: art, tiles, console slots, the system lever
+  data/ui/queue.js   its play queue: the Up next section, the game's queue panel and their dialogs
   data/ui/views.js   its pages: home, system, search, the game page, consoles
   data/ui/app.js     its frame: router, search, confirmation dialog, keyboard and gamepad, login
   data/ui/style.css
