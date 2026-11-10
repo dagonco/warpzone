@@ -325,7 +325,7 @@
     function row(b) {
       const picked = st.name === b.name;
       return h('li', null, h('button', {
-        type: 'button', class: 'hrow' + (picked ? ' on' : ''), 'aria-pressed': String(picked), disabled: b.empty || null,
+        type: 'button', class: 'hist-row' + (picked ? ' on' : ''), 'aria-pressed': String(picked), disabled: b.empty || null,
         dataset: { fk: 'hb:' + b.name }, onclick: () => pick(b.name),
       }, h('b', { title: formatMoment(b.time) }, formatMoment(b.time) || b.name), h('small', null, timeAgo(b.time)),
       h('span', null, b.summary)));
