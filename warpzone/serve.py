@@ -448,7 +448,7 @@ class HubFiles:
             entries: dict[str, artwork.Entry] = {}
             if stamp is not None:
                 try:
-                    for entry in artwork.parse_gamelist(path.read_bytes()):
+                    for entry in artwork.parse_gamelist(artwork.read_gamelist(path)):
                         entries.setdefault(entry.path, entry)
                 except (OSError, artwork.ArtworkError):
                     entries = {}
