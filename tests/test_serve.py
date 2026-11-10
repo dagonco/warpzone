@@ -441,6 +441,27 @@ class MediaTests(ServeCase):
         self.assertEqual(reply.headers["Content-Type"], "image/png")
         self.assertEqual(reply.headers["X-Content-Type-Options"], "nosniff")
 
+    def test_a_ps4_game_finds_its_scrape_below_the_shortcuts_folder(self) -> None:
+        # The catalog says `./shortcuts/Example PS4.desktop`; ES-DE reads that folder, so
+        # the gamelist and the media on the hub are named without it.
+        gamelist = self.root / "frontend" / "es-de" / "gamelists" / "ps4" / "gamelist.xml"
+        gamelist.parent.mkdir(parents=True)
+        gamelist.write_text(
+            "<gameList><game><path>./Example PS4.desktop</path><name>Scraped</name>"
+            "<desc>Text.</desc></game></gameList>"
+        )
+        covers = self.root / "frontend" / "media" / "ps4" / "covers"
+        covers.mkdir(parents=True)
+        (covers / "Example PS4.png").write_bytes(PNG)
+        found = self.get(f"/api/v1/games/{PS4.id}").json
+        self.assertEqual(found["meta"], {"name": "Scraped", "desc": "Text."})
+        self.assertEqual(found["media"], ["covers"])
+        reply = self.get(f"/api/v1/games/{PS4.id}/media/covers")
+        self.assertEqual((reply.status, reply.body), (200, PNG))
+        listed = self.get("/api/v1/systems/ps4/games").json
+        item = next(g for g in listed["games"] if g["id"] == PS4.id)
+        self.assertEqual((item["name"], item["cover"]), ("Scraped", True))
+
     def test_the_physical_media_scan_is_served_and_listed(self) -> None:
         folder = self.root / "frontend" / "media" / "psx" / "physicalmedia"
         folder.mkdir()

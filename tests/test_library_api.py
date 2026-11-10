@@ -16,6 +16,8 @@ from warpzone.library_api import (
     changes_response,
     devices_response,
     game_facts,
+    game_media,
+    game_meta,
     game_response,
     games_response,
     media_file,
@@ -246,6 +248,41 @@ class ReadAnswerTests(unittest.TestCase):
         self.assertEqual(
             media_file(LIB, m3u.id, "covers", lambda s: extras)[1], "Other Game.chd.png"
         )
+
+    def test_a_system_read_from_a_subfolder_finds_its_entry_and_media(self) -> None:
+        # ES-DE lists PS4 from `roms/ps4/shortcuts/`, so its gamelist and media say
+        # `./Example PS4.desktop` while the catalog says `./shortcuts/Example PS4.desktop`.
+        entry = artwork.Entry("game", "./Example PS4.desktop", {"name": "N", "desc": "D"})
+        extras = SystemExtras({entry.path: entry}, {"Example PS4": {"covers": "Example PS4.png"}})
+        found = game_response(LIB, PS4.id, CFG, self.views, lambda s: extras)
+        self.assertEqual(found["meta"], {"name": "N", "desc": "D"})
+        self.assertEqual(found["media"], ["covers"])
+        listed = games_response(LIB, "ps4", CFG, self.views, lambda s: extras)
+        item = next(g for g in listed["games"] if g["id"] == PS4.id)
+        self.assertEqual((item["name"], item["cover"]), ("N", True))
+        self.assertEqual(
+            media_file(LIB, PS4.id, "covers", lambda s: extras), ("ps4", "Example PS4.png")
+        )
+
+    def test_the_catalogs_own_path_wins_over_the_shorter_one(self) -> None:
+        full = artwork.Entry("game", PS4.gamelist, {"name": "Full"})
+        short = artwork.Entry("game", "./Example PS4.desktop", {"name": "Short"})
+        extras = SystemExtras(
+            {full.path: full, short.path: short},
+            {"shortcuts/Example PS4": {"covers": "a.png"}, "Example PS4": {"covers": "b.png"}},
+        )
+        self.assertEqual(game_meta(PS4, extras), {"name": "Full"})
+        self.assertEqual(game_media(PS4, extras), {"covers": "a.png"})
+
+    def test_media_without_a_gamelist_entry_is_found_below_the_subfolder_too(self) -> None:
+        extras = SystemExtras(media={"Example PS4": {"covers": "Example PS4.png"}})
+        self.assertEqual(game_media(PS4, extras), {"covers": "Example PS4.png"})
+
+    def test_a_folder_entry_of_a_subfolder_system_keeps_its_whole_name(self) -> None:
+        game = catalog.Game(**{**PS4.__dict__, "gamelist": "./carts/Example.m3u"})
+        entry = artwork.Entry("folder", "./Example.m3u", {})
+        extras = SystemExtras({entry.path: entry}, {"Example.m3u": {"covers": "c.png"}})
+        self.assertEqual(game_media(game, extras), {"covers": "c.png"})
 
     def test_media_index_prefers_png_and_ignores_other_files(self) -> None:
         found = media_index(

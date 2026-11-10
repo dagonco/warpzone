@@ -338,7 +338,8 @@ the pauses, the downloads and the guarded writes.
 The UI reads the ES-DE scrape that is already on the hub, read-only:
 
 - `frontend/es-de/gamelists/<system>/gamelist.xml`, parsed with `artwork.parse_gamelist`. A
-  game's entry is the one whose `<path>` equals its `gamelist`. The API passes on `name`, `desc`,
+  game's entry is the one whose `<path>` equals its `gamelist`, or else that path with its
+  leading folders dropped one by one (see below). The API passes on `name`, `desc`,
   `rating`, `releasedate`, `developer`, `publisher`, `genre` and `players`.
 - `frontend/media/<system>/<kind>/<stem>.<ext>`, where `<stem>` is the gamelist path without
   `./` and without its extension (a folder entry keeps its whole name, as in `artwork.build`),
@@ -346,6 +347,20 @@ The UI reads the ES-DE scrape that is already on the hub, read-only:
   `physicalmedia` (the scan of the cartridge or disc), `backcovers` and `videos`, and the
   extensions `png`, `jpg` and `jpeg` (`mp4` and `webm` for `videos`; where a stem has more than
   one extension the first in each list wins).
+
+**A frontend that reads a folder below the system's one.** The catalog's `gamelist` is relative
+to the hub's system folder (`./shortcuts/Example.desktop`), but a frontend may read a folder
+below it (`artwork.FrontendSystem.base`: ES-DE lists PS4 from `roms/ps4/shortcuts/`, pico-8
+from `roms/pico-8/carts/`) and then records its entries and names its media without that part
+(`./Example.desktop`, `covers/Example.png`). The frontend's system list says which folder, but
+it lives on the devices and not on the hub, so the server does not read it: it looks for the
+entry under the exact `gamelist`, then under the same path with its first folder dropped, then
+the next (`library_api.gamelist_paths`, `game_entry`). The media stem is the one of the entry
+found (a `<folder>` entry keeps its whole name); a game with no entry looks for media under the
+same paths in the same order. The exact path always wins, so a system whose frontend reads the
+whole folder is unaffected. The catalog file does not change. The cost of reading the base this
+way is that a game in a subfolder with no entry could take the entry of another game with the
+same file name at the top level; the file names `inbox` writes make that unlikely.
 
 The videos stay on the hub. `wz-media` reaches a device that receives the whole folder with
 `/*/videos` in its ignores, and a profile with `[artwork]` receives only the kinds it lists,
