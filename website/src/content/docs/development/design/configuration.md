@@ -181,6 +181,7 @@ re-check right before acting.
 - Changing a folder's `path` on an existing folder is refused (it would make
   Syncthing see a mass delete); the user is told to remove the folder first. The one
   exception is a save folder whose old path the profile lists in `previous_paths` and whose
-  old directory is empty: it is removed from Syncthing and added again at the new path (see
-  `previous_paths` in `development/design/profiles.md`).
+  old directory is empty or fully on the hub: it is removed from Syncthing and added again
+  at the new path, after a second check right before (see `previous_paths` in
+  `development/design/profiles.md`).
 - Devices are only ever added, never removed, by warpzone.

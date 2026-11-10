@@ -8,15 +8,16 @@ from __future__ import annotations
 
 import os
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import Any
 
 from warpzone.errors import WarpzoneError
 from warpzone.model import FolderSpec
 from warpzone.report import Reporter
-from warpzone.syncthing import Client
+from warpzone.syncthing import Client, SyncthingError
 
 PREFIX = "wz-"
+NEED_KEYS = ("needFiles", "needDirectories", "needSymlinks", "needDeletes")
 
 
 class ProvisionError(WarpzoneError):
@@ -49,15 +50,61 @@ def holds_data(path: str, marker: str = ".stfolder") -> bool:
     return any(name not in (marker, ".stignore") for name in names)
 
 
-def can_move(spec: FolderSpec, current: dict[str, Any]) -> bool:
+def fully_synced(status: dict[str, Any], completions: Sequence[dict[str, Any]]) -> bool:
+    """Whether every file of the folder is on the other devices too (pure).
+
+    `status` is `db/status` of the local folder, `completions` the `db/completion` of each
+    device it is shared with. The local folder must be idle with nothing to pull and no local
+    changes, and each remote must report 100% from a valid state."""
+    need = status.get("needTotalItems")
+    if need is None:
+        need = sum(status.get(k, 0) for k in NEED_KEYS)
+    return (
+        status.get("state") == "idle"
+        and need == 0
+        and not status.get("receiveOnlyChangedItems")
+        and bool(completions)
+        and all(
+            c.get("completion") == 100
+            and not c.get("needItems")
+            and c.get("remoteState", "valid") == "valid"
+            for c in completions
+        )
+    )
+
+
+def can_move(client: Client, spec: FolderSpec, current: dict[str, Any]) -> bool:
     """Whether the folder can be pointed at its new path without risk to any file.
 
     Changing a folder's path in place would look like a mass delete, so a move is done by
     removing the folder from Syncthing (the files stay on disk) and adding it again at the
-    new path. That is only safe when the retired path holds nothing a re-scan could lose.
+    new path. That is safe when the retired path holds nothing, and when it holds files that
+    are all on the hub already (a folder another console moved first, whose saves this one
+    downloaded): the files then come back by themselves into the new directory. Anything
+    else could be read as deletions once the files are moved, so it is left to the user.
     """
+    if not is_move(spec, current):
+        return False
     marker = current.get("markerName") or ".stfolder"
-    return is_move(spec, current) and not holds_data(current.get("path", ""), marker)
+    if not holds_data(current.get("path", ""), marker):
+        return True
+    try:
+        status = client.db_status(spec.id)
+        completions = [client.completion(spec.id, device) for device in spec.devices]
+    except SyncthingError:
+        return False
+    return fully_synced(status, completions)
+
+
+def move_refusal(spec: FolderSpec, current: dict[str, Any]) -> str:
+    """What to tell the user when a retired folder cannot be moved by itself."""
+    return (
+        f"{spec.id}: Syncthing has it at {current.get('path')!r} and the profile moved it to "
+        f"{spec.path!r}, but the old folder holds files that are not all on the hub yet. "
+        "Moving files out of a folder Syncthing still syncs would be sent as deletions: "
+        "remove (or pause) the folder in Syncthing first (the files stay on disk), then move "
+        f"the files into {spec.path} and run provision again"
+    )
 
 
 def _subset(wanted: Any, actual: Any) -> bool:
@@ -118,16 +165,13 @@ def upsert_folder(
         rep.note(spec.id, f"created at {spec.path}")
         return True
     if not same_path(current.get("path", ""), spec.path):
-        hint = (
-            f" The old folder still holds files: move them into {spec.path} first."
-            if is_move(spec, current)
-            else ""
-        )
+        if is_move(spec, current):
+            raise ProvisionError(move_refusal(spec, current))
         raise ProvisionError(
             f"{spec.id}: Syncthing has it at {current.get('path')!r} but the config says "
             f"{spec.path!r}. Changing a folder path would look like a mass delete, so "
             "warpzone refuses. Remove the folder in Syncthing first (files stay on disk), "
-            f"then run provision again.{hint}"
+            "then run provision again."
         )
     patch = folder_patch(spec, current)
     if patch:
@@ -270,12 +314,9 @@ def unattended_refusals(
         problems.append(f"{spec.id}: versioning differs from the config")
     if not moving and not same_path(current.get("path", ""), spec.path):
         problems.append(
-            f"{spec.id}: Syncthing has it at {current.get('path')!r}, not {spec.path!r}"
-            + (
-                f" and still holds files: move them into {spec.path} first"
-                if is_move(spec, current)
-                else ""
-            )
+            move_refusal(spec, current)
+            if is_move(spec, current)
+            else f"{spec.id}: Syncthing has it at {current.get('path')!r}, not {spec.path!r}"
         )
     return problems
 

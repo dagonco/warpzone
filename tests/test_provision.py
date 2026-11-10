@@ -4,7 +4,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 from unittest import mock
 
 from support import (
@@ -20,6 +20,7 @@ from support import (
     stub_self_update,
 )
 from warpzone import esde, provision_emulators, settings_state
+from warpzone import provision_device as provision_device_module
 from warpzone.config import Config, parse_config
 from warpzone.model import NO_VERSIONING, hub_specs
 from warpzone.probes import DeviceProbes
@@ -943,9 +944,17 @@ class MovedSaveFolderTests(DeviceFixture):
             self.provision(local, hub, unattended=True)
             self.assertEqual(self.folder_writes(local), [])
 
-    def test_an_old_folder_with_files_is_refused_and_untouched(self) -> None:
-        self.old.mkdir(parents=True)
-        (self.old / "CUSA00001").mkdir()
+    SYNCED: ClassVar[dict[str, Any]] = {"completion": 100, "needItems": 0, "remoteState": "valid"}
+
+    def old_with_files(self) -> None:
+        self.old.mkdir(parents=True, exist_ok=True)
+        (self.old / "CUSA00001").mkdir(exist_ok=True)
+        (self.old / "CUSA00001" / "save.bin").write_text("fake")
+
+    def test_an_old_folder_with_files_the_hub_has_is_moved_and_the_files_stay(self) -> None:
+        # The first console to move uploaded the saves; this one downloaded them into its
+        # old folder. Every file is on the hub, so removing the folder touches nothing.
+        self.old_with_files()
         for unattended in (False, True):
             with (
                 self.subTest(unattended=unattended),
@@ -953,12 +962,90 @@ class MovedSaveFolderTests(DeviceFixture):
                 FakeSyncthing(HUB_ID) as hub,
             ):
                 self.install(local, hub, self.old)
-                with self.assertRaises(ProvisionError) as ctx:
+                local.completion[(self.FOLDER, HUB_ID)] = dict(self.SYNCED)
+                self.provision(local, hub, unattended=unattended)
+                self.assertEqual(local.folders[self.FOLDER]["path"], str(self.new))
+                self.assertTrue((self.old / "CUSA00001" / "save.bin").is_file())
+
+    def test_an_old_folder_with_files_not_all_on_the_hub_is_refused_and_untouched(self) -> None:
+        self.old_with_files()
+        not_synced: dict[str, tuple[dict[str, Any] | None, dict[str, Any] | None]] = {
+            "hub has no record": (None, None),
+            "hub behind": ({**self.SYNCED, "completion": 80, "needItems": 2}, None),
+            "hub state unknown": ({**self.SYNCED, "remoteState": "unknown"}, None),
+            "local scanning": (dict(self.SYNCED), {"state": "scanning"}),
+            "local needs files": (dict(self.SYNCED), {"needTotalItems": 2}),
+            "local changes": (dict(self.SYNCED), {"receiveOnlyChangedItems": 1}),
+        }
+        for name, (completion, status) in not_synced.items():
+            for unattended in (False, True):
+                with (
+                    self.subTest(case=name, unattended=unattended),
+                    FakeSyncthing(DECK_ID) as local,
+                    FakeSyncthing(HUB_ID) as hub,
+                ):
+                    self.install(local, hub, self.old)
+                    if completion is not None:
+                        local.completion[(self.FOLDER, HUB_ID)] = completion
+                    if status is not None:
+                        local.status[self.FOLDER] = status
+                    with self.assertRaises(ProvisionError) as ctx:
+                        self.provision(local, hub, unattended=unattended)
+                    self.assertEqual(self.folder_writes(local), [])
+                    self.assertEqual(local.folders[self.FOLDER]["path"], str(self.old))
+                    self.assertTrue((self.old / "CUSA00001" / "save.bin").is_file())
+                    message = str(ctx.exception)
+                    self.assertIn("remove (or pause) the folder in Syncthing first", message)
+                    self.assertIn("files stay on disk", message)
+                    self.assertNotIn("move them into", message)
+
+    def test_files_that_appear_before_the_removal_stop_the_move(self) -> None:
+        # The old directory was empty when the move was decided; a pull then puts files in it
+        # (the hub is not caught up with them), so the check is made again before acting.
+        self.old.mkdir(parents=True)
+        for unattended in (False, True):
+            with (
+                self.subTest(unattended=unattended),
+                FakeSyncthing(DECK_ID) as local,
+                FakeSyncthing(HUB_ID) as hub,
+            ):
+                self.install(local, hub, self.old)
+                real = provision_device_module.ensure_device
+
+                def ensure_device_then_files(*args: Any, real: Any = real, **kw: Any) -> None:
+                    real(*args, **kw)
+                    (self.old / "CUSA00002").mkdir(exist_ok=True)
+                    local.completion[(self.FOLDER, HUB_ID)] = {**self.SYNCED, "completion": 40}
+
+                with (
+                    mock.patch.object(
+                        provision_device_module, "ensure_device", ensure_device_then_files
+                    ),
+                    self.assertRaises(ProvisionError) as ctx,
+                ):
                     self.provision(local, hub, unattended=unattended)
-                self.assertEqual(self.folder_writes(local), [])
+                self.assertEqual([w for w in local.writes() if w[0] == "DELETE"], [])
                 self.assertEqual(local.folders[self.FOLDER]["path"], str(self.old))
-                self.assertTrue((self.old / "CUSA00001").is_dir())
-        self.assertIn("move them into", str(ctx.exception))
+                self.assertIn("remove (or pause) the folder in Syncthing first", str(ctx.exception))
+                self.assertTrue((self.old / "CUSA00002").is_dir())
+                (self.old / "CUSA00002").rmdir()
+
+    def test_an_attended_run_moves_a_folder_whose_directory_it_creates(self) -> None:
+        # `moving` is decided after the directories are made, so a created target does not
+        # leave the old folder to be refused halfway through the run.
+        self.new.rmdir()
+        self.new.parent.rmdir()
+        marker = mock.Mock(return_value=True)
+        with FakeSyncthing(DECK_ID) as local, FakeSyncthing(HUB_ID) as hub:
+            self.install(local, hub, self.old)
+            with mock.patch.object(provision_device_module, "_create_target", marker):
+                marker.side_effect = lambda spec, dry, rep: (
+                    Path(spec.path).mkdir(parents=True, exist_ok=True) or True
+                    if spec.id == self.FOLDER
+                    else False
+                )
+                self.provision(local, hub)
+            self.assertEqual(local.folders[self.FOLDER]["path"], str(self.new))
 
     def test_a_path_the_profile_never_retired_is_still_refused(self) -> None:
         other = self.home / "elsewhere"

@@ -35,6 +35,7 @@ from warpzone.provision_folders import (
     can_move,
     ensure_device,
     in_sync,
+    move_refusal,
     rescan,
     unattended_refusals,
     unpause,
@@ -354,17 +355,23 @@ def provision_device(
         for s in device_specs(cfg, name, profile, scope)
     ]
     existing = {f["id"]: f for f in local.folders()}
-    # Folders Syncthing has at a path the profile retired, whose old directory is empty:
-    # they are removed from Syncthing (no file is touched) and added again at the new path.
-    moving = {
-        s.id
-        for s in specs
-        if s.id in existing
-        and can_move(s, existing[s.id])
-        and not (s.skip_if_missing and not os.path.isdir(s.path))
-    }
+
+    # Folders Syncthing has at a path the profile retired, whose old directory is empty or
+    # whose files are all on the hub: they are removed from Syncthing (no file is touched)
+    # and added again at the new path. Decided over the folders whose directory exists.
+    def movable(candidates: Iterable[FolderSpec]) -> set[str]:
+        return {
+            s.id
+            for s in candidates
+            if s.id in existing
+            and not (s.skip_if_missing and not os.path.isdir(s.path))
+            and can_move(local, s, existing[s.id])
+        }
+
+    moving: set[str] = set()
     if unattended:
         present = [s for s in specs if not (s.skip_if_missing and not os.path.isdir(s.path))]
+        moving = movable(present)
         problems = [
             problem
             for spec in present
@@ -392,6 +399,10 @@ def provision_device(
         else:
             todo.append(spec)
 
+    if not unattended:
+        # Directories were made just above, so a folder whose new directory is new can move.
+        moving = movable(todo)
+
     if hub is not None and device.auto_hub and profiles is not None:
         _auto_hub(cfg, profiles, hub, {s.id for s in todo}, rep, dry_run=local.dry_run)
 
@@ -416,10 +427,15 @@ def provision_device(
     for spec in todo:
         current = existing.get(spec.id)
         if current is not None and spec.id in moving:
+            # Look again right before acting: whitelist waits and the other folders came
+            # between the decision and now, and files may have been written meanwhile.
+            if not can_move(local, spec, current):
+                raise ProvisionError(move_refusal(spec, current))
             rep.note(
                 spec.id,
-                f"moves from {current.get('path')} (nothing in it) to {spec.path}: removed "
-                "from Syncthing, no file touched, added again at the new path",
+                f"moves from {current.get('path')} to {spec.path}: removed from Syncthing, no "
+                "file touched, added again at the new path (files already on the hub come "
+                "back into it; the old directory is left as it is)",
             )
             local.remove_folder(spec.id)
             current = None

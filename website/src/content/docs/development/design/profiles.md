@@ -217,16 +217,29 @@ profile data, not code that tests the profile name.
   the folder when that directory exists. RetroArch writes `saves/` and `states/` only on
   the first save, so without it the two folders would stay skipped until then.
 - **`previous_paths`** on a `[saves.*]` entry: earlier values of `path`. When Syncthing has
-  the folder at one of them, and that directory holds nothing but Syncthing's marker and
-  `.stignore` (or does not exist), `provision device` removes the folder from Syncthing and
-  adds it again at `path`, in the same run, unattended runs included. Removing a folder
-  deletes no file, and the new folder starts from a fresh index, so nothing can be read as a
-  mass delete. If the old directory holds anything, or the old path is not listed, the
-  refusal for a changed path applies (`provision_folders.can_move`, `is_move`, pure apart
-  from reading the directory). The new directory must exist (or be creatable with
-  `create_when`); until then the old folder is left as it is. `steamos-emudeck` uses it for
-  `shadps4-saves`, which moved from `~/.local/share/shadPS4/savedata` to
-  `~/.local/share/shadPS4/home/1000/savedata`.
+  the folder at one of them, `provision device` removes the folder from Syncthing and adds
+  it again at `path`, in the same run, unattended runs included, in two cases
+  (`provision_folders.can_move`; `fully_synced` is pure):
+  - the old directory holds nothing but Syncthing's marker and `.stignore`, or does not exist;
+  - the old directory holds files, but all of them are on the hub: the local `db/status` is
+    `idle` with `needTotalItems` 0 and no local changes, and `db/completion` of every device
+    the folder is shared with is 100 from a `valid` remote state (any error answering is
+    "not synced"). This is the second console to upgrade, whose old folder downloaded what
+    the first one uploaded.
+
+  Removing a folder deletes no file and the new folder starts from a fresh index, so nothing
+  can be read as a mass delete; files already on the hub arrive by themselves in the new
+  directory, and the old directory is left as it is. The check is made twice: when the move
+  is decided and again right before `remove_folder`, since whitelist waits and other folders
+  come between. Otherwise (files not on the hub yet, or an old path the profile does not
+  list) the move is refused and nothing changes. The refusal says: remove (or pause) the
+  folder in Syncthing first, the files stay on disk, then move the files and run provision
+  again. Files must never be moved out of a folder Syncthing still syncs: the scan would
+  announce them as deletions to the hub and the other consoles. The new directory must
+  exist when the run decides: an unattended run leaves the old folder in place until it
+  does, and an attended run decides after it made the directories `create_when` asks for.
+  `steamos-emudeck` uses it for `shadps4-saves`, which moved from
+  `~/.local/share/shadPS4/savedata` to `~/.local/share/shadPS4/home/1000/savedata`.
 - **`[es_systems]`** (`source`, `override`, `prefix`, `process`; needs `paths.library`).
   The frontend reads `override` before `source`. `provision device` writes the override as
   the source with every `<path>` element that starts with `prefix` moved to

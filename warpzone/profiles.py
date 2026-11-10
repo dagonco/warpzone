@@ -51,8 +51,8 @@ class SaveFolder:
     # is skipped.
     create_when: str | None = None
     # Earlier values of `path`. A device whose Syncthing folder is still at one of them
-    # and whose directory there holds nothing is moved to `path` by `provision device`
-    # (see development/design/provisioning.md).
+    # and whose directory there is empty, or all on the hub, is moved to `path` by
+    # `provision device` (see development/design/profiles.md).
     previous_paths: tuple[str, ...] = ()
 
 

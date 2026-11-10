@@ -151,6 +151,8 @@ class FakeSyncthing:
         self.connections: dict[str, dict[str, Any]] = {}
         # db/completion: (folder, device ID) -> the answer; a pair that is not there is a 404.
         self.completion: dict[tuple[str, str], dict[str, Any]] = {}
+        # db/status: folder -> keys that replace the default answer (idle, nothing needed).
+        self.status: dict[str, dict[str, Any]] = {}
         # Seconds a full scan takes to answer: Syncthing holds it while the folder pulls.
         self.scan_delay = 0.0
         self.requests: list[tuple[str, str, Any]] = []
@@ -250,6 +252,8 @@ class FakeSyncthing:
                 "stateChanged": str(self.scans),
                 "globalFiles": 3,
                 "needFiles": 0,
+                "needTotalItems": 0,
+                **self.status.get(folder, {}),
             }
         if (method, path) == ("GET", "/rest/system/connections"):
             return 200, {"connections": self.connections, "total": {}}
