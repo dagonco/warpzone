@@ -3,8 +3,9 @@ title: "Play queue"
 ---
 
 **Status: proposed, not implemented.** Nothing on this page exists in the code yet. It is the
-design under review for the play queue of the [library UI](/warpzone/development/design/library-ui/);
-once accepted it becomes the contract for the implementation, and the library UI page, the hub
+design of the play queue of the [library UI](/warpzone/development/design/library-ui/), with the
+maintainer's answers to the review's questions recorded in [Decisions](#decisions); once merged
+it becomes the contract for the implementation, and the library UI page, the hub
 layout in [Hub, folders and ignores](/warpzone/development/design/hub-and-folders/) and the code
 layout in [Code, testing and CI](/warpzone/development/design/code-and-testing/) are updated in
 the pull request that implements it.
@@ -22,17 +23,19 @@ a rule for how a queue change and a whitelist change compose.
 
 ## Decisions
 
-These are the choices this proposal makes. The ones the maintainer should confirm are repeated
-in [Open questions](#open-questions).
+These are the choices of this design. Items 1, 3, 6, 7, 10 and 11 were confirmed by the
+maintainer in review.
 
-1. One queue per hub. The UI has one shared token and no users (see
-   [Authentication](/warpzone/development/design/library-ui/#authentication)), so "per user" means
-   per household until users exist.
+1. Every entry and every collection carries an `owner` from format `1`. The UI has one shared
+   token and no users (see [Authentication](/warpzone/development/design/library-ui/#authentication)),
+   so today every entry has the one owner `default`; when users come, each user's entries carry
+   that user's name and the file keeps its format.
 2. The queue lives in `catalog/queue.json` on the hub, outside every Syncthing folder. No console
    receives it; a Decky plugin reads it through the API.
 3. A game in the queue is named by its catalog id, with a snapshot of its system, primary path,
    title and title key, so an entry whose game left the library is shown and can be relinked,
-   never dropped silently.
+   never dropped silently. A relink is always proposed by the server and confirmed by the user,
+   never automatic, even when there is a single candidate.
 4. The queue records **intent**, the whitelist is the **effect**. A request that changes both
    writes the queue first, so every failure in between leaves a state the page can show and
    repair with one click, and nothing ever leaks space without a record.
@@ -41,13 +44,19 @@ in [Open questions](#open-questions).
    exclusion line.
 6. Releasing a console (turning the game off when it is finished, dropped or removed) is never
    automatic: the page asks, with the consoles the queue turned on pre-checked.
-7. `playing` can be inferred from the play-state ledgers and `finished` suggested from the
-   RetroAchievements award, but neither is ever written by the server on its own: a `GET` never
-   writes, and only the user's request changes the file.
+7. `playing` is shown when the game was played since it was queued and within the last 14 days,
+   and `finished` is suggested from the RetroAchievements award, but neither is ever written by
+   the server on its own: a `GET` never writes, and only the user's request changes the file.
 8. Writes stay `POST` only, like every other write of the API: one route takes a list of
    operations, so there is one write path, one lock and one validation order.
 9. Collections (manual lists, no whitelist effect) have their schema in the same file from
    format `1`, so adding them later needs no format change.
+10. The queue and the switches stay separate: `POST /api/v1/changes` neither reads nor writes the
+    queue, and a manual switch does not end a claim (see
+    [Releasing never takes what the user had](#releasing-never-takes-what-the-user-had)).
+11. Finished and dropped entries are kept forever. The server never drops an entry to make room;
+    the only bound is the size of the file, and a write that would pass it is refused with a clear
+    error (see [Limits](#limits)).
 
 ## The file
 
@@ -76,6 +85,7 @@ bytes. The order of `queue` is the order of the queue and is kept as written.
   "updated": "2026-11-10T20:00:00Z",
   "queue": [
     {
+      "owner": "default",
       "game": {"id": "5d0c1f3a9b2e7c48", "system": "psx",
                "primary": "roms/psx/Example Game (Europe).chd",
                "title": "Example Game (Europe)", "key": "example game"},
@@ -91,7 +101,8 @@ bytes. The order of `queue` is the order of the queue and is kept as written.
     }
   ],
   "collections": {
-    "3f2a9c1e": {"title": "Couch co-op", "created": "2026-11-02T10:00:00Z",
+    "3f2a9c1e": {"owner": "default", "title": "Couch co-op",
+                 "created": "2026-11-02T10:00:00Z",
                  "games": [{"id": "…", "system": "…", "primary": "…", "title": "…", "key": "…"}]}
   }
 }
@@ -101,8 +112,16 @@ bytes. The order of `queue` is the order of the queue and is kept as written.
   [Validation, the conflict check and writing](#validation-the-conflict-check-and-writing)).
 - `updated`: the time of the last write, UTC, ISO 8601 with `Z`, whole seconds, like every time
   in the file.
-- `game`: the **game reference** (below). One entry per game id: queueing a game that is in the
-  queue is refused, queueing a game whose entry has ended starts it again (below).
+- `owner`: whose entry it is, a name of 1 to 32 characters among lower-case letters, digits, `-`
+  and `_`. While the UI has one token there is one user, and its name is `default`: the server
+  writes `default` in every entry it makes and answers and changes only the entries of `default`.
+  Entries of any other owner (written by a later warpzone that knows users) are kept byte for byte,
+  never shown, changed or counted. A user's queue order is the order of that user's entries in
+  `queue`, and `position` counts that user's active entries only. When users exist, the owner of a
+  request is the authenticated user, and nothing else in the file changes.
+- `game`: the **game reference** (below). One entry per owner and game id: queueing a game that
+  is in the user's queue is refused, queueing a game whose entry has ended starts it again
+  (below).
 - `state`: `queued`, `playing`, `finished` or `dropped`. The first two are **active**, the other
   two **ended**. `added` is when the entry was last queued, `changed` when `state` last changed,
   `ended` when it became ended (`null` while active).
@@ -114,8 +133,8 @@ bytes. The order of `queue` is the order of the queue and is kept as written.
   `end` is `null` while the claim is open, `released` when the user asked for the game to be
   turned off there, `kept` when the user asked for it to stay; `until` is when it ended.
 - `collections`: keyed by an id of 8 hex digits the server draws at random when a collection is
-  made. `games` is an ordered list of game references, unique by id. Collections never touch a
-  whitelist. Format `1` readers validate and keep them; the operations that edit them come later
+  made. `owner` is as for an entry. `games` is an ordered list of game references, unique by id.
+  Collections never touch a whitelist. Format `1` readers validate and keep them; the operations that edit them come later
   and need no new format.
 
 The queue **holds** a game on a console when that console's claim has `before` `off` and `end`
@@ -124,7 +143,7 @@ The queue **holds** a game on a console when that console's claim has `before` `
 the queue turns a partial game fully on when it is queued but never turns it off.
 
 A file that does not match this schema exactly (an unknown key, a wrong type, a time that is not
-in the form above, two entries with one id, a claim for a device name that is not a valid device
+in the form above, two entries with the same owner and id, a claim for a device name that is not a valid device
 name) is **damaged** (below).
 
 ### Game references
@@ -155,7 +174,8 @@ What each case means in practice:
   again as a CHD through `inbox`, a file renamed by hand): the new copy has a new id. While the
   old copy is still there the entry keeps pointing at it and is `present`; once the old copy is
   deleted and the catalog drops it, the entry becomes `moved`, with the new copy as a candidate.
-  Relinking is the user's action (`relink`, below); it keeps the state, the dates and the order,
+  The server only proposes the candidates; relinking is the user's confirmed action (`relink`,
+  below), never automatic, not even with one candidate in the same system. It keeps the state, the dates and the order,
   ends every open claim as `kept` (the claims were about the old parts, and the new game's state
   on each console says nothing about who put it there) and takes a new snapshot.
 - **Removed from the library:** `missing`. The whitelist lines of the removed parts stay in the
@@ -238,6 +258,12 @@ does not add an exclusion line: the console is reported in `skipped` with `reaso
 before queueing it is never turned off by the queue, whatever the request says: asking to release
 a console the queue does not hold is refused with `not-held`.
 
+Two owners can each have an entry for the same game on the same console. A release turns the game
+off only when no other entry, of any owner, has an open claim (any `before`) for that game on that
+console; otherwise the console is reported in `skipped` with `reason: "claimed"`, the claim ends
+as `kept`, and the game stays. With the one owner of today this never happens, since there is one
+entry per game.
+
 The switches of the game page, the system levers and `POST /api/v1/changes` do not read or write
 the queue. A user who turns a held game off with the switch sees `not-on` on the queue entry; one
 who turns it on again sees `on`. Finishing the entry later still asks before releasing.
@@ -273,7 +299,7 @@ a queue request and a `POST /api/v1/changes` never interleave.
 
 | Method and path | Answers |
 |---|---|
-| `GET /api/v1/queue` | the queue, resolved against the catalog, the whitelists, the play totals and the RA progress |
+| `GET /api/v1/queue?history=N` | the queue, resolved against the catalog, the whitelists, the play totals and the RA progress |
 | `POST /api/v1/queue` | applies a list of operations (below); with `"dry_run": true` writes nothing |
 
 ### `GET /api/v1/queue`
@@ -291,17 +317,21 @@ a queue request and a `POST /api/v1/changes` never interleave.
     "play": {"plays": 4, "last": 1793000000, "fav": null, "playtime": 5400},
     "devices": {"deck": {"before": "off", "end": null, "game": "on", "view": "on"},
                 "machine": {"before": "on", "end": null, "game": "on", "view": "kept"}}}],
- "history": [],
+ "history": [], "history_total": 0,
+ "size": 48213, "limit": 4194304,
  "collections": [{"id": "3f2a9c1e", "title": "Couch co-op", "games": 12}]}
 ```
 
 - `state`: `ok`; `absent` (no file yet: an empty queue, `etag` `absent`); `damaged` (the file
-  cannot be read, is not UTF-8 JSON, is over 1 MiB or does not match the schema: `entries` and
+  cannot be read, is not UTF-8 JSON, is over 16 MiB or does not match the schema: `entries` and
   `history` are empty and every write is refused with `queue-damaged`); `newer` (a format above
   `1`: shown as far as the known keys allow, every write refused with `queue-damaged`). With
   `damaged`, a `message` names the file and the cause; the log has the full path.
 - `etag`: `sha256:<hex>` of the file's bytes, or `absent`, echoed in `expect_queue`.
-- `entries`: the active entries in queue order; `history`: the ended ones, latest `ended` first.
+- `entries`: the user's active entries in queue order; `history`: the user's ended ones, latest
+  `ended` first, at most `N` of them (`history`: a whole number from 0 to 10000, default 50;
+  anything else is `400 bad-request`), and `history_total` how many there are in all.
+- `size` is the file's size in bytes and `limit` the [size limit](#limits) of a write.
 - `name`, `cover`, `size` and `play` are as in the compact game list, and are absent for a
   game that is not `present`. `candidates` lists `{"id", "system", "title", "name"}` for a `moved`
   game and is empty otherwise.
@@ -338,10 +368,9 @@ order to one model of the queue:
 | `dismiss` | `game` | stores the date of the current award suggestion in `ra_dismissed` |
 
 The answer is `{"dry_run": …, "queue": <the GET body after the change>, "devices": […],
-"skipped": […], "trimmed": N}`, with `devices` and `skipped` as in the answer of `POST
-/api/v1/changes` (the files written, the games turned on and off, the bytes, the warnings, and
-the consoles left alone with a reason), and `trimmed` the number of ended entries dropped by the
-[limits](#limits). With `"dry_run": true` the server validates and computes everything, writes
+"skipped": […]}`, with `devices` and `skipped` as in the answer of `POST /api/v1/changes` (the
+files written, the games turned on and off, the bytes, the warnings, and the consoles left alone
+with a reason). With `"dry_run": true` the server validates and computes everything, writes
 nothing and answers with `"dry_run": true`; the page uses it for the confirmation dialog.
 
 ### Validation, the conflict check and writing
@@ -349,7 +378,8 @@ nothing and answers with `"dry_run": true`; the page uses it for the confirmatio
 `queue.plan` (pure) takes the request, the queue as read, the config, the catalog and the
 whitelists as read, and the time, and returns either the new queue, the whitelist changes per
 console and the second queue (for a `remove` that ends claims), or the first error, in this
-order: the body's shape and the [limits](#limits); the queue is not `damaged` or `newer`; each
+order: the body's shape and the [limits](#limits), the size limit included (it is checked on
+the rendered file); the queue is not `damaged` or `newer`; each
 game, device and position is known and valid for its operation; each device an operation touches
 supports the game's system (an `add` for a console with the system in `exclude_systems` is
 refused with `unsupported`) and has a managed whitelist (`not-managed` otherwise); `expect_queue`
@@ -396,19 +426,35 @@ of `device`. New codes:
 | 409 | `in-sync` | `sync` on a claim whose view is not `not-on` or `not-released` |
 | 409 | `queue-damaged` | the queue file is `damaged` or `newer`; it is never overwritten (restore a backup) |
 | 409 | `queue-full` | an `add` past the limit of active entries |
+| 409 | `queue-too-large` | the new file would be over the size limit and larger than the current one; nothing is written |
 | 412 | `stale` | also: `expect_queue` differs from the file as it is now |
 | 428 | `expect-missing` | also: no `expect_queue` |
 
 ### Limits
 
-- At most 200 active entries (`queue-full`), and at most 500 ended ones: a write that leaves more
-  drops the oldest by `ended` and reports how many in `trimmed`. The backups keep what was
-  dropped.
+- At most 200 active entries per owner (`queue-full`): a queue is a list of what comes next,
+  not a backlog of everything.
+- Finished and dropped entries are never dropped by the server: the history is kept forever.
 - At most 50 operations per request and at most 8 consoles per entry; a `position` from 0 to the
-  number of active entries.
-- At most 100 collections, 1000 games per collection and 100 characters per collection title.
-- A file over 1 MiB is `damaged`. At about 400 bytes an entry, the limits above fit in a third of
-  that.
+  number of the user's active entries.
+- At most 100 collections, 1000 games per collection and 100 characters per collection title, all
+  inside the size limit.
+- **Size.** A write whose rendered file would be over 4 MiB, and larger than the file it
+  replaces, is refused with `queue-too-large` before anything is written, the whitelists
+  included. The message gives the file's size and the limit and says what makes room: removing
+  ended entries or collection games. A write that does not make the file larger is always
+  accepted, so the user can make room even when the file is past the limit (after a hand edit or
+  a restored backup). Nothing is ever dropped to fit.
+- A file over 16 MiB is `damaged`; no write of the server can produce one, only a hand edit.
+
+Why 4 MiB, now that the history is never trimmed: an entry with two claims is about 400 bytes,
+so 4 MiB holds about 10,000 entries, more than a game finished or dropped every day for 25
+years, next to 200 active ones and room for collections. The file is parsed only when it changes
+and written whole on each change; at 4 MiB that is a few tens of milliseconds on a NAS, under the
+write lock, and the 50 backups take at most 200 MiB. A larger limit would make every queue change
+slower for a history that no household reaches; a smaller one (the 1 MiB first proposed, about
+2,500 entries) could be reached in a decade of steady use. `GET` answers only the latest 50
+ended entries unless asked for more, so the size of the history does not weigh on the page.
 
 ## What the page shows
 
@@ -425,7 +471,9 @@ of `device`. New codes:
   RetroAchievements suggestion ("You beat it. Mark it finished?") with "Yes" and "Not now", and
   the repair buttons of `not-on` and `not-released`. Moving an entry uses "Move up" and "Move
   down" buttons, so it works with the keyboard and a gamepad; dragging is not needed. A short
-  "Recently finished" list follows, collapsed. The section is absent when the queue is empty and
+  "Recently finished" list follows, collapsed, with "Show all" asking for the rest of the
+  history. When `size` passes 90% of `limit` the section says the queue file is nearly full and
+  how to make room. The section is absent when the queue is empty and
   the file is `absent`; a `damaged` or `newer` file shows one line saying so and nothing else.
 - **System grid and search:** a small "queued" mark on the tiles of queued games, from the queue
   the page already loaded.
@@ -437,7 +485,7 @@ of `device`. New codes:
 
 - **Pure** (`queue.py`): `parse` (bytes to the model, or `damaged` or `newer` with a reason),
   `render` (the deterministic encoding), `resolve`, `shown_state`, `suggestion`, `device_view`,
-  `release_change`, `trim` and `plan`, and the response builders of both routes.
+  `release_change`, `size_check` and `plan`, and the response builders of both routes.
 - **I/O** (`queue_store.py`): reading with a stamp, the backups and their rotation, the guarded
   atomic write. `serve`: the routes, the lock and the order of the writes; the whitelist writes
   reuse `whitelist_store`.
@@ -448,14 +496,17 @@ present, a re-filed (same system and other system) and a removed game; `shown_st
 operation of `plan`, with `before` `off`, `on` and `partial`, a whole system turned on after
 queueing (`covered`), a device that left the config, an unsupported system and a
 `needs-migration` whitelist; `device_view` for each row of its table; the API against a fake hub
-root (auth, origin, `stale` on the queue and on a whitelist, dry runs, the limits and `trimmed`)
+root (auth, origin, `stale` on the queue and on a whitelist, dry runs, the limits, a write over the size limit refused with nothing written and one that
+shrinks a file past the limit accepted, two owners holding one game, entries of another owner
+kept byte for byte)
 and the failure of each write step (a failure in step 4 writes no whitelist; a failure in step 5
 leaves a claim the next `GET` shows as `not-on` or `not-released`; a failure in step 6 leaves the
 entry).
 
 ## Out of scope
 
-- Users: one queue per hub, as the UI has one token.
+- Users themselves (logins, roles, a token per person): the file carries owners from format `1`,
+  but the server knows only `default` until users exist.
 - Editing collections, and any whitelist effect of a collection ("send this collection to the
   deck"). The schema is reserved; the routes come later.
 - Per-game download progress (see [Progress](/warpzone/development/design/library-ui/#progress)).
@@ -463,23 +514,3 @@ entry).
   it.
 - Syncing the queue to consoles, or showing it in a frontend on the console. A Decky plugin can
   read it through the API.
-
-## Open questions
-
-For the maintainer to decide before implementation:
-
-1. **One queue per hub.** Is a single household queue enough, or should format `1` already carry
-   an owner field so that a later per-user queue needs no migration? The proposal says one queue
-   and a format change if users ever come.
-2. **The release default.** The dialog pre-checks the consoles the queue turned the game on for.
-   Should finishing release them without asking, or should nothing be pre-checked?
-3. **The switches and the queue.** The proposal keeps `POST /api/v1/changes` unaware of the queue,
-   so turning a held game off with the switch shows `not-on` instead of ending the claim. Should a
-   manual switch end the claim (the user took over), at the cost of the changes route writing the
-   queue too?
-4. **The playing window.** Is "played since it was queued and within the last 14 days" the right
-   rule for showing `playing`, and is it right never to write it?
-5. **The history cap.** 500 ended entries, oldest dropped (kept in backups). Keep history forever
-   instead, with the 1 MiB file limit as the only bound?
-6. **Relinking.** A `moved` entry waits for the user to pick the new game. Should the server relink
-   by itself when there is exactly one candidate in the same system?
