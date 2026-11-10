@@ -587,7 +587,12 @@
           ui.diskMeter(d),
           wl === 'missing' ? h('p', { class: 'note warn' }, 'This console has no whitelist yet. The first change made here creates it.') : null,
           wl === 'needs-migration' ? h('p', { class: 'note warn' }, `Its whitelist is not in the format the UI manages. On the hub run "warpzone whitelist migrate ${d.name}", then reload.`) : null,
-          excluded.length ? h('p', { class: 'mute small' }, 'Does not run: ', excluded.map(systemName).join(', ')) : null),
+          excluded.length ? h('p', { class: 'mute small' }, 'Does not run: ', excluded.map(systemName).join(', ')) : null,
+          h('button', {
+            type: 'button', class: 'btn sm', dataset: { fk: 'hist:' + d.name },
+            title: 'The earlier versions of this whitelist, with a restore',
+            onclick: () => store.hooks.openHistory(d.name),
+          }, 'History')),
         h('div', { class: 'dev-levers' }, S.systems.map((s) => ui.lever(s.system, d.name, { compact: true }))));
     }
 

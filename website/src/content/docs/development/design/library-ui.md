@@ -12,7 +12,8 @@ it).
 
 Underneath, the UI does one thing: it rewrites `library/patterns-<device>.stignore`. It never
 deletes, moves or renames anything in the library. What it writes is limited to the device
-whitelists, the catalog index (`catalog/`) and the backups of the whitelists it replaced.
+whitelists, the catalog index (`catalog/`) and the backups of the whitelists it replaced. It can also
+put one of those backups back (see [History and restore](#history-and-restore)).
 Removing a game from a console reaches the console through the normal path: Syncthing delivers
 the new whitelist, the console's rescan applies it, and the console's prune timer deletes the
 leftovers (see [Removal reaches the console](#removal-reaches-the-console)).
@@ -61,7 +62,7 @@ Syncthing folder, so no console receives it and the hub's filesystem snapshots c
 ├── ra/user/summary.json       the user's completion progress, cached
 ├── ra/user/games/<id>.json    when the user unlocked each achievement of one game, cached
 ├── ra/badges/<name>[_lock].png  badge images, cached
-└── whitelists/<device>/       backups of the whitelists the UI and the migration replaced
+└── whitelists/<device>/       backups of the whitelists the UI, the migration and a restore replaced
 ```
 
 Each file is UTF-8 JSON written with sorted keys, so the same catalog always gives the same
@@ -605,6 +606,54 @@ it at once; a failed scan is a warning, since the hub's watcher picks the file u
 
 A missing file (`etag` `"absent"`) is created, for a configured device that lists `library`.
 
+### History and restore
+
+Every write above keeps the file it replaced, so a device's whitelist has a history: the 50
+newest backups in `catalog/whitelists/<device>/`, named by the UTC time of the write
+(`20261106T100000.123456Z.stignore`). A restore writes one of them back. It is a whitelist write
+like any other, so everything in [Reading, the conflict check and writing](#reading-the-conflict-check-and-writing)
+holds: the same lock, the `etag` of the file as the caller saw it, a backup of the file being
+replaced (so a restore can itself be undone, and it is a write for [progress](#progress)), the
+atomic write that re-checks the stamp, and the scan after the lock is released. Nothing is
+restored from a path the caller gives: a backup is named by its exact file name, which must
+match the pattern above and exist in that device's folder.
+
+The decisions are pure (`whitelist_history`, and `library_api.plan_restore` on top of it):
+
+- **List.** The backup names, newest first; a file in the folder that is not named like a backup
+  is not one. Each is compared with the current file.
+- **Compare.** The paths the two files name, read as lines (`!/path` turns a path on, `/path`
+  leaves it out; comments, `#include` and `*` are not paths). The paths a restore turns **on**
+  are those with a `!` line in the backup and none in the current file, plus those the current
+  file excludes and the backup does not; the paths it turns **off** are the reverse. This is a
+  comparison of lines, not of files: a path below a folder that is on is not looked up. For
+  managed files, the API also gives the games it turns on and off and the bytes (`on`, `off`,
+  `bytes_on`, `bytes_off`, from `whitelist.effect` on the two models; null when either file is
+  hand-written and unreadable). The unified diff of the two texts goes with it.
+- **Warn.** A restore that turns paths on says so: the console downloads them again, and they
+  may be games or systems that were taken off it since.
+- **Refuse.** An empty backup is the file as it was before the whitelist existed (the write that
+  created it left an empty backup, to record the time). Written back it would be an empty ignore
+  file, which lets every file through, so it is listed but cannot be restored (`not-restorable`).
+- **Same file.** A backup equal to the current file writes nothing and makes no backup.
+
+A backup of a hand-written whitelist (from before [the migration](#the-migration)) can be
+restored. The UI marks it (`managed: false`) and the file is not managed again until the next
+`warpzone whitelist migrate`.
+
+`warpzone whitelist restore <device> [backup]` does the same from the command line, where the hub
+root is mounted. Without a backup it lists them, newest first, each with its time and how it
+differs from the current file. With one (its name, or the start of it when that is enough to
+tell it from the others) it prints the unified diff, the paths that turn on and off and the
+warning, then writes; `--dry-run` stops before the write. It refuses, and exits 1, when the
+file changed since it read it.
+
+In the page, each console on the Consoles view has a History button. It opens a dialog with the
+backups, newest first; picking one loads its diff, the games it would turn back on and off and
+what that downloads or frees, and a Restore button that sends the `etag` the diff was computed
+from. A whitelist that changed in the meantime is refused (`stale`) and the dialog shows the
+list again.
+
 ### Supported systems
 
 A device runs every system of the library unless its table in the private config lists some in
@@ -747,6 +796,9 @@ outside the home goes through the user's own reverse proxy with TLS, which is ou
 | `GET /api/v1/recent?limit=N` | the games played most recently on any device, newest first |
 | `GET /api/v1/progress` | the [progress state](#progress) of each device |
 | `GET /api/v1/catalog` | whether the catalog is built, and the state of the background run |
+| `GET /api/v1/devices/{device}/backups` | the device's whitelist [backups](#history-and-restore), newest first, each compared with the current file, and the current `etag` |
+| `GET /api/v1/devices/{device}/backups/{name}` | one backup: its diff against the current file, the paths and games a restore turns on and off |
+| `POST /api/v1/devices/{device}/restore` | writes a backup over the device's whitelist |
 | `POST /api/v1/changes` | turns games and systems on and off |
 | `POST /api/v1/catalog/refresh` | starts a `catalog` run now (`202`; `409` while one runs) |
 
@@ -985,6 +1037,33 @@ endpoint takes a `Range` header with one range:
 chunks of 64 KiB and never holds more than one chunk; `HEAD` sends the headers only. A client
 that closes the connection in the middle (a player seeking) is not an error.
 
+The backup endpoints (see [History and restore](#history-and-restore)):
+
+```json
+{"device": "deck", "etag": "sha256:…",
+ "backups": [{"name": "20261106T100000.123456Z.stignore", "time": "2026-11-06T10:00:00Z",
+              "size": 412, "empty": false, "same": false, "included": 2, "excluded": 0,
+              "summary": "2 path(s) back on"}]}
+```
+
+`GET …/backups/{name}` answers the same fields as a restore, below, without `written`. `POST
+…/restore` takes `{"backup": "<name>", "expect": "sha256:…", "dry_run": false}` (`expect` is the
+`etag` of the current whitelist, required) and answers:
+
+```json
+{"device": "deck", "backup": "20261106T100000.123456Z.stignore", "time": "2026-11-06T10:00:00Z",
+ "etag": "sha256:…", "same": false, "managed": true,
+ "diff": ["--- current", "+++ 20261106T100000.123456Z", "@@ -4,0 +5 @@", "+!/roms/psx"],
+ "included": ["roms/psx"], "excluded": [], "on": ["<game id>"], "off": [],
+ "bytes_on": 5368709120, "bytes_off": 0, "warning": "restoring turns 1 path(s) back on: …",
+ "written": true, "dry_run": false}
+```
+
+`etag` is the new file's once `written`, else the current one; `warnings` (a failed scan) appears
+when there is one. The errors are those of any whitelist write, in this order: `bad-request` (the
+shape), `not-found` (an unknown device, or a backup that is not in its folder), `not-restorable`
+(an empty backup), `expect-missing` and `stale`, and `write-failed`.
+
 ### Validation and errors
 
 `library_api.plan_changes` (pure) takes the request, the config, the profiles, the catalog and
@@ -1011,6 +1090,7 @@ last two when they apply):
 | 409 | `covered` | a part stays off under an exclusion of a parent folder |
 | 409 | `cannot-apply` | the change would not reach its state or would change other games |
 | 409 | `unlistable` | a part's path cannot be written as a whitelist line |
+| 409 | `not-restorable` | restoring a backup that is empty (taken before the whitelist existed) |
 | 409 | `catalog-running` | `catalog/refresh` while a run is in progress |
 | 412 | `stale` | an `expect` differs from the file as it is now |
 | 422 | `unsupported` | turning on a system in the device's `exclude_systems` |
@@ -1130,14 +1210,15 @@ network:
   `catalog.ra_state`, the catalog's JSON encoding and merge; `ra_data` (the achievement
   cache's encoding, `game_view`, `summary_view`) and the parsers of `ra.py`; `whitelist.escape`, `unescape`,
   `parse`, `parse_hand`, `render`, `normalize`, `apply`, `decide`, `decide_lines`, `effect`,
-  `unsupported` and the migration's classification; `library_api.plan_changes` and every
+  `unsupported` and the migration's classification; `whitelist_history` (backup names, the
+  comparison of two files, the diff, what a restore refuses and warns about); `library_api.plan_changes` and every
   response builder (the play statistics included: `game_play`, `attach_play`, `recent_response`);
   `saves_index.build_index`, `match_game` and `saves_response`; `progress.state`; `prune.guard`;
   `diskstatus` (`measure`, `should_write`, `render`, `parse`, `stale`, `api_disk`).
 - **I/O:** `catalog_store` (the walk, hashing, RAHasher and the RA download through `ra.py`, the
   guarded writes), `diskstatus_io` (the disk report's write on a console and read on the hub),
   `whitelist_store` (reading with a stamp, backups, the guarded write, the hub
-  scan, the migration's walk), `saves_index.scan` and `SavesCache` (the listing of `saves/` and its
+  scan, the migration's walk, the restore), `saves_index.scan` and `SavesCache` (the listing of `saves/` and its
   60-second cache), `serve` (sockets, sessions, the lock, the background runs, the
   caches).
 
@@ -1148,7 +1229,8 @@ and without a licence, Switch with updates and DLC and an unclaimed folder, `.m3
 special character and refusal of unlistable names; the migration on hand-written files
 (shadowed lines, redundant exclusions, a file refused for a wildcard, a file refused by the
 proof); the API against a fake hub root and the fake Syncthing (auth, origin, `stale`,
-`not-managed`, `unsupported`, dry runs, a `*` change with a skipped device); and the progress
+`not-managed`, `unsupported`, dry runs, a `*` change with a skipped device; the backups listed and
+restored, an empty one refused); and the progress
 states; the disk report (when to write, parsing damaged and foreign files, staleness, the writer
 on a fake disk and the two jobs that call it, the hub reader and the API with missing, stale and
 damaged files). The e2e test adds the matcher check above and the completion check.

@@ -804,6 +804,13 @@ class App:
                     200,
                     library_api.devices_response(cfg, self.files.views(cfg), self._disks()),
                 )
+            case ["devices", device, "backups"]:
+                return self._backups(device)
+            case ["devices", device, "backups", name]:
+                self._known_device(device)
+                return json_response(
+                    200, library_api.restore_response(self._restore_plan(device, name))
+                )
             case ["systems"]:
                 lib = self.files.library()
                 return json_response(
@@ -858,6 +865,9 @@ class App:
         match segments:
             case ["changes"]:
                 return self._changes(self._json_body(request))
+            case ["devices", device, "restore"]:
+                self._known_device(device)
+                return self._restore(device, self._json_body(request))
             case ["catalog", "refresh"]:
                 self._json_body(request)
                 if self.refresher is None or not self.refresher.trigger():
@@ -996,6 +1006,62 @@ class App:
             partial["error"] = failure.body()["error"]
             return json_response(500, partial)
         return json_response(200, library_api.changes_response(plan, written, warnings))
+
+    # ------------------------------------------------------------- history and restore
+
+    def _known_device(self, device: str) -> None:
+        if device not in {d.name for d in library_api.library_devices(self.cfg)}:
+            raise ApiError("not-found", f"no device {device!r}", device=device)
+
+    def _backups(self, device: str) -> Response:
+        self._known_device(device)
+        snapshot = store.read(store.whitelist_path(self.root, device))
+        items = store.entries(self.root, device, snapshot.data)
+        view = library_api.view_of(snapshot.data)
+        return json_response(200, library_api.backups_response(device, view, items))
+
+    def _restore_plan(self, device: str, name: str) -> library_api.RestorePlan:
+        """The current whitelist read once, the backup `name` read, and what restoring does."""
+        snapshot = store.read(store.whitelist_path(self.root, device))
+        try:
+            data = store.read_backup(self.root, device, name)
+        except store.BackupNotFound as exc:
+            raise ApiError("not-found", str(exc), device=device) from None
+        view = library_api.view_of(snapshot.data)
+        return library_api.plan_restore(
+            device, view, snapshot.data, name, data, self.files.library()
+        )
+
+    def _restore(self, device: str, body: object) -> Response:
+        request = library_api.parse_restore(body)
+        plan = self._restore_plan(device, request.backup)
+        library_api.check_restore(plan.etag, request.expect, device)
+        if request.dry_run or not plan.changed:
+            answer = library_api.restore_response(plan, written=False, dry_run=request.dry_run)
+            return json_response(200, answer)
+        with self.write_lock:  # the same lock, backup, re-check and atomic write as a change
+            try:
+                store.replace(
+                    self.root,
+                    device,
+                    library_api.raw_etag(plan.etag),
+                    lambda _snapshot: plan.data,
+                    now=self.now(),
+                )
+            except store.Stale:
+                raise ApiError(
+                    "stale",
+                    f"{device}: the whitelist changed while it was being written",
+                    device=device,
+                ) from None
+            except (store.NoLibrary, OSError, WarpzoneError) as exc:
+                message = f"{device}: the whitelist could not be written ({_reason(exc)})"
+                raise ApiError("write-failed", message, device=device) from None
+        warnings: dict[str, list[str]] = {}
+        self._scan_written([device], warnings)
+        return json_response(
+            200, library_api.restore_response(plan, written=True, warnings=warnings.get(device, []))
+        )
 
     def _scan_written(self, devices: list[str], warnings: dict[str, list[str]]) -> None:
         """Ask the hub's Syncthing to scan each written whitelist, without the write lock. A

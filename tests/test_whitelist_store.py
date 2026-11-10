@@ -4,6 +4,7 @@ import tempfile
 import unittest
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 from unittest import mock
 
 from support import API_KEY, DECK_ID, HUB_ID, MACHINE_ID, FakeSyncthing, config_data
@@ -367,6 +368,134 @@ class MigrationTests(StoreCase):
             self.assertFalse(whitelist_store.junk(name), name)
 
 
+def managed_text(*systems: str, excludes: tuple[str, ...] = ()) -> str:
+    return wl.render(wl.Model(frozenset(systems), frozenset(), frozenset(excludes)))
+
+
+class RestoreTests(StoreCase):
+    def setUp(self) -> None:
+        super().setUp()
+        self.old = managed_text("snes", "psx")
+        self.new = managed_text("snes", excludes=("roms/snes/Bad.sfc",))
+        self.path = self.put("deck", self.new)
+        # `old` was the whitelist until a change kept it as a backup
+        self.old_name = "20261106T100000.123456Z.stignore"
+        whitelist_store.backup(self.root, "deck", self.old.encode(), NOW)
+
+    def restore(
+        self, ref: str | None, *, dry_run: bool = False, client: Client | None = None
+    ) -> bool:
+        return whitelist_store.restore_device(
+            self.root,
+            "deck",
+            ref,
+            dry_run=dry_run,
+            now=NOW.replace(hour=11),
+            out=self.log.append,
+            warn=self.warnings.append,
+            scan_client=(lambda: client) if client else None,
+        )
+
+    def test_without_a_backup_the_backups_are_listed_newest_first(self) -> None:
+        whitelist_store.backup(self.root, "deck", b"", NOW.replace(day=5))
+        whitelist_store.backup(self.root, "deck", self.new.encode(), NOW.replace(day=7))
+        (whitelist_store.backups_dir(self.root, "deck") / "notes.txt").write_text("x")
+        self.assertFalse(self.restore(None))
+        text = "\n".join(self.log)
+        self.assertLess(text.index("20261107"), text.index("20261106"))
+        self.assertLess(text.index("20261106"), text.index("20261105"))
+        self.assertIn("2026-11-06 10:00:00 UTC  2 path(s) back on", text)
+        self.assertIn("same as the current whitelist", text)
+        self.assertIn("empty (taken before the whitelist existed)", text)
+        self.assertNotIn("notes.txt", text)
+        self.assertEqual(self.path.read_text(), self.new)
+
+    def test_a_device_without_backups_says_so(self) -> None:
+        self.assertFalse(
+            whitelist_store.restore_device(
+                self.root, "machine", None, dry_run=False, now=None, out=self.log.append
+            )
+        )
+        self.assertIn("machine: no backups", self.log[0])
+
+    def test_dry_run_shows_the_diff_and_the_paths_and_writes_nothing(self) -> None:
+        self.assertFalse(self.restore(self.old_name, dry_run=True))
+        text = "\n".join(self.log)
+        self.assertIn(f"+++ {self.old_name.removesuffix('.stignore')}", text)
+        self.assertIn("+!/roms/psx", text)
+        self.assertIn("-/roms/snes/Bad.sfc", text)
+        self.assertIn("2 path(s) back on:", text)
+        self.assertIn("    roms/psx", text)
+        self.assertIn("    roms/snes/Bad.sfc", text)
+        self.assertIn("would restore", text)
+        self.assertEqual(len(self.warnings), 1)
+        self.assertIn("2 path(s) back on", self.warnings[0])
+        self.assertEqual(self.path.read_text(), self.new)
+        self.assertEqual(len(whitelist_store.backup_names(self.root, "deck")), 1)
+
+    def test_restoring_backs_up_the_current_file_first_and_scans(self) -> None:
+        with FakeSyncthing(HUB_ID) as hub:
+            client = Client(hub.url, API_KEY, label="hub")
+            self.assertFalse(self.restore("20261106T1000", client=client))
+            scans = [r for r in hub.requests if r[1].startswith("/rest/db/scan")]
+        self.assertEqual(len(scans), 1)
+        self.assertEqual(self.path.read_text(), self.old)
+        names = whitelist_store.backup_names(self.root, "deck")
+        self.assertEqual(len(names), 2)
+        newest = whitelist_store.read_backup(self.root, "deck", names[0])
+        self.assertEqual(newest.decode(), self.new)  # the file the restore replaced
+        self.assertIn("restored 20261106T100000.123456Z", "\n".join(self.log))
+        self.assertEqual(wl.read(self.path.read_text()).status, "managed")
+
+    def test_restoring_the_current_file_does_nothing(self) -> None:
+        whitelist_store.backup(self.root, "deck", self.new.encode(), NOW.replace(day=7))
+        self.assertFalse(self.restore("20261107"))
+        self.assertIn("nothing to restore", "\n".join(self.log))
+        self.assertEqual(len(whitelist_store.backup_names(self.root, "deck")), 2)
+
+    def test_an_empty_backup_is_refused(self) -> None:
+        whitelist_store.backup(self.root, "deck", b"", NOW.replace(day=5))
+        self.assertTrue(self.restore("20261105"))
+        self.assertIn("refused", self.log[0])
+        self.assertIn("would let every file through", "\n".join(self.log))
+        self.assertEqual(self.path.read_text(), self.new)
+
+    def test_a_file_that_changed_since_it_was_read_is_refused(self) -> None:
+        real = whitelist_store.write
+
+        def racing(*args: Any, **kw: Any) -> whitelist_store.Written:
+            self.path.write_text("someone else\n")
+            return real(*args, **kw)
+
+        with mock.patch.object(whitelist_store, "write", racing):
+            self.assertTrue(self.restore(self.old_name))
+        self.assertEqual(self.path.read_text(), "someone else\n")
+        self.assertIn("changed since it was read", "\n".join(self.log))
+
+    def test_a_missing_whitelist_is_created_from_the_backup(self) -> None:
+        self.path.unlink()
+        self.assertFalse(self.restore(self.old_name))
+        self.assertEqual(self.path.read_text(), self.old)
+
+    def test_an_unknown_or_ambiguous_backup_is_an_error(self) -> None:
+        whitelist_store.backup(self.root, "deck", b"x\n", NOW.replace(day=7))
+        with self.assertRaisesRegex(whitelist_store.BackupNotFound, "no backup '2025'"):
+            self.restore("2025")
+        with self.assertRaisesRegex(whitelist_store.BackupNotFound, "matches 2 backups"):
+            self.restore("2026")
+
+    def test_a_name_outside_the_folder_is_not_a_backup(self) -> None:
+        for name in ("../../library/patterns-deck.stignore", "..", "x"):
+            with self.assertRaises(whitelist_store.BackupNotFound):
+                whitelist_store.read_backup(self.root, "deck", name)
+
+    def test_a_hand_written_backup_can_be_restored(self) -> None:
+        # the way back from a migration: the UI is read-only for the file again
+        whitelist_store.backup(self.root, "deck", HAND.encode(), NOW.replace(day=8))
+        self.assertFalse(self.restore("20261108"))
+        self.assertEqual(self.path.read_text(), HAND)
+
+
 class ExcludedSystemsTests(StoreCase):
     def config(self, **deck: object) -> tuple[object, dict[str, object]]:
         data = config_data()
@@ -524,6 +653,42 @@ folders = ["saves"]
         code, _, err = run("whitelist", "migrate", "tablet", "--config", config)
         self.assertEqual(code, 2)
         self.assertIn("unknown device 'tablet'", err)
+
+    def test_whitelist_restore_lists_diffs_and_restores(self) -> None:
+        config = self.write_config()
+        old = managed_text("snes", "psx")
+        path = self.put("deck", managed_text("snes"))
+        whitelist_store.backup(self.root, "deck", old.encode(), NOW)
+        code, out, err = run("whitelist", "restore", "deck", "--config", config)
+        self.assertEqual((code, err), (0, ""))
+        self.assertIn("1 path(s) back on", out)
+        self.assertIn("warpzone whitelist restore deck <backup>", out)
+        code, out, err = run(
+            "whitelist", "restore", "deck", "20261106", "--dry-run", "--config", config
+        )
+        self.assertEqual(code, 0)
+        self.assertIn("+!/roms/psx", out)
+        self.assertIn("warning: deck: restoring turns 1 path(s) back on", err)
+        self.assertEqual(path.read_text(), managed_text("snes"))
+        code, out, err = run("whitelist", "restore", "deck", "20261106", "--config", config)
+        self.assertEqual(code, 0)
+        self.assertEqual(path.read_text(), old)
+        self.assertNotIn(API_KEY, out + err)
+        self.assertIn("could not ask the hub to scan", err)  # the hub is not reachable here
+
+    def test_whitelist_restore_errors(self) -> None:
+        config = self.write_config()
+        self.put("deck", managed_text("snes"))
+        code, _, err = run("whitelist", "restore", "tablet", "--config", config)
+        self.assertEqual(code, 2)
+        self.assertIn("unknown device 'tablet'", err)
+        code, _, err = run("whitelist", "restore", "deck", "2025", "--config", config)
+        self.assertEqual(code, 1)
+        self.assertIn("no backup '2025'", err)
+        whitelist_store.backup(self.root, "deck", b"", NOW)
+        code, out, _ = run("whitelist", "restore", "deck", "20261106", "--config", config)
+        self.assertEqual(code, 1)
+        self.assertIn("refused", out)
 
     def test_check_reports_a_whitelist_that_names_an_excluded_system(self) -> None:
         config = self.write_config('exclude_systems = ["ps4"]')

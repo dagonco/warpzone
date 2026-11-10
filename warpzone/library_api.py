@@ -12,11 +12,13 @@ import posixpath
 import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
+from datetime import datetime
 from functools import cached_property
 from typing import Any
 
 from warpzone import artwork, catalog, diskstatus, playstate, ra_data
 from warpzone import whitelist as wl
+from warpzone import whitelist_history as hist
 from warpzone.config import Config, Device
 
 MAX_BODY = 64 * 1024
@@ -61,6 +63,7 @@ STATUS = {
     "covered": 409,
     "cannot-apply": 409,
     "unlistable": 409,
+    "not-restorable": 409,
     "catalog-running": 409,
     "stale": 412,
     "unsupported": 422,
@@ -820,6 +823,161 @@ def changes_response(
             item["warnings"] = list(notes[dp.device])
         devices.append(item)
     return {"dry_run": plan.dry_run, "devices": devices, "skipped": list(plan.skipped)}
+
+
+# --------------------------------------------------------------------------- history
+
+
+def _iso(when: datetime) -> str:
+    return when.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def backups_response(device: str, view: DeviceView, items: Sequence[hist.Entry]) -> dict[str, Any]:
+    """The backups of a device's whitelist, newest first, with the `etag` of the current file
+    they were compared with."""
+    return {
+        "device": device,
+        "etag": view.etag,
+        "backups": [
+            {
+                "name": item.name,
+                "time": _iso(item.when),
+                "size": item.size,
+                "empty": item.empty,
+                "same": item.same,
+                "included": len(item.delta.included),
+                "excluded": len(item.delta.excluded),
+                "summary": hist.describe(item),
+            }
+            for item in items
+        ],
+    }
+
+
+@dataclass(frozen=True)
+class RestoreRequest:
+    backup: str
+    expect: str | None
+    dry_run: bool
+
+
+def parse_restore(body: object) -> RestoreRequest:
+    """The shape of a `POST /api/v1/devices/{device}/restore` body; `bad-request` otherwise."""
+    if not isinstance(body, dict):
+        raise _bad("the body must be a JSON object")
+    unknown = sorted(set(body) - {"backup", "expect", "dry_run"})
+    if unknown:
+        raise _bad(f"unknown key {unknown[0]!r}")
+    backup = body.get("backup")
+    if not isinstance(backup, str) or not hist.is_backup_name(backup):
+        raise _bad("`backup` must be the name of a backup")
+    expect = body.get("expect")
+    if expect is not None and not isinstance(expect, str):
+        raise _bad("`expect` must be the etag of the current whitelist")
+    dry_run = body.get("dry_run", False)
+    if not isinstance(dry_run, bool):
+        raise _bad("`dry_run` must be true or false")
+    return RestoreRequest(backup, expect, dry_run)
+
+
+@dataclass(frozen=True)
+class RestorePlan:
+    """What restoring one backup over the device's current whitelist does."""
+
+    device: str
+    etag: str  # of the file the plan was computed from
+    new_etag: str
+    data: bytes
+    item: hist.Entry
+    diff: tuple[str, ...]
+    managed: bool  # the backup is in the UI's format (a hand-written one makes the UI read-only)
+    on: tuple[str, ...] | None  # games it turns on and off; None when a side cannot be read
+    off: tuple[str, ...] | None
+    bytes_on: int
+    bytes_off: int
+
+    @property
+    def changed(self) -> bool:
+        return not self.item.same
+
+
+def plan_restore(
+    device: str,
+    view: DeviceView,
+    current: bytes | None,
+    name: str,
+    data: bytes,
+    lib: Library,
+) -> RestorePlan:
+    """Compare the backup `name` (holding `data`) with the current whitelist (`current`, whose
+    view is `view`). Raises `not-restorable` for an empty backup. Pure: nothing is written."""
+    item = hist.entry(name, data, current)
+    why = hist.refusal(item)
+    if why:
+        raise ApiError("not-restorable", why, device=device)
+    after = view_of(data)
+    on: tuple[str, ...] | None = None
+    off: tuple[str, ...] | None = None
+    size_on = size_off = 0
+    if view.model is not None and after.model is not None:
+        effect = wl.effect(view.model, after.model, lib.wl_games)
+        on, off = effect.turned_on, effect.turned_off
+        size_on, size_off = lib.size_of(on), lib.size_of(off)
+    return RestorePlan(
+        device=device,
+        etag=view.etag,
+        new_etag=after.etag,
+        data=data,
+        item=item,
+        diff=tuple(hist.unified_diff(hist.text_of(current), hist.text_of(data), name)),
+        managed=after.state == MANAGED,
+        on=on,
+        off=off,
+        bytes_on=size_on,
+        bytes_off=size_off,
+    )
+
+
+def check_restore(etag: str, expect: str | None, device: str) -> None:
+    """The conflict check of a restore: `expect-missing` without an etag, `stale` when it is not
+    the current file's (`etag`, in the API's form)."""
+    if not expect:
+        raise ApiError("expect-missing", f"no `expect` for {device!r}", device=device)
+    if _canonical_etag(expect) != etag:
+        raise ApiError("stale", f"{device}: the whitelist changed since it was read", device=device)
+
+
+def restore_response(
+    plan: RestorePlan,
+    *,
+    written: bool | None = None,
+    dry_run: bool = False,
+    warnings: Sequence[str] = (),
+) -> dict[str, Any]:
+    """The answer for one backup: the detail (`GET`, `written` None) or the outcome of a
+    restore. The etag is the new file's once it is written, else the current one."""
+    body: dict[str, Any] = {
+        "device": plan.device,
+        "backup": plan.item.name,
+        "time": _iso(plan.item.when),
+        "etag": plan.new_etag if written else plan.etag,
+        "same": plan.item.same,
+        "managed": plan.managed,
+        "diff": list(plan.diff),
+        "included": list(plan.item.delta.included),
+        "excluded": list(plan.item.delta.excluded),
+        "on": None if plan.on is None else list(plan.on),
+        "off": None if plan.off is None else list(plan.off),
+        "bytes_on": plan.bytes_on,
+        "bytes_off": plan.bytes_off,
+        "warning": hist.warning(plan.item.delta),
+    }
+    if written is not None:
+        body["written"] = written
+        body["dry_run"] = dry_run
+        if warnings:
+            body["warnings"] = list(warnings)
+    return body
 
 
 # --------------------------------------------------------------------------- play statistics

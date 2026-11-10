@@ -39,6 +39,7 @@
     progressChanged() {},   // a progress answer (or failure) arrived
     detailChanged(id) {},   // a write touched this game: load its page data again
     confirmSystem() { return Promise.resolve(false); },
+    openHistory(deviceName) {}, // the backups of a console's whitelist, with a restore
     reset() {},             // the whole catalog was loaded again: drop what was derived from it
   };
 
@@ -351,6 +352,20 @@
     });
   }
 
+  // A backup written over a console's whitelist. `etag` is the file the diff was shown against:
+  // if the whitelist changed since, the server refuses it (stale) and nothing is written.
+  // Resolves the server's answer, or null after an error (already shown).
+  function restoreBackup(deviceName, name, etag) {
+    return guarded(async () => {
+      const res = await api.restore(deviceName, { backup: name, expect: etag, dry_run: false });
+      S.etags[deviceName] = res.etag;
+      S.searchResult = null;
+      await reloadAll();
+      progressSoon();
+      return res;
+    });
+  }
+
   // ===== the catalog scan ==================================================================
 
   // A refresh runs on the hub for a while: poll /catalog until it ends, then load what it found.
@@ -398,6 +413,6 @@
     loadDevices, loadCatalog, loadSystems, loadHomeExtras, ensureList, preloadLists, reloadAll,
     device, system, excludes, isManaged, allBlocked, gameState, coverage, holdings, patchState,
     schedulePoll, pollProgress, progressSoon,
-    changeGame, changeSystem, watchCatalog, refreshCatalog, plural,
+    changeGame, changeSystem, restoreBackup, watchCatalog, refreshCatalog, plural,
   };
 })();

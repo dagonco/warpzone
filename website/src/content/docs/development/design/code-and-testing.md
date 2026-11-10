@@ -70,8 +70,9 @@ warpzone/
   bios.py            BIOS manifest, local overrides, pure `judge_*`, disk checks
   whitelist.py       managed whitelists: escape, parse, render, normalize, changes, matcher,
                      effect, migration parsing and classification, unsupported systems (pure)
+  whitelist_history.py  the backups of a whitelist: names, comparison, diff, what a restore refuses (pure)
   whitelist_store.py whitelist files on the hub: read with a stamp, backups, guarded write,
-                     hub scan, `whitelist migrate` and its proof walk
+                     hub scan, `whitelist migrate` and its proof walk, `whitelist restore`
   dat.py             Redump / No-Intro DAT parsing, cache, matching, disc grouping (pure)
   inbox_core.py      what the inbox pipeline and its handlers share: errors, options, results, staging
   inbox_lock.py      the `inbox/.warpzone.lock` file that keeps two `--apply` runs apart
