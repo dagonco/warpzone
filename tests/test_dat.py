@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 
 from inbox_support import dat_text, write_dat
@@ -34,6 +35,12 @@ def rom(name: str, data: bytes, *, sha1: bool = True) -> Rom:
 def finfo(path: str, data: bytes) -> FileInfo:
     r = rom(path, data)
     return FileInfo(path, r.size, r.crc, r.sha1)
+
+
+def nes_finfo(path: str, data: bytes) -> FileInfo:
+    """A file the way the inbox fingerprints it: whole, plus the data after the iNES header."""
+    body = rom(path, data[16:])
+    return replace(finfo(path, data), without_header=(body.size, body.crc, body.sha1))
 
 
 def make_dat(system: str, games: list[Game]) -> Dat:
@@ -213,6 +220,55 @@ class MatchTests(unittest.TestCase):
         self.assertEqual(
             len(match_dat(make_dat("nes", [g]), [finfo("f", b"1"), finfo("g", b"1")]).matches), 1
         )
+
+
+class HeaderlessTests(unittest.TestCase):
+    BODY = bytes(range(256)) * 32
+    OURS = b"NES\x1a\x01\x00\x00\x00" + b"\x00" * 8 + BODY  # a header the DAT does not list
+    DAT_GAME = Game("Wrecking (World)", (rom("Wrecking (World).unh", BODY),))
+
+    def test_header_that_differs_matches_the_headerless_entry(self) -> None:
+        found = match_dat(make_dat("nes", [self.DAT_GAME]), [nes_finfo("w.nes", self.OURS)])
+        self.assertEqual([m.game.name for m in found.matches], ["Wrecking (World)"])
+        match = found.matches[0]
+        self.assertEqual([f.path for f in match.files], ["w.nes"])
+        self.assertEqual(match.files[0].size, len(self.OURS))
+        # the rom describes the file as it is, so the zip and its check use the real bytes
+        only = match.game.roms[0]
+        self.assertEqual((only.name, only.size), ("Wrecking (World).nes", len(self.OURS)))
+        self.assertEqual((only.crc, only.sha1), (match.files[0].crc, match.files[0].sha1))
+
+    def test_whole_file_match_wins_over_the_headerless_one(self) -> None:
+        headered = Game("Wrecking (World)", (rom("Wrecking (World).nes", self.OURS),))
+        found = match_dat(
+            make_dat("nes", [headered, self.DAT_GAME]), [nes_finfo("w.nes", self.OURS)]
+        )
+        self.assertEqual(found.matches[0].game, headered)
+
+    def test_file_without_the_ines_header_is_not_tried(self) -> None:
+        found = match_dat(make_dat("nes", [self.DAT_GAME]), [finfo("w.nes", self.OURS)])
+        self.assertEqual(found.matches, ())
+
+    def test_no_headerless_entry_for_the_data_is_no_match(self) -> None:
+        other = Game("Other", (rom("Other.unh", b"something else"),))
+        found = match_dat(make_dat("nes", [other]), [nes_finfo("w.nes", self.OURS)])
+        self.assertEqual((found.matches, found.ambiguous), ((), ()))
+
+    def test_same_crc_with_another_sha1_is_no_match(self) -> None:
+        r = self.DAT_GAME.roms[0]
+        liar = Game("Wrecking (World)", (replace(r, sha1="0" * 40),))
+        found = match_dat(make_dat("nes", [liar]), [nes_finfo("w.nes", self.OURS)])
+        self.assertEqual(found.matches, ())
+
+    def test_only_nes_dats_are_tried(self) -> None:
+        found = match_dat(make_dat("snes", [self.DAT_GAME]), [nes_finfo("w.nes", self.OURS)])
+        self.assertEqual(found.matches, ())
+
+    def test_two_names_for_the_same_data_are_ambiguous(self) -> None:
+        twin = Game("Twin (World)", (rom("Twin (World).unh", self.BODY),))
+        found = match_dat(make_dat("nes", [self.DAT_GAME, twin]), [nes_finfo("w.nes", self.OURS)])
+        self.assertEqual(found.matches, ())
+        self.assertEqual(found.ambiguous, (("Twin (World)", "Wrecking (World)"),))
 
 
 def match_for(system: str, name: str, data: bytes) -> dat.GameMatch:
