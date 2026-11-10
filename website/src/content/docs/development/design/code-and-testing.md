@@ -96,6 +96,7 @@ warpzone/
   settings.py        `settings apply`, `capture`, `audit`: loading, prompts, output
   settings_formats.py  format handlers ini, qt-ini, retroarch-cfg, yaml-flat (pure)
   settings_tree.py   format handlers json, toml (pure)
+  settings_xml.py    format handler esde-xml: ES-DE's es_settings.xml (pure)
   settings_layers.py layer files: parse, validate, merge, render (pure) and atomic write
   settings_plan.py   apply plan, capture candidates and pre-selection, audit rows (pure)
   settings_state.py  device state: snapshots, backups, log, lock

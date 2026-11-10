@@ -126,7 +126,28 @@ modules:
 title: "x"
 """
 
+ESDE = (
+    '<?xml version="1.0"?>\n'
+    '<bool name="ScrapeVideos" value="true" />\n'
+    '<bool name="ScrapeCovers" value="false" />\n'
+    '<int name="ScraperConnectionTimeout" value="30" />\n'
+    '<float name="FakeScale" value="1.5" />\n'
+    '<string name="ScraperRegion" value="eu" />\n'
+    '<string name="ScraperLanguage" value="en" />\n'
+    '<string name="ROMDirectory" value="/fake/roms" />\n'
+    '<bool name="CustomEventScripts" value="true" />\n'
+    '<string name="Quoted" value="a &amp; &quot;b&quot; &lt;c&gt;" />\n'
+    "<string name='Single' value='it&apos;s' />\n"
+    '<bool name="Dup" value="true" />\n'
+    '<bool name="Dup" value="false" />\n'
+    '<bool name="Odd" value="maybe" />\n'
+    '<int name="BadInt" value="1.5" />\n'
+    '<string name="Empty" value="" />\n'
+    '<!-- <bool name="InComment" value="true" /> -->\n'
+)
+
 FIXTURES = {
+    "esde-xml": [ESDE],
     "qt-ini": [EDEN, AZAHAR],
     "ini": [DUCKSTATION, PCSX2, PPSSPP, DOLPHIN],
     "retroarch-cfg": [RETROARCH],
@@ -176,6 +197,7 @@ class RoundTripTests(unittest.TestCase):
             "ini": (DUCKSTATION, {"[Main]Language": "es"}),
             "retroarch-cfg": (RETROARCH, {"savestate_auto_save": "false"}),
             "yaml-flat": (VITA3K, {"backend-renderer": "OpenGL"}),
+            "esde-xml": (ESDE, {"ScrapeVideos": False, "ScraperRegion": "us"}),
         }
         for name, (text, changes) in cases.items():
             h = sf.handler(name)
@@ -185,6 +207,147 @@ class RoundTripTests(unittest.TestCase):
             with self.subTest(handler=name):
                 self.assertEqual(after.values, expected)
                 self.assertEqual(after.fixed, before.fixed)
+
+
+class EsdeXmlTests(unittest.TestCase):
+    h = sf.handler("esde-xml")
+
+    def test_flags(self) -> None:
+        self.assertTrue(self.h.typed)
+        self.assertFalse(self.h.can_add)
+        self.assertEqual(self.h.name, "esde-xml")
+
+    def test_read_is_typed_by_the_tag(self) -> None:
+        r = self.h.read(ESDE)
+        self.assertEqual(r.values["ScrapeVideos"], True)
+        self.assertEqual(r.values["ScrapeCovers"], False)
+        self.assertEqual(r.values["ScraperConnectionTimeout"], 30)
+        self.assertEqual(r.values["FakeScale"], 1.5)
+        self.assertEqual(r.values["ScraperRegion"], "eu")
+        self.assertEqual(r.values["Empty"], "")
+        self.assertEqual(r.values["Quoted"], 'a & "b" <c>')
+        self.assertEqual(r.values["Single"], "it's")
+        self.assertNotIn("InComment", r.values)
+
+    def test_fixed_keys(self) -> None:
+        r = self.h.read(ESDE)
+        # Owned by warpzone, a path, repeated, or a value its tag does not allow.
+        self.assertEqual(r.fixed, {"CustomEventScripts", "ROMDirectory", "Dup", "Odd", "BadInt"})
+        self.assertFalse(r.fixed & set(r.values))
+
+    def test_change_touches_only_its_value(self) -> None:
+        out = self.h.write(ESDE, {"ScrapeVideos": False, "ScraperRegion": "us"})
+        self.assertEqual(changed(ESDE, out), [1, 5])
+        lines = out.split("\n")
+        self.assertEqual(lines[1], '<bool name="ScrapeVideos" value="false" />')
+        self.assertEqual(lines[5], '<string name="ScraperRegion" value="us" />')
+
+    def test_an_unchanged_value_changes_no_byte(self) -> None:
+        self.assertEqual(self.h.write(ESDE, {"ScrapeVideos": True, "FakeScale": 1.5}), ESDE)
+
+    def test_int_float_and_string_values(self) -> None:
+        out = self.h.write(ESDE, {"ScraperConnectionTimeout": 60, "FakeScale": 2.0, "Empty": "x"})
+        r = self.h.read(out)
+        self.assertEqual(r.values["ScraperConnectionTimeout"], 60)
+        self.assertEqual(r.values["FakeScale"], 2.0)
+        self.assertEqual(r.values["Empty"], "x")
+
+    def test_special_characters_are_escaped_in_the_quote_style_of_the_element(self) -> None:
+        out = self.h.write(ESDE, {"ScraperRegion": "a&b<c>\"d'e", "Single": "a&b<c>\"d'e"})
+        r = self.h.read(out)
+        self.assertEqual(r.values["ScraperRegion"], "a&b<c>\"d'e")
+        self.assertEqual(r.values["Single"], "a&b<c>\"d'e")
+        self.assertIn('value="a&amp;b&lt;c>&quot;d\'e"', out)
+        self.assertIn("value='a&amp;b&lt;c>\"d&apos;e'", out)
+
+    def test_a_type_mismatch_is_refused(self) -> None:
+        for key, value in (
+            ("ScrapeVideos", "false"),
+            ("ScrapeVideos", 0),
+            ("ScraperConnectionTimeout", True),
+            ("ScraperConnectionTimeout", 1.5),
+            ("FakeScale", 1),
+            ("ScraperRegion", 3),
+            ("ScraperRegion", True),
+        ):
+            with self.subTest(key=key, value=value), self.assertRaises(NotWritable) as cm:
+                self.h.write(ESDE, {key: value})
+            self.assertEqual(cm.exception.key, key)
+
+    def test_values_that_cannot_be_stored_are_refused(self) -> None:
+        for value in ("a\nb", "a\rb", "a\tb", "a\x00b"):
+            with self.subTest(value=value), self.assertRaises(NotWritable):
+                self.h.write(ESDE, {"ScraperRegion": value})
+        with self.assertRaises(NotWritable):
+            self.h.write(ESDE, {"FakeScale": float("nan")})
+
+    def test_fixed_and_missing_keys_are_refused(self) -> None:
+        for key, value in (
+            ("CustomEventScripts", False),
+            ("ROMDirectory", "/other"),
+            ("Dup", False),
+            ("Odd", True),
+            ("BadInt", 2),
+            ("InComment", False),
+            ("NoSuchSetting", True),
+        ):
+            with self.subTest(key=key), self.assertRaises(NotWritable) as cm:
+                self.h.write(ESDE, {key: value})
+            self.assertEqual(cm.exception.key, key)
+
+    def test_any_directory_path_or_dir_key_is_fixed(self) -> None:
+        text = (
+            '<string name="MediaDirectory" value="" />\n'
+            '<string name="CacheDir" value="" />\n'
+            '<string name="SomePath" value="" />\n'
+            '<string name="DirectoryOfNothing" value="" />\n'
+        )
+        r = self.h.read(text)
+        self.assertEqual(r.fixed, {"MediaDirectory", "CacheDir", "SomePath"})
+        self.assertEqual(r.values, {"DirectoryOfNothing": ""})
+
+    def test_crlf_bom_and_a_missing_final_newline_are_kept(self) -> None:
+        text = "\ufeff" + ESDE.replace("\n", "\r\n").rstrip("\r\n")
+        out = self.h.write(text, {"ScrapeVideos": False})
+        self.assertEqual(
+            out, text.replace('"ScrapeVideos" value="true"', '"ScrapeVideos" value="false"')
+        )
+
+    def test_a_file_with_a_root_element_works_too(self) -> None:
+        text = '<?xml version="1.0"?>\n<settings>\n  <bool name="A" value="true"/>\n</settings>\n'
+        out = self.h.write(text, {"A": False})
+        self.assertEqual(out, text.replace("true", "false"))
+
+    def test_multi_line_and_single_quoted_tags(self) -> None:
+        text = "<bool\n  name='A'\n  value='true'\n/>\n"
+        self.assertEqual(self.h.write(text, {"A": False}), text.replace("true", "false"))
+
+    def test_an_attribute_value_that_looks_like_an_attribute(self) -> None:
+        text = '<string name="A" note=\' value="x" \' value="y" />\n'
+        self.assertEqual(self.h.read(text).values, {"A": "y"})
+        self.assertEqual(self.h.write(text, {"A": "z"}), text.replace('"y"', '"z"'))
+
+    def test_an_element_without_a_value_is_fixed(self) -> None:
+        text = '<bool name="A" />\n'
+        self.assertEqual(self.h.read(text).fixed, {"A"})
+
+    def test_text_that_is_not_xml_is_a_format_error(self) -> None:
+        for text in ('<bool name="A" value="true"', "<bool></int>", "not xml at all <"):
+            with self.subTest(text=text), self.assertRaises(FormatError):
+                self.h.read(text)
+        with self.assertRaises(FormatError):
+            self.h.write('<bool name="A" value="true"', {"A": False})
+
+    def test_an_empty_file_has_no_keys(self) -> None:
+        self.assertEqual(self.h.read("").values, {})
+        self.assertEqual(self.h.read('<?xml version="1.0"?>\n').values, {})
+        self.assertEqual(self.h.write("", {}), "")
+
+    def test_other_settings_read_back_after_a_change(self) -> None:
+        before = self.h.read(ESDE)
+        after = self.h.read(self.h.write(ESDE, {"ScrapeCovers": True}))
+        self.assertEqual(after.values, before.values | {"ScrapeCovers": True})
+        self.assertEqual(after.fixed, before.fixed)
 
 
 class IniTests(unittest.TestCase):

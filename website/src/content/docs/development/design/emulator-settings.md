@@ -49,6 +49,9 @@ system_language = "AmericanEnglish"
 
 [xemu.config]
 "general.show_welcome" = false
+
+[esde.es-settings]
+ScrapeVideos = false
 ```
 
 ```toml
@@ -69,7 +72,7 @@ res_scale = 1
   templated file is `<file>:<name>`, as in `"opt:Flycast"`), and each entry a key in the
   file's canonical form (see [Format handlers](#format-handlers)) with its value.
 - **Values** are TOML scalars: strings, integers, floats and booleans. Line-oriented
-  formats hold raw strings; `json` and `toml` keep the type they read. Arrays, tables and
+  formats hold raw strings; `json`, `toml` and `esde-xml` keep the type they read. Arrays, tables and
   null are never captured or written.
 - **Merge.** The effective value of a key is the device layer's when it has the key, else
   common's. A device cannot unset a common key, only give it another value. Removing a key
@@ -134,7 +137,7 @@ create_when = "~/Emulation/storage/xemu"
 - Patterns match the canonical key. `*` matches any run of characters and `?` one
   character; nothing else is special, so `[` is literal. Ids are `[a-z0-9-]+`.
 
-The shipped `steamos-emudeck` profile declares twelve emulators:
+The shipped `steamos-emudeck` profile declares twelve emulators and ES-DE's own settings file (`esde`, see [ES-DE settings](#es-de-settings)):
 
 | Emulator | File ids | Path | Format |
 |---|---|---|---|
@@ -150,6 +153,7 @@ The shipped `steamos-emudeck` profile declares twelve emulators:
 | `xemu` | `config` | `~/.var/app/app.xemu.xemu/data/xemu/xemu/xemu.toml` | `toml` |
 | `ryujinx` | `config` | `~/.config/Ryujinx/Config.json` | `json` |
 | `xenia` | `config` | `~/Emulation/roms/xbox360/xenia-canary.config.toml` | `toml` |
+| `esde` | `es-settings` | `~/ES-DE/settings/es_settings.xml` | `esde-xml` |
 
 Files that hold only a login (Dolphin's `RetroAchievements.ini`, PPSSPP's achievements
 token) are not declared at all.
@@ -196,6 +200,7 @@ The contract, tested for every handler:
 | `yaml-flat` | Vita3K | `key` | raw text after `: ` on a top-level `key: scalar` line | no |
 | `json` | Ryujinx | dotted path of objects, `hotkeys.screenshot` | typed scalar | no |
 | `toml` | melonDS, xemu | dotted path of tables and key, `Instance0.Firmware.Language` | typed scalar | after the table's last key; a missing table at the end |
+| `esde-xml` | ES-DE (`es_settings.xml`) | the `name` attribute, `ScrapeVideos` | typed by the element: `<bool>`, `<int>`, `<float>` or `<string>` | no |
 
 - `ini`: a key that appears twice in a section is `fixed` (PCSX2 writes `[Folders]SaveStates`
   twice; DuckStation repeats a hotkey that has several bindings). A section that appears
@@ -220,6 +225,23 @@ The contract, tested for every handler:
   tables, arrays, arrays of tables and multi-line values are `fixed` (xemu's
   `input.gamepad_mappings` spans several lines). The result must parse with `tomllib` to the
   expected values; scalars are written by `tomlw.py`, since `tomllib` only reads.
+
+- `esde-xml`: ES-DE's file is a flat list of `<bool name="Key" value="true" />`,
+  `<int ...>`, `<float ...>` and `<string ...>` elements after an XML declaration, with no
+  root element (`esde.parse_elements` checks it is well-formed). The key is the `name`
+  attribute; the value is the `value` attribute read as the tag says (`true` and `false`, an
+  integer, a finite number, the unescaped text). A write replaces only the text inside the
+  quotes of that attribute, escaped for the quote the element uses, so every other byte stays.
+  A layer value must have the kind of the element (a TOML boolean for `<bool>`, an integer for
+  `<int>`, a float for `<float>`, a string without control characters for `<string>`);
+  anything else is refused for that key, never coerced. The key is `fixed` when it is
+  repeated, its element has no `value` or one its tag does not allow, when it is
+  `CustomEventScripts` (provision owns it, see [ES-DE startup script](#es-de-startup-script)),
+  or when its name ends in `Directory`, `Dir`, `Path` or `Paths` (a place on this machine,
+  such as `ROMDirectory` and `MediaDirectory`): a layer that names one is reported as
+  "cannot write" and never applied. Comments and CDATA are not elements. Keys are not added:
+  ES-DE writes every setting it knows when it quits, so a key the file lacks is a typo or
+  belongs to a newer ES-DE, and adding it would only keep the typo in the file.
 
 Equality is typed (`1`, `1.0`, `true` and `"1"` all differ), which is exact for the raw
 formats and safe for the typed ones, since a value is always read back from the same
@@ -368,6 +390,38 @@ find the config. Provisioning again with another config rewrites the script.
 - The same mechanism installs `warpzone-links.sh` (for a device that lists `library` and whose profile has `[links.*]`), which runs `links sync` and so links the games that arrived since the last start before ES-DE lists them (see [Title links](/warpzone/development/design/title-links/)).
 - Apply runs once per ES-DE start, possibly before Syncthing has pulled the newest layers.
   What arrives later applies at the next start, or at once with `warpzone settings apply`.
+
+## ES-DE settings
+
+ES-DE's `es_settings.xml` is a settings file like the emulators' (profile emulator `esde`,
+file `es-settings`, handler `esde-xml`), so a choice such as *Scrape videos* can be shared
+from `common.toml`:
+
+```toml
+[esde.es-settings]
+ScrapeVideos = false
+```
+
+The profile marks as `known` the scraper's media toggles (`ScrapeVideos`, `ScrapeCovers`,
+`ScrapeScreenshots`, `ScrapeTitleScreens`, `Scrape3DBoxes`, `ScrapePhysicalMedia`,
+`ScrapeMarquees`, `ScrapeBackCovers`, `ScrapeFanArt`, `ScrapeManuals`), `ScraperRegion` and
+`ScraperLanguage`. Credentials (`Scraper*Username*`, `Scraper*Password*`) are `secret`: never
+captured, never applied, rejected in a layer. Paths (`*Directory`, `*Dir`, `*Path`, `*Paths`),
+window and screen settings and `CustomEventScripts` are `noise`, and the first and the last
+are also `fixed` by the handler, so no layer can move them. `CustomEventScripts` stays
+owned by `provision device`, which turns it on; a layered value for it is "cannot write".
+
+**Order.** ES-DE reads `es_settings.xml` once at startup and rewrites the whole file when it
+quits, so a key written while it runs is neither used in that session nor kept. `apply`
+therefore treats ES-DE like any other emulator: its `process` names are those of
+`esde.ESDE_PROCESSES` (`es-de`, `ES-DE.AppImage`), the same check `provision` uses before it
+touches the file, and a running ES-DE is skipped before the file is read and again right
+before the replace. The startup script runs `apply` while ES-DE is already running, so the
+`esde` entry is always skipped there (logged as running) and the other emulators go on as
+before. ES-DE's layered keys land when `warpzone settings apply` runs with ES-DE closed, for
+example from a terminal or over SSH in Desktop Mode; ES-DE then reads them at its next start.
+`capture` skips ES-DE while it runs for the same reason (its file may not hold its latest
+changes).
 
 ## Capture
 

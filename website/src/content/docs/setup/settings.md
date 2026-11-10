@@ -34,6 +34,16 @@ The folder is two-way (unlike `tools`, which is receive-only on devices), becaus
 
 Twelve emulators are covered by the `steamos-emudeck` profile: Eden, RetroArch (and its core options), DuckStation, PCSX2, Dolphin, Azahar, melonDS, PPSSPP, Vita3K, xemu, Ryujinx and Xenia (the Proton build of Canary). Xenia's console language is not in its config file: set it in Xenia (Console > Open console settings) and capture its `xconfig.settings`, a system data file (below).
 
+ES-DE's own `es_settings.xml` is covered too, for the scraper options only (which media to download, region and language), so one choice reaches every console:
+
+```toml
+# settings/common.toml
+[esde.es-settings]
+ScrapeVideos = false
+```
+
+Each value must have the kind of the setting in the file (`true`/`false` for an on/off option, a number for a number, quoted text for text). Logins, paths and the *Enable custom event scripts* option are never shared. ES-DE rewrites the file when it quits, so `apply` leaves it alone while ES-DE runs, which includes the startup script's own run: to apply an ES-DE setting, close ES-DE and run `warpzone settings apply --emulator esde` (from a terminal in Desktop Mode, or over SSH); ES-DE uses it from its next start.
+
 ## Set up
 
 1. Add `"settings"` to `folders` for each device in the config (see [`examples/config.example.toml`](https://github.com/dagonco/warpzone/blob/main/examples/config.example.toml)).

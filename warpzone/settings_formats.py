@@ -2,7 +2,7 @@
 
 A handler is pure (text in, text out). This module holds the line-oriented formats
 (`ini`, `qt-ini`, `retroarch-cfg`, `yaml-flat`); `json` and `toml` live in
-`settings_tree` and are imported on demand. See "Format handlers" in
+`settings_tree` and `esde-xml` in `settings_xml`, imported on demand. See "Format handlers" in
 development/design/emulator-settings.md.
 """
 
@@ -88,6 +88,10 @@ def handler(name: str) -> Handler:
         from warpzone import settings_tree
 
         return settings_tree.JSON if name == "json" else settings_tree.TOML
+    if name == "esde-xml":
+        from warpzone import settings_xml
+
+        return settings_xml.ESDE_XML
     raise ValueError(f"unknown settings format {name!r}")
 
 
