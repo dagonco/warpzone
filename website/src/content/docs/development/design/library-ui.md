@@ -1150,8 +1150,8 @@ uses it to show what a change does before the user confirms it.
 
 The media endpoint answers `200` with `Content-Type` by extension (`image/png`, `image/jpeg`,
 `video/mp4`, `video/webm`), `Accept-Ranges: bytes` and the `Cache-Control` of the other media,
-after the same authentication and the same checks of the path as before (a symlink that leaves
-the kind's folder is `404`). A video does not play on Safari and iOS without byte ranges, so the
+after the same authentication and the same checks of the path as before (a symlink anywhere
+between `frontend/media/` and the file is `404`; see below). A video does not play on Safari and iOS without byte ranges, so the
 endpoint takes a `Range` header with one range:
 
 | Request | Answer |
@@ -1164,6 +1164,30 @@ endpoint takes a `Range` header with one range:
 `library_api.parse_range` (pure) decides this. The server opens the file once, reads it in
 chunks of 64 KiB and never holds more than one chunk; `HEAD` sends the headers only. A client
 that closes the connection in the middle (a player seeking) is not an error.
+
+**Symbolic links in the media folder.** Syncthing replicates symbolic links as links, and the
+media folder syncs both ways, so a console can make a link appear in it. The server treats any
+link below `frontend/media/` as hostile:
+
+- `safe_file(root, base, parts)` resolves `root` (the media folder; the UI folder for the static
+  files) once and requires the path `base/parts` to be exactly its own resolved path below it. A
+  link in the system folder, the kind folder, a subfolder or the file itself, even one that points
+  to another place inside `root`, makes the file `404`; so does a `..`, an absolute name or a file
+  outside `root`. Before this check a kind folder that was a link took the place of the root the
+  file was compared with, so the link's target was served.
+- The media listing does not list a system or kind folder that is a link (`os.walk` enters its
+  top folder even when it is a link), so such a folder adds no kinds to a game either.
+- The file is opened with `O_NOFOLLOW` and `O_NONBLOCK`, `fstat`ed, and served only when it is a
+  regular file; the size and the bytes come from that one open file, so a file replaced by a link
+  (or by a FIFO, which would block a thread) after the check is `404`. This narrows the gap
+  between the check and the open; it does not close it: only the last component is not followed,
+  so a folder above the file swapped for a link in that instant is still followed. Closing it
+  would need `openat2` with `RESOLVE_BENEATH`, which is Linux only, or opening each component
+  from a directory descriptor.
+- The static route uses the same `safe_file` with the UI folder as root, so it follows no link
+  either. It still reads the file with a plain `read_bytes` (the UI folder is part of the
+  installation, not a synced folder). The badge route checks `is_symlink` on the file only and its
+  folder is the hub's own `ra/badges/`, which is not synced.
 
 The backup endpoints (see [History and restore](#history-and-restore)):
 

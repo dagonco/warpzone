@@ -4,6 +4,7 @@ fake Syncthing. Every request goes through a socket."""
 import http.client
 import json
 import os
+import shutil
 import signal
 import socket
 import sys
@@ -793,6 +794,149 @@ class MediaTests(ServeCase):
         (outside / "x.png").write_bytes(b"x")
         (self.root / "frontend" / "media" / "psx" / "covers" / "dir").symlink_to(outside)
         self.assertIsNone(files.media_path("psx", "covers", "dir/x.png"))
+
+
+class MediaJailTests(ServeCase):
+    """A symbolic link that Syncthing replicates into `frontend/media/` must not move the
+    folder the media route trusts, and must not be followed after the check."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.media = self.root / "frontend" / "media"
+        self.outside = self.tmp / "outside-photos"
+        (self.outside / "covers").mkdir(parents=True)
+        (self.outside / "covers" / "Other Game.png").write_bytes(b"PRIVATE")
+        (self.outside / "Other Game.png").write_bytes(b"PRIVATE")
+
+    def cover_url(self, game: Any = OTHER) -> str:
+        return f"/api/v1/games/{game.id}/media/covers"
+
+    def swapping(self, swap: Any) -> Any:
+        """Patch `media_path` so `swap(path)` runs right after the check, before the open."""
+        original = serve.HubFiles.media_path
+
+        def media_path(files: serve.HubFiles, *args: str) -> Path | None:
+            path = original(files, *args)
+            if path is not None:
+                swap(path)
+            return path
+
+        return mock.patch.object(serve.HubFiles, "media_path", media_path)
+
+    def test_a_kind_folder_that_is_a_link_out_is_not_served_or_listed(self) -> None:
+        shutil.rmtree(self.media / "psx" / "covers")
+        (self.media / "psx" / "covers").symlink_to(self.outside)
+        reply = self.get(self.cover_url())
+        self.assertEqual(reply.status, 404)
+        self.assertNotIn(b"PRIVATE", reply.body)
+        self.assertNotIn("covers", self.get(f"/api/v1/games/{OTHER.id}").json["media"])
+        self.assertIsNone(self.app.files.media_path("psx", "covers", "Other Game.png"))
+
+    def test_a_system_folder_that_is_a_link_out_is_not_served_or_listed(self) -> None:
+        shutil.rmtree(self.media / "psx")
+        (self.media / "psx").symlink_to(self.outside)
+        self.assertEqual(self.get(self.cover_url()).status, 404)
+        self.assertEqual(self.get(self.cover_url(EXAMPLE)).status, 404)
+        self.assertNotIn("covers", self.get(f"/api/v1/games/{OTHER.id}").json["media"])
+        self.assertIsNone(self.app.files.media_path("psx", "covers", "Other Game.png"))
+
+    def test_a_link_to_a_folder_inside_the_media_root_is_refused_too(self) -> None:
+        # The simple rule: no link anywhere between the media root and the file.
+        shutil.rmtree(self.media / "psx" / "marquees")
+        (self.media / "psx" / "marquees").symlink_to(self.media / "psx" / "covers")
+        self.assertIsNone(self.app.files.media_path("psx", "marquees", "Example Game (Europe).png"))
+        self.assertNotIn("marquees", self.get(f"/api/v1/games/{EXAMPLE.id}").json["media"])
+        covers = self.media / "psx" / "covers"
+        (covers / "real").mkdir()
+        (covers / "real" / "x.png").write_bytes(PNG)
+        (covers / "alias").symlink_to(covers / "real")
+        self.assertIsNotNone(self.app.files.media_path("psx", "covers", "real/x.png"))
+        self.assertIsNone(self.app.files.media_path("psx", "covers", "alias/x.png"))
+
+    def test_a_file_that_is_a_link_is_refused(self) -> None:
+        covers = self.media / "psx" / "covers"
+        (covers / "Other Game.png").symlink_to(covers / "Example Game (Europe).png")
+        self.assertIsNone(self.app.files.media_path("psx", "covers", "Other Game.png"))
+        self.assertEqual(self.get(self.cover_url()).status, 404)
+
+    def test_safe_file_keeps_everything_inside_the_root_it_is_given(self) -> None:
+        root = self.tmp / "root"
+        (root / "a" / "b").mkdir(parents=True)
+        (root / "a" / "b" / "f.png").write_bytes(PNG)
+        self.assertEqual(
+            serve.safe_file(root, root / "a" / "b", ("f.png",)), root.resolve() / "a/b/f.png"
+        )
+        self.assertEqual(
+            serve.safe_file(root, root, ("a", "b", "f.png")), root.resolve() / "a/b/f.png"
+        )
+        self.assertIsNone(serve.safe_file(root, root / "a" / "b", ("..", "b", "f.png")))
+        self.assertIsNone(serve.safe_file(root, root / "a" / "b", ("/etc/passwd",)))
+        self.assertIsNone(serve.safe_file(root, root / "a" / "b", ()))
+        self.assertIsNone(serve.safe_file(root, self.tmp, ("root", "a", "b", "f.png")))
+        (root / "a" / "up").symlink_to(self.tmp)
+        self.assertIsNone(serve.safe_file(root, root / "a" / "up", ("root", "a", "b", "f.png")))
+        (root / "a" / "in").symlink_to(root / "a" / "b")
+        self.assertIsNone(serve.safe_file(root, root / "a" / "in", ("f.png",)))
+        self.assertIsNone(serve.safe_file(root, root / "a", ("in", "f.png")))
+
+    def test_a_root_reached_through_a_link_still_works(self) -> None:
+        real = self.tmp / "real"
+        (real / "k").mkdir(parents=True)
+        (real / "k" / "f.png").write_bytes(PNG)
+        alias = self.tmp / "alias"
+        alias.symlink_to(real)
+        self.assertEqual(
+            serve.safe_file(alias, alias / "k", ("f.png",)), real.resolve() / "k" / "f.png"
+        )
+
+    def test_the_static_route_follows_no_link_either(self) -> None:
+        (self.ui / "real").mkdir()
+        (self.ui / "real" / "x.js").write_text("// x")
+        (self.ui / "alias").symlink_to(self.ui / "real")
+        (self.ui / "out").symlink_to(self.outside)
+        self.assertEqual(self.get("/real/x.js", auth=False).status, 200)
+        for path in ("/alias/x.js", "/out/Other%20Game.png", "/leak.txt"):
+            self.assertEqual(self.get(path, auth=False).status, 404, path)
+
+    def test_a_file_swapped_for_a_link_after_the_check_is_not_opened(self) -> None:
+        def swap(path: Path) -> None:
+            path.unlink()
+            path.symlink_to(self.secret)
+
+        with self.swapping(swap):
+            reply = self.get(self.cover_url(EXAMPLE))
+        self.assertEqual(reply.status, 404)
+        self.assertNotIn(b"do not serve", reply.body)
+
+    def test_a_file_swapped_for_a_fifo_after_the_check_does_not_block(self) -> None:
+        def swap(path: Path) -> None:
+            path.unlink()
+            os.mkfifo(path)
+
+        with self.swapping(swap):
+            reply = self.get(self.cover_url(EXAMPLE))
+        self.assertEqual(reply.status, 404)
+
+    def test_open_regular_opens_a_regular_file_and_nothing_else(self) -> None:
+        plain = self.tmp / "plain.png"
+        plain.write_bytes(PNG)
+        opened = serve.open_regular(plain)
+        assert opened is not None
+        handle, size = opened
+        with handle:
+            self.assertEqual((size, handle.read()), (len(PNG), PNG))
+        link = self.tmp / "link.png"
+        link.symlink_to(plain)
+        fifo = self.tmp / "fifo.png"
+        os.mkfifo(fifo)
+        for refused in (link, fifo, self.tmp, self.tmp / "missing.png"):
+            self.assertIsNone(serve.open_regular(refused), refused.name)
+
+    def test_a_regular_file_is_still_served_with_a_range(self) -> None:
+        reply = self.get(self.cover_url(EXAMPLE), headers={"Range": "bytes=0-3"})
+        self.assertEqual((reply.status, reply.body), (206, PNG[:4]))
+        self.assertEqual(reply.headers["Content-Range"], f"bytes 0-3/{len(PNG)}")
+        self.assertEqual(reply.headers["Cache-Control"], "private, max-age=3600")
 
 
 class UnreadableWhitelistTests(ServeCase):
