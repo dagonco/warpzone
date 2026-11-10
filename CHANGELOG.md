@@ -23,6 +23,7 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ### Fixed
 
+- The library UI finds the description, name and cover of a game whose frontend reads a folder below the system's one, such as the PS4 games (ES-DE lists `roms/ps4/shortcuts/`, so its gamelist and media say `./Bloodborne.desktop` where the catalog says `./shortcuts/Bloodborne.desktop`). Before, those games showed no scraped data and no image although both were on the hub. The server now also tries the catalog's gamelist path with its leading folders dropped, after the exact path; nothing changes for the systems that already matched. See [Metadata and media](https://dagonco.github.io/warpzone/development/design/library-ui/#metadata-and-media).
 - `warpzone inbox` identifies NES dumps whose 16-byte iNES header differs from the one No-Intro lists. A file that starts with `NES\x1a` and matches no entry whole is tried again without its header against the DAT's headerless (`.unh`) entries by SHA-1, and on a match it is filed under the DAT's game name with its own header unchanged. Before, such a dump was reported as "no DAT match". See [Identification by content](https://dagonco.github.io/warpzone/development/design/inbox/).
 
 ## [0.4.0rc1] - 2026-11-10

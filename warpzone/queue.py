@@ -998,7 +998,7 @@ def plan(
 
 def _card(ctx: Context, system: str, game: catalog.Game) -> dict[str, Any]:
     extra = ctx.extras(system)
-    meta = extra.meta.get(game.gamelist)
+    meta = api.game_entry(game, extra)
     return {
         "name": (meta.fields.get("name") if meta else None) or game.title,
         "cover": "covers" in api.game_media(game, extra),

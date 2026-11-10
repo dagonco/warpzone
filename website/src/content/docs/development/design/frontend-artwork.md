@@ -69,7 +69,8 @@ always the ROM folder: dArkOS's `ppsspp` reads `psp`, `mame2010` reads `mame`, `
 rewrite as the override, which applies `[es_systems.rename]`: frontend folder -> hub folder,
 so hub `pokemini` is the system `pokemonmini`) and takes `<name>` and the folder of each
 entry. A system whose folder is below the hub's system folder (`pico-8` reads `pico8/carts/`)
-gets paths relative to it. When several hub folders carry one name (`snes` has two entries),
+gets paths relative to it (the hub has no system list, so the library UI matches the same
+shift by trying shorter paths, see [Metadata and media](/warpzone/development/design/library-ui/#metadata-and-media)). When several hub folders carry one name (`snes` has two entries),
 the one the hub names alike wins and the rest are reported. One hub folder may feed several
 names.
 

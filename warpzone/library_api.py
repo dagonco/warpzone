@@ -253,19 +253,53 @@ def _system_devices(
 # --------------------------------------------------------------------------- media and meta
 
 
-def media_stem(game: catalog.Game, entry: artwork.Entry | None) -> str | None:
-    """The stem the game's media files carry (`artwork.build`'s rule): the gamelist path
-    without `./` and without its extension; a `<folder>` entry keeps its whole name."""
+def gamelist_paths(game: catalog.Game) -> list[str]:
+    """The `<path>` values a frontend may record for the game, best first: the catalog's own
+    `gamelist`, then the same path with its leading folders dropped one by one.
+
+    The catalog writes the path below the hub's system folder, but a frontend may read a
+    folder below it (`shortcuts/` for PS4, `carts/` for pico-8: `artwork.FrontendSystem.base`)
+    and then records, and names its media, without that part. The frontend's system list,
+    which says which folder, is on the devices and not on the hub, so the server tries the
+    shorter paths."""
     rel = artwork.relative(game.gamelist)
+    if rel is None:
+        return [game.gamelist]
+    parts = rel.split("/")
+    found = [game.gamelist]
+    found.extend(f"./{'/'.join(parts[i:])}" for i in range(1, len(parts)))
+    return found
+
+
+def game_entry(game: catalog.Game, extras: SystemExtras) -> artwork.Entry | None:
+    """The game's gamelist entry (see `gamelist_paths` for where it is looked for)."""
+    for path in gamelist_paths(game):
+        entry = extras.meta.get(path)
+        if entry is not None:
+            return entry
+    return None
+
+
+def media_stem(path: str, entry: artwork.Entry | None) -> str | None:
+    """The stem media files carry (`artwork.build`'s rule): the gamelist path without `./`
+    and without its extension; a `<folder>` entry keeps its whole name."""
+    rel = artwork.relative(path)
     if rel is None:
         return None
     return rel if entry is not None and entry.tag == "folder" else posixpath.splitext(rel)[0]
 
 
 def game_media(game: catalog.Game, extras: SystemExtras) -> dict[str, str]:
-    """The kinds the game has an image of, with the file below `<kind>/` for each."""
-    stem = media_stem(game, extras.meta.get(game.gamelist))
-    return dict(extras.media.get(stem, {})) if stem is not None else {}
+    """The kinds the game has an image of, with the file below `<kind>/` for each. The stem
+    is that of the game's gamelist entry; without one, the first of `gamelist_paths` that has
+    media."""
+    entry = game_entry(game, extras)
+    paths = [entry.path] if entry is not None else gamelist_paths(game)
+    for path in paths:
+        stem = media_stem(path, entry)
+        if stem is not None and stem in extras.media:
+            return dict(extras.media[stem])
+    return {}
 
 
 # The regions No-Intro and Redump put in a file name tag, as written there.
@@ -355,7 +389,7 @@ def game_facts(game: catalog.Game) -> dict[str, Any]:
 
 
 def game_meta(game: catalog.Game, extras: SystemExtras) -> dict[str, str]:
-    entry = extras.meta.get(game.gamelist)
+    entry = game_entry(game, extras)
     if entry is None:
         return {}
     return {k: entry.fields[k] for k in META_FIELDS if entry.fields.get(k)}
@@ -502,7 +536,7 @@ def _compact(
     game: catalog.Game,
     extras: SystemExtras,
 ) -> dict[str, Any]:
-    entry = extras.meta.get(game.gamelist)
+    entry = game_entry(game, extras)
     return {
         "id": game.id,
         "title": game.title,
@@ -1140,7 +1174,7 @@ def recent_response(
     out = []
     for last, _, system, game, device, key in found[:limit]:
         extra = extras(system)
-        entry = extra.meta.get(game.gamelist)
+        entry = game_entry(game, extra)
         totals = _totals(index, key)
         out.append(
             {
@@ -1232,7 +1266,7 @@ def candidates(
     for system, games in sorted(lib.systems.items()):
         extra = extras(system)
         for game in sorted(games.values(), key=lambda g: g.id):
-            entry = extra.meta.get(game.gamelist)
+            entry = game_entry(game, extra)
             fields = entry.fields if entry else {}
             genres = recommend.parse_genres(fields.get("genre"))
             developer = (fields.get("developer") or "").strip()
@@ -1265,7 +1299,7 @@ def candidates(
 def _shelf_game(lib: Library, extras: Extras, c: recommend.Candidate) -> dict[str, Any]:
     system, game = lib.by_id[c.id]
     extra = extras(system)
-    entry = extra.meta.get(game.gamelist)
+    entry = game_entry(game, extra)
     return {
         "id": game.id,
         "system": system,
