@@ -264,6 +264,35 @@
         h('span', { class: 's' }, [plays, time].filter(Boolean).join(' · ') || ' ')));
   }
 
+  // A card of the "Unfinished" and "Because you play" shelves. `r` is an entry of the
+  // recommendations answer; what it says under the name depends on the shelf: when it was last
+  // played and how far it got, or what it shares with the game the shelf starts from.
+  function recCard(r, shelf) {
+    const t = parseTitle(r.name || r.title);
+    const known = S.byId.get(r.id);
+    const has = r.cover != null ? !!r.cover : known ? !!known.game.cover : false;
+    let line1 = '';
+    let line2 = '';
+    let when = '';
+    if (shelf === 'unfinished') {
+      line1 = timeAgo(r.last);
+      when = formatMoment(r.last);
+      const ra = r.ra && r.ra.total > 0 ? `${r.ra.unlocked} / ${r.ra.total} achievements` : '';
+      line2 = [formatPlaytime(r.playtime), ra].filter(Boolean).join(' · ');
+    } else {
+      line1 = (r.genres || []).join(', ');
+      line2 = [r.developer, r.year].filter(Boolean).join(' · ');
+    }
+    return h('article', { class: 'tile resume', vars: systemTint(r.system) },
+      h('a', { class: 'tl', href: gameHref(r.system, r.id), dataset: { fk: `rec-${shelf}:${r.id}` }, title: `${t.full} (${systemName(r.system)})` },
+        h('span', { class: 'artw' },
+          artBox({ id: r.id, system: r.system, has }),
+          h('span', { class: 'b-sys', title: systemName(r.system) }, systemCode(r.system))),
+        h('span', { class: 't' }, t.name),
+        h('span', { class: 's when', title: when || line1 }, line1 || ' '),
+        h('span', { class: 's' }, line2 || ' ')));
+  }
+
   // The disk of a console as its last report says (see "Disk space" in the design): a bar of the
   // space used and the figures. Nothing when the console never reported (the API sends nulls).
   function diskMeter(d) {
@@ -396,7 +425,7 @@
   W.ui = {
     gameHref, systemHref, systemTint, artBox, regionChip, raBadge, RA_TEXT,
     statusOf, paintProgress, pnode, segs, led,
-    devicesOf, paintSlot, paintSlots, slotBtn, slots, tile, resumeCard, diskMeter, playMarks, skeletonTiles,
+    devicesOf, paintSlot, paintSlots, slotBtn, slots, tile, resumeCard, recCard, diskMeter, playMarks, skeletonTiles,
     leverModel, lever, sysCard,
   };
 })();
