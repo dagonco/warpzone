@@ -337,7 +337,9 @@ the pauses, the downloads and the guarded writes.
 
 The UI reads the ES-DE scrape that is already on the hub, read-only:
 
-- `frontend/es-de/gamelists/<system>/gamelist.xml`, parsed with `artwork.parse_gamelist`. A
+- `frontend/es-de/gamelists/<system>/gamelist.xml`, read with `artwork.read_gamelist` (a file over 32 MiB is
+  refused without being loaded, and the system shows no metadata) and parsed with
+  `artwork.parse_gamelist`. A
   game's entry is the one whose `<path>` equals its `gamelist`, or else that path with its
   leading folders dropped one by one (see below). The API passes on `name`, `desc`,
   `rating`, `releasedate`, `developer`, `publisher`, `genre` and `players`.
