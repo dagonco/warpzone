@@ -24,7 +24,9 @@ The contract:
 - **Layout.** `--root` (or `[inbox] root`) is the hub root as mounted on this machine:
   it must hold `inbox/` and `library/roms/`. Items are the top-level files and folders
   of `inbox/`. Hidden files, `@eaDir`, `#recycle`, `Thumbs.db` and any `_*` folder
-  (`_done`, `_revisar`) are never items. An item modified in the last 30 seconds is left
+  (`_done`, `_revisar`, `_unverified`) are never items of that scan; the only `_*` folder
+  that holds items is `_unverified/<system>/` (see
+  [Roms no DAT knows](#roms-no-dat-knows)). An item modified in the last 30 seconds is left
   alone, since it may still be copying.
 - **Report only by default.** Without `--apply` it unpacks into a local work folder,
   identifies, plans and prints, and writes nothing to the share. With `--apply` it
@@ -76,6 +78,8 @@ The contract:
   size/CRC32 check after the copy compares those. A whole-file match always wins, two names
   with the same data are ambiguous as before, and a file with no iNES magic or no
   headerless match goes to review as "no DAT match".
+- **Roms no DAT knows.** See [Roms no DAT knows](#roms-no-dat-knows) below; a file the user
+  drops in `inbox/_unverified/<system>/` and no DAT identifies is filed as it is.
 - **Formats follow the library.** `psx`, `saturn`, `dreamcast`: `chdman createcd` from
   the cue or gdi, then `chdman verify`. `ps2`: `createdvd` for an `.iso`, `createcd`
   for cue/bin. A lone `.bin` without a cue gets a generated one (PlayStation only).
@@ -150,9 +154,58 @@ The contract:
 
 The decisions (`skip_name`, `unsafe_member`, `select_purge`, `plan_units`,
 `destination_verdict`, `whitelist_line`, `resolve_refs`, `unsupported_reason`,
+`unverified_reason`, `unverified_match`,
 `match_dat`, `group_discs`, `parse_dat`) are pure and unit-tested; conversions are
 tested with stand-in `chdman` and `RAHasher` scripts, and one test runs the cartridge
 flow end to end with no external tool.
+
+## Roms no DAT knows
+
+Homebrew and aftermarket releases are in no DAT, so by default they go to review as "no DAT
+match". The user can say that a file is such a rom by dropping it in
+`inbox/_unverified/<system>/`, where `<system>` is the library folder name (`nes`, `snes`,
+`gba`, ...). The folder is only a permission to file what no DAT explains; it never skips
+verification.
+
+- **Items.** `scan_unverified` lists the files and folders inside each
+  `_unverified/<system>/` (hidden and junk names, symbolic links and anything directly in
+  `_unverified/` that is not a system folder are no items; the report names the stray ones). Each is
+  processed like any item, with its system folder name as `unverified`, and shown as
+  `_unverified/<system>/<name>`. Its original goes to `_done/<date>/` or `_revisar/` under its
+  own name like the others.
+- **A DAT wins.** The item goes through the whole pipeline first: the kind handlers, then the
+  DAT lookup in every system. A file a DAT matches is filed the normal way, under the DAT's
+  game name and into the DAT's system, whatever folder it was in, and is not marked.
+- **What is left.** Only the files nothing explained (the "no DAT match" ones) are looked at, by
+  `unverified_reason` (pure). A file is refused, with a reason that goes to `_revisar/`, when
+  its system is not one of the cartridge systems `inbox` stores
+  (`UNVERIFIED_EXTENSIONS` in `inbox_core.py`: `nes`, `snes`, `n64`, `gb`, `gbc`, `gba`,
+  `genesis`, `mastersystem`, `gamegear`; disc systems, `psp`, `gc` and the rest are not),
+  when its extension is not one the system accepts (`nes` `.nes`; `snes` `.sfc`, `.smc`; `n64`
+  `.z64`, `.n64`, `.v64`; `gb` `.gb`; `gbc` `.gbc`, `.gb`; `gba` `.gba`; `genesis` `.md`,
+  `.gen`, `.smd`, `.bin`; `mastersystem` `.sms`; `gamegear` `.gg`), when it is empty, or, for
+  `nes`, when it does not start with the iNES magic `NES\x1a`. These are the only header
+  checks the code knows; the other systems are checked by extension alone. Sidecars (text,
+  images, ...) travel with the item and are ignored, as always.
+- **Filing.** A file that passes becomes a `Unit` with `unverified` set, whose match is
+  built by `unverified_match`: a game with one rom that is the file itself (its size, CRC32
+  and SHA-1). A loose file, or a file in a folder item, gives the game its own name without
+  the extension and the rom its own base name. When the item is an archive and exactly one
+  of its files is a rom to file, the game takes the archive's name without its extension (the
+  curated, No-Intro-style name the library follows; the member's name is often bare) and
+  the rom is named `<archive name><the member's extension>`, so the zip and its member
+  match as for a DAT game. An archive with several roms keeps the base name of each member.
+  Everything after that is the normal path of a cartridge
+  game: `<name>.zip` in `library/roms/<system>/` holding the rom under its own file name, the
+  copy to `.part`, the read-back and the size/CRC32 check, the re-check right before the
+  rename, no overwrite (the same content is "already in the library", anything else is a
+  conflict and goes to review) and the RA hash of the source and the result when
+  `[inbox] rahasher` is set.
+- **Report.** The unit line reads `would place (unverified)` without `--apply`, and
+  `placed` (or `already in the library`) with it, both followed by
+  `, not in any DAT (filed from _unverified)`.
+- **Catalog.** The catalog game gets the flag `unverified` in `flags` and no `dat` (see
+  [The catalog index](/warpzone/development/design/library-ui/#the-catalog-index)).
 
 ## Switch games
 

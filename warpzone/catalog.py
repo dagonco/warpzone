@@ -16,7 +16,7 @@ import json
 import posixpath
 import re
 import unicodedata
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -29,6 +29,7 @@ FORMAT = 1
 ID_LENGTH = 16
 FILE, DIR = "file", "dir"
 UNLISTABLE = "unlistable"
+UNVERIFIED = "unverified"  # filed by `inbox` from `_unverified/`: no DAT knows it
 # Systems whose games live one level down, in `roms/<system>/roms/`.
 # The whitelist model owns the rule of which paths a whole system is (`whitelist.system_roots`).
 INNER_ROMS = whitelist.SUBROOT_SYSTEMS
@@ -435,13 +436,16 @@ def merge(
     today: str,
     dat: Mapping[str, str] | None = None,
     serials: Mapping[str, tuple[str, ...]] | None = None,
+    unverified: Collection[str] = (),
 ) -> list[Game]:
     """Derived games plus what only earlier runs and `inbox` know.
 
     A file part keeps its stored sha1 while its size and mtime are unchanged. `added`, `dat`,
     `ra` and `serials` are kept for games that stay; a new game is `added` today. `dat` maps
     the primary path of a game `inbox` just filed to its DAT name, `serials` to the DAT's
-    serials. Games no longer derived are dropped.
+    serials. `unverified` lists the primary paths of games `inbox` filed with no DAT match;
+    they get the `unverified` flag, which a game keeps until a DAT name is recorded for it.
+    Games no longer derived are dropped.
     """
     out = []
     for game in derived:
@@ -459,9 +463,14 @@ def merge(
             ):
                 part = replace(part, sha1=was.sha1)
             parts.append(part)
+        named = game.primary in (dat or {})
+        marked = game.primary in unverified or (
+            old is not None and UNVERIFIED in old.flags and not named
+        )
         out.append(
             replace(
                 game,
+                flags=(*game.flags, UNVERIFIED) if marked else game.flags,
                 parts=tuple(parts),
                 added=(old.added if old and old.added else today),
                 dat=(dat or {}).get(game.primary) or (old.dat if old else None),

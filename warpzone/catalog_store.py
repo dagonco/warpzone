@@ -204,6 +204,7 @@ def update_system(
     dry_run: bool = False,
     dat: Mapping[str, str] | None = None,
     serials: Mapping[str, tuple[str, ...]] | None = None,
+    unverified: Collection[str] = (),
     ra_known: RaKnown | None = None,
     ra_hasher: RaHasher | None = None,
     ra_limit: int | None = None,
@@ -234,7 +235,9 @@ def update_system(
         for _ in range(WRITE_TRIES):
             doc, stamp = read_state(path)
             previous = doc.games if doc else {}
-            games = catalog.merge(previous, derived, today=today, dat=dat, serials=serials)
+            games = catalog.merge(
+                previous, derived, today=today, dat=dat, serials=serials, unverified=unverified
+            )
             if not dry_run:
                 pending = catalog.pending_hashes(games)
                 if pending:
@@ -669,6 +672,7 @@ def update_after_inbox(
     out: Callable[[str], None],
     warn: Callable[[str], None],
     serials: Mapping[str, tuple[str, ...]] | None = None,
+    unverified: Collection[str] = (),
     ra_known: RaKnown | None = None,
     now: datetime | None = None,
 ) -> None:
@@ -685,6 +689,7 @@ def update_after_inbox(
             updated=updated,
             dat=dat,
             serials=serials,
+            unverified=unverified,
             ra_known=ra_known,
             out=out,
         )

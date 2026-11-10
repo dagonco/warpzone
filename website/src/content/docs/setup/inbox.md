@@ -141,13 +141,27 @@ vita_zrif = "~/keys/PSV_GAMES.tsv"            # optional: zRIF keys for PS Vita 
    A multi-disc game of a CHD system goes in `<game without disc tag>.m3u/` with every disc and a `<game>.m3u` playlist, and only when all its discs are in the item; otherwise it goes to review.
 4. **Checks RetroAchievements** (optional). With `rahasher` configured it hashes the source and the result and refuses to place a game whose hash changed. With `RA_API_KEY` in the environment it looks the hash up and reports `supported (<title>)` or `hash not linked`. The key is never printed.
 5. **Places** the result in `library/roms/<system>/` (copied to `<name>.part`, read back, then renamed). It never overwrites: the same content is reported as "already in the library", different content under the same name goes to review.
-6. **Files the original** in `inbox/_done/<date>/`, or in `inbox/_revisar/` with a `<item>.reason.txt` (no DAT match, incomplete multi-disc, conversion or verify failed, RA hash changed, conflict, missing tool). On every `--apply`, `_done` folders named like a date and older than 7 days are deleted, nothing else.
+6. **Files the original** in `inbox/_done/<date>/`, or in `inbox/_revisar/` with a `<item>.reason.txt` (no DAT match (unless you dropped the file in `_unverified/<system>/`), incomplete multi-disc, conversion or verify failed, RA hash changed, conflict, missing tool). On every `--apply`, `_done` folders named like a date and older than 7 days are deleted, nothing else.
 
 **One `--apply` at a time.** While it works, `--apply` holds a lock file, `inbox/.warpzone.lock`, with the host name, the process id and the start time of the run, and removes it when it ends (also after an error or Ctrl-C). A second `--apply` on the same hub, from this machine or another desktop that mounts the share, stops with exit code 2 and says who holds the lock and since when; a report without `--apply` never needs the lock. If a run was killed and left its lock behind, the lock counts as stale once it is older than 12 hours or when its process is gone from the machine that took it (a lock from another machine cannot be checked, so it only goes stale by age). A stale lock is never taken silently: the refusal says so, and `warpzone inbox --apply --force-lock` takes it over. A lock that is still live is never taken, with or without `--force-lock`.
 
-Items modified in the last 30 seconds are left alone (they may still be copying), and `_*` folders, hidden files, `@eaDir` and `.DS_Store` are never items. warpzone does not edit whitelists: add the printed lines to the device whitelists yourself ([Whitelists and pruning](/warpzone/setup/whitelists/)). Exit code 1 when any item needs review.
+Items modified in the last 30 seconds are left alone (they may still be copying), and `_*` folders (except the `<system>` folders inside `_unverified`, see [Homebrew and other roms no DAT knows](#homebrew-and-other-roms-no-dat-knows)), hidden files, `@eaDir` and `.DS_Store` are never items. warpzone does not edit whitelists: add the printed lines to the device whitelists yourself ([Whitelists and pruning](/warpzone/setup/whitelists/)). Exit code 1 when any item needs review.
 
 A PS Vita dump kept as a game folder is filed (see [PS Vita games](#ps-vita-games)), and a Vita `.pkg` is installed with Vita3K first (see [PS Vita packages](#ps-vita-packages)). `.vpk` files, PS3 or Xbox games kept as extracted folders and PS3 `.pkg` files are not supported yet and go to review ("not supported by inbox yet").
+
+## Homebrew and other roms no DAT knows
+
+Homebrew, translations and aftermarket releases are in no Redump or No-Intro DAT, so `inbox` sends them to review as "no DAT match". When you know a file is one of those, say so by dropping it (or the archive that holds it) in `inbox/_unverified/<system>/`, with `<system>` the library folder name: `nes`, `snes`, `n64`, `gb`, `gbc`, `gba`, `genesis`, `mastersystem` or `gamegear`. For example `inbox/_unverified/nes/My Homebrew.nes`. Create the folder yourself; `inbox` never does.
+
+```bash
+warpzone inbox          # shows "would place (unverified)"
+warpzone inbox --apply
+```
+
+- The folder is a permission, not a shortcut. A file a DAT recognises is filed the normal way, under the DAT's name, and is not marked.
+- A file nothing recognises is filed as `library/roms/<system>/<file name>.zip`, with the rom inside under the same name. A loose file keeps its own name. An archive that holds exactly one rom gives its name to both the entry and the rom inside, so name the archive the way you want the game called (`Witch n' Wiz (World) (Aftermarket) (Unl).zip` is filed as `Witch n' Wiz (World) (Aftermarket) (Unl).zip`, whatever the rom inside is called); an archive with several roms keeps the name of each rom. The report says `not in any DAT (filed from _unverified)`, and the game is marked `unverified` in the catalog.
+- Before filing, `inbox` checks that the file is plausibly for that system: an extension the system accepts (`.nes` for `nes`, `.gba` for `gba`, ...), not empty, and for `nes` the `NES` iNES header. A file that fails, or a system folder `inbox` cannot file without a DAT (discs, PSP, GameCube, anything not in the list above), goes to review with the reason; a file placed directly in `_unverified/`, outside a system folder, is left alone and the report names it.
+- Nothing is overwritten, the original goes to `_done/` and the RetroAchievements hash is computed as for any game. Whitelist lines are printed as usual.
 
 ## Switch games
 

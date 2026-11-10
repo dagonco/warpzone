@@ -133,7 +133,12 @@ several, and a game is on for a console only when every part is.
   Dreamcast game's memory card.
 - `ra`: see [RetroAchievements](#retroachievements).
 - `flags`: `unlistable` when a part cannot be written as a whitelist line (see
-  [Escaping](#escaping)); the UI shows such a game and refuses to change it.
+  [Escaping](#escaping)); the UI shows such a game and refuses to change it. `unverified` when
+  `inbox` filed the game from `inbox/_unverified/<system>/` because no DAT knows it (see
+  [Roms no DAT knows](/warpzone/development/design/inbox/#roms-no-dat-knows)); `inbox` sets it,
+  a scan keeps it, and it goes away when `inbox` later records a DAT name for the game.
+  Files written before the flag existed simply never have it, and a reader ignores flags it does
+  not know.
 
 ### How parts are derived
 

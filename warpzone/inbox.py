@@ -49,7 +49,9 @@ from warpzone.dat import (
     GameMatch,
 )
 from warpzone.inbox_core import (
+    ARCHIVE_EXTENSIONS,
     CHUNK,
+    INES_MAGIC,
     SIDECAR_EXTENSIONS,
     Context,
     InboxError,
@@ -71,17 +73,19 @@ from warpzone.inbox_core import (
     stage_item,
     tail,
     unsupported_reason,
+    unverified_reason,
     zip_members,
 )
 from warpzone.report import Reporter
 
 DONE_DIR = "_done"
 REVIEW_DIR = "_revisar"
+UNVERIFIED_DIR = "_unverified"  # holds <system>/ folders of roms no DAT knows
 DONE_KEEP_DAYS = 7
 SETTLE_SECONDS = 30  # an item changed more recently than this may still be copying
 COMPRESSED_GC = (".gcz",)  # .rvz and .wia are read by `inbox_dolphin`
 # Files that travel with a dump but are not part of any DAT; never identified.
-INES_MAGIC, INES_HEADER_BYTES = b"NES\x1a", 16
+INES_HEADER_BYTES = 16
 ZIP_DATE = (1996, 12, 24, 23, 32, 0)  # fixed, so the same game always zips to the same bytes
 DOLPHIN_HINT = "dolphin-tool convert -f rvz -c zstd -l 5 -b 131072"
 _DATE_DIR = re.compile(r"^\d{4}-\d\d-\d\d$")
@@ -145,6 +149,7 @@ class Unit:
     system: str
     entry: str  # name inside roms/<system>/
     matches: tuple[GameMatch, ...]  # one, or all the discs of an m3u folder
+    unverified: bool = False  # filed from `_unverified/`: the "match" describes the file itself
 
     @property
     def is_m3u(self) -> bool:
@@ -191,6 +196,18 @@ def plan_units(
             ext = output_extension(g.system, compressed(m))
             units.append(Unit(g.system, m.game.name + ext, (m,)))
     return units, problems
+
+
+def unverified_match(system: str, info: FileInfo, stem: str | None = None) -> GameMatch:
+    """A stand-in for a DAT match of a rom no DAT knows: a game named after the file, with
+    one rom that is the file (its own name, size and hashes), so the same zipping and
+    checks as for a DAT game apply. With `stem` (the name of the archive that holds the
+    only rom), the game and the rom take that name, and the rom keeps its own extension."""
+    base = re.split(r"[\\/]", info.path)[-1]
+    if stem:
+        base = stem + os.path.splitext(base)[1]
+    rom = datmod.Rom(base, info.size, info.crc, info.sha1)
+    return GameMatch(system, datmod.Game(os.path.splitext(base)[0], (rom,)), (info,))
 
 
 # ------------------------------------------------------------------ tools and options
@@ -497,7 +514,8 @@ def process_unit(
     ctx: Context, unit: Unit, staged: Mapping[str, Staged], scratch: Path
 ) -> UnitResult:
     res = UnitResult(unit.system, unit.entry, "planned" if not ctx.opts.apply else "placed")
-    if len(unit.matches) == 1 and not unit.entry.endswith(".m3u"):
+    res.unverified = unit.unverified
+    if len(unit.matches) == 1 and not unit.entry.endswith(".m3u") and not unit.unverified:
         res.dat = unit.matches[0].game.name
     res.serials = tuple(dict.fromkeys(x for m in unit.matches for x in m.game.serials))
     sysdir = ctx.roms / unit.system
@@ -629,8 +647,12 @@ def _place(
             shutil.rmtree(part, ignore_errors=True)
 
 
-def process_item(ctx: Context, item: Path, number: int) -> ItemResult:
-    result = ItemResult(item.name)
+def process_item(
+    ctx: Context, item: Path, number: int, unverified: str | None = None
+) -> ItemResult:
+    """Identify and file one item. `unverified` is the system of the `_unverified/<system>/`
+    folder the item was dropped in: a rom no DAT knows may then be filed as it is."""
+    result = ItemResult(f"{UNVERIFIED_DIR}/{unverified}/{item.name}" if unverified else item.name)
     work = ctx.work / f"item{number}"
     try:
         newest = max(
@@ -642,7 +664,7 @@ def process_item(ctx: Context, item: Path, number: int) -> ItemResult:
             result.left = f"changed {int(max(age, 0))} s ago, still being copied? left in the inbox"
             return result
         work.mkdir(parents=True)
-        _identify_and_place(ctx, item, work, result)
+        _identify_and_place(ctx, item, work, result, unverified)
     except ItemFailure as exc:
         result.reasons.append(str(exc))
     except OSError as exc:
@@ -652,7 +674,9 @@ def process_item(ctx: Context, item: Path, number: int) -> ItemResult:
     return result
 
 
-def _identify_and_place(ctx: Context, item: Path, work: Path, result: ItemResult) -> None:
+def _identify_and_place(
+    ctx: Context, item: Path, work: Path, result: ItemResult, unverified: str | None = None
+) -> None:
     for handler in kind_handlers():
         if handler.claims(ctx, item):
             handler.process(ctx, item, work, result)
@@ -691,16 +715,20 @@ def _identify_and_place(ctx: Context, item: Path, work: Path, result: ItemResult
         unmatched = [f for f in unmatched if f.path not in taken]
     for names in ambiguous:
         result.reasons.append("ambiguous DAT match, cannot tell apart: " + " | ".join(names))
+    extra: list[Unit] = []
+    if unverified and unmatched:
+        extra, unmatched = _unverified_units(unverified, item, by_rel, unmatched, result)
     if unmatched:
         shown = ", ".join(f.path for f in unmatched[:5]) + (", ..." if len(unmatched) > 5 else "")
         what = "no DAT match" if not matches else "files not in any DAT (the rest was placed)"
         result.reasons.append(f"{what}: {shown}")
-    if not matches:
-        return
-    dats = {s: ctx.library.load(s) for s in {m.system for m in matches}}
-    groups = datmod.group_discs(matches, dats)
-    units, problems = plan_units(groups, lambda m: by_rel[m.files[0].path].origin is not None)
-    result.reasons.extend(problems)
+    units: list[Unit] = []
+    if matches:
+        dats = {s: ctx.library.load(s) for s in {m.system for m in matches}}
+        groups = datmod.group_discs(matches, dats)
+        units, problems = plan_units(groups, lambda m: by_rel[m.files[0].path].origin is not None)
+        result.reasons.extend(problems)
+    units.extend(extra)
     for i, unit in enumerate(units):
         scratch = work / f"u{i}"
         unit_result = process_unit(ctx, unit, by_rel, scratch)
@@ -709,7 +737,69 @@ def _identify_and_place(ctx: Context, item: Path, work: Path, result: ItemResult
             result.reasons.append(unit_result.reason)
 
 
+def _unverified_units(
+    system: str,
+    item: Path,
+    staged: Mapping[str, Staged],
+    unmatched: Sequence[FileInfo],
+    result: ItemResult,
+) -> tuple[list[Unit], list[FileInfo]]:
+    """The files no DAT knows that were dropped in `_unverified/<system>/`: one unit for each
+    that looks like a rom of the system, a review reason for each that does not. Returns the
+    units and the files not dealt with (none: each one is filed or explained).
+
+    When the item is an archive and exactly one of its files is a rom to file, the game takes
+    the archive's name (the curated one); otherwise each rom keeps its own file name."""
+    units: list[Unit] = []
+    roms: list[FileInfo] = []
+    for info in unmatched:
+        with staged[info.path].path.open("rb") as f:
+            head = f.read(INES_HEADER_BYTES)
+        why = unverified_reason(system, info.path, head, info.size)
+        if why:
+            result.reasons.append(why)
+            continue
+        roms.append(info)
+    stem = os.path.splitext(item.name)[0] if _is_archive(item) and len(roms) == 1 else None
+    for info in roms:
+        match = unverified_match(system, info, stem)
+        units.append(Unit(system, match.game.name + ".zip", (match,), unverified=True))
+    return units, []
+
+
+def _is_archive(item: Path) -> bool:
+    return item.is_file() and item.suffix.lower() in ARCHIVE_EXTENSIONS
+
+
 # ------------------------------------------------------------------ inbox folder
+
+
+def scan_unverified(inbox: Path) -> list[tuple[Path, str]]:
+    """The items of `inbox/_unverified/<system>/`, with the folder's system name: the files
+    and folders inside each system folder. Anything else in `_unverified/` is no item."""
+    root = inbox / UNVERIFIED_DIR
+    if not root.is_dir() or root.is_symlink():
+        return []
+    items: list[tuple[Path, str]] = []
+    for folder in sorted(root.iterdir(), key=lambda q: q.name):
+        if skip_name(folder.name) or folder.is_symlink() or not folder.is_dir():
+            continue
+        for p in sorted(folder.iterdir(), key=lambda q: q.name):
+            if not skip_name(p.name) and not p.is_symlink():
+                items.append((p, folder.name))
+    return items
+
+
+def _stray_unverified(inbox: Path) -> list[str]:
+    """Names directly in `_unverified/` that are not system folders: they are left alone."""
+    root = inbox / UNVERIFIED_DIR
+    if not root.is_dir() or root.is_symlink():
+        return []
+    return [
+        p.name
+        for p in sorted(root.iterdir(), key=lambda q: q.name)
+        if not skip_name(p.name) and (p.is_symlink() or not p.is_dir())
+    ]
 
 
 def scan(inbox: Path) -> list[Path]:
@@ -796,10 +886,12 @@ def run_inbox(opts: Options, rep: Reporter) -> int:
 
 
 def _run(opts: Options, rep: Reporter, inbox: Path, library: DatLibrary) -> int:
-    items = scan(inbox)
+    items = [(p, None) for p in scan(inbox)] + [(p, s) for p, s in scan_unverified(inbox)]
     mode = "apply" if opts.apply else "report only"
     rep.out(f"inbox: {inbox} ({mode}), {len(items)} item(s)")
     rep.out(f"tools: {_describe_tools(opts.tools)}; DATs: {', '.join(library.systems())}")
+    for name in _stray_unverified(inbox):
+        rep.out(f"{UNVERIFIED_DIR}: ignored {name} (put it in {UNVERIFIED_DIR}/<system>/)")
     if not opts.tools.rahasher:
         rep.out("RA: not checked (set [inbox] rahasher to hash images)")
     elif not opts.ra_key:
@@ -812,8 +904,8 @@ def _run(opts: Options, rep: Reporter, inbox: Path, library: DatLibrary) -> int:
     today = opts.today()
     results: list[ItemResult] = []
     try:
-        for n, item in enumerate(items, 1):
-            result = process_item(ctx, item, n)
+        for n, (item, unverified) in enumerate(items, 1):
+            result = process_item(ctx, item, n, unverified)
             results.append(result)
             if opts.apply and not result.left:
                 try:
@@ -852,6 +944,7 @@ def _update_catalog(opts: Options, rep: Reporter, results: Sequence[ItemResult])
         return
     dat = {f"{u.library_folder}/{u.entry}": u.dat for u in placed if u.dat}
     serials = {f"{u.library_folder}/{u.entry}": u.serials for u in placed if u.serials}
+    unverified = {f"{u.library_folder}/{u.entry}" for u in placed if u.unverified}
     ra_known = {
         f"{u.library_folder}/{u.entry}": (u.ra_hash, f"{u.library_folder}/{u.ra_of}")
         for u in placed
@@ -863,6 +956,7 @@ def _update_catalog(opts: Options, rep: Reporter, results: Sequence[ItemResult])
             systems,
             dat=dat,
             serials=serials,
+            unverified=unverified,
             ra_known=ra_known,
             out=rep.out,
             warn=rep.warn,
@@ -897,7 +991,13 @@ def _print_item(
         "review": "REVIEW",
     }
     for u in result.units:
-        rep.out(f"  {u.system}: {u.entry}: {words[u.outcome]}")
+        word = "would place (unverified)" if u.unverified and u.outcome == "planned" else None
+        tag = (
+            ", not in any DAT (filed from _unverified)"
+            if u.unverified and u.outcome != "review"
+            else ""
+        )
+        rep.out(f"  {u.system}: {u.entry}: {word or words[u.outcome]}{tag}")
         if u.outcome != "review":
             rep.out(f"    path: {u.path}")
         for line in u.ra:
