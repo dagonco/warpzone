@@ -61,7 +61,7 @@ and states; Dolphin GC, Wii and states; DuckStation, PCSX2, melonDS, MAME, RMG
 Vita3K; ScummVM; PrimeHack (GC, Wii, states); Eden (`nand/user/save`, plus the
 user profiles in `nand/system/save/8000000000000010`); Ryujinx (`bis/user`
 restricted to `save` and `saveMeta`, plus the profiles in `bis/system/save`);
-Azahar (sdmc, states); shadPS4; Cemu (`mlc01/usr/save`); Xenia (Proton:
+Azahar (sdmc, states); shadPS4 (`home/1000/savedata`, the first user); Cemu (`mlc01/usr/save`); Xenia (Proton:
 `~/Emulation/roms/xbox360/content`, native: `~/.local/share/Xenia/content`;
 EmuDeck installs one or the other, and each has its own hub folder);
 Flycast (`vmu_save_*.bin` and the `nvmem` files only, from the folder that also
@@ -73,7 +73,12 @@ User profiles are synced so that a save keeps its owner on every console: a
 Switch save belongs to a profile ID, and the same ID must exist everywhere.
 
 The save key `<emu>-<kind>` maps to folder ID `wz-save-<emu>-<kind>` and hub
-path `saves/<emu>/<kind>`. A save folder with an `ignore` list gets those
+path `saves/<emu>/<kind>`. The optional `group` key of a `[saves.*]` entry (default `saves`,
+any folder group of the device config) says which group brings the folder: a device gets it
+only if it lists that group, and listing `saves` does not bring a folder of another group.
+`yarg-data` has `group = "songs"`, so a console that plays no songs receives nothing of YARG
+(and the hub does not show a folder that stays at 0% because YARG is not installed there).
+The folder ID, the hub path and the device path do not depend on the group. A save folder with an `ignore` list gets those
 patterns (after `#include patterns-common.stignore`).
 
 Save paths that do not exist on the device yet (the emulator was never opened,
@@ -216,6 +221,30 @@ profile data, not code that tests the profile name.
 - **`create_when`** on a `[saves.*]` entry, with the meaning it has for `[bios.*]`: create
   the folder when that directory exists. RetroArch writes `saves/` and `states/` only on
   the first save, so without it the two folders would stay skipped until then.
+- **`previous_paths`** on a `[saves.*]` entry: earlier values of `path`. When Syncthing has
+  the folder at one of them, `provision device` removes the folder from Syncthing and adds
+  it again at `path`, in the same run, unattended runs included, in two cases
+  (`provision_folders.can_move`; `fully_synced` is pure):
+  - the old directory holds nothing but Syncthing's marker and `.stignore`, or does not exist;
+  - the old directory holds files, but all of them are on the hub: the local `db/status` is
+    `idle` with `needTotalItems` 0 and no local changes, and `db/completion` of every device
+    the folder is shared with is 100 from a `valid` remote state (any error answering is
+    "not synced"). This is the second console to upgrade, whose old folder downloaded what
+    the first one uploaded.
+
+  Removing a folder deletes no file and the new folder starts from a fresh index, so nothing
+  can be read as a mass delete; files already on the hub arrive by themselves in the new
+  directory, and the old directory is left as it is. The check is made twice: when the move
+  is decided and again right before `remove_folder`, since whitelist waits and other folders
+  come between. Otherwise (files not on the hub yet, or an old path the profile does not
+  list) the move is refused and nothing changes. The refusal says: remove (or pause) the
+  folder in Syncthing first, the files stay on disk, then move the files and run provision
+  again. Files must never be moved out of a folder Syncthing still syncs: the scan would
+  announce them as deletions to the hub and the other consoles. The new directory must
+  exist when the run decides: an unattended run leaves the old folder in place until it
+  does, and an attended run decides after it made the directories `create_when` asks for.
+  `steamos-emudeck` uses it for `shadps4-saves`, which moved from
+  `~/.local/share/shadPS4/savedata` to `~/.local/share/shadPS4/home/1000/savedata`.
 - **`[es_systems]`** (`source`, `override`, `prefix`, `process`; needs `paths.library`).
   The frontend reads `override` before `source`. `provision device` writes the override as
   the source with every `<path>` element that starts with `prefix` moved to
@@ -313,6 +342,15 @@ changed; `provision device` backs the file up, refuses while ES-DE runs and uses
 write that fails if the file changed meanwhile. `doctor` compares the script with the text
 `provision` would write and reads the rule. The ES-DE startup scripts do not depend on any of
 this: if EmuDeck puts its entry back, only PS4 launching goes back to the Qt launcher.
+
+ES-DE shows nothing of a script's stderr, so every error the script ends with (no version,
+no `Exec=` line, a shortcut it cannot read) is also appended, with a timestamp, to
+`~/.local/state/warpzone/shadps4-launch.log` (`$XDG_STATE_HOME/warpzone/` when that is an
+absolute path; a log that cannot be written is ignored) and shown in a dialog when
+`DISPLAY` or `WAYLAND_DISPLAY` is set: `zenity --error`, else `kdialog --error`, else
+`notify-send`, all under `timeout 60` where `timeout` exists, so the script never waits for
+ever. None of them is a dependency; with none the error stays on stderr. `shadps4.select_version`
+is the pure twin of the script's lookup, used by `doctor` (`shadPS4 version`).
 
 ## Cemu paths
 

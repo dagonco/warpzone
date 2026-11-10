@@ -30,7 +30,8 @@ Why the split:
   never propagate to the hub.
 - Saves need two-way sync; they live in their own folders so their direction
   cannot leak into the library.
-- `songs` is not emulation (Clone Hero, YARG) and is mounted outside `~/Emulation`.
+- `songs` is not emulation (Clone Hero, YARG) and is mounted outside `~/Emulation`. YARG's own
+  data (`wz-save-yarg-data`) travels with it, not with `saves`.
 - `settings` is written by `warpzone settings capture` on a device, so it is two-way
   like the saves (see [Emulator settings](/warpzone/development/design/emulator-settings/)).
 
@@ -80,7 +81,9 @@ Folder-level settings:
 
 A device subscribes to a subset of folders, set in the private config
 (`folders = ["library", "tools", "saves", "frontend", "songs", "bios", "settings", "play-state"]`).
-`saves` expands to every save folder of the device's profile; `frontend` expands to
+`saves` expands to every save folder of the device's profile that belongs to `saves`, which is
+every one unless its entry names another group (`group = "songs"` on `yarg-data`: YARG's data
+follows the `songs` group, so a device without `songs` gets neither); `frontend` expands to
 `wz-media` and `wz-esde` (a profile with `[artwork]` places and limits them itself, see
 [Frontend artwork](/warpzone/development/design/frontend-artwork/)); `bios` expands to every BIOS placement of the profile;
 `settings` is `wz-settings`; `play-state` is `wz-play-state` and needs `frontend` (see

@@ -50,6 +50,8 @@ class FolderSpec:
     skip_if_missing: bool = False
     # With skip_if_missing: create the missing directory when this one exists.
     create_when: str | None = None
+    # Earlier device paths of a save folder: see `provision_folders.is_move`.
+    previous_paths: tuple[str, ...] = ()
     # Only whitelisted device folders set it: it bounds how long a whitelist
     # edited on the hub takes to apply. None leaves Syncthing's default.
     rescan_interval_s: int | None = None
@@ -94,6 +96,7 @@ class _Def:
     history: bool = False
     skip_if_missing: bool = False
     create_when: str | None = None
+    previous_paths: tuple[str, ...] = ()
 
 
 _STATIC: dict[str, tuple[_Def, ...]] = {
@@ -159,21 +162,25 @@ def _defs_for(device: Device, profile: Profile) -> list[_Def]:
             "the play state lives in the gamelists that group brings"
         )
     for group in device.folders:
-        if group == "saves":
-            for save in profile.saves.values():
-                defs.append(
-                    _Def(
-                        f"wz-save-{save.emu}-{save.kind}",
-                        f"saves/{save.emu}/{save.kind}",
-                        "sendreceive",
-                        "sendreceive",
-                        device_path=save.path,
-                        fixed_ignores=save.ignore,
-                        save=True,
-                        skip_if_missing=True,
-                        create_when=save.create_when,
-                    )
+        # A save folder travels with `saves` unless its profile entry names another group.
+        for save in profile.saves.values():
+            if save.group != group:
+                continue
+            defs.append(
+                _Def(
+                    f"wz-save-{save.emu}-{save.kind}",
+                    f"saves/{save.emu}/{save.kind}",
+                    "sendreceive",
+                    "sendreceive",
+                    device_path=save.path,
+                    fixed_ignores=save.ignore,
+                    save=True,
+                    skip_if_missing=True,
+                    create_when=save.create_when,
+                    previous_paths=save.previous_paths,
                 )
+            )
+        if group == "saves":
             continue
         if group == "bios":
             for place in profile.bios.values():
@@ -273,6 +280,7 @@ def device_specs(
                 required_files=required,
                 skip_if_missing=item.skip_if_missing,
                 create_when=item.create_when,
+                previous_paths=item.previous_paths,
                 rescan_interval_s=device.rescan_seconds if item.whitelist else None,
                 ignore_perms=profile.ignore_perms,
             )

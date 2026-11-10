@@ -10,6 +10,7 @@ from importlib import resources
 from pathlib import Path
 from typing import Any, TypeGuard
 
+from warpzone.config import FOLDER_GROUPS
 from warpzone.errors import UsageError
 from warpzone.safefile import TMP_SUFFIX
 from warpzone.saveconvert import FORMATS as SAVE_CONVERT_FORMATS
@@ -50,6 +51,13 @@ class SaveFolder:
     # installed but has not written its save folder yet). Without it a missing `path`
     # is skipped.
     create_when: str | None = None
+    # Earlier values of `path`. A device whose Syncthing folder is still at one of them
+    # and whose directory there is empty, or all on the hub, is moved to `path` by
+    # `provision device` (see development/design/profiles.md).
+    previous_paths: tuple[str, ...] = ()
+    # The device folder group this folder travels with. Only a device that lists the group
+    # gets it, and `saves` does not bring it when the group is another one.
+    group: str = "saves"
 
 
 @dataclass(frozen=True)
@@ -402,7 +410,9 @@ def parse_profile(data: dict[str, Any], source: str) -> Profile:
         if not isinstance(entry, dict):
             err(f"saves.{key}: must be a table")
             continue
-        for extra in sorted(set(entry) - {"path", "ignore", "create_when"}):
+        for extra in sorted(
+            set(entry) - {"path", "ignore", "create_when", "previous_paths", "group"}
+        ):
             err(f"saves.{key}: unknown key {extra!r}")
         path = entry.get("path")
         if not isinstance(path, str) or not path:
@@ -416,8 +426,23 @@ def parse_profile(data: dict[str, Any], source: str) -> Profile:
         if create_when is not None and (not isinstance(create_when, str) or not create_when):
             err(f"saves.{key}.create_when: must be a non-empty string")
             continue
+        previous = entry.get("previous_paths", [])
+        if not isinstance(previous, list) or not all(isinstance(p, str) and p for p in previous):
+            err(f"saves.{key}.previous_paths: must be a list of non-empty strings")
+            continue
+        group = entry.get("group", "saves")
+        if group not in FOLDER_GROUPS:
+            err(f"saves.{key}.group: must be one of {', '.join(FOLDER_GROUPS)}")
+            continue
         saves[key] = SaveFolder(
-            key, match.group(1), match.group(2), path, tuple(ignore), create_when
+            key,
+            match.group(1),
+            match.group(2),
+            path,
+            tuple(ignore),
+            create_when,
+            previous_paths=tuple(previous),
+            group=group,
         )
 
     library_ignore = _parse_library(data.get("library", {}), err)

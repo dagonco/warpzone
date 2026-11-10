@@ -182,6 +182,40 @@ class ProfileTests(unittest.TestCase):
         self.assert_invalid({**base, "saves": {"a-b": {"path": "~/x", "ignore": "*"}}}, "ignore")
         self.assert_invalid({**base, "saves": {"a-b": {"path": "~/x", "foo": 1}}}, "unknown key")
 
+    def test_saves_previous_paths(self) -> None:
+        base = {"name": "p", "paths": {"library": "~/x"}}
+        parsed = parse_profile(
+            {**base, "saves": {"a-b": {"path": "~/new", "previous_paths": ["~/old"]}}}, "t"
+        )
+        self.assertEqual(parsed.saves["a-b"].previous_paths, ("~/old",))
+        self.assertEqual(
+            parse_profile({**base, "saves": {"a-b": {"path": "~/x"}}}, "t")
+            .saves["a-b"]
+            .previous_paths,
+            (),
+        )
+        for bad in ("~/old", [1], [""]):
+            self.assert_invalid(
+                {**base, "saves": {"a-b": {"path": "~/x", "previous_paths": bad}}}, "previous_paths"
+            )
+        shipped = load_profile("steamos-emudeck").saves["shadps4-saves"]
+        self.assertEqual(shipped.path, "~/.local/share/shadPS4/home/1000/savedata")
+        self.assertEqual(shipped.previous_paths, ("~/.local/share/shadPS4/savedata",))
+
+    def test_save_folder_group(self) -> None:
+        base = {"name": "p", "paths": {"library": "~/x"}}
+        parsed = parse_profile(
+            {**base, "saves": {"a-b": {"path": "~/x"}, "c-d": {"path": "~/y", "group": "songs"}}},
+            "t",
+        )
+        self.assertEqual(parsed.saves["a-b"].group, "saves")
+        self.assertEqual(parsed.saves["c-d"].group, "songs")
+        self.assertEqual(load_profile("steamos-emudeck").saves["yarg-data"].group, "songs")
+        for bad in ("nope", "", 3):
+            self.assert_invalid(
+                {**base, "saves": {"a-b": {"path": "~/x", "group": bad}}}, "saves.a-b.group"
+            )
+
     def test_bios_and_library_validation(self) -> None:
         base = {"name": "p", "paths": {"library": "~/x"}}
         good = {"hub": "bios/x", "path": "~/x"}

@@ -67,7 +67,7 @@ If you remove the line first, the console keeps its copy, and `prune` will repor
 
 **Cause.** The `wz-*` folder already exists in Syncthing with a different path than the config. Changing a folder's path would make Syncthing see a mass delete.
 
-**Fix.** Remove the folder in Syncthing (the files stay on disk), then run the provision command again. See [Safety](/warpzone/operation/safety/).
+**Fix.** Remove the folder in Syncthing (the files stay on disk), then run the provision command again. See [Safety](/warpzone/operation/safety/). If the message says the profile moved the folder and the old folder holds files that are not all on the hub yet, do not move any file yet: Syncthing would announce it as a deletion. Remove (or pause) the folder in Syncthing first (the files stay on disk), then move the files into the new directory and provision again. Often it is enough to wait until the folder is fully synced and run provision again, since a folder whose files are all on the hub is moved by itself.
 
 ### `prune` deletes less than expected, or refuses
 
@@ -161,6 +161,12 @@ A dump that holds `sce_module/steroid.suprx` (a Vitamin dump) always goes to rev
 **Cause.** RetroArch's Flycast core keeps its VMUs in `bios/dc/` unless per-game VMUs are on, and warpzone does not sync that folder. `doctor` warns that `Flycast's per-game VMUs are off`.
 
 **Fix.** Change the core option as the `doctor` fix says (it names the menu path), keeping `VMU A1` or `All VMUs`. See [Dreamcast saves](/warpzone/guides/emudeck/#dreamcast-saves-retroarch-flycast).
+
+### A PS4 game does nothing when started
+
+**Cause.** The shadPS4 Qt launcher has no version installed or selected, so warpzone's launch script has no emulator to run. ES-DE shows nothing of the script's error.
+
+**Fix.** `doctor` shows it as `shadPS4 version`. Open the shadPS4 Qt launcher, go to Version Manager, then download and select a version. Failed launches are also logged in `~/.local/state/warpzone/shadps4-launch.log`. See [shadPS4 launch script](/warpzone/guides/emudeck/#shadps4-launch-script).
 
 ### EmuDeck undid a launcher or a setting
 

@@ -49,7 +49,37 @@ EXPECTED_FILES = {
     ("ryujinx", "config"): ("~/.config/Ryujinx/Config.json", "json"),
     ("xenia", "config"): ("~/Emulation/roms/xbox360/xenia-canary.config.toml", "toml"),
     ("esde", "es-settings"): ("~/ES-DE/settings/es_settings.xml", "esde-xml"),
+    ("shadps4", "config"): ("~/.local/share/shadPS4/config.json", "json"),
+    ("shadps4", "launcher"): ("~/.local/share/shadPS4QtLauncher/qt_ui.ini", "ini"),
 }
+
+# What shadPS4 v0.21 writes in config.json, and what its Qt launcher writes in qt_ui.ini.
+SHADPS4_CONFIG = (
+    "{\n"
+    '  "General": {\n'
+    '    "install_dirs": [{"enabled": true, "path": "/fake/games"}],\n'
+    '    "addon_install_dir": "/fake/dlc",\n'
+    '    "home_dir": "",\n'
+    '    "volume_slider": 100,\n'
+    '    "console_language": 1,\n'
+    '    "big_picture_scale": 1000\n'
+    "  },\n"
+    '  "Input": {"cursor_state": 1},\n'
+    '  "GPU": {"window_width": 1280, "full_screen": false, "fsr_enabled": true},\n'
+    '  "Vulkan": {"gpu_id": -1}\n'
+    "}\n"
+)
+SHADPS4_LAUNCHER = (
+    "[general_settings]\n"
+    "guiLanguage=en_US\n"
+    "shadPath=/fake/emu\n"
+    "theme=0\n"
+    "[main_window]\n"
+    "geometry=@ByteArray(fake)\n"
+    "[version_manager]\n"
+    "versionSelected=/fake/version\n"
+)
+
 
 # Canonical key -> the lists it must fall in ("plain" for none of them).
 FIXTURES: dict[tuple[str, str], tuple[str, dict[str, str | set[str]]]] = {
@@ -649,6 +679,32 @@ FIXTURES: dict[tuple[str, str], tuple[str, dict[str, str | set[str]]]] = {
             "ThemeSet": "plain",
         },
     ),
+    ("shadps4", "config"): (
+        SHADPS4_CONFIG,
+        {
+            "General.install_dirs": "noise",
+            "General.addon_install_dir": "noise",
+            "General.home_dir": "noise",
+            "General.volume_slider": "plain",
+            "General.console_language": "known",
+            "General.big_picture_scale": "noise",
+            "Input.cursor_state": "noise",
+            "GPU.window_width": "device",
+            "GPU.full_screen": "device",
+            "GPU.fsr_enabled": "plain",
+            "Vulkan.gpu_id": "device",
+        },
+    ),
+    ("shadps4", "launcher"): (
+        SHADPS4_LAUNCHER,
+        {
+            "[general_settings]guiLanguage": "known",
+            "[general_settings]shadPath": "noise",
+            "[general_settings]theme": "plain",
+            "[main_window]geometry": "noise",
+            "[version_manager]versionSelected": "noise",
+        },
+    ),
 }
 
 
@@ -685,6 +741,7 @@ class ShippedSettingsTests(unittest.TestCase):
                     "ryujinx",
                     "xenia",
                     "esde",
+                    "shadps4",
                 ]
             ),
         )
@@ -715,6 +772,9 @@ class ShippedSettingsTests(unittest.TestCase):
         self.assertEqual(self.settings["ppsspp"].process, ("PPSSPPSDL", "PPSSPPQt"))
         # The Proton build: the kernel cuts the name to "xenia_canary.ex", which matches.
         self.assertEqual(self.settings["xenia"].process, ("xenia_canary.exe",))
+
+    def test_shadps4_uses_the_process_names_of_its_profile_table(self) -> None:
+        self.assertEqual(self.settings["shadps4"].process, self.profile.shadps4.process)
 
     def test_retroarch_core_options_are_a_template(self) -> None:
         opt = self.settings["retroarch"].files["opt"]
@@ -857,6 +917,41 @@ class ClassificationTests(unittest.TestCase):
         self.assertIn(
             "device",
             categories(self.settings["azahar"].files["qt-config"], "[Layout]layout_option"),
+        )
+
+
+class Shadps4SettingsTests(unittest.TestCase):
+    """The language keys that are shared, written on a sample of shadPS4's own files."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.files = load_profile("steamos-emudeck").settings["shadps4"].files
+
+    def test_the_live_config_is_json_and_the_stale_toml_is_not_declared(self) -> None:
+        self.assertEqual(self.files["config"].path, "~/.local/share/shadPS4/config.json")
+        self.assertNotIn(".toml", "".join(f.path for f in self.files.values()))
+
+    def test_only_the_languages_are_known(self) -> None:
+        self.assertEqual(self.files["config"].known, ("General.console_language",))
+        self.assertEqual(self.files["launcher"].known, ("[general_settings]guiLanguage",))
+
+    def test_paths_warpzone_sets_are_never_shared(self) -> None:
+        for key in ("General.install_dirs", "General.addon_install_dir"):
+            self.assertTrue(any(match(p, key) for p in self.files["config"].noise), key)
+
+    def test_the_console_language_is_written_as_an_int_and_nothing_else_changes(self) -> None:
+        fmt = handler("json")
+        written = fmt.write(SHADPS4_CONFIG, {"General.console_language": 3})
+        self.assertEqual(
+            written, SHADPS4_CONFIG.replace('"console_language": 1', '"console_language": 3')
+        )
+        self.assertEqual(fmt.read(written).values["General.console_language"], 3)
+
+    def test_the_gui_language_is_written_as_text_and_nothing_else_changes(self) -> None:
+        fmt = handler("ini")
+        written = fmt.write(SHADPS4_LAUNCHER, {"[general_settings]guiLanguage": "es_ES"})
+        self.assertEqual(
+            written, SHADPS4_LAUNCHER.replace("guiLanguage=en_US", "guiLanguage=es_ES")
         )
 
 

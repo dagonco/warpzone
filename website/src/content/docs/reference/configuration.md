@@ -60,9 +60,9 @@ Folder groups for `folders`:
 | Group | What the device gets | Direction |
 |---|---|---|
 | `library` | ROMs, BIOS and extras the device's whitelist allows | receive-only |
-| `songs` | Clone Hero and YARG songs the device's whitelist allows | receive-only |
+| `songs` | Clone Hero and YARG songs the device's whitelist allows, and YARG's own data (`yarg-data`, two-way) | receive-only (two-way for YARG's data) |
 | `tools` | Scripts and documents | receive-only |
-| `saves` | Every `[saves.*]` folder of the profile | two-way |
+| `saves` | Every `[saves.*]` folder of the profile, except those whose entry names another group (YARG's data comes with `songs`) | two-way |
 | `frontend` | ES-DE media, gamelists and collections (or the scraped artwork, for a profile with `[artwork]`) | two-way (receive-only artwork) |
 | `bios` | Keys and firmware delivered into each emulator's own folder (the profile's `[bios.*]`) | receive-only |
 | `settings` | The emulator settings layers | two-way |
@@ -208,6 +208,7 @@ One table per save folder, delivered with the `saves` group (two-way). The key i
 | `path` | string | none (required) | The REAL directory. Syncthing never follows symlinks, and EmuDeck exposes saves through symlinks, so point at the real directory. |
 | `ignore` | array of strings | `[]` | Syncthing ignore lines for this folder only, such as `["!/save", "!/saveMeta", "*"]`. |
 | `create_when` | string | none | A directory. When `path` is missing and this one exists (the emulator is installed but has not written its saves yet), `path` is created. Without it a missing `path` is skipped. |
+| `previous_paths` | array of strings | `[]` | Earlier values of `path`. A device whose Syncthing folder is still at one of them is moved to `path` by `provision device` when the old directory is empty or all its files are on the hub: the folder is removed from Syncthing (no file is touched) and added again. Otherwise the move is refused as any changed path is. |
 
 ### `[library]`
 

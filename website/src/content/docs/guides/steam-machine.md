@@ -83,7 +83,7 @@ sh src/warpzone/data/updater.sh install machine
 
 The `songs` group puts the hub's `songs/` folder, filtered by `songs/patterns-machine.stignore`, in `~/Songs`. warpzone does not configure the games: add `~/Songs` as a song folder in Clone Hero or YARG yourself.
 
-YARG's own data (settings, scores, profiles, playlists and `custom/`) is a save folder, `yarg-data`, under `~/.config/unity3d/YARC/YARG/release`, synced two-way through the `saves` group. The song cache and the list of bad songs never sync, because they hold the absolute paths of one machine. `scores/` is a SQLite database: close the game on one console before playing on another.
+YARG's own data (settings, scores, profiles, playlists and `custom/`) is a save folder, `yarg-data`, under `~/.config/unity3d/YARC/YARG/release`, synced two-way through the `songs` group (not `saves`: a console without `songs` gets nothing of YARG). The song cache and the list of bad songs never sync, because they hold the absolute paths of one machine. `scores/` is a SQLite database: close the game on one console before playing on another.
 
 ## 5. Sharing with a Steam Deck
 

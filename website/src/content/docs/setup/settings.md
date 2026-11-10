@@ -32,7 +32,7 @@ Each table is `[<emulator>.<file>]`, and each entry is a key of that file with i
 
 The folder is two-way (unlike `tools`, which is receive-only on devices), because captures are written on a console. The hub keeps 30 days of versions of every layer, which is the history of each change.
 
-Twelve emulators are covered by the `steamos-emudeck` profile: Eden, RetroArch (and its core options), DuckStation, PCSX2, Dolphin, Azahar, melonDS, PPSSPP, Vita3K, xemu, Ryujinx and Xenia (the Proton build of Canary). Xenia's console language is not in its config file: set it in Xenia (Console > Open console settings) and capture its `xconfig.settings`, a system data file (below).
+Thirteen emulators are covered by the `steamos-emudeck` profile: Eden, RetroArch (and its core options), DuckStation, PCSX2, Dolphin, Azahar, melonDS, PPSSPP, Vita3K, xemu, Ryujinx, Xenia (the Proton build of Canary) and shadPS4. For shadPS4 the shared keys are the PS4 system language, `[shadps4.config]` `General.console_language` (1 is English US, 3 is Spanish), and the launcher's interface language, `[shadps4.launcher]` `"[general_settings]guiLanguage"` (for example `es_ES`). Version 0.21 and later read `config.json`; the old `config.toml` is only a leftover that is read once to migrate, so changing it does nothing. Xenia's console language is not in its config file: set it in Xenia (Console > Open console settings) and capture its `xconfig.settings`, a system data file (below).
 
 ES-DE's own `es_settings.xml` is covered too, for the scraper options only (which media to download, region and language), so one choice reaches every console:
 
