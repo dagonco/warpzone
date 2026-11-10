@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ## [Unreleased]
 
+## [0.4.0rc2] - 2026-11-10
+
 ### Added
 
 - `warpzone settings` can layer ES-DE's own `es_settings.xml`, so a scraper choice such as `ScrapeVideos = false` in `[esde.es-settings]` of `settings/common.toml` reaches every console. The profile marks the scraper's media toggles, `ScraperRegion` and `ScraperLanguage` as shared; the ScreenScraper login, every path (`ROMDirectory`, `MediaDirectory`) and `CustomEventScripts` are never layered. A value must have the kind of the setting (`false` for an on/off option, a number for a number, text for text) and a setting the file lacks is not added. ES-DE rewrites the file when it quits, so `apply` skips it while ES-DE runs, which includes the startup script's own run. A new user timer, `warpzone-settings` (installed by `provision device` for a device that subscribes to `settings`, every 15 minutes), runs `warpzone settings apply --emulator esde --when-idle --quiet`, which applies the ES-DE keys only when no ES-DE process is running, leaves no trace when it writes nothing, and never fails the unit; the new `--when-idle` option is that unattended mode. See [ES-DE settings](https://dagonco.github.io/warpzone/development/design/emulator-settings/#es-de-settings).
@@ -286,7 +288,8 @@ First public release. warpzone keeps one game library on a home server and deliv
 - `warpzone doctor` checks the tools, config, Syncthing, DATs and hub folder of a machine and prints the fix for each problem.
 - `warpzone status`, `check` and `render-ignores` to inspect folder state, validate the config and preview a device's ignore lines. `provision` supports `--dry-run`.
 
-[Unreleased]: https://github.com/dagonco/warpzone/compare/v0.4.0rc1...HEAD
+[Unreleased]: https://github.com/dagonco/warpzone/compare/v0.4.0rc2...HEAD
+[0.4.0rc2]: https://github.com/dagonco/warpzone/compare/v0.4.0rc1...v0.4.0rc2
 [0.4.0rc1]: https://github.com/dagonco/warpzone/compare/v0.3.0...v0.4.0rc1
 [0.3.0]: https://github.com/dagonco/warpzone/compare/v0.2.0...v0.3.0
 [0.3.0rc6]: https://github.com/dagonco/warpzone/compare/v0.3.0rc5...v0.3.0rc6
