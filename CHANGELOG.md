@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ## [Unreleased]
 
-## [0.4.0] - 2026-11-11
+## [0.4.0rc1] - 2026-11-10
 
 The library gets a web app. `warpzone serve` runs it on the hub: a catalog of the whole library with covers, videos, descriptions, achievements, play statistics, saves and the disk of each console, where you turn games and whole systems on and off per console by rewriting the device whitelists. Behind it are a catalog index of the library (`warpzone catalog`) and RetroAchievements hashes for far more systems, a hub container for a NAS with an old Python, and `inbox` support for PS4 updates and DLC. A console now also deletes what you turn off by itself, with a guard that holds back a suspicious removal.
 
@@ -260,8 +260,8 @@ First public release. warpzone keeps one game library on a home server and deliv
 - `warpzone doctor` checks the tools, config, Syncthing, DATs and hub folder of a machine and prints the fix for each problem.
 - `warpzone status`, `check` and `render-ignores` to inspect folder state, validate the config and preview a device's ignore lines. `provision` supports `--dry-run`.
 
-[Unreleased]: https://github.com/dagonco/warpzone/compare/v0.4.0...HEAD
-[0.4.0]: https://github.com/dagonco/warpzone/compare/v0.3.0...v0.4.0
+[Unreleased]: https://github.com/dagonco/warpzone/compare/v0.4.0rc1...HEAD
+[0.4.0rc1]: https://github.com/dagonco/warpzone/compare/v0.3.0...v0.4.0rc1
 [0.3.0]: https://github.com/dagonco/warpzone/compare/v0.2.0...v0.3.0
 [0.3.0rc6]: https://github.com/dagonco/warpzone/compare/v0.3.0rc5...v0.3.0rc6
 [0.3.0rc5]: https://github.com/dagonco/warpzone/compare/v0.3.0rc4...v0.3.0rc5
