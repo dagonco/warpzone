@@ -5,7 +5,7 @@ description: Use when the maintainer wants to publish a warpzone release or rele
 
 # Publish a release
 
-Follow [releasing.md](../../../website/src/content/docs/development/releasing.md) exactly; it is the contract and wins over this summary. Releases are published by pushing an annotated (or signed) tag on `main`, which triggers `.github/workflows/release.yml`. Nothing goes to PyPI.
+Follow [releasing.md](../../../website/src/content/docs/development/releasing.md) exactly; it is the contract and wins over this summary. Releases are published by pushing a signed tag on `main`, which triggers `.github/workflows/release.yml`. Nothing goes to PyPI.
 
 `main` is protected: changes land through a pull request, squash-merged, with all CI checks green. No force pushes, no direct pushes to `main`. Commit messages are a single imperative title line, no body, no trailers. Do not touch `.github/workflows/`.
 
@@ -33,12 +33,12 @@ Confirm with the user first: the version and that it should ship now. Releases a
 
    One test fails if `CHANGELOG.md` has no section for the current version.
 6. Commit (single title line, for example `Prepare the X.Y.Z release`), push the branch and open a pull request with `gh pr create`. Wait for green checks (`gh pr checks --watch`), then squash-merge with the user's OK.
-7. Tag the merge commit on `main` and push only that tag. Check whether signatures are in force: if `warpzone/data/allowed_signers` holds a key line (not only comments), sign the tag (`-s`) and verify it before pushing; otherwise annotate it (`-a`).
+7. Tag the merge commit on `main` and push only that tag. The `verify` job of the workflow refuses a tag that is not annotated and signed with an SSH key listed in `warpzone/data/allowed_signers` of the tagged commit, so always sign the tag (`-s`) and verify it before pushing; if the file holds no key line (only comments), stop: a key must be merged first.
 
    ```bash
    git switch main && git pull --ff-only
-   git tag -a vX.Y.Z -m "warpzone X.Y.Z"      # or: git tag -s ... when keys are listed
-   git -c gpg.ssh.allowedSignersFile=warpzone/data/allowed_signers verify-tag vX.Y.Z   # signed tags only
+   git tag -s vX.Y.Z -m "warpzone X.Y.Z"
+   python3 scripts/verify_tag_signature.py vX.Y.Z --signers warpzone/data/allowed_signers
    git push origin vX.Y.Z
    ```
 
@@ -56,4 +56,4 @@ Devices with the updater timer fetch every hour on `rc` and every 12 hours on `s
 
 ## When it fails
 
-See "When a release fails" in [releasing.md](../../../website/src/content/docs/development/releasing.md#when-a-release-fails). In short: if `verify` fails, nothing was published; delete the tag locally and on the remote (`git tag -d vX.Y.Z`, `git push origin :refs/tags/vX.Y.Z`), fix it through a normal pull request and tag again, each with the user's OK. For transient `build` or `release` failures re-run the failed jobs. A wrong release whose code is bad is never fixed by moving the tag: publish a new patch version, and withdraw the bad one with a signed `retired/vX.Y.Z` tag if needed ([Retiring a release](../../../website/src/content/docs/development/releasing.md#retiring-a-release)).
+See "When a release fails" in [releasing.md](../../../website/src/content/docs/development/releasing.md#when-a-release-fails). In short: if `verify` fails (a tag whose signature does not verify included), nothing was published; delete the tag locally and on the remote (`git tag -d vX.Y.Z`, `git push origin :refs/tags/vX.Y.Z`), fix it through a normal pull request and tag again, each with the user's OK. For transient `build` or `release` failures re-run the failed jobs. A wrong release whose code is bad is never fixed by moving the tag: publish a new patch version, and withdraw the bad one with a signed `retired/vX.Y.Z` tag if needed ([Retiring a release](../../../website/src/content/docs/development/releasing.md#retiring-a-release)).

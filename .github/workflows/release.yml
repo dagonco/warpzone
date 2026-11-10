@@ -50,6 +50,21 @@ jobs:
           fi
           echo "version=${version}" >> "$GITHUB_OUTPUT"
           echo "prerelease=${prerelease}" >> "$GITHUB_OUTPUT"
+      # The devices refuse a tag that is not signed by an allowed key, so nothing is built or
+      # published for one. This step stays after the "tag is on main" check above: the keys are
+      # read from the tagged commit, and they can be trusted only because that commit is on
+      # `main`, which is protected, so the file got there through a reviewed pull request. A
+      # tag on a commit outside `main` could carry its own keys and sign itself.
+      - name: Verify the tag signature
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          # On a tag push the checkout can leave the local tag as a lightweight ref that points
+          # at the commit; fetch the real tag object, which carries the signature. The
+          # repository is public, so no credentials are needed.
+          git fetch --force --no-tags origin "refs/tags/${TAG}:refs/tags/${TAG}"
+          python scripts/verify_tag_signature.py "$TAG" --signers warpzone/data/allowed_signers
       - uses: astral-sh/ruff-action@278981a28ce3188b1e39527901f38254bf3aac89 # v4.1.0
         with:
           version: "0.17.2"
