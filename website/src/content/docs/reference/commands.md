@@ -392,7 +392,7 @@ warpzone serve --listen 127.0.0.1:8780
 warpzone frontend refresh [NAME] [--config PATH] [--dry-run] [--syncthing-config PATH]
 ```
 
-On a console whose profile has an `[artwork]` table and whose device lists the `frontend` folder group: widens the artwork folders' ignores to the systems that have games on the device (when the local Syncthing is found) and rewrites the frontend's own gamelists from the synced ES-DE data. It writes the gamelists only while the frontend is closed; never run it while the frontend is open.
+On a console whose profile has an `[artwork]` table and whose device lists the `frontend` folder group: widens the artwork folders' ignores to the systems that have games on the device (when the local Syncthing is found) and rewrites the frontend's own gamelists from the synced ES-DE data. It writes the gamelists only while the frontend is closed; never run it while the frontend is open. A gamelist on the device that cannot be read is copied to the settings backups before it is rewritten, and a warning names the copy; one that can be read is replaced without a copy, since the player's favourites, hidden marks and play counts are carried over.
 
 On a console whose profile also has `[save_convert.*]` and whose device lists `saves`, it first runs [`saves convert`](#warpzone-saves-convert); such a device does not need the `frontend` folder group, and then only the conversion runs. On a device that lists `play-state` it also publishes the disk report described under [`play-state sync`](#warpzone-play-state-sync).
 

@@ -1448,11 +1448,14 @@ def judge_artwork(
             )
         return OK, "no system with games on the device has a frontend system", ""
     missing = [i.system for i in plan.items if i.state == "missing"]
-    stale = [i.system for i in plan.items if i.state == "stale"]
-    if not missing and not stale:
+    unreadable = [i.system for i in plan.items if i.state == "stale" and i.unreadable]
+    stale = [i.system for i in plan.items if i.state == "stale" and not i.unreadable]
+    if not missing and not stale and not unreadable:
         return OK, f"{len(plan.items)} gamelists current", ""
+    if unreadable:
+        fix += " (it keeps a copy of a gamelist it cannot read, then rewrites it)"
     parts = []
-    for word, names in (("missing", missing), ("stale", stale)):
+    for word, names in (("missing", missing), ("unreadable", unreadable), ("stale", stale)):
         if names:
             shown = ", ".join(names[:6]) + (f" and {len(names) - 6} more" if len(names) > 6 else "")
             parts.append(f"{len(names)} {word} ({shown})")

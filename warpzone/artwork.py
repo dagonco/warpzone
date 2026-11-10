@@ -421,6 +421,9 @@ class Planned:
     data: bytes
     state: str  # `current`, `missing` or `stale`
     games: int
+    # Why the file on the device could not be read (it is then `stale`, and its user data is
+    # lost unless the caller keeps a copy); empty when it was read or is missing.
+    unreadable: str = ""
 
 
 @dataclass(frozen=True)
@@ -503,10 +506,11 @@ def plan_gamelists(
         for system in chosen[hub]:
             path = gamelist_path(layout, system)
             before = files.read(path)
+            unreadable = ""
             try:
                 existing = parse_gamelist(before) if before is not None else []
-            except ArtworkError:
-                existing = []
+            except ArtworkError as exc:
+                existing, unreadable = [], str(exc)
             built = build(
                 fmt,
                 source,
@@ -524,7 +528,7 @@ def plan_gamelists(
                 state = "current"
             else:
                 state = "stale"
-            items.append(Planned(system.name, hub, path, wanted, state, len(built)))
+            items.append(Planned(system.name, hub, path, wanted, state, len(built), unreadable))
     return GamelistPlan(tuple(items), tuple(dropped), tuple(waiting), tuple(problems))
 
 

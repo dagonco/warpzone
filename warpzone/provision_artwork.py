@@ -3,9 +3,17 @@
 from __future__ import annotations
 
 import dataclasses
+from functools import partial
 from pathlib import Path
 
-from warpzone import artwork, diskstatus_io, playstate_device, safefile, saveconvert_device
+from warpzone import (
+    artwork,
+    diskstatus_io,
+    playstate_device,
+    safefile,
+    saveconvert_device,
+    settings_state,
+)
 from warpzone.config import Config
 from warpzone.model import ESDE_ID, MEDIA_ID, device_specs
 from warpzone.paths import expand_home
@@ -74,6 +82,24 @@ def sync_artwork_scope(
             rep.out(f"{spec.id}: ignores updated ({systems} systems)")
 
 
+def keep_copy(item: artwork.Planned, copy: list[Path], root: Path) -> None:
+    """Copy the gamelist on the device to the settings backups; the path goes to `copy`."""
+    copy.append(
+        settings_state.backup(item.path, "emulationstation", f"gamelist-{item.system}", root=root)
+    )
+
+
+def unreadable_warning(item: artwork.Planned, copy: Path, *, restored: bool) -> str:
+    text = (
+        f"{item.path} could not be read ({item.unreadable}) and was replaced by the hub's data; "
+        f"the old file is kept in {copy}. The favourites, hidden marks and play counts that were "
+        "only in that file are not in the new one"
+    )
+    if restored:
+        text += " (play state restores the play counts and favourites it had published)"
+    return text
+
+
 def ensure_gamelists(
     name: str,
     profile: Profile,
@@ -83,6 +109,7 @@ def ensure_gamelists(
     dry_run: bool,
     probes: DeviceProbes = REAL_PROBES,
     play_state: bool = False,
+    state_root: Path | None = None,
 ) -> None:
     """Write the frontend's gamelists from the scraped data that Syncthing delivered.
 
@@ -92,8 +119,10 @@ def ensure_gamelists(
     is open and has nothing to change, do nothing. A file is written only while the frontend
     is not running, atomically, and refused when it changed after it was read. The user
     data the frontend saved in a gamelist is carried over; see
-    development/design/frontend-artwork.md. With `play_state` that data also goes to the other
-    devices and theirs is merged in; see development/design/play-state.md.
+    development/design/frontend-artwork.md. A gamelist on the device that cannot be read is
+    copied to the settings backups (under `state_root`) before it is rewritten, and said so.
+    With `play_state` the user data also goes to the other devices and theirs is merged in; see
+    development/design/play-state.md.
     """
     art, rule = profile.artwork, profile.es_systems
     layout = artwork_layout(profile, home)
@@ -111,6 +140,7 @@ def ensure_gamelists(
     except (OSError, UnicodeDecodeError) as exc:
         rep.warn(f"cannot read the system list {source} ({exc}), so no gamelist was written")
         return
+    root = state_root if state_root is not None else settings_state.state_dir(home=home)
     stamps: dict[Path, safefile.FileStamp] = {}
 
     def read(path: Path) -> bytes | None:
@@ -181,22 +211,40 @@ def ensure_gamelists(
     publish(applied=True)
     for item in pending:
         if dry_run:
-            rep.out(f"gamelists: dry-run: would write {item.path} ({item.games} games)")
-        else:
+            if item.unreadable:
+                rep.out(
+                    f"gamelists: dry-run: would keep a copy of {item.path} (it cannot be read: "
+                    f"{item.unreadable}) and would write {item.path} ({item.games} games)"
+                )
+            else:
+                rep.out(f"gamelists: dry-run: would write {item.path} ({item.games} games)")
+            continue
+        copy: list[Path] = []
+        try:
             outcome = safefile.guarded_edit(
                 item.path,
                 item.data,
                 expect=stamps.get(item.path),
                 busy=lambda: busy(rule.process, label, what, again, rep, probes),  # it may start
+                backup=(partial(keep_copy, item, copy, root) if item.unreadable else None),
             )
-            if outcome is safefile.Edit.BUSY:
-                return
-            if outcome is safefile.Edit.CHANGED:
-                rep.warn(
-                    f"{item.path} changed while it was being written, so it was left alone: {again}"
-                )
-                continue
-            rep.out(f"gamelists: wrote {item.path} ({item.games} games, was {item.state})")
+        except OSError as exc:
+            if not item.unreadable:
+                raise
+            rep.warn(
+                f"{item.path} cannot be read and was not replaced ({exc}), so it was left alone"
+            )
+            continue
+        if outcome is safefile.Edit.BUSY:
+            return
+        if outcome is safefile.Edit.CHANGED:
+            rep.warn(
+                f"{item.path} changed while it was being written, so it was left alone: {again}"
+            )
+            continue
+        rep.out(f"gamelists: wrote {item.path} ({item.games} games, was {item.state})")
+        if item.unreadable:
+            rep.warn(unreadable_warning(item, copy[0], restored=state is not None))
     if not dry_run:
         rep.out(f"gamelists: {len(plan.items) - len(pending)} current")
 
@@ -211,6 +259,7 @@ def refresh_artwork(
     local: Client | None,
     dry_run: bool,
     probes: DeviceProbes = REAL_PROBES,
+    state_root: Path | None = None,
 ) -> None:
     """`frontend refresh`: reconcile the saves, update the artwork scope, then the gamelists.
 
@@ -252,6 +301,7 @@ def refresh_artwork(
         dry_run=dry_run,
         probes=probes,
         play_state="play-state" in folders,
+        state_root=state_root,
     )
     if "play-state" in folders:
         diskstatus_io.publish(name, profile, home, say=rep.out, warn=rep.warn, dry_run=dry_run)

@@ -147,6 +147,9 @@ the state the config and the profile describe: running one again changes nothing
 they change is either warpzone's own (Syncthing folders it prefixes with `wz-`, its units,
 scripts and state files, symlinks it made) or a file that an emulator or the frontend owns,
 which they edit on one key or one line, with a backup first and never while that program runs.
+The frontend's gamelists are the exception: `frontend refresh` regenerates each whole from the
+hub's copy with the player's fields carried over, so it keeps a backup only of a gamelist that
+cannot be read (see [Frontend artwork](/warpzone/development/design/frontend-artwork/)).
 They are `provision hub`, `provision device`, `frontend refresh`, `play-state sync`,
 `links sync`, `saves convert`, `settings apply`, `settings capture` (which writes only the keys the user
 chooses), `catalog` (which writes only `catalog/`) and `whitelist migrate` (which keeps a backup
