@@ -171,8 +171,8 @@ The [library UI](/warpzone/development/design/library-ui/) has no file left to a
 modules and its `data/ui/` files are all in the block above, and so are the hub's container image
 and its compose example. `tests/test_container_files.py` reads them: the base images pinned by
 digest, RALibretro by commit, a health check, `pip` touching only the local wheel, no build tools
-in the last stage, and no secret-looking value in the compose example. The image is not built in
-CI, which has no Docker step.
+in the last stage, and no secret-looking value in the compose example. A pull request does not
+build the image; the `image` job of the weekly and manual runs does (see "CI" below).
 
 ## Testing
 
@@ -374,5 +374,20 @@ checks keep their names.
 - `e2e`: ubuntu-latest, downloads a pinned Syncthing release, verifies its
   SHA-256 against a value committed in the workflow, runs the e2e test.
 - `secrets`: gitleaks over the full history.
+
+Two more jobs run only on the weekly and manual runs, never on a pull request, and no check
+depends on them:
+
+- `image`: builds `docker/Dockerfile` with `docker build` from the root of the checkout (nothing
+  is pushed and there is no registry login), then runs the image: `warpzone --version` must
+  print the version of the checkout, `chdman`, `bsdtar` and `RAHasher` must be on `PATH`, and
+  the default user must not be root. The RAHasher stage compiles C++, so the job has a timeout
+  of 45 minutes. It finds a base image or apt change that breaks the build before someone
+  rebuilds the image on the hub.
+- `coverage`: the unit tests under `coverage` (pinned to an exact version) with branch
+  measurement, limited to the `warpzone` package, on Ubuntu with Python 3.11 and without the
+  updater script's tests (they measure a shell script). The total and the ten least covered
+  modules go to the job summary. There is no threshold: it publishes the number and never
+  fails on it. Subprocesses the tests start are not measured.
 - Every third-party action pinned by commit SHA, `permissions: contents: read`
   at workflow level, Dependabot for GitHub Actions.
