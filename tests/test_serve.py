@@ -21,7 +21,7 @@ from unittest import mock
 from library_support import GIB, config, games, managed, write_catalog
 from support import API_KEY, DECK_ID, HUB_ID, MACHINE_ID, FakeSyncthing
 from test_cli import run
-from warpzone import __version__, catalog, library_api, serve
+from warpzone import __version__, artwork, catalog, library_api, serve
 from warpzone import whitelist as wl
 from warpzone.config import ServeSettings, parse_config
 from warpzone.syncthing import Client
@@ -567,6 +567,26 @@ class StaticTests(ServeCase):
 
     def test_only_get_serves_files(self) -> None:
         self.assertEqual(self.call("POST", "/index.html", {}, auth=False).status, 404)
+
+
+class GamelistLimitTests(ServeCase):
+    def test_a_gamelist_over_the_limit_gives_no_entries_and_is_not_read(self) -> None:
+        files = serve.HubFiles(self.root, interval=0, media_seconds=0)
+        with (
+            mock.patch.object(artwork, "MAX_GAMELIST_BYTES", len(GAMELIST) - 1),
+            mock.patch.object(
+                Path, "read_bytes", autospec=True, side_effect=Path.read_bytes
+            ) as read,
+        ):
+            self.assertEqual(files.extras("psx").meta, {})
+            self.assertEqual(
+                [call for call in read.call_args_list if call.args[0].name == "gamelist.xml"], []
+            )
+        # Within the limit the same file is read.
+        self.assertEqual(
+            list(serve.HubFiles(self.root, interval=0).extras("psx").meta),
+            ["./Example Game (Europe).chd"],
+        )
 
 
 class ReadTests(ServeCase):
