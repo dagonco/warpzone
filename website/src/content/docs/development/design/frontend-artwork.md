@@ -58,7 +58,7 @@ one more name in `ARTWORK_FORMATS`; planning, writing, the timer and the doctor 
   machine writes the file, so a bad one is an `ArtworkError` and never a traceback: that
   includes an XML declaration that names an encoding the parser cannot use (`bogus`,
   `shift_jis`, `utf-16-le`), and a file over `MAX_GAMELIST_BYTES` (32 MiB), which is refused
-  before parsing, and before reading where the reader has the path (`read_gamelist`). `frontend
+  before parsing, and before reading wherever the reader has the path (`read_gamelist`: `playstate_device` and the library UI server). `frontend
   refresh` reports such a scraped gamelist as a problem of its system and writes the others.
   Entries with a path that is absolute or climbs out of the system folder (`..`) are dropped.
 - An entry is kept only when its ROM exists on the device
