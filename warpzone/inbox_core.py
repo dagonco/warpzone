@@ -92,6 +92,38 @@ def unsafe_member(name: str) -> str | None:
     return None
 
 
+_CONTROL = re.compile(r"[\x00-\x1f\x7f]")
+
+
+def unsafe_entry(name: str) -> str | None:
+    """Why a name must not name a file of the library, or None when it is fine.
+
+    The name of a game, a set or a rom comes from a DAT, which is a file from outside like an
+    archive. It is joined to a system folder or becomes a zip member, so it has to be one path
+    component, and one a whitelist line can hold."""
+    if not name:
+        return "no characters"
+    if name in (".", ".."):
+        return "only dots"
+    if "/" in name or "\\" in name:
+        return "a path separator"
+    if _CONTROL.search(name):
+        return "a control character"
+    return None
+
+
+def printable(text: str) -> str:
+    """`text` with each control character replaced, for a line of the report."""
+    return _CONTROL.sub("?", text)
+
+
+def refused_name(name: str, source: str) -> str | None:
+    """The reason to file nothing under `name`, which `source` gives ("the DAT", the label of
+    an arcade DAT), or None when the name is fine."""
+    why = unsafe_entry(name)
+    return f"refused: the name {printable(name)!r} in {source} has {why}" if why else None
+
+
 def whitelist_line(system: str, entry_name: str) -> str:
     """The Syncthing whitelist line that would deliver `roms/<system>/<entry_name>`."""
     return "!" + whitelist.escape(f"roms/{system}/{entry_name}")

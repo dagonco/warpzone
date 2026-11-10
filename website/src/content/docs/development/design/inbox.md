@@ -95,6 +95,16 @@ The contract:
   `<game>.m3u` playlist; GameCube discs stay loose files, as in the library. A game is
   placed only when every disc the DAT lists is in the item (`incomplete multi-disc`
   otherwise); a disc that is the only one its DAT lists is a plain game.
+- **Names are untrusted too.** A DAT is a file from outside, like an archive, and its
+  names become paths: the game name is the entry in `library/roms/<system>/` and each rom
+  name a member of the zip. Before anything is prepared, `unsafe_names` checks the entry
+  and every game and rom name of the game with `unsafe_entry` (pure). A name that is
+  empty, is `.` or `..`, or holds a `/`, a `\` or a control character must be a plain
+  file name and is not: the game goes to review with
+  `refused: the name '<name>' in the DAT has a path separator` and nothing is written
+  under that name, while the other games of the item are filed as usual. The name of a
+  rom from `_unverified/` is the file's own and gets the same check (`in the item`).
+  Control characters are printed as `?` in the report and in the reason file.
 - **RetroAchievements (optional).** With `[inbox] rahasher` set, the RA hash of the
   source (the cue, gdi, iso or rom; a Redump cue of a Dreamcast disc is turned into a
   temporary gdi, which RAHasher needs) is compared with the hash of the result (the
@@ -113,7 +123,7 @@ The contract:
   Items with anything that could not be placed go to `inbox/_revisar/` with
   `<item>.reason.txt` (no DAT match, ambiguous match, files not in any DAT, incomplete
   multi-disc, conversion or verify failed, RA hash changed, conflict, missing tool,
-  unsafe archive, not supported yet). Games of such an item that could be placed are
+  unsafe archive, a DAT name that is not a plain file name, not supported yet). Games of such an item that could be placed are
   placed; running the item again reports them as already in the library. Names that are
   taken get ` (2)`, ` (3)`, ... On every `--apply` run, folders of `_done` whose name is a
   date older than 7 days are deleted; nothing else in `_done` is touched, and a symbolic
@@ -152,7 +162,7 @@ The contract:
 - **Exit code.** `0` when every item is placed or already in the library; `1` when any
   item went to review; `2` for a usage or configuration error.
 
-The decisions (`skip_name`, `unsafe_member`, `select_purge`, `plan_units`,
+The decisions (`skip_name`, `unsafe_member`, `unsafe_entry`, `select_purge`, `plan_units`,
 `destination_verdict`, `whitelist_line`, `resolve_refs`, `unsupported_reason`,
 `unverified_reason`, `unverified_match`,
 `match_dat`, `group_discs`, `parse_dat`) are pure and unit-tested; conversions are
@@ -738,7 +748,10 @@ registry (`inbox.kind_handlers()`; a handler has `validate`, `claims` and `proce
   still placed and a note tells the user to copy it from `roms/mame/`; warpzone never
   copies BIOS files.
 - **Name and placement.** The result is `library/roms/mame/<set>.zip`, the set name of the
-  database that decided, whatever the file was called; the bytes are the original's. It is
+  database that decided, whatever the file was called; the bytes are the original's. The
+  set name comes from the database, so it gets the same check as a DAT's game name
+  (`unsafe_entry`): one that is not a plain file name sends the zip to review and nothing
+  is written. It is
   copied to `<name>.part`, read back and compared member by member, then renamed. If the
   name exists, equal members mean "already in the library" and different ones a review
   (conflict, nothing replaced). `roms/arcade/` is never written. The whitelist line is

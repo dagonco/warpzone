@@ -910,6 +910,28 @@ class FlowTests(FlowBase):
         self.assertEqual(self.library(), ["nes/Adventure (USA).zip"])
         self.assertNotIn("arcade", self.out.split("[1/1]")[1])
 
+    def test_a_set_name_that_is_a_path_is_never_written_outside_the_arcade_folder(self) -> None:
+        data = b"escape rom " * 40
+        (self.hub / "outside").mkdir()  # three levels above roms/mame/
+        for name in ("../../../outside/escape", str(self.tmp / "escape")):
+            with self.subTest(name=name):
+                evil = machine_el("game", name, [rom_el("e1.bin", data)])
+                dat = f'<?xml version="1.0"?>\n<datafile>\n{evil}\n</datafile>\n'
+                self.fbneo_dat.write_text(dat)
+                self.zip_of("dump.zip", {"e1.bin": data})
+                before = self.tree()
+                self.assertEqual(self.go(apply=False), 1, self.out)
+                self.assertEqual(self.tree(), before)
+                self.assertNotIn("would place", self.out)
+                self.assertEqual(self.go(), 1, self.out)
+                strays = [p for p in self.tmp.rglob("*escape*") if p.suffix == ".zip"]
+                self.assertEqual(strays, [])
+                self.assertEqual(self.library(), [])
+                self.assertIn("a path separator", self.reason("dump.zip"))
+                self.assertFalse(self.gamelist.exists())
+                for left in (self.inbox / "_revisar").iterdir():
+                    left.unlink()
+
     def test_without_arcade_dats_configured_zips_take_the_usual_path(self) -> None:
         self.mslug_zip()
         self.assertEqual(self.go(settings=InboxSettings()), 1)

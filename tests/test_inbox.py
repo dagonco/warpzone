@@ -185,6 +185,24 @@ class PureTests(unittest.TestCase):
         for name in ("a.nes", "dir/a.nes", "..hidden", "a..b/c", "weird name (1).bin"):
             self.assertIsNone(unsafe_member(name), name)
 
+    def test_unsafe_entries(self) -> None:
+        unsafe_entry = inbox_core.unsafe_entry
+        for name in ("Adventure (USA)", ".hack (USA) (Disc 1)", "Pokémon (Spain)", "a..b", "..."):
+            self.assertIsNone(unsafe_entry(name), name)
+        for name in ("../x", "/abs/x", "dir/x", "dir\\x", "C:\\x"):
+            self.assertEqual(unsafe_entry(name), "a path separator", name)
+        for name in ("line\nbreak", "tab\there", "nul\0byte", "del\x7f"):
+            self.assertEqual(unsafe_entry(name), "a control character", name)
+        self.assertEqual(unsafe_entry(""), "no characters")
+        for name in (".", ".."):
+            self.assertEqual(unsafe_entry(name), "only dots", name)
+        self.assertEqual(inbox_core.printable("a\x1b[2Jb\nc"), "a?[2Jb?c")
+        self.assertIsNone(inbox_core.refused_name("Adventure (USA).zip", "the DAT"))
+        self.assertEqual(
+            inbox_core.refused_name("../x\n", "the DAT"),
+            "refused: the name '../x?' in the DAT has a path separator",
+        )
+
     def test_purge_only_picks_old_date_folders(self) -> None:
         names = [
             "2026-10-19",
@@ -625,6 +643,94 @@ class CartridgeTests(Base):
         self.go(tools=Tools())
         self.assertEqual(self.library(), [])
         self.assertIn("skipped symbolic link", self.out)
+
+
+class DatNameTests(Base):
+    """A name in a DAT comes from outside: it names a file in the system folder or nothing.
+
+    Every unsafe name here holds the word `escape`, and the dropped items do not, so a file
+    written anywhere under the test's folder because of the name is found by that word."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        (self.hub / "outside").mkdir()  # three levels above roms/<system>/
+        (self.tmp / "elsewhere").mkdir()  # outside the hub root
+
+    def nes_dat(self, game: str, rom_name: str = "dump.nes") -> None:
+        folder = self.dats / "no-intro"
+        games = [(game, [(rom_name, NES_ROM)])]
+        write_dat(folder, "Nintendo - Nintendo Entertainment System", games)
+
+    def psp_dat(self, game: str) -> None:
+        write_dat(self.dats / "redump", "Sony - PlayStation Portable", [(game, [("d.iso", ISO)])])
+
+    def escaped(self) -> list[str]:
+        return sorted(
+            str(p.relative_to(self.tmp))
+            for p in self.tmp.rglob("*escape*")
+            if self.dats not in p.parents
+        )
+
+    def assert_refused(self, item: str, why: str) -> None:
+        """Report and apply both send the item to review, and nothing was written for it."""
+        before = self.tree()
+        self.assertEqual(self.go(apply=False, tools=Tools()), 1, self.out)
+        self.assertIn("REVIEW", self.out)
+        self.assertNotIn("would place", self.out)
+        self.assertEqual(self.tree(), before, "report only changes nothing in the hub")
+        self.assertEqual(self.go(tools=Tools()), 1, self.out)
+        self.assertEqual(self.escaped(), [])
+        self.assertEqual(self.library(), [])
+        self.assertIn(why, self.reason(item))
+        self.assertNotIn("whitelist:", self.out)
+
+    def test_a_game_name_with_parent_folders_stays_out_of_the_hub(self) -> None:
+        self.psp_dat("../../../outside/escape")
+        self.drop("dump.iso", ISO)  # an image is copied as it is: the bytes are the sender's
+        self.assert_refused("dump.iso", "a path separator")
+
+    def test_an_absolute_game_name_stays_out_of_the_disk(self) -> None:
+        self.nes_dat(str(self.tmp / "elsewhere" / "escape"))
+        self.psp_dat(str(self.tmp / "elsewhere" / "escape-too"))
+        self.drop("dump.nes", NES_ROM)
+        self.drop("dump.iso", ISO)
+        self.assertEqual(self.go(tools=Tools()), 2, self.out)
+        self.assertEqual(self.escaped(), [])
+        self.assertEqual(self.library(), [])
+        self.assertEqual(
+            self.review(),
+            ["dump.iso", "dump.iso.reason.txt", "dump.nes", "dump.nes.reason.txt"],
+        )
+
+    def test_a_rom_name_with_parent_folders_never_becomes_a_zip_member(self) -> None:
+        self.nes_dat("Clean Name (USA)", rom_name="../../../outside/escape.nes")
+        self.drop("dump.nes", NES_ROM)
+        self.assert_refused("dump.nes", "a path separator")
+
+    def test_a_game_name_with_a_line_break_is_refused(self) -> None:
+        self.nes_dat("escape\nline")
+        self.drop("dump.nes", NES_ROM)
+        self.assert_refused("dump.nes", "a control character")
+
+    def test_the_reason_shows_the_name_without_its_control_characters(self) -> None:
+        self.nes_dat("escape\x1b[2Jline")
+        self.drop("dump.nes", NES_ROM)
+        self.assertEqual(self.go(apply=False, tools=Tools()), 1, self.out)
+        self.assertNotIn("\x1b", self.out)
+
+    def test_a_safe_name_next_to_an_unsafe_one_is_still_filed(self) -> None:
+        folder = self.dats / "no-intro"
+        write_dat(
+            folder,
+            "Nintendo - Nintendo Entertainment System",
+            [("../escape", [("a.nes", SPIRIT_ROM)]), ("Adventure (USA)", [("b.nes", NES_ROM)])],
+        )
+        self.drop("good.nes", NES_ROM)
+        self.drop("bad.nes", SPIRIT_ROM)
+        self.assertEqual(self.go(tools=Tools()), 1, self.out)
+        self.assertEqual(self.library(), ["nes/Adventure (USA).zip"])
+        self.assertEqual(self.escaped(), [])
+        self.assertEqual(self.done(), ["good.nes"])
 
 
 class UnverifiedTests(Base):

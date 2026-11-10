@@ -67,6 +67,8 @@ from warpzone.inbox_core import (
     crc_of,
     destination_verdict,
     next_free,
+    printable,
+    refused_name,
     run,
     same_content,
     skip_name,
@@ -510,9 +512,32 @@ def _ra_lines(
     return lines, "", before if prepared.kind == "iso" else None
 
 
+def unsafe_names(unit: Unit) -> str | None:
+    """Why a unit is not filed because of one of its names, or None when all are fine.
+
+    The entry is joined to the system folder, each disc becomes a file named after its game and
+    each rom name a zip member, and all of them come from a DAT (or, for an unverified rom,
+    from the file): every one has to be a plain file name (`inbox_core.unsafe_entry`)."""
+    source = "the item" if unit.unverified else "the DAT"
+    names: list[str] = []
+    for match in unit.matches:
+        names.append(match.game.name)
+        names.extend(rom.name for rom in match.game.roms)
+    for name in (*names, unit.entry):  # the names as their source gives them come first
+        refused = refused_name(name, source)
+        if refused:
+            return refused
+    return None
+
+
 def process_unit(
     ctx: Context, unit: Unit, staged: Mapping[str, Staged], scratch: Path
 ) -> UnitResult:
+    refused = unsafe_names(unit)
+    if refused:  # before anything is prepared: no path is ever built from such a name
+        return UnitResult(
+            unit.system, printable(unit.entry), "review", reason=refused, unverified=unit.unverified
+        )
     res = UnitResult(unit.system, unit.entry, "planned" if not ctx.opts.apply else "placed")
     res.unverified = unit.unverified
     if len(unit.matches) == 1 and not unit.entry.endswith(".m3u") and not unit.unverified:
