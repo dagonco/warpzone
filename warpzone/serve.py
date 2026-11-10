@@ -70,6 +70,7 @@ RA_LISTS_PERIOD = 24 * 3600.0
 UI_DIR = Path(__file__).resolve().parent / "data" / "ui"
 CSP = "default-src 'self'"
 CHUNK = 64 * 1024  # bytes of a media file read and sent at a time
+MAX_DRAIN = 1024 * 1024  # bytes of a rejected request body read and thrown away before the answer
 LIBRARY_FOLDER = "wz-library"
 CONTENT_TYPES = {
     ".html": "text/html; charset=utf-8",
@@ -1534,6 +1535,23 @@ class _Handler(BaseHTTPRequestHandler):
             if response.stream is not None:
                 response.stream.close()
 
+    def _discard(self, left: int) -> bool:
+        """Read and throw away `left` bytes of a body that is refused, so the client has sent all
+        of it before the answer and the close of the socket cannot reset the connection with its
+        answer still unread. False when the client stalled or went away: the connection is
+        dropped, as for a body that stops half way."""
+        try:
+            while left > 0:
+                chunk = self.rfile.read(min(CHUNK, left))
+                if not chunk:  # the client closed before sending all it announced
+                    break
+                left -= len(chunk)
+        except OSError as exc:
+            self.server.app.log(f"connection: body not received ({type(exc).__name__})")
+            self.close_connection = True
+            return False
+        return True
+
     def _handle(self) -> None:
         length_text = self.headers.get("Content-Length")
         body, too_large = b"", False
@@ -1545,6 +1563,12 @@ class _Handler(BaseHTTPRequestHandler):
                 return
             if len(text) > 9 or int(text) > library_api.MAX_BODY:
                 too_large = True
+                if len(text) > 9 or int(text) > MAX_DRAIN:
+                    # Not read, and the connection is dropped after the answer so the bytes
+                    # still to come are never parsed as a request. The client may see a reset.
+                    self.close_connection = True
+                elif not self._discard(int(text)):
+                    return
             else:
                 try:
                     body = self.rfile.read(int(text))
