@@ -514,8 +514,9 @@ entry).
 Where the code settled something this page left open, or reads it more narrowly:
 
 - **The plan is made once.** `POST` reads the queue and the whitelists fresh, plans, then takes
-  the lock and compares every file's `etag` with the one the plan was computed from (step 1); a
-  second plan on identical inputs would give the same result, so there is none. The size limit
+  the lock and compares the `etag` of the queue and of every whitelist the plan looked at, written
+  or not (`QueuePlan.reads`), with the one the plan used (step 1); a second plan on identical
+  inputs would give the same result, so there is none. The size limit
   is checked last, on the rendered file, because only the result has a size.
 - **Held, kept, auto-ended.** Finishing, dropping or removing ends every open claim: the held
   ones as the request says, and the ones that hold nothing (`before` `on` or `partial`) as
@@ -524,6 +525,12 @@ Where the code settled something this page left open, or reads it more narrowly:
   otherwise, also for a game that left the library: its consoles can only be kept). A console
   named in both lists is `bad-request`; `release` and `keep` on any other `state` change are
   `bad-request`.
+- **A release that did not reach the whitelist is pending.** A claim ended `released` with
+  `before` `off` whose game is still on its console (the view `not-released`) is still owed:
+  `remove`, and finishing or dropping an active entry, must name it in `release` (which turns
+  the game off again) or `keep`, like a held claim; `add` and `devices.add` over it record
+  `before: "off"` again, and a restart through `add` keeps such a claim on the entry. A closed
+  claim (released and really off, or `kept`) is closed.
 - **`moved` needs a candidate.** The candidates are computed after leaving out the games already
   in the queue; an entry with none left is `missing`.
 - **One write when nothing was released.** A `remove` whose claims all end `kept` (or that had
@@ -542,7 +549,8 @@ Where the code settled something this page left open, or reads it more narrowly:
 - **The award's date** is compared to the second, in UTC; a date without a time counts as
   midnight UTC.
 - **An unreadable file** (permissions) is `damaged` like a corrupt one. The hub's `catalog/`
-  folder must exist for the first write (an unmounted hub root creates nothing).
+  folder must exist for the first write (an unmounted hub root creates nothing); the answer
+  names `catalog/`, the log the hub root.
 - **The file** is compact JSON with sorted keys; entries of other owners are kept as parsed and
   written back identically.
 

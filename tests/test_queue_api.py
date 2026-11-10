@@ -15,7 +15,7 @@ import test_serve
 from library_support import GIB, managed
 from test_serve import EXAMPLE, OTHER, PS4, TINY, ServeCase, by_title, fresh_cookie
 from warpzone import queue as q
-from warpzone import queue_store
+from warpzone import queue_store, serve
 from warpzone import whitelist as wl
 from warpzone import whitelist_store as store
 
@@ -79,6 +79,9 @@ class QueueCase(ServeCase):
             "devices": {},
         }
         return q.Entry(**{**fields, **kw})
+
+    def entries_by_id(self) -> dict[str, q.Entry]:
+        return {e.game.id: e for e in self.read_queue().entries}
 
     def backups(self) -> list[Path]:
         return sorted((self.root / "catalog" / "queue-backups").glob("*.json"))
@@ -309,9 +312,6 @@ class WriteTests(QueueCase):
         refused = self.post([self.finish(EXAMPLE, release=["deck"])])
         self.assertEqual((refused.status, self.error(refused)["code"]), (409, "not-held"))
         self.assertIn(EXAMPLE.primary, self.whitelist("deck").includes)
-
-    def entries_by_id(self) -> dict[str, q.Entry]:
-        return {e.game.id: e for e in self.read_queue().entries}
 
     def test_a_system_turned_on_afterwards_covers_the_game_and_it_stays(self) -> None:
         self.post([self.add(OTHER, ["deck"])])
@@ -597,6 +597,75 @@ class FailureTests(QueueCase):
         done = self.post([{"op": "remove", "game": OTHER.id, "release": [], "keep": []}])
         self.assertEqual(done.status, 200, done.body)
         self.assertEqual(self.read_queue().entries, ())
+
+
+class PendingTests(QueueCase):
+    def failing_write(self) -> Any:
+        err = store.WhitelistIOError("write", Path("x"), OSError(5, "Input/output error"))
+        return unittest.mock.patch.object(store, "replace", side_effect=err)
+
+    def test_a_release_that_never_reached_the_whitelist_is_not_forgotten(self) -> None:
+        self.post([self.add(OTHER, ["deck"])])
+        with self.failing_write():
+            failed = self.post([self.finish(OTHER, release=["deck"])])
+        self.assertEqual(failed.status, 500)
+        self.assertIn(OTHER.primary, self.whitelist("deck").includes)
+        shown = self.get("/api/v1/queue").json["history"][0]["devices"]["deck"]
+        self.assertEqual((shown["end"], shown["view"]), ("released", "not-released"))
+        # queueing it again must not record the game as the user's
+        again = self.post([self.add(OTHER, ["deck"])])
+        self.assertEqual(again.status, 200, again.body)
+        self.assertEqual(self.entries_by_id()[OTHER.id].devices["deck"].before, "off")
+        finished = self.post([self.finish(OTHER, release=["deck"])])
+        self.assertEqual(finished.status, 200, finished.body)
+        self.assertNotIn(OTHER.primary, self.whitelist("deck").includes)
+
+    def test_removing_after_a_failed_release_needs_the_console_named(self) -> None:
+        self.post([self.add(OTHER, ["deck"])])
+        gone = {"op": "remove", "game": OTHER.id, "keep": []}
+        with self.failing_write():
+            failed = self.post([{**gone, "release": ["deck"]}])
+        self.assertEqual(failed.status, 500)
+        refused = self.post([{**gone, "release": []}])
+        self.assertEqual((refused.status, self.error(refused)["code"]), (400, "bad-request"))
+        self.assertEqual([e.game.id for e in self.read_queue().entries], [OTHER.id])
+        done = self.post([{**gone, "release": ["deck"]}])
+        self.assertEqual(done.status, 200, done.body)
+        self.assertEqual(self.read_queue().entries, ())
+        self.assertNotIn(OTHER.primary, self.whitelist("deck").includes)
+
+
+class RaceTests(QueueCase):
+    def test_a_whitelist_read_but_not_written_is_rechecked_under_the_lock(self) -> None:
+        # EXAMPLE is on the deck: queueing it writes no whitelist, only records before=on
+        real = queue_store.load
+        calls = []
+
+        def racing(root: Path) -> queue_store.Loaded:
+            calls.append(1)
+            if len(calls) == 2:  # between the plan and the lock, a switch turns it off
+                self.write_whitelist("deck", managed(["gba"]))
+            return real(root)
+
+        with unittest.mock.patch.object(queue_store, "load", racing):
+            reply = self.post([self.add(EXAMPLE, ["deck"])])
+        self.assertEqual((reply.status, self.error(reply)["code"]), (412, "stale"))
+        self.assertEqual(self.error(reply)["device"], "deck")
+        self.assertFalse(self.queue_file().exists())
+
+
+class NoCatalogTests(QueueCase):
+    def test_the_answer_names_the_folder_and_not_the_hub_path(self) -> None:
+        self.start(files=serve.HubFiles(self.root, interval=1000, media_seconds=0))
+        self.assertEqual(self.get("/api/v1/systems").status, 200)  # the catalog is cached
+        (self.root / "catalog").rename(self.tmp / "catalog-away")
+        reply = self.post([self.add(OTHER, [])])
+        self.assertEqual((reply.status, self.error(reply)["code"]), (500, "write-failed"))
+        self.assertTrue(self.error(reply)["queue"])
+        self.assertIn("catalog/", self.error(reply)["message"])
+        self.assertNotIn(str(self.root), reply.body.decode())
+        self.assertTrue(any(str(self.root) in line for line in self.logs))
+        self.assertFalse((self.root / "catalog").exists())
 
 
 if __name__ == "__main__":

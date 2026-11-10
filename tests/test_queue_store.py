@@ -102,8 +102,10 @@ class ReplaceTests(StoreCase):
 
     def test_no_catalog_folder_means_nothing_is_created(self) -> None:
         (self.root / "catalog").rmdir()
-        with self.assertRaises(store.NoLibrary):
+        with self.assertRaises(store.NoLibrary) as caught:
             queue_store.replace(self.root, "absent", data(), NOW)
+        self.assertIn("catalog/", str(caught.exception))
+        self.assertNotIn(str(self.root), str(caught.exception))
         self.assertFalse((self.root / "catalog").exists())
 
     def test_a_temporary_file_is_never_left(self) -> None:

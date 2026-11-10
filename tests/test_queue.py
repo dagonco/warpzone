@@ -805,6 +805,79 @@ class PlanRemoveTests(unittest.TestCase):
         self.assertEqual(w.code([remove(OTHER, release=["deck"]), add(OTHER)]), "bad-request")
 
 
+class PendingReleaseTests(unittest.TestCase):
+    """A claim ended `released` whose whitelist write failed: the game is still on, so the
+    claim is pending and later operations must not treat it as closed."""
+
+    def world(self, state: str | None = "finished") -> World:
+        w = World()
+        w.apply([add(OTHER, ["deck"])])
+        on = w.views["deck"]
+        if state:
+            w.apply([finish(OTHER, state, release=["deck"])])
+        w.views["deck"] = on  # the whitelist write failed: the game is still on
+        return w
+
+    def test_removing_must_name_a_pending_console(self) -> None:
+        w = self.world()
+        self.assertEqual(w.code([remove(OTHER)]), "bad-request")
+        w.apply([remove(OTHER, keep=["deck"])])  # keeping it is a decision
+        self.assertEqual(w.queue.entries, ())
+
+    def test_removing_with_release_turns_it_off_again(self) -> None:
+        w = self.world()
+        plan = w.plan([remove(OTHER, release=["deck"])])
+        self.assertEqual(plan.devices[0].turned_off, (OTHER,))
+        self.assertIsNotNone(plan.second)  # the entry goes after the whitelist
+
+    def test_a_pending_claim_of_an_active_entry_blocks_finishing_silently(self) -> None:
+        w = World()
+        w.apply([add(OTHER, ["deck", "machine"])])
+        on = w.views["deck"]
+        w.apply([{"op": "devices", "game": OTHER, "release": ["deck"]}])
+        w.views["deck"] = on
+        self.assertEqual(w.code([remove(OTHER, release=["machine"])]), "bad-request")
+
+    def test_queueing_again_keeps_before_off(self) -> None:
+        w = self.world()
+        w.apply([add(OTHER, ["deck"])])
+        self.assertEqual(w.entries()[OTHER].devices["deck"].before, "off")
+        self.assertTrue(q.holds(w.entries()[OTHER].devices["deck"]))
+
+    def test_queueing_again_for_another_console_keeps_the_pending_claim(self) -> None:
+        w = self.world()
+        w.apply([add(OTHER, ["machine"])])
+        claims = w.entries()[OTHER].devices
+        self.assertEqual((claims["deck"].end, claims["deck"].before), ("released", "off"))
+        self.assertEqual(claims["machine"].end, None)
+
+    def test_adding_a_console_over_a_pending_claim_keeps_before_off(self) -> None:
+        w = self.world(None)
+        w.apply([{"op": "devices", "game": OTHER, "release": ["deck"]}])
+        w.views["deck"] = view(managed(["gba"], includes=[EXAMPLE_PATH, OTHER_PATH]))
+        w.apply([{"op": "devices", "game": OTHER, "add": ["deck"]}])
+        self.assertEqual(w.entries()[OTHER].devices["deck"].before, "off")
+
+    def test_a_kept_claim_is_the_users_and_a_closed_one_is_closed(self) -> None:
+        w = World()
+        w.apply([add(OTHER, ["deck"])])
+        w.apply([finish(OTHER, keep=["deck"])])  # kept: the game stays, on purpose
+        w.apply([add(OTHER, ["deck"])])
+        self.assertEqual(w.entries()[OTHER].devices["deck"].before, "on")
+        done = World()
+        done.apply([add(OTHER, ["deck"])])
+        done.apply([finish(OTHER, release=["deck"])])  # released and really off
+        done.apply([remove(OTHER)])
+        self.assertEqual(done.queue.entries, ())
+
+    def test_the_plan_lists_every_whitelist_it_read(self) -> None:
+        w = self.world()
+        plan = w.plan([remove(OTHER, keep=["deck"])])
+        self.assertEqual(plan.reads, {"deck": w.views["deck"].etag})
+        plan = w.plan([add(MGS)])
+        self.assertEqual(plan.reads, {})
+
+
 class PlanSyncTests(unittest.TestCase):
     def sync(self, game_id: str, device: str) -> list[dict[str, Any]]:
         return [{"op": "sync", "game": game_id, "device": device}]

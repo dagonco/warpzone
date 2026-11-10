@@ -1091,13 +1091,11 @@ class App:
             if queue_store.load(self.root).etag != loaded.etag:
                 raise ApiError("stale", "the queue changed since it was read", queue=True)
             todo = [dp for dp in plan.devices if dp.changed]
-            for dp in todo:
-                snapshot = store.read(store.whitelist_path(self.root, dp.device))
-                if library_api.api_etag(snapshot.etag) != dp.etag:
+            for name, etag in plan.reads.items():  # every whitelist the plan read, written or not
+                snapshot = store.read(store.whitelist_path(self.root, name))
+                if library_api.api_etag(snapshot.etag) != etag:
                     raise ApiError(
-                        "stale",
-                        f"{dp.device}: the whitelist changed since it was read",
-                        device=dp.device,
+                        "stale", f"{name}: the whitelist changed since it was read", device=name
                     )
             # Step 4: the queue first, so a failure after it leaves a claim the page can show.
             if plan.first is not None:
@@ -1156,7 +1154,12 @@ class App:
             raise ApiError(
                 "stale", "the queue changed while it was being written", queue=True
             ) from None
-        except (store.NoLibrary, OSError, WarpzoneError) as exc:
+        except store.NoLibrary as exc:  # the answer names the folder, the log the hub root
+            self.log(f"error: {exc} (hub root {self.root})")
+            raise ApiError(
+                "write-failed", f"the queue could not be written ({exc})", queue=True
+            ) from None
+        except (OSError, WarpzoneError) as exc:
             message = f"the queue could not be written ({_reason(exc)})"
             raise ApiError("write-failed", message, queue=True) from None
         finally:
@@ -1296,6 +1299,8 @@ class App:
 
 
 def _reason(exc: BaseException) -> str:
+    if isinstance(exc, store.NoLibrary):  # its message holds the hub's path
+        return "a folder of the hub is not there"
     return getattr(exc, "strerror", None) or str(exc) or type(exc).__name__
 
 

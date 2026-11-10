@@ -537,7 +537,8 @@ class Context:
 class QueuePlan:
     """The outcome of a request. `first` is the queue file to write before the whitelists (None:
     the queue does not change), `second` the one to write after them (a `remove` that ended
-    claims). `queue` is the queue after everything and `views` the whitelists after it."""
+    claims). `queue` is the queue after everything and `views` the whitelists after it; `reads`
+    is the etag of every whitelist the plan looked at, written or not, for the re-check."""
 
     dry_run: bool
     queue: Queue
@@ -546,6 +547,7 @@ class QueuePlan:
     devices: tuple[api.DevicePlan, ...]
     skipped: tuple[dict[str, Any], ...]
     views: Mapping[str, api.DeviceView]
+    reads: Mapping[str, str]  # every whitelist the plan read, with the etag it read
 
     @property
     def final(self) -> bytes | None:
@@ -568,12 +570,32 @@ class _Work:
         self.entries = list(queue.entries)
         self.now = fmt_time(now)
         self.models: dict[str, wl.Model] = {}
+        self.read: set[str] = set()  # the whitelists looked at, written or not
         self.doomed: set[str] = set()  # entries a second write deletes
         self.skipped: list[dict[str, Any]] = []
 
     # ------------------------------------------------------------- helpers
 
+    def peek(self, name: str) -> wl.Model | None:
+        """A console's model as it stands, without making it a console the request writes."""
+        self.read.add(name)
+        return self.models.get(name) or self.ctx.views[name].model
+
+    def pending(self, game: str, name: str, claim: Claim) -> bool:
+        """A claim ended `released` whose game is still on: the whitelist write after the queue
+        write failed, so the queue still owes the console a turn-off."""
+        found = self.lib.by_id.get(game)
+        if claim.end != "released" or claim.before != "off" or found is None:
+            return False
+        model = self.peek(name) if name in self.devices else None
+        return model is not None and wl.game_state(model, [p.path for p in found[1].parts]) != "off"
+
+    def owed(self, game: str, name: str, claim: Claim) -> bool:
+        """The queue holds the game there, or a failed release left it pending."""
+        return holds(claim) or self.pending(game, name, claim)
+
     def model(self, name: str) -> wl.Model:
+        self.read.add(name)
         if name not in self.models:
             model = self.ctx.views[name].model
             assert model is not None  # a managed or missing whitelist always has a model
@@ -619,8 +641,11 @@ class _Work:
             {"device": name, "system": ref.system, "game": ref.id, "reason": reason}
         )
 
-    def turn_on(self, name: str, system: str, game: catalog.Game) -> str:
-        """Turn a game on for a console; the game's state there before."""
+    def turn_on(
+        self, name: str, system: str, game: catalog.Game, prior: Claim | None = None
+    ) -> str:
+        """Turn a game on for a console; the game's state there before. A game still on after a
+        release that did not reach the whitelist (`prior`) was the queue's: it stays `off`."""
         device = self.devices[name]
         if system in device.exclude_systems:
             raise ApiError(
@@ -631,6 +656,13 @@ class _Work:
         if before != "on":
             item = api.ChangeItem(name, system, game.id, True)
             self.models[name] = api.apply_item(device, model, item, self.lib)
+        if (
+            before == "on"
+            and prior is not None
+            and prior.before == "off"
+            and prior.end == "released"
+        ):
+            return "off"
         return before
 
     def release(self, entry: Entry, name: str, claim: Claim) -> Claim:
@@ -668,18 +700,22 @@ class _Work:
         self, i: int, release: Sequence[str], keep: Sequence[str], *, complete: bool
     ) -> list[str]:
         """End claims of entry `i`: the `release` ones turn the game off, the `keep` ones leave
-        it. With `complete`, every held console must be named and the open claims that hold
-        nothing end `kept`. Returns the consoles released."""
+        it. With `complete`, every console the queue owes (held, or pending after a failed
+        release) must be named and the open claims that hold nothing end `kept`. Returns the
+        consoles released."""
+        game = self.entries[i].game.id
         entry = self.entries[i]
         if set(release) & set(keep):
             raise _bad("a console is in both `release` and `keep`")
         claims = dict(entry.devices)
         if complete:
-            left = [n for n, c in claims.items() if holds(c) and n not in (*release, *keep)]
+            left = [
+                n for n, c in claims.items() if n not in (*release, *keep) and self.owed(game, n, c)
+            ]
             if left:
                 raise _bad(f"name every console the queue holds in `release` or `keep`: {left[0]}")
         for name in release:
-            if name not in claims or not holds(claims[name]):
+            if name not in claims or not self.owed(game, name, claims[name]):
                 raise ApiError(
                     "not-held",
                     f"the queue does not hold {entry.game.title!r} on {name}",
@@ -687,7 +723,9 @@ class _Work:
                     game=entry.game.id,
                 )
         for name in keep:
-            if name not in claims or claims[name].end is not None:
+            if name not in claims or not (
+                claims[name].end is None or self.pending(game, name, claims[name])
+            ):
                 raise ApiError(
                     "not-held",
                     f"{name} has no open claim on {entry.game.title!r}",
@@ -721,12 +759,15 @@ class _Work:
         if i is not None:
             if self.entries[i].state in ACTIVE:
                 raise ApiError("already-queued", f"{game.title!r} is already queued", game=op.game)
-            self.entries.pop(i)
+            old = self.entries.pop(i).devices
+        else:
+            old = {}
         self.check_room(op.position)
-        claims = {}
+        # The old claims are all ended; one whose release never reached the whitelist is still
+        # owed and stays on the entry.
+        claims = {n: c for n, c in old.items() if self.pending(op.game, n, c)}
         for name in op.devices:
-            before = self.turn_on(name, system, game)
-            claims[name] = Claim(before, self.now)
+            claims[name] = Claim(self.turn_on(name, system, game, old.get(name)), self.now)
         entry = Entry(
             OWNER,
             ref_of(system, game),
@@ -757,7 +798,7 @@ class _Work:
             if found is None:
                 raise _bad(f"{entry.game.title!r} is no longer in the library")
             for name in op.add:
-                claims[name] = Claim(self.turn_on(name, *found), self.now)
+                claims[name] = Claim(self.turn_on(name, *found, claims.get(name)), self.now)
         if len(claims) > MAX_CLAIMS:
             raise _bad(f"an entry has at most {MAX_CLAIMS} consoles")
         self.entries[i] = replace(entry, devices=dict(sorted(claims.items())))
@@ -918,7 +959,7 @@ def plan(
     first: bytes | None = None
     second: bytes | None = None
     final = queue
-    if entries != reading.queue.entries:
+    if entries != reading.queue.entries or work.doomed:
         first = render(queue)
         if not size_check(len(first), size):
             raise ApiError(
@@ -946,7 +987,10 @@ def plan(
             after[dp.device] = api.DeviceView(
                 api.MANAGED, dp.new_etag, work.models[dp.device], dp.new_text
             )
-    return QueuePlan(request.dry_run, final, first, second, plans, tuple(work.skipped), after)
+    reads = {n: ctx.views[n].etag for n in sorted(work.read)}
+    return QueuePlan(
+        request.dry_run, final, first, second, plans, tuple(work.skipped), after, reads
+    )
 
 
 # --------------------------------------------------------------------------- the answers

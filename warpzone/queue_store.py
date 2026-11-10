@@ -91,7 +91,9 @@ def replace(root: Path, etag: str, data: bytes, now: datetime) -> Path | None:
         raise store.Stale("queue")
     path = snapshot.path
     if snapshot.stamp is None and not path.parent.is_dir():
-        raise store.NoLibrary(f"{path.parent} is not a folder; is the hub root mounted and right?")
+        raise store.NoLibrary(
+            "the hub's catalog/ folder is not there; is the hub root mounted and right?"
+        )
     saved: list[Path] = []
     failing = path
 
