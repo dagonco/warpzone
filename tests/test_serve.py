@@ -5,6 +5,7 @@ import contextlib
 import http.client
 import json
 import os
+import select
 import shutil
 import signal
 import socket
@@ -2039,6 +2040,54 @@ class HardeningTests(ServeCase):
         self.assertFalse([line for line in self.logs if "internal" in line])
         self.assertEqual(self.get("/api/v1/devices").status, 200)
 
+    def drip(self, announced: int, give_up: float = 5.0) -> tuple[bool, float]:
+        """POST a body of `announced` bytes announced but sent one byte at a time, 0.1 s apart,
+        for at most `give_up` seconds. Returns whether the server closed the connection and how
+        long the client waited. The socket stays quiet for far less than the per-read timeout."""
+        head = (
+            b"POST /api/v1/changes HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer "
+            + TOKEN.encode()
+            + b"\r\nContent-Type: application/json\r\nContent-Length: "
+            + str(announced).encode()
+            + b"\r\n\r\n"
+        )
+        started = time.monotonic()
+        sock = socket.create_connection(("127.0.0.1", self.port), timeout=5)
+        try:
+            sock.sendall(head)
+            while time.monotonic() - started < give_up:
+                try:
+                    sock.sendall(b"x")
+                    if select.select([sock], [], [], 0.1)[0] and sock.recv(65536) == b"":
+                        return True, time.monotonic() - started
+                except (BrokenPipeError, ConnectionResetError):
+                    return True, time.monotonic() - started
+            return False, time.monotonic() - started
+        finally:
+            sock.close()
+
+    def test_a_body_dripped_past_the_total_limit_is_cut_off(self) -> None:
+        # The limit is 0.6 s, the per-read timeout 15 s: only a total limit ends this.
+        self.start(body_seconds=0.6)
+        for announced in (60_000, 70_000, serve.MAX_DRAIN):
+            closed, waited = self.drip(announced)
+            self.assertTrue(closed, (announced, waited))
+            self.assertLess(waited, 4.0, announced)
+        self.assertTrue(any("body not received" in line for line in self.logs), self.logs)
+        self.assertFalse([line for line in self.logs if "internal" in line])
+        self.assertEqual(self.get("/api/v1/devices").status, 200)
+
+    def test_a_body_that_fits_the_total_limit_is_read_as_before(self) -> None:
+        self.start(body_seconds=0.6)
+        self.assertEqual(self.get("/api/v1/devices").status, 200)
+        reply = self.call("POST", "/api/v1/changes", {"changes": [], "expect": {}})
+        self.assertEqual(reply.status, 400)  # an empty change is refused, after the body was read
+        self.assertNotIn("body not received", "".join(self.logs))
+        reply = self.oversized_post(70_000, 10_000, 0.2)
+        self.assertTrue(reply.startswith(b"HTTP/1.0 400"), reply[:60])
+        self.assertIn(b"the body is over 65536 bytes", reply)
+        self.assertNotIn("body not received", "".join(self.logs))
+
 
 class TokenTests(unittest.TestCase):
     def test_the_environment_wins_then_the_first_line_of_the_file(self) -> None:
@@ -2080,6 +2129,21 @@ class TokenTests(unittest.TestCase):
             path.write_text("0123456789abcdef\n")  # 16 characters
             settings = ServeSettings(token_file=str(path))
             self.assertEqual(serve.load_token({}, settings), "0123456789abcdef")
+
+
+class BodyBudgetTests(unittest.TestCase):
+    def test_a_chunk_and_the_time_left_while_there_is_time(self) -> None:
+        self.assertEqual(serve.body_budget(10, 100.0, 100.0, 60.0, 15.0), (10, 15.0))
+        self.assertEqual(serve.body_budget(10**6, 100.0, 130.0, 60.0, 15.0), (serve.CHUNK, 15.0))
+
+    def test_the_read_timeout_shrinks_to_the_time_left(self) -> None:
+        count, timeout = serve.body_budget(10, 100.0, 155.0, 60.0, 15.0) or (0, 0.0)
+        self.assertEqual(count, 10)
+        self.assertAlmostEqual(timeout, 5.0)
+
+    def test_no_budget_once_the_limit_has_run_out(self) -> None:
+        self.assertIsNone(serve.body_budget(10, 100.0, 160.0, 60.0, 15.0))
+        self.assertIsNone(serve.body_budget(10, 100.0, 999.0, 60.0, 15.0))
 
 
 class FailureLimiterTests(unittest.TestCase):
