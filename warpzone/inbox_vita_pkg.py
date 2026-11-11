@@ -64,7 +64,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import BinaryIO
 
-from warpzone import inbox_core, inbox_ps4, inbox_vita
+from warpzone import inbox_core, inbox_ps4, inbox_vita, runners
 from warpzone.inbox_core import (
     VITA3K_BINARY,
     Context,
@@ -513,17 +513,11 @@ Runner = Callable[[Sequence[str], Path, Mapping[str, str], float], tuple[int, st
 def run_vita3k(
     argv: Sequence[str], cwd: Path, env: Mapping[str, str], timeout: float
 ) -> tuple[int, str]:
+    # Vita3K starts helper processes, so it runs through `run_tool`: when the limit runs out its
+    # whole group is killed, not only the program (see `development/design/inbox.md`).
     try:
-        proc = subprocess.run(
-            list(argv),
-            cwd=cwd,
-            env={**os.environ, **env},
-            stdin=subprocess.DEVNULL,
-            capture_output=True,
-            text=True,
-            errors="replace",
-            timeout=timeout,
-            check=False,
+        proc = runners.run_tool(
+            argv, timeout, stdin=subprocess.DEVNULL, cwd=cwd, env={**os.environ, **env}
         )
     except subprocess.TimeoutExpired:
         return -1, f"Vita3K did not finish within {int(timeout)} seconds"
