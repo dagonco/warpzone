@@ -38,6 +38,7 @@ from warpzone import (
     diskstatus_io,
     library_api,
     playstate,
+    playstate_device,
     progress,
     queue,
     queue_store,
@@ -514,8 +515,9 @@ class HubFiles:
     def play_ledgers(self) -> tuple[playstate.Ledger, ...]:
         """The ledgers in `frontend/play-state/`, one per device, in device order. A file is
         parsed again when its size or mtime changed (checked at most every `interval`
-        seconds); one that cannot be read, or trusted, is left out. Conflict copies are
-        ignored, and the devices that left the config still count: their plays happened."""
+        seconds); one that cannot be read, or trusted, or is over 32 MiB, is left out. Conflict
+        copies are ignored, and the devices that left the config still count: their plays
+        happened."""
         with self._lock:
             if self.clock() - self._ledgers_checked >= self.interval:
                 self._ledgers_checked = self.clock()
@@ -544,7 +546,7 @@ class HubFiles:
                 continue
             try:
                 ledger: playstate.Ledger | None = playstate.parse_ledger(
-                    path.read_bytes().decode("utf-8"), path.stem
+                    playstate_device.read_ledger(path), path.stem
                 )
             except (OSError, UnicodeDecodeError, playstate.LedgerError):
                 ledger = None
