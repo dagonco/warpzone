@@ -1,5 +1,7 @@
+import hashlib
 import http.client
 import unittest
+import urllib.request
 from unittest import mock
 
 from support import API_KEY, DECK_ID, HUB_ID, FakeSyncthing
@@ -9,7 +11,16 @@ from warpzone.localst import (
     find_config,
     parse_config,
 )
-from warpzone.syncthing import REDACTED, Client, SyncthingError, redact, scrub
+from warpzone.syncthing import (
+    REDACTED,
+    Client,
+    SyncthingError,
+    cert_sha256_matches,
+    format_fingerprint,
+    mismatch_message,
+    redact,
+    scrub,
+)
 
 
 class RedactionTests(unittest.TestCase):
@@ -224,6 +235,67 @@ class LocalSyncthingTests(unittest.TestCase):
             self.assertEqual(find_config(target.parent), target)
             with self.assertRaises(LocalSyncthingError):
                 find_config(home / "nowhere.xml")
+
+
+class CertificatePinTests(unittest.TestCase):
+    """The pure parts of pinning; tests/test_syncthing_pin.py talks to a real TLS server."""
+
+    DER = b"not really a certificate, only bytes to hash"
+
+    def test_matching_digest(self) -> None:
+        self.assertTrue(cert_sha256_matches(self.DER, hashlib.sha256(self.DER).digest()))
+
+    def test_a_digest_one_bit_off_does_not_match(self) -> None:
+        digest = bytearray(hashlib.sha256(self.DER).digest())
+        digest[-1] ^= 1
+        self.assertFalse(cert_sha256_matches(self.DER, bytes(digest)))
+
+    def test_no_certificate_is_a_mismatch(self) -> None:
+        self.assertFalse(cert_sha256_matches(None, hashlib.sha256(b"").digest()))
+        self.assertFalse(cert_sha256_matches(None, bytes(32)))
+
+    def test_format_fingerprint_is_openssls_form(self) -> None:
+        self.assertEqual(format_fingerprint("abcd01"), "AB:CD:01")
+        self.assertEqual(format_fingerprint("0f" * 32), ":".join(["0F"] * 32))
+
+    def test_mismatch_message_has_both_fingerprints_and_no_key(self) -> None:
+        text = mismatch_message("hub", "https://hub.example.lan:8384", "ab" * 32, "01" * 32)
+        self.assertIn(format_fingerprint("ab" * 32), text)
+        self.assertIn(format_fingerprint("01" * 32), text)
+        self.assertIn("https://hub.example.lan:8384", text)
+        self.assertIn("nothing was sent", text)
+        self.assertIn("hub.api_cert_sha256", text)
+        self.assertIn("openssl x509 -in", text)
+        self.assertNotIn(API_KEY, text)
+
+    def test_mismatch_message_when_no_certificate_was_presented(self) -> None:
+        text = mismatch_message("hub", "https://hub.example.lan:8384", None, "01" * 32)
+        self.assertIn("It presented no certificate.", text)
+        self.assertIn(format_fingerprint("01" * 32), text)
+
+    def test_a_pin_needs_an_https_url(self) -> None:
+        for url in ("http://hub.example.lan:8384", "http://127.0.0.1:8384"):
+            with self.subTest(url=url), self.assertRaises(SyncthingError) as ctx:
+                Client(url, API_KEY, label="hub", cert_sha256="ab" * 32)
+            self.assertIn("https://", str(ctx.exception))
+            self.assertNotIn(API_KEY, str(ctx.exception))
+
+    def test_the_pinned_opener_has_no_redirect_proxy_or_plain_http_handler(self) -> None:
+        client = Client("https://hub.example.lan:8384", API_KEY, cert_sha256="ab" * 32)
+        opener = client._opener
+        assert opener is not None
+        forbidden = (
+            urllib.request.ProxyHandler,
+            urllib.request.HTTPRedirectHandler,
+            urllib.request.HTTPHandler,
+        )
+        for handler in opener.handlers:
+            self.assertNotIsInstance(handler, forbidden, type(handler).__name__)
+        self.assertTrue(any(isinstance(h, urllib.request.HTTPSHandler) for h in opener.handlers))
+
+    def test_without_a_pin_there_is_no_pinned_opener(self) -> None:
+        self.assertIsNone(Client("https://hub.example.lan:8384", API_KEY)._opener)
+        self.assertIsNone(Client("http://hub.example.lan:8384", API_KEY)._opener)
 
 
 if __name__ == "__main__":

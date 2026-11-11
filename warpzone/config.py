@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import re
 import tomllib
+import urllib.parse
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -32,6 +33,7 @@ FOLDER_GROUPS = (
 _DEVICE_ID_RE = re.compile(r"^[A-Z2-7]{7}(-[A-Z2-7]{7}){7}$")
 _NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 _SYSTEM_RE = re.compile(r"^[a-z0-9_-]+$")
+_SHA256_HEX_RE = re.compile(r"[0-9a-f]{64}")
 
 
 class ConfigError(UsageError):
@@ -46,6 +48,10 @@ class Hub:
     api_url: str
     api_key: str = field(repr=False)
     addresses: tuple[str, ...] = ("dynamic",)
+    # SHA-256 of the hub Syncthing's GUI certificate as 64 lowercase hex digits (not secret).
+    # Set: the hub client speaks TLS and accepts only that certificate; see
+    # development/design/configuration.md.
+    api_cert_sha256: str | None = None
 
 
 @dataclass(frozen=True)
@@ -239,6 +245,40 @@ def _exclude_systems(table: dict[str, Any], where: str, errors: list[str]) -> tu
     return tuple(raw) if not bad and not repeated else ()
 
 
+def normalize_cert_sha256(text: str) -> str | None:
+    """The 64 lowercase hex digits in a pasted SHA-256 fingerprint, or None if it is not one.
+
+    ':' and whitespace are ignored, so what `openssl x509 -fingerprint -sha256` prints after
+    '=' (AB:CD:...), the spaced form of a browser and bare hex all give the same pin.
+    """
+    digits = "".join(ch for ch in text if ch != ":" and not ch.isspace()).lower()
+    return digits if _SHA256_HEX_RE.fullmatch(digits) else None
+
+
+def _read_cert_pin(hub: dict[str, Any], api_url: str, errors: list[str]) -> str | None:
+    if "api_cert_sha256" not in hub:
+        return None
+    raw = hub["api_cert_sha256"]
+    if not isinstance(raw, str):
+        errors.append("hub.api_cert_sha256: must be a string")
+        return None
+    pin = normalize_cert_sha256(raw)
+    if pin is None:
+        errors.append(
+            "hub.api_cert_sha256: must be the 64 hex digits of the certificate's SHA-256 "
+            "fingerprint (':' and spaces are ignored), as printed after '=' by: "
+            "openssl x509 -in https-cert.pem -noout -fingerprint -sha256"
+        )
+        return None
+    if urllib.parse.urlsplit(api_url).scheme == "http":
+        errors.append(
+            "hub.api_cert_sha256: needs an https:// api_url; with http:// the API key would "
+            "still cross the network in the clear"
+        )
+        return None
+    return pin
+
+
 def _read_api_key(hub: dict[str, Any], errors: list[str]) -> str:
     inline = hub.get("api_key")
     key_file = hub.get("api_key_file")
@@ -378,7 +418,16 @@ def parse_config(data: dict[str, Any], known_profiles: set[str] | None = None) -
     else:
         _check_keys(
             raw_hub,
-            {"name", "device_id", "root", "api_url", "api_key", "api_key_file", "addresses"},
+            {
+                "name",
+                "device_id",
+                "root",
+                "api_url",
+                "api_key",
+                "api_key_file",
+                "addresses",
+                "api_cert_sha256",
+            },
             "hub",
             errors,
         )
@@ -390,11 +439,12 @@ def parse_config(data: dict[str, Any], known_profiles: set[str] | None = None) -
             errors.append("hub.api_url: must start with http:// or https://")
         addresses = _addresses(raw_hub, "hub", errors)
         api_key = _read_api_key(raw_hub, errors)
+        cert_pin = _read_cert_pin(raw_hub, api_url, errors)
         if root and not root.startswith("/"):
             errors.append(f"hub.root: must be an absolute path (starting with /), not {root!r}")
         if root and len(root) > 1:
             root = root.rstrip("/")
-        hub = Hub(name, device_id, root, api_url.rstrip("/"), api_key, addresses)
+        hub = Hub(name, device_id, root, api_url.rstrip("/"), api_key, addresses, cert_pin)
 
     devices: dict[str, Device] = {}
     raw_devices = data.get("devices")

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import shutil
 import socketserver
+import ssl
 import threading
 import time
 from collections.abc import Sequence
@@ -112,6 +113,15 @@ def make_config(api_url: str = "http://127.0.0.1:1") -> Config:
 
 class _Server(ThreadingHTTPServer):
     daemon_threads = True
+    # Set to serve TLS: each accepted connection is wrapped here, and its handshake runs in
+    # the handler thread on the first read, so a client that aborts it cannot stall accept().
+    tls: ssl.SSLContext | None = None
+
+    def get_request(self) -> tuple[Any, Any]:
+        sock, address = super().get_request()
+        if self.tls is not None:
+            sock = self.tls.wrap_socket(sock, server_side=True, do_handshake_on_connect=False)
+        return sock, address
 
     def server_bind(self) -> None:
         # HTTPServer.server_bind calls getfqdn(), which can stall for seconds on
@@ -129,7 +139,9 @@ class _Server(ThreadingHTTPServer):
 class FakeSyncthing:
     """Just enough of Syncthing's REST API, backed by dicts. Records every request."""
 
-    def __init__(self, my_id: str, api_key: str = API_KEY) -> None:
+    def __init__(
+        self, my_id: str, api_key: str = API_KEY, *, tls: ssl.SSLContext | None = None
+    ) -> None:
         self.my_id = my_id
         self.api_key = api_key
         self.devices: list[dict[str, Any]] = [{"deviceID": my_id, "name": "self"}]
@@ -157,13 +169,15 @@ class FakeSyncthing:
         self.scan_delay = 0.0
         self.requests: list[tuple[str, str, Any]] = []
         self._server = _Server(("127.0.0.1", 0), self._handler())
+        self._server.tls = tls
         self._thread = threading.Thread(
             target=self._server.serve_forever, kwargs={"poll_interval": 0.02}, daemon=True
         )
 
     @property
     def url(self) -> str:
-        return f"http://127.0.0.1:{self._server.server_address[1]}"
+        scheme = "http" if self._server.tls is None else "https"
+        return f"{scheme}://127.0.0.1:{self._server.server_address[1]}"
 
     def __enter__(self) -> FakeSyncthing:
         self._thread.start()

@@ -29,6 +29,13 @@ for every problem, the exact fix for this platform.
   something that is not a file (`inbox` refuses to start) and `[ok]` otherwise. A config that does not load,
   a configured tool path that is not executable, a tool that cannot run, a local
   Syncthing whose API does not answer, and Python older than 3.11 are always problems.
+- **Hub API.** In the config group, from the config alone (doctor never contacts the hub):
+  `[ok]` for `https://` with `api_cert_sha256` ("pinned"; `warpzone check` proves the pin
+  matches), for `https://` on loopback and for `https://` elsewhere without a pin (with a note
+  that Syncthing's own self-signed certificate fails default verification); `[! ]` for plain
+  `http://` away from loopback, because the API key crosses the network in the clear, with the
+  fix "use https:// and set hub.api_cert_sha256". Plain `http://` on loopback says nothing. An
+  invalid pin, or a pin with `http://`, is a config error like any other (`judge_hub_api`, pure).
 - **Where inbox runs.** `warpzone inbox` runs on a computer that mounts the hub's share
   or in the hub container (see [Inbox](/warpzone/development/design/inbox/)), and with an
   `[inbox]` table `doctor` checks the way in use, found from the machine and never asked.

@@ -4,7 +4,13 @@ import unittest
 from pathlib import Path
 
 from support import API_KEY, config_data
-from warpzone.config import ConfigError, load_config, load_inbox_settings, parse_config
+from warpzone.config import (
+    ConfigError,
+    load_config,
+    load_inbox_settings,
+    normalize_cert_sha256,
+    parse_config,
+)
 
 
 class ConfigTests(unittest.TestCase):
@@ -75,6 +81,73 @@ class ConfigTests(unittest.TestCase):
         self.assert_error(
             lambda d: d["devices"].update({"Bad Name": d["devices"]["deck"]}), "name must be"
         )
+
+    def test_cert_pin_is_optional_and_off_by_default(self) -> None:
+        self.assertIsNone(parse_config(config_data()).hub.api_cert_sha256)
+
+    def test_cert_pin_accepts_colons_spaces_and_bare_hex_and_stores_lowercase(self) -> None:
+        digest = "ab" * 32
+        forms = [
+            ":".join(["AB"] * 32),
+            " ".join(["ab"] * 32),
+            digest,
+            digest.upper(),
+            "\t" + ":".join(["aB"] * 32) + " ",
+        ]
+        for form in forms:
+            with self.subTest(form=form):
+                data = config_data("https://hub.example.lan:8384")
+                data["hub"]["api_cert_sha256"] = form
+                self.assertEqual(parse_config(data).hub.api_cert_sha256, digest)
+
+    def test_cert_pin_works_on_https_loopback_and_other_hosts(self) -> None:
+        for url in ("https://127.0.0.1:8384", "https://hub.example.lan:8384"):
+            with self.subTest(url=url):
+                data = config_data(url)
+                data["hub"]["api_cert_sha256"] = "0f" * 32
+                self.assertEqual(parse_config(data).hub.api_cert_sha256, "0f" * 32)
+
+    def test_cert_pin_rejects_what_is_not_64_hex_digits(self) -> None:
+        bad = [
+            "ab" * 31,
+            "ab" * 31 + "a",
+            "ab" * 32 + "a",
+            "ab" * 33,
+            "ab" * 31 + "zz",
+            "",
+            "   ",
+            "sha256 Fingerprint=" + ":".join(["AB"] * 32),
+            "SHA256:" + "ab" * 32,
+        ]
+        for value in bad:
+            with self.subTest(value=value):
+                data = config_data("https://hub.example.lan:8384")
+                data["hub"]["api_cert_sha256"] = value
+                with self.assertRaises(ConfigError) as ctx:
+                    parse_config(data)
+                text = str(ctx.exception)
+                self.assertIn("hub.api_cert_sha256: must be the 64 hex digits", text)
+                self.assertIn("openssl x509 -in https-cert.pem -noout -fingerprint -sha256", text)
+
+    def test_cert_pin_must_be_a_string(self) -> None:
+        self.assert_error(
+            lambda d: d["hub"].update(api_url="https://h.example.lan", api_cert_sha256=12),
+            "hub.api_cert_sha256: must be a string",
+        )
+
+    def test_cert_pin_with_plain_http_is_an_error(self) -> None:
+        for url in ("http://hub.example.lan:8384", "http://127.0.0.1:8384"):
+            with self.subTest(url=url):
+                self.assert_error(
+                    lambda d, url=url: d["hub"].update(api_url=url, api_cert_sha256="ab" * 32),
+                    "hub.api_cert_sha256: needs an https:// api_url",
+                )
+
+    def test_normalize_cert_sha256(self) -> None:
+        self.assertEqual(normalize_cert_sha256(":".join(["AB"] * 32)), "ab" * 32)
+        self.assertIsNone(normalize_cert_sha256("ab" * 31))
+        self.assertIsNone(normalize_cert_sha256("sha256 Fingerprint=" + "ab" * 32))
+        self.assertIsNone(normalize_cert_sha256(""))
 
     def test_hub_root_must_be_an_absolute_path(self) -> None:
         self.assert_error(lambda d: d["hub"].update(root="games"), "hub.root: must be an absolute")

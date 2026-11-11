@@ -53,7 +53,8 @@ In `config.toml`, copied from [`examples/config.example.toml`](https://github.co
 ```toml
 [hub]
 root = "/srv/games"                      # the hub root, as on the NAS (use yours; on a Synology it is usually under /volume1/) and as mounted below
-api_url = "http://192.168.1.10:8384"     # a LAN address of the NAS, not 127.0.0.1
+api_url = "https://192.168.1.10:8384"    # a LAN address of the NAS, not 127.0.0.1
+api_cert_sha256 = "AB:CD:EF:..."         # the SHA-256 fingerprint of Syncthing's GUI certificate, see below
 api_key_file = "/config/hub.key"
 
 [inbox]
@@ -63,6 +64,8 @@ rahasher = "/usr/local/bin/RAHasher"     # optional: lets the server keep RA has
 token_file = "/config/ui.token"
 ```
 
+`api_cert_sha256` lets the container reach Syncthing over `https://` across the bridge network without the API key crossing it in the clear: warpzone accepts only the certificate with that fingerprint. Read it on the NAS from Syncthing's `https-cert.pem` (the file is in its config folder, `syncthing paths` shows where) with `openssl x509 -in https-cert.pem -noout -fingerprint -sha256`, and paste what follows the `=`. See [Getting the fingerprint](/warpzone/reference/configuration/#getting-the-fingerprint). Without the key, use `http://` as before.
+
 Make the token a long random string (`head -c 24 /dev/urandom | base64 | tr -d '/+='` makes one) and keep it to one line. The same applies to `RA_API_KEY` in `warpzone.env`: your RetroAchievements web API key, as `RA_API_KEY=<key>`. Without it the RA game lists are not downloaded and the page shows no achievements.
 
 In `compose.yaml`, change:
@@ -71,7 +74,7 @@ In `compose.yaml`, change:
 - the two paths on the left of the `volumes:` lines, if your share or your config folder are elsewhere. The hub root keeps the same path on both sides: it is the path `[hub] root` names, so the same config is right inside and outside the container.
 - `mem_limit`, if you want another limit (512 MB is enough for the server).
 
-**Network.** On the default bridge network the container reaches Syncthing at `[hub] api_url`, so Syncthing's GUI must listen on a LAN address of the NAS (and the NAS firewall must let the container's network in). If Syncthing's GUI listens only on `127.0.0.1`, switch the service to the host network instead, as the comments in the compose file say: remove `ports:`, uncomment `network_mode: host` and use `http://127.0.0.1:8384` as `api_url`.
+**Network.** On the default bridge network the container reaches Syncthing at `[hub] api_url`, so Syncthing's GUI must listen on a LAN address of the NAS (and the NAS firewall must let the container's network in). The GUI port answers both `https://` and `http://`, so the pinned `https://` URL needs nothing turned on in Syncthing. If Syncthing's GUI listens only on `127.0.0.1`, switch the service to the host network instead, as the comments in the compose file say: remove `ports:`, uncomment `network_mode: host` and use `http://127.0.0.1:8384` as `api_url` (and drop `api_cert_sha256`, or keep `https://` with it).
 
 ## First run
 
@@ -140,7 +143,7 @@ cd /path/to/the/compose/folder && docker compose up -d
 ## If it does not work
 
 - `docker compose logs warpzone` prints why `serve` stopped. Exit `2` means no token (`token_file` unreadable by the uid, or empty), no `library/.stfolder` under `[hub] root`, or an address that cannot be listened on.
-- A page that loads but shows no consoles or progress: the container cannot reach Syncthing at `api_url`. Try `docker compose run --rm warpzone status`.
+- A page that loads but shows no consoles or progress: the container cannot reach Syncthing at `api_url`. Try `docker compose run --rm warpzone status`. If it says the certificate "is not the one in hub.api_cert_sha256", nothing was sent: the message shows the fingerprint Syncthing presented. Compare it with the file; Syncthing renews its own GUI certificate about every 790 days, so after a renewal update `api_cert_sha256`.
 - A change refused with a "not managed" message: that device's whitelist is still in the hand-written format; run `whitelist migrate` for it.
 - A permission error writing `catalog/` or a whitelist: `user:` is not a uid that can write the share.
 - `Permission denied` reading `library/patterns-<device>.stignore` (or `warpzone whitelist migrate` failing with `cannot read ...: Permission denied`) on a Synology, although `ls -l` shows `rwxrwxrwx`: the share grants access through ACL entries to the `administrators` group, not to your uid, and the container runs with only the primary group of `user:`. Uncomment `group_add:` in the compose file with the gid of that group (`101` on Synology; `getent group administrators` or `id` on the NAS shows it) and run `docker compose up -d` again.

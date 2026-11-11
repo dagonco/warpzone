@@ -30,12 +30,30 @@ The hub is the machine that holds the library and runs the authoritative Syncthi
 | `name` | string | none | yes | Non-empty after trimming. The hub's display name in Syncthing on the devices. |
 | `device_id` | string | none | yes | A Syncthing device ID: 8 groups of 7 characters from `A-Z` and `2-7`, separated by `-`. Must differ from every device's ID. |
 | `root` | string | none | yes | Non-empty and absolute (a relative path is a config error). The absolute path of the hub root on the hub's own filesystem (the folder holding `library/`, `saves/`, `frontend/`, `songs/`, `tools/` and `settings/`), as seen by the hub's Syncthing, not by the machine running warpzone. A trailing `/` is removed. |
-| `api_url` | string | none | yes | Must start with `http://` or `https://`. The base URL of the hub's Syncthing GUI and API. A trailing `/` is removed. |
+| `api_url` | string | none | yes | Must start with `http://` or `https://`. The base URL of the hub's Syncthing GUI and API. A trailing `/` is removed. Away from the machine that runs the hub, use `https://` with `api_cert_sha256`: with `http://` the API key crosses the network in the clear. |
+| `api_cert_sha256` | string | none | no | The SHA-256 fingerprint of the hub Syncthing's GUI certificate, 64 hex digits; `:` and spaces are ignored and case does not matter, so the `AB:CD:...` that `openssl` prints after `=` works as is (not the `sha256 Fingerprint=` prefix). With it, warpzone speaks TLS to the hub and accepts only a server presenting exactly that certificate, checked before the API key or any part of the request is sent; it follows no redirect and uses no proxy from the environment for the hub. An `http://` `api_url` with it is an error. See [Getting the fingerprint](#getting-the-fingerprint). |
 | `api_key` | string | none | one of the two | Non-empty. The hub's API key, inline. |
 | `api_key_file` | string | none | one of the two | A path to a file holding the key (`~` is expanded). The file must be readable and not empty; its contents are trimmed. Keep it mode 600 and out of any repository. |
 | `addresses` | array of strings | `["dynamic"]` | no | Non-empty, every item a non-empty string. Where devices find the hub; set explicit `tcp://host:22000` addresses if discovery is off. |
 
 Set exactly one of `api_key` and `api_key_file`: both or neither is an error. API keys are never printed or logged; dry runs redact them.
+
+#### Getting the fingerprint
+
+Syncthing serves its GUI and API with a self-signed certificate that it keeps in `https-cert.pem`, in its config folder (the one that holds `config.xml`; `syncthing paths` prints the exact location, `syncthing --paths` on Syncthing 1.x). It is not the device certificate (`cert.pem`) that defines the device ID. The GUI port answers TLS and plain HTTP on the same port, so `https://` works without turning on "Use HTTPS for GUI". On the hub:
+
+```bash
+openssl x509 -in /path/to/https-cert.pem -noout -fingerprint -sha256
+# sha256 Fingerprint=AB:CD:...   -> paste what follows the '='
+```
+
+Reading the file on the hub is the safe way. From another machine you can ask the server instead, which trusts whatever answers on first use, so compare the result with the file or with your browser's certificate viewer when you can:
+
+```bash
+openssl s_client -connect hub.example.lan:8384 </dev/null 2>/dev/null | openssl x509 -noout -fingerprint -sha256
+```
+
+Then set `api_url = "https://hub.example.lan:8384"` and `api_cert_sha256`. Syncthing replaces an auto-generated certificate about every 790 days, with a new key, so the fingerprint changes and warpzone reports a mismatch (with the fingerprint it saw) until you update the value; a custom certificate you put in `https-cert.pem` is never replaced.
 
 ### `[devices.<name>]`
 
@@ -126,7 +144,8 @@ Every ID, address, path and key below is fake.
 name = "hub"
 device_id = "AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA"  # gitleaks:allow
 root = "/srv/games"
-api_url = "http://hub.example.lan:8384"
+api_url = "https://hub.example.lan:8384"
+api_cert_sha256 = "AB:CD:EF:..."          # fake and cut short; see "Getting the fingerprint"
 api_key_file = "~/.config/warpzone/hub.key"
 # api_key = "paste-the-key-here"          # use this or api_key_file, never both
 addresses = ["tcp://hub.example.lan:22000"]

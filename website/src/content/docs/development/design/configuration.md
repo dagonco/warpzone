@@ -14,6 +14,7 @@ name = "nas"
 device_id = "XXXXXXX-..."
 root = "/srv/games"                        # path on the hub's filesystem (an example; use your own)
 api_url = "http://nas.local:8384"
+# api_cert_sha256 = "AB:CD:..."              # optional: pin the hub's GUI certificate, with an https:// api_url
 api_key_file = "~/.config/warpzone/hub.key"  # or api_key = "..."
 addresses = ["tcp://nas.local:22000"]        # optional, default ["dynamic"]
 
@@ -63,6 +64,42 @@ error messages; the RetroAchievements key is read from `RA_API_KEY`, never from 
 `warpzone serve` reads `[hub]`, `[devices.*]`, `[serve]`, `[ra]` and `[inbox] rahasher`; its token
 comes from `WARPZONE_UI_TOKEN` or `[serve] token_file` and is never printed either (see
 [Library UI](/warpzone/development/design/library-ui/#authentication)).
+
+### The hub's API over the network
+
+Syncthing's GUI certificate is self-signed, so a client that verifies certificates the usual way
+rejects it, and a hub reached across the LAN (`provision hub` from a laptop, the hub container on a
+bridge network, every console's `provision device`) would have to use `http://`, with the API key
+in the clear. The optional `[hub] api_cert_sha256` removes that choice:
+
+- It holds the SHA-256 fingerprint of the hub Syncthing's GUI certificate (`https-cert.pem`).
+  `normalize_cert_sha256` drops `:` and whitespace and lowercases, so what `openssl x509 -fingerprint
+  -sha256` prints after `=`, a browser's spaced form and bare hex are the same pin. Anything that is
+  not exactly 64 hex digits is a config error.
+- With it, the hub client speaks TLS and accepts only a server whose leaf certificate (the DER from
+  `getpeercert(binary_form=True)`) hashes to exactly that value. The comparison is
+  `hmac.compare_digest`, done in `connect()` after the handshake and before `http.client` writes
+  anything, so the request line, the headers and the `X-API-Key` never reach another server. A
+  mismatch is a `SyncthingError` with both fingerprints and no key in it. The name in the URL is not
+  checked: the pin replaces it.
+- The pinned client is an `OpenerDirector` with only the HTTPS handler and the error handlers: it
+  follows no redirect (a 3xx is an error, so the key cannot be copied to another host), uses no proxy
+  from the environment (it always connects directly) and cannot speak plain HTTP. TLS 1.2 is the
+  minimum.
+- `http://` with a pin is a config error (exit 2), and `Client` refuses it too: the pin says that only
+  a verified TLS peer gets the key. An `https://` loopback URL with a pin is checked like any other
+  (without a pin, loopback keeps skipping verification, as before).
+- `cli._hub_client` is the only place that builds a client for the hub, so `provision hub`,
+  `provision device` (whitelist pre-check and `auto_hub`), `check`, `status`, `serve` and `whitelist`
+  all get the pin. A mismatch in the `provision device` pre-check is reported like an unreachable hub
+  (with the mismatch text) and provisioning goes on; nothing was sent. Clients for the local
+  Syncthing (`config.xml`) are never pinned.
+- Without the key nothing changes. Syncthing renews an auto-generated GUI certificate about every 790
+  days, with a new key, so the pin must then be updated; a custom certificate in `https-cert.pem` is
+  never replaced by Syncthing.
+- `warpzone doctor` stays offline: its "Hub API" line reports only what the config says (https with a
+  pin, https on loopback, https verified by the system, or a warning for plain `http://` away from
+  loopback). `warpzone check` and `status` prove that the pin matches.
 
 ## Command line
 

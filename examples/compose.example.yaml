@@ -8,7 +8,8 @@
 # Put next to this file:
 #   config/config.toml   the config from examples/config.example.toml, with in the tables:
 #                          [hub]    root = "/srv/games"        (your games share; the same as the mount below)
-#                                   api_url = "http://192.168.1.10:8384"   (see "Network" below)
+#                                   api_url = "https://192.168.1.10:8384"   (see "Network" below)
+#                                   api_cert_sha256 = "AB:CD:..."   (Syncthing's GUI certificate, see "Network")
 #                                   api_key_file = "/config/hub.key"
 #                          [inbox]  rahasher = "/usr/local/bin/RAHasher"   (optional, RA hashes)
 #                          [serve]  token_file = "/config/ui.token"
@@ -71,7 +72,9 @@ services:
 
     # Network. With the default (bridge) network the container reaches the hub's Syncthing at
     # `[hub] api_url`, which must be a LAN address of the NAS, not 127.0.0.1 (and Syncthing's GUI
-    # must listen on it). If Syncthing's GUI listens only on 127.0.0.1, the container has to share
+    # must listen on it). Use `https://` there with `[hub] api_cert_sha256` (read it on the NAS with
+    # `openssl x509 -in https-cert.pem -noout -fingerprint -sha256`; the file is in Syncthing's
+    # config folder), so the API key does not cross the network in the clear. If Syncthing's GUI listens only on 127.0.0.1, the container has to share
     # the host's network instead: remove `ports:` above, uncomment the next line, and set
     # `api_url = "http://127.0.0.1:8384"`. The UI is then on port 8780 of the NAS.
     # network_mode: host

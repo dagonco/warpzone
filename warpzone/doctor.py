@@ -31,6 +31,7 @@ import textwrap
 import time
 import tomllib
 import urllib.error
+import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
 from collections.abc import Callable, Collection, Mapping, Sequence
@@ -756,6 +757,10 @@ class ConfigState:
     # Every configured device with the folders its config describes; empty when the config
     # does not load.
     device_folders: tuple[DeviceFolders, ...] = ()
+    # [hub] api_url and whether [hub] api_cert_sha256 is set; None/False when the config does
+    # not load.
+    hub_api_url: str | None = None
+    hub_cert_pinned: bool = False
 
 
 @dataclass(frozen=True)
@@ -840,9 +845,13 @@ def load_config_state(path: Path) -> ConfigState:
     update_devices: list[SettingsDevice] = []
     prune_devices: list[SettingsDevice] = []
     device_folders: list[DeviceFolders] = []
+    hub_api_url: str | None = None
+    hub_cert_pinned = False
     try:
         if "hub" in data or "devices" in data:
             cfg = parse_config(data, set(available_profiles()))
+            hub_api_url = cfg.hub.api_url
+            hub_cert_pinned = cfg.hub.api_cert_sha256 is not None
             profiles = {
                 name: load_profile(name) for name in {d.profile for d in cfg.devices.values()}
             }
@@ -919,6 +928,8 @@ def load_config_state(path: Path) -> ConfigState:
         updating,
         pruning,
         described,
+        hub_api_url if error is None else None,
+        hub_cert_pinned and error is None,
     )
 
 
@@ -964,6 +975,7 @@ def check_config(ctx: Context) -> list[Result]:
                     "(see examples/config.example.toml)",
                 )
             )
+    results += check_hub_api(cfg)
     if only_inbox:
         # A machine that only files games has no use for the hub and device tables, so
         # they are one note rather than two "not set up" items.
@@ -977,6 +989,44 @@ def check_config(ctx: Context) -> list[Result]:
             )
         )
     return results
+
+
+def judge_hub_api(api_url: str, pinned: bool) -> Result | None:
+    """The "Hub API" line for `[hub] api_url` and whether the certificate is pinned; None
+    for plain http on loopback, which has nothing to say."""
+    parsed = urllib.parse.urlsplit(api_url)
+    loopback = _is_loopback(parsed.hostname or "")
+    if parsed.scheme == "https":
+        if pinned:
+            detail = (
+                "https with the certificate pinned (hub.api_cert_sha256); "
+                "`warpzone check` proves it matches"
+            )
+        elif loopback:
+            detail = "https on loopback"
+        else:
+            detail = (
+                "https, verified against the system's trusted certificates; Syncthing's own "
+                "self-signed certificate fails this, set hub.api_cert_sha256"
+            )
+        return Result("Hub API", G_CONFIG, OK, detail)
+    if loopback:
+        return None
+    return Result(
+        "Hub API",
+        G_CONFIG,
+        WARN,
+        f"{api_url} is plain http, so the API key crosses the network in the clear",
+        "use https:// in [hub] api_url and set hub.api_cert_sha256 to the SHA-256 fingerprint "
+        "of the hub Syncthing's https-cert.pem (see reference/configuration.md)",
+    )
+
+
+def check_hub_api(cfg: ConfigState) -> list[Result]:
+    if cfg.hub_api_url is None:
+        return []
+    line = judge_hub_api(cfg.hub_api_url, cfg.hub_cert_pinned)
+    return [] if line is None else [line]
 
 
 def check_syncthing(ctx: Context) -> list[Result]:

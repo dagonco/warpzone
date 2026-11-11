@@ -574,14 +574,29 @@ def _eprint(message: str) -> None:
     print(message, file=sys.stderr)
 
 
-def _client(base_url: str, api_key: str, *, label: str, dry_run: bool = False) -> Client:
+def _client(
+    base_url: str,
+    api_key: str,
+    *,
+    label: str,
+    dry_run: bool = False,
+    cert_sha256: str | None = None,
+) -> Client:
     from warpzone.syncthing import Client
 
-    return Client(base_url, api_key, label=label, dry_run=dry_run)
+    return Client(base_url, api_key, label=label, dry_run=dry_run, cert_sha256=cert_sha256)
 
 
 def _hub_client(cfg: Config, *, dry_run: bool = False) -> Client:
-    return _client(cfg.hub.api_url, cfg.hub.api_key, label="hub", dry_run=dry_run)
+    """The only place a client for the hub's API is built, so the certificate pin applies to
+    every command that talks to it."""
+    return _client(
+        cfg.hub.api_url,
+        cfg.hub.api_key,
+        label="hub",
+        dry_run=dry_run,
+        cert_sha256=cfg.hub.api_cert_sha256,
+    )
 
 
 def _config_path(args: argparse.Namespace) -> Path:
