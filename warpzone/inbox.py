@@ -605,6 +605,8 @@ def process_unit(
             if res.outcome == "exists":
                 res.notes.append("already in the library (content is compared with --apply)")
             return res
+        # The first game of a system: a new library has no folder for it yet.
+        sysdir.mkdir(parents=True, exist_ok=True)
         _place(ctx, unit, prepared, produced, dest, res)
     except ItemFailure as exc:
         res.outcome = "review"

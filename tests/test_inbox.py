@@ -888,6 +888,17 @@ class CartridgeTests(Base):
         self.assertIn("!/roms/nes/Adventure (USA).zip", self.out)
         self.assertNotIn(".part", "".join(self.library()))
 
+    def test_the_first_game_of_a_system_makes_its_folder(self) -> None:
+        # A new library has `library/roms/` and no folder for the system yet.
+        (self.roms / "nes").rmdir()
+        self.drop("bare.nes", NES_ROM)
+        self.assertEqual(self.go(apply=False, tools=Tools()), 0)
+        self.assertFalse((self.roms / "nes").exists(), "report only makes no folder")
+        self.assertEqual(self.go(tools=Tools()), 0)
+        self.assertEqual(self.library(), ["nes/Adventure (USA).zip"])
+        self.assertEqual(self.done(), ["bare.nes"])
+        self.assertEqual(self.review(), [])
+
     def test_bare_rom_and_folder_with_two_games(self) -> None:
         self.drop("bare.nes", NES_ROM)
         self.drop("pack", {"a/one.bin": SPIRIT_ROM, "notes.txt": b"x"})
