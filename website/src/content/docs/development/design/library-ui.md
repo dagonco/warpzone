@@ -941,7 +941,8 @@ key: id, system, title) and `saves` (see [Saves per game](#saves-per-game)).
 
 Play statistics come from the ledgers in `frontend/play-state/*.jsonl` (see [Play
 state](/warpzone/development/design/play-state/)), read again when a file changed (checked at
-most every 5 seconds); a ledger that cannot be read is left out, and the ledgers of devices that
+most every 5 seconds); a ledger that cannot be read, or is over 32 MiB (`playstate_device.read_ledger`,
+which reads at most one byte past the limit), is left out, and the ledgers of devices that
 left the config still count. A ledger line is keyed by hub system and ROM path below it, and a
 catalog game is found under its `gamelist` path (what a frontend records), else under its
 primary path below `roms/<system>/`. Lines for a ROM the catalog does not hold are ignored.

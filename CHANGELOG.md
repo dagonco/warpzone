@@ -10,6 +10,10 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 - `warpzone provision device` (a dry run and an unattended run too) and `warpzone doctor` warn about a `wz-*` folder in the console's own Syncthing that its config no longer describes, for example after a group is taken out of its `folders`. The warning names the folder and its path and says that warpzone leaves it as it is; it can be removed in the console's Syncthing, and its files stay on disk. Nothing is changed for such a folder.
 
+### Fixed
+
+- A play-state ledger over 32 MiB is no longer loaded whole. The library UI server read each `frontend/play-state/<device>.jsonl` with no size limit, so a damaged or hostile file of several gigabytes written by a console filled the server's memory on each refresh; a device reading the ledgers of the others had the same flaw. A ledger is now read through a limit (at most one byte past it is read, even if the file grows meanwhile) and one over it is left out like any ledger that cannot be read. A real ledger is far smaller: a line is about 150 bytes. See [Play state](https://dagonco.github.io/warpzone/development/design/play-state/).
+
 ## [0.4.0rc2] - 2026-11-11
 
 The second candidate adds to the library UI (a play queue, recommendation shelves and the history of each console's whitelist), lets `settings` share ES-DE's and shadPS4's own settings, files homebrew through `inbox`, and hardens the inbox and the library UI server against bad input from DATs, shared folders and the network.
