@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ## [Unreleased]
 
+## [0.4.0rc3] - 2026-11-11
+
+The third candidate lets the hub's Syncthing API be reached over https by pinning its certificate, makes the hub see a console with a partly whitelisted system as fully in sync, fixes a save folder that stopped syncing after its path moved, and closes three more ways a bad file, a slow client or a stuck tool could tie up a command or the library UI server.
+
+**Upgrading from 0.4.0rc1 or 0.4.0rc2:** run `warpzone whitelist migrate` once on the hub. The whitelists the library UI manages gain a generated `// Folders` section, and until they are migrated again the UI shows them read-only; every console keeps receiving exactly the same files meanwhile. To stop the hub's API key from travelling in the clear on the network, set `[hub] api_cert_sha256` and switch `api_url` to `https://` (see the second entry under Added); until then `warpzone doctor` warns about a plain `http://` `api_url` that is not on loopback.
+
+**If two consoles hold different shadPS4 saves of the same game:** the shadPS4 save folder moved in 0.4.0rc2, and both saves are merged file by file when the consoles sync after the move (the newer file wins and the other is kept beside it as a `.sync-conflict` copy; nothing is deleted). Before upgrading the second console, move aside the save you do not want to keep. A console that upgraded to 0.4.0rc2 and whose shadPS4 saves never reached the hub recovers when its connection to the hub is made again, for example after a restart of its Syncthing.
+
 ### Added
 
 - `warpzone provision device` (a dry run and an unattended run too) and `warpzone doctor` warn about a `wz-*` folder in the console's own Syncthing that its config no longer describes, for example after a group is taken out of its `folders`. The warning names the folder and its path and says that warpzone leaves it as it is; it can be removed in the console's Syncthing, and its files stay on disk. Nothing is changed for such a folder.
@@ -320,7 +328,8 @@ First public release. warpzone keeps one game library on a home server and deliv
 - `warpzone doctor` checks the tools, config, Syncthing, DATs and hub folder of a machine and prints the fix for each problem.
 - `warpzone status`, `check` and `render-ignores` to inspect folder state, validate the config and preview a device's ignore lines. `provision` supports `--dry-run`.
 
-[Unreleased]: https://github.com/dagonco/warpzone/compare/v0.4.0rc2...HEAD
+[Unreleased]: https://github.com/dagonco/warpzone/compare/v0.4.0rc3...HEAD
+[0.4.0rc3]: https://github.com/dagonco/warpzone/compare/v0.4.0rc2...v0.4.0rc3
 [0.4.0rc2]: https://github.com/dagonco/warpzone/compare/v0.4.0rc1...v0.4.0rc2
 [0.4.0rc1]: https://github.com/dagonco/warpzone/compare/v0.3.0...v0.4.0rc1
 [0.3.0]: https://github.com/dagonco/warpzone/compare/v0.2.0...v0.3.0
