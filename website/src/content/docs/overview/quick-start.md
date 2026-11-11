@@ -31,7 +31,7 @@ Commands below say `warpzone`; from the clone type `python3 -m warpzone` instead
 
 Copy [`examples/config.example.toml`](https://github.com/dagonco/warpzone/blob/main/examples/config.example.toml) to `~/.config/warpzone/config.toml` and fill in:
 
-- `[hub]`: `name`, `device_id`, `root` (the hub root as the hub's own filesystem sees it), `api_url` and the API key (`api_key_file` is preferred; keep the file `chmod 600`).
+- `[hub]`: `name`, `device_id`, `root` (the hub root as the hub's own filesystem sees it), `api_url` and the API key (`api_key_file` is preferred; keep the file `chmod 600`). Away from the hub, use an `https://` `api_url` with `api_cert_sha256`, the fingerprint of the hub Syncthing's GUI certificate ([how to get it](/warpzone/reference/configuration/#getting-the-fingerprint)).
 - `[devices.deck]`: the console's `device_id`, a `profile` (`steamos-emudeck` for a Steam Deck or Steam Machine, `anbernic-rg351mp` for the Anbernic) and the `folders` it subscribes to.
 
 ```toml

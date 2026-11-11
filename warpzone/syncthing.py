@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import functools
+import hashlib
+import hmac
 import http.client
 import ipaddress
 import json
@@ -57,6 +60,97 @@ def _is_loopback(host: str) -> bool:
         return False
 
 
+class CertificateMismatchError(OSError):
+    """The TLS peer's certificate is not the pinned one; nothing was sent to it."""
+
+    def __init__(self, presented: str | None) -> None:
+        super().__init__("the certificate is not the pinned one")
+        self.presented = presented  # SHA-256 of what the peer sent as hex, None if nothing
+
+
+def cert_sha256_matches(der: bytes | None, pin: bytes) -> bool:
+    """Whether the SHA-256 of the DER certificate is `pin` (32 bytes). No certificate: no."""
+    return der is not None and hmac.compare_digest(hashlib.sha256(der).digest(), pin)
+
+
+def format_fingerprint(digest_hex: str) -> str:
+    """'abcd..' as 'AB:CD:..', the form openssl prints and browsers show."""
+    upper = digest_hex.upper()
+    return ":".join(upper[i : i + 2] for i in range(0, len(upper), 2))
+
+
+def mismatch_message(label: str, base_url: str, presented: str | None, expected: str) -> str:
+    """Why a pinned connection was refused. Holds only public values: no API key."""
+    wanted = format_fingerprint(expected)
+    if presented is None:
+        got = f"It presented no certificate. The config expects {wanted}."
+    else:
+        got = f"It presented SHA-256 {format_fingerprint(presented)}; the config expects {wanted}."
+    return (
+        f"{label}: the certificate of {base_url} is not the one in hub.api_cert_sha256, so "
+        f"nothing was sent to it. {got} "
+        "If Syncthing renewed its GUI certificate (it does so about every 790 days), read the "
+        "new fingerprint on the hub with: openssl x509 -in <Syncthing config folder>/"
+        "https-cert.pem -noout -fingerprint -sha256"
+    )
+
+
+class _PinnedHTTPSConnection(http.client.HTTPSConnection):
+    """An HTTPS connection that checks the peer's certificate against a pin before use.
+
+    `http.client` buffers the request line and headers and writes to the socket only in
+    `send()`, which calls `connect()` first; raising here means no request byte is written.
+    """
+
+    def __init__(self, *args: Any, pin: bytes, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._pin = pin
+
+    def connect(self) -> None:
+        super().connect()  # TCP and the TLS handshake; nothing is written yet
+        sock = self.sock
+        # The DER form is available even though the context does not verify the chain.
+        der = sock.getpeercert(binary_form=True) if isinstance(sock, ssl.SSLSocket) else None
+        if not cert_sha256_matches(der, self._pin):
+            presented = None if der is None else hashlib.sha256(der).hexdigest()
+            sock.close()
+            self.sock = None
+            raise CertificateMismatchError(presented)
+
+
+class _PinnedHTTPSHandler(urllib.request.HTTPSHandler):
+    def __init__(self, context: ssl.SSLContext, pin: bytes) -> None:
+        super().__init__(context=context)
+        self._pin = pin
+        self._pinned_context = context
+
+    def https_open(self, req: urllib.request.Request) -> http.client.HTTPResponse:
+        connection = functools.partial(_PinnedHTTPSConnection, pin=self._pin)
+        return self.do_open(connection, req, context=self._pinned_context)
+
+
+def _pinned_opener(pin_hex: str) -> urllib.request.OpenerDirector:
+    """An opener that speaks only TLS to a server whose certificate hashes to `pin_hex`.
+
+    No redirect handler (a 3xx is an error), no proxy handler (it connects directly) and no
+    plain-HTTP handler (it cannot be downgraded).
+    """
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    context.check_hostname = False  # the pin replaces name checking
+    # Safe only because _PinnedHTTPSConnection compares the pin on every connection this
+    # context makes; it is used nowhere else.
+    context.verify_mode = ssl.CERT_NONE
+    context.minimum_version = ssl.TLSVersion.TLSv1_2
+    opener = urllib.request.OpenerDirector()
+    for handler in (
+        _PinnedHTTPSHandler(context, bytes.fromhex(pin_hex)),
+        urllib.request.HTTPDefaultErrorHandler(),
+        urllib.request.HTTPErrorProcessor(),
+    ):
+        opener.add_handler(handler)
+    return opener
+
+
 @dataclass(frozen=True)
 class Call:
     method: str
@@ -76,6 +170,7 @@ class Client:
         dry_run: bool = False,
         timeout: float = 30.0,
         sink: Callable[[str], None] = print,
+        cert_sha256: str | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self._api_key = api_key
@@ -86,7 +181,14 @@ class Client:
         self.recorded: list[Call] = []
         parsed = urllib.parse.urlsplit(self.base_url)
         self._context: ssl.SSLContext | None = None
-        if parsed.scheme == "https" and _is_loopback(parsed.hostname or ""):
+        # With a pin: TLS to the one certificate with that SHA-256, whatever the host.
+        self._pin = cert_sha256
+        self._opener: urllib.request.OpenerDirector | None = None
+        if cert_sha256 is not None:
+            if parsed.scheme != "https":
+                raise SyncthingError(f"{label}: a pinned certificate needs an https:// URL")
+            self._opener = _pinned_opener(cert_sha256)
+        elif parsed.scheme == "https" and _is_loopback(parsed.hostname or ""):
             # Syncthing's own certificate is self-signed; trust it only on loopback.
             self._context = ssl.create_default_context()
             self._context.check_hostname = False
@@ -113,7 +215,11 @@ class Client:
         )
         secrets = (self._api_key,)
         try:
-            with urllib.request.urlopen(req, timeout=self.timeout, context=self._context) as resp:
+            if self._opener is not None:
+                opened = self._opener.open(req, timeout=self.timeout)
+            else:
+                opened = urllib.request.urlopen(req, timeout=self.timeout, context=self._context)
+            with opened as resp:
                 raw = resp.read()
         except urllib.error.HTTPError as exc:
             detail = scrub(exc.read(300).decode(errors="replace").strip(), secrets)
@@ -129,6 +235,10 @@ class Client:
                 timed_out=True,
             ) from None
         except (urllib.error.URLError, OSError) as exc:
+            cause = getattr(exc, "reason", exc)
+            if isinstance(cause, CertificateMismatchError) and self._pin is not None:
+                text = mismatch_message(self.label, self.base_url, cause.presented, self._pin)
+                raise SyncthingError(scrub(text, secrets)) from None
             reason = scrub(str(getattr(exc, "reason", exc)), secrets)
             raise SyncthingError(f"{self.label}: cannot reach {self.base_url} ({reason})") from None
         except http.client.HTTPException as exc:

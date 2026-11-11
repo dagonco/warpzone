@@ -1363,7 +1363,9 @@ Mounting the hub root at the path the config already names keeps one config vali
 outside the container. `serve` refuses to start (exit `2`) when `[hub] root` has no
 `library/.stfolder`, so an unmounted share never looks like an empty library. The hub's
 Syncthing API must be reachable at `[hub] api_url` from the container: a LAN address works from
-a bridge network; when Syncthing listens only on loopback, the container uses the host network.
+a bridge network (use `https://` with `[hub] api_cert_sha256` there, so the API key does not cross the
+network in the clear, see [the hub's API over the network](/warpzone/development/design/configuration/#the-hubs-api-over-the-network));
+when Syncthing listens only on loopback, the container uses the host network.
 The image has a health check on `GET /healthz` (Python's standard library, port 8780 inside the container).
 
 ## Pure decisions and I/O

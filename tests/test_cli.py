@@ -8,9 +8,10 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from support import API_KEY, DECK_ID, HUB_ID, MACHINE_ID, FakeSyncthing
+from support import API_KEY, DECK_ID, HUB_ID, MACHINE_ID, FakeSyncthing, config_data
 from warpzone import __version__, doctor, settings_state
-from warpzone.cli import _build_parser, main
+from warpzone.cli import _build_parser, _client, _hub_client, main
+from warpzone.config import parse_config
 
 
 def run(*argv: str) -> tuple[int, str, str]:
@@ -164,6 +165,31 @@ class CliTests(unittest.TestCase):
         )
         self.assertEqual(code, 1)
         self.assertIn("no Syncthing config", err)
+
+
+class HubClientPinTests(unittest.TestCase):
+    def config(self, api_url: str, pin: str | None = None):
+        data = config_data(api_url)
+        if pin is not None:
+            data["hub"]["api_cert_sha256"] = pin
+        return parse_config(data)
+
+    def test_the_hub_client_is_pinned_when_the_config_has_a_pin(self) -> None:
+        client = _hub_client(self.config("https://hub.example.lan:8384", "ab" * 32))
+        self.assertIsNotNone(client._opener)
+        self.assertEqual(client.label, "hub")
+
+    def test_the_hub_client_is_not_pinned_without_a_pin(self) -> None:
+        self.assertIsNone(_hub_client(self.config("https://hub.example.lan:8384"))._opener)
+        self.assertIsNone(_hub_client(self.config("http://hub.example.lan:8384"))._opener)
+
+    def test_the_dry_run_hub_client_is_pinned_too(self) -> None:
+        client = _hub_client(self.config("https://hub.example.lan:8384", "ab" * 32), dry_run=True)
+        self.assertIsNotNone(client._opener)
+        self.assertTrue(client.dry_run)
+
+    def test_a_client_for_the_local_syncthing_is_never_pinned(self) -> None:
+        self.assertIsNone(_client("https://127.0.0.1:8384", "k", label="local")._opener)
 
 
 class ApplyPathImportTests(unittest.TestCase):

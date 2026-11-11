@@ -18,6 +18,15 @@ root = "/srv/games"
 # Base URL of the hub's Syncthing GUI/API. Enable the GUI on a LAN address of the hub.
 api_url = "http://nas.local:8384"
 
+# Optional. The SHA-256 fingerprint of the hub Syncthing's GUI certificate (https-cert.pem in
+# its config folder; `syncthing paths` shows where). With it, use https:// in api_url above:
+# warpzone then talks TLS and accepts only that certificate, checked before the API key is
+# sent, so the key does not cross the network in the clear. Read it on the hub with:
+#   openssl x509 -in https-cert.pem -noout -fingerprint -sha256
+# and paste what follows the '='. (Syncthing renews its own certificate about every 790 days;
+# update the value then.) An http:// api_url with this set is an error.
+# api_cert_sha256 = "AB:CD:EF:..."
+
 # The hub's API key (Actions > Settings > GUI). Set exactly one of these two.
 # A key file is preferred: keep it chmod 600 and out of the repo.
 api_key_file = "~/.config/warpzone/hub.key"

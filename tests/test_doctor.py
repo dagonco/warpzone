@@ -313,6 +313,52 @@ class ConfigTests(TmpCase):
         self.assertEqual([r.status for r in results], [OK, OK, OK, OK])
         self.assertIn("deck", by_name(results, "[devices]").detail)
 
+    def hub_api(self, api_url: str, pin: str | None = None):
+        text = FULL.replace('api_url = "http://127.0.0.1:1"', f'api_url = "{api_url}"')
+        if pin is not None:
+            text = text.replace("api_key =", f'api_cert_sha256 = "{pin}"\napi_key =')
+        results = check_config(context(self.tmp, text))
+        self.assertEqual(by_name(results, "Config file").status, OK, results[0].detail)
+        return [r for r in results if r.name == "Hub API"]
+
+    def test_hub_api_line_for_https_with_a_pin(self) -> None:
+        (line,) = self.hub_api("https://hub.example.lan:8384", "ab" * 32)
+        self.assertEqual(line.status, OK)
+        self.assertIn("pinned", line.detail)
+        self.assertIn("warpzone check", line.detail)
+
+    def test_hub_api_line_for_https_on_loopback_without_a_pin(self) -> None:
+        (line,) = self.hub_api("https://127.0.0.1:8384")
+        self.assertEqual(line.status, OK)
+        self.assertIn("loopback", line.detail)
+
+    def test_hub_api_line_for_https_elsewhere_without_a_pin(self) -> None:
+        (line,) = self.hub_api("https://hub.example.lan:8384")
+        self.assertEqual(line.status, OK)
+        self.assertIn("api_cert_sha256", line.detail)
+
+    def test_hub_api_line_warns_about_plain_http_off_loopback(self) -> None:
+        (line,) = self.hub_api("http://hub.example.lan:8384")
+        self.assertEqual(line.status, WARN)
+        self.assertIn("in the clear", line.detail)
+        self.assertIn("https://", line.fix)
+        self.assertIn("api_cert_sha256", line.fix)
+        self.assertEqual(exit_code([line]), 0)
+
+    def test_no_hub_api_line_for_plain_http_on_loopback_or_without_a_hub(self) -> None:
+        self.assertEqual(self.hub_api("http://127.0.0.1:8384"), [])
+        results = check_config(context(self.tmp, INBOX_ONLY))
+        self.assertFalse([r for r in results if r.name == "Hub API"])
+
+    def test_a_bad_pin_or_a_pin_with_plain_http_is_a_config_failure(self) -> None:
+        base = FULL.replace('api_url = "http://127.0.0.1:1"', 'api_url = "https://h.example.lan"')
+        for url, pin in (("https://h.example.lan", "abc"), ("http://h.example.lan", "ab" * 32)):
+            text = base.replace("https://h.example.lan", url)
+            text = text.replace("api_key =", f'api_cert_sha256 = "{pin}"\napi_key =')
+            results = check_config(context(self.tmp, text))
+            self.assertEqual(results[0].status, FAIL)
+            self.assertIn("hub.api_cert_sha256", results[0].detail)
+
     def test_invalid_config_reports_the_loader_errors(self) -> None:
         results = check_config(context(self.tmp, '[hub]\nname = "nas"\n'))
         self.assertEqual(len(results), 1)
