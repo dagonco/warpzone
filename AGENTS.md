@@ -62,6 +62,7 @@ CI runs unit tests on Linux with Python 3.11 and 3.14 and on macOS with Python 3
 
 - Ignore patterns are applied only on a full scan of the folder. A whitelist that just synced does not take effect until the next scan, which is why device folders get a short `rescan_seconds`.
 - After a full scan, a directory that just became ignored may still be recorded as not ignored (seen on Linux). Scan that directory on its own (`POST /rest/db/scan?folder=...&sub=...`, which answers when the scan is done) before trusting its `db/file` record.
+- A folder removed and added again under the same ID while the connection to the hub stays open can be left without the hub ever receiving its index (no error on either side) until the connection is made again; `provision device` pauses the hub device around such a move (`provision_folders.hub_disconnected`).
 - Syncthing never follows symlinks. EmuDeck exposes saves through symlinks, so save folders must point at the real directories.
 - A folder whose `.stignore` includes a file that has not arrived yet is refused; `provision device` bootstraps with ignores that let only the whitelists through first.
 

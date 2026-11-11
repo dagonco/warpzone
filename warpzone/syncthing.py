@@ -268,6 +268,13 @@ class Client:
     def add_device(self, device: dict[str, Any]) -> None:
         self.request("POST", "/rest/config/devices", device)
 
+    def set_device_paused(self, device_id: str, paused: bool) -> None:
+        """Pause or resume a device: Syncthing closes its connection and, once resumed,
+        connects again from scratch."""
+        self.request(
+            "PATCH", f"/rest/config/devices/{urllib.parse.quote(device_id)}", {"paused": paused}
+        )
+
     def folders(self) -> list[dict[str, Any]]:
         return self.get("/rest/config/folders") or []
 

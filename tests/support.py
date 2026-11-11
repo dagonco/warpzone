@@ -232,6 +232,12 @@ class FakeSyncthing:
                 self.devices.append(body)
                 return 200, None
             return 200, self.devices
+        if path.startswith("/rest/config/devices/") and method == "PATCH":
+            known = [d for d in self.devices if d["deviceID"] == path.rsplit("/", 1)[1]]
+            if not known:
+                return 404, "No device with given ID"
+            known[0].update(body)
+            return 200, None
         if path == "/rest/config/folders":
             if method == "POST":
                 self.folders[body["id"]] = {"paused": False, **body}

@@ -243,6 +243,23 @@ profile data, not code that tests the profile name.
   announce them as deletions to the hub and the other consoles. The new directory must
   exist when the run decides: an unattended run leaves the old folder in place until it
   does, and an attended run decides after it made the directories `create_when` asks for.
+
+  The removal and the new addition happen with the hub device paused in the console's
+  Syncthing, and the hub is resumed right after (`provision_folders.hub_disconnected`; a
+  dry run reports the calls without making them). A folder added again under the same ID
+  over the connection to the hub was seen, in the end-to-end test and on two consoles, to
+  stay without the hub ever receiving its index (hub `globalFiles` 0, the console showing
+  the hub at 0% with all its items needed, both sides `valid` and connected, no error)
+  until the connection was made again. That happened by itself only when the hub had files
+  in the folder to send: the console drops the connection on that message, because the
+  folder is paused for a moment. Making the connection again once the folder is complete
+  is the remedy that worked every time; pausing and resuming the hub device back to back
+  after the change did not (the connections of the two sides collided). The second check
+  (`can_move`) runs before the pause, since a paused hub reports nothing. A hub the user
+  paused is left alone, and if the move fails halfway the hub is resumed. A move also
+  warns (`move_merge_warning`) when the new directory already holds files and the hub
+  already has files in the folder: both sets merge file by file, and a clash keeps the
+  newer file and a `.sync-conflict` copy of the other.
   `steamos-emudeck` uses it for `shadps4-saves`, which moved from
   `~/.local/share/shadPS4/savedata` to `~/.local/share/shadPS4/home/1000/savedata`.
 - **`[es_systems]`** (`source`, `override`, `prefix`, `process`; needs `paths.library`).

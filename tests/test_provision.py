@@ -32,7 +32,13 @@ from warpzone.provision import (
     provision_device,
     provision_hub,
 )
-from warpzone.provision_folders import folder_patch, undescribed, wait_for_files
+from warpzone.provision_folders import (
+    folder_patch,
+    hub_is_running,
+    move_merge_warning,
+    undescribed,
+    wait_for_files,
+)
 from warpzone.provision_hub import (
     additive_plan,
     provision_hub_additive,
@@ -41,7 +47,7 @@ from warpzone.provision_hub import (
 )
 from warpzone.report import Reporter
 from warpzone.runners import run_import_check
-from warpzone.syncthing import Client
+from warpzone.syncthing import Client, SyncthingError
 
 PROFILES = {"steamos-emudeck": load_profile("steamos-emudeck")}
 
@@ -1325,6 +1331,163 @@ class MovedSaveFolderTests(DeviceFixture):
             self.provision(local, hub, dry_run=True)
             self.assertEqual(self.folder_writes(local), [])
             self.assertEqual(local.folders[self.FOLDER]["path"], str(self.old))
+
+    def hub_calls(self, local: FakeSyncthing) -> list[tuple[str, str, Any]]:
+        return [w for w in local.writes() if w[1] == f"/rest/config/devices/{HUB_ID}"]
+
+    def hub_device(self, local: FakeSyncthing) -> dict[str, Any]:
+        return next(d for d in local.devices if d["deviceID"] == HUB_ID)
+
+    def test_the_hub_is_paused_while_the_folder_is_added_again_and_resumed_after(self) -> None:
+        # Added again under the same ID over a connection that stays open, the folder can be
+        # left without the hub ever receiving its index; the hub connection is made again
+        # with the folder complete.
+        for unattended in (False, True):
+            with (
+                self.subTest(unattended=unattended),
+                FakeSyncthing(DECK_ID) as local,
+                FakeSyncthing(HUB_ID) as hub,
+            ):
+                self.install(local, hub, self.old)
+                self.provision(local, hub, unattended=unattended)
+                order: list[str] = []
+                for method, path, body in local.writes():
+                    if path == f"/rest/config/devices/{HUB_ID}":
+                        order.append("pause hub" if body == {"paused": True} else "resume hub")
+                    elif method == "DELETE" and self.FOLDER in path:
+                        order.append("remove folder")
+                    elif method == "POST" and (body or {}).get("id") == self.FOLDER:
+                        order.append("add folder")
+                    elif method == "PATCH" and path.endswith(self.FOLDER):
+                        order.append("patch folder")
+                self.assertEqual(order[:3], ["pause hub", "remove folder", "add folder"])
+                self.assertEqual(order[-1], "resume hub")
+                self.assertEqual(order.count("pause hub"), 1)
+                self.assertEqual(order.count("resume hub"), 1)
+                self.assertFalse(self.hub_device(local).get("paused"))
+                self.assertFalse(local.folders[self.FOLDER]["paused"])
+
+    def test_the_hub_stays_as_it_is_when_nothing_moves(self) -> None:
+        with FakeSyncthing(DECK_ID) as local, FakeSyncthing(HUB_ID) as hub:
+            self.install(local, hub, self.new)
+            self.provision(local, hub)
+            self.assertEqual(self.hub_calls(local), [])
+
+    def test_a_hub_the_user_paused_is_neither_paused_nor_resumed(self) -> None:
+        with FakeSyncthing(DECK_ID) as local, FakeSyncthing(HUB_ID) as hub:
+            self.install(local, hub, self.old)
+            local.devices.append({"deviceID": HUB_ID, "name": "nas", "paused": True})
+            self.provision(local, hub)
+            self.assertEqual(local.folders[self.FOLDER]["path"], str(self.new))
+            self.assertEqual(self.hub_calls(local), [])
+            self.assertTrue(self.hub_device(local)["paused"])
+
+    def test_a_dry_run_does_not_touch_the_hub_device(self) -> None:
+        with FakeSyncthing(DECK_ID) as local, FakeSyncthing(HUB_ID) as hub:
+            self.install(local, hub, self.old)
+            local.devices.append({"deviceID": HUB_ID, "name": "nas"})
+            _, lines = self.provision(local, hub, dry_run=True)
+            self.assertEqual(local.writes(), [])
+            self.assertTrue(any(f"PATCH /rest/config/devices/{HUB_ID}" in line for line in lines))
+
+    def test_the_hub_is_resumed_when_the_move_fails_halfway(self) -> None:
+        with FakeSyncthing(DECK_ID) as local, FakeSyncthing(HUB_ID) as hub:
+            self.install(local, hub, self.old)
+            real = provision_device_module.upsert_folder
+
+            def upsert(client: Client, spec: Any, *args: Any, **kw: Any) -> bool:
+                if spec.id == self.FOLDER:
+                    raise ProvisionError("boom")
+                return real(client, spec, *args, **kw)
+
+            with (
+                mock.patch.object(provision_device_module, "upsert_folder", upsert),
+                self.assertRaises(ProvisionError),
+            ):
+                self.provision(local, hub)
+            self.assertEqual(
+                [b for _, _, b in self.hub_calls(local)], [{"paused": True}, {"paused": False}]
+            )
+
+    def test_a_hub_that_cannot_be_resumed_fails_the_run_and_says_how_to_resume_it(self) -> None:
+        with FakeSyncthing(DECK_ID) as local, FakeSyncthing(HUB_ID) as hub:
+            self.install(local, hub, self.old)
+            real = Client.set_device_paused
+
+            def set_paused(client: Client, device_id: str, paused: bool) -> None:
+                if not paused:
+                    raise SyncthingError("down", 500)
+                real(client, device_id, paused)
+
+            with (
+                mock.patch.object(Client, "set_device_paused", set_paused),
+                self.assertRaises(ProvisionError) as ctx,
+            ):
+                self.provision(local, hub)
+            self.assertIn("could not be resumed", str(ctx.exception))
+            self.assertIn("Resume", str(ctx.exception))
+
+    def test_the_second_check_runs_before_the_hub_is_paused(self) -> None:
+        # The hub's completion is read for the check; a paused hub would report nothing.
+        self.old_with_files()
+        with FakeSyncthing(DECK_ID) as local, FakeSyncthing(HUB_ID) as hub:
+            self.install(local, hub, self.old)
+            local.completion[(self.FOLDER, HUB_ID)] = dict(self.SYNCED)
+            self.provision(local, hub)
+            calls = [(m, p) for m, p, _ in local.requests]
+            last_read = max(i for i, (_, p) in enumerate(calls) if "/db/completion" in p)
+            first_pause = next(
+                i
+                for i, (m, p) in enumerate(calls)
+                if m == "PATCH" and p == f"/rest/config/devices/{HUB_ID}"
+            )
+            self.assertLess(last_read, first_pause)
+
+    def test_files_on_both_sides_of_a_move_are_warned_about(self) -> None:
+        (self.new / "CUSA00009").mkdir()
+        with FakeSyncthing(DECK_ID) as local, FakeSyncthing(HUB_ID) as hub:
+            self.install(local, hub, self.old)
+            local.status[self.FOLDER] = {"globalFiles": 4}
+            rep, _ = self.provision(local, hub)
+            self.assertTrue(
+                any(".sync-conflict" in w and "already has 4" in w for w in rep.warnings)
+            )
+            self.assertEqual(local.folders[self.FOLDER]["path"], str(self.new))
+
+    def test_a_move_with_nothing_to_merge_does_not_warn(self) -> None:
+        # The new directory is empty, or the hub has no file in the folder.
+        for new_has_files, hub_files in ((False, 4), (True, 0)):
+            with (
+                self.subTest(new_has_files=new_has_files, hub_files=hub_files),
+                FakeSyncthing(DECK_ID) as local,
+                FakeSyncthing(HUB_ID) as hub,
+            ):
+                if new_has_files:
+                    (self.new / "CUSA00009").mkdir(exist_ok=True)
+                self.install(local, hub, self.old)
+                local.status[self.FOLDER] = {"globalFiles": hub_files}
+                rep, _ = self.provision(local, hub)
+                self.assertFalse(any(".sync-conflict" in w for w in rep.warnings))
+                self.assertEqual(local.folders[self.FOLDER]["path"], str(self.new))
+
+
+class MoveDecisionTests(unittest.TestCase):
+    def test_the_hub_is_running_unless_missing_or_paused(self) -> None:
+        self.assertTrue(hub_is_running([{"deviceID": HUB_ID}], HUB_ID))
+        self.assertTrue(hub_is_running([{"deviceID": HUB_ID, "paused": False}], HUB_ID))
+        self.assertFalse(hub_is_running([{"deviceID": HUB_ID, "paused": True}], HUB_ID))
+        self.assertFalse(hub_is_running([{"deviceID": DECK_ID}], HUB_ID))
+        self.assertFalse(hub_is_running([], HUB_ID))
+
+    def test_the_merge_warning_needs_files_on_both_sides(self) -> None:
+        spec = next(s for s in _hub_specs() if s.id == "wz-save-shadps4-saves")
+        warned = move_merge_warning(spec, {"globalFiles": 2}, True)
+        self.assertIsNotNone(warned)
+        self.assertIn(spec.id, warned or "")
+        self.assertIn("2 in this folder", warned or "")
+        self.assertIsNone(move_merge_warning(spec, {"globalFiles": 2}, False))
+        self.assertIsNone(move_merge_warning(spec, {"globalFiles": 0}, True))
+        self.assertIsNone(move_merge_warning(spec, {}, True))
 
 
 class UnsubscribedTests(unittest.TestCase):

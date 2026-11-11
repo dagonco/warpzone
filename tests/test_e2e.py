@@ -186,6 +186,12 @@ class EndToEndTests(unittest.TestCase):
     def test_whitelist_matcher_agrees_with_syncthing(self) -> None:
         self.run_logged(self.matcher_scenario)
 
+    def test_save_folder_moved_while_connected(self) -> None:
+        self.run_logged(lambda: self.move_scenario(hub_has_files=False))
+
+    def test_save_folder_moved_while_connected_and_hub_has_files(self) -> None:
+        self.run_logged(lambda: self.move_scenario(hub_has_files=True))
+
     def scenario(self) -> None:
         self.hub.start()
         self.deck.start()
@@ -499,6 +505,116 @@ rescan_seconds = 10
         wait_for(lambda: self.settled(self.deck, "wz-library"), "device library to settle")
         self.assertEqual((emulation / "roms/nes/mario.nes").read_text(), "nes rom")
         self.assertFalse((emulation / "roms/n64").exists())
+
+    def move_scenario(self, *, hub_has_files: bool) -> None:
+        """A save folder the profile moved (`previous_paths`) while the device stays connected:
+        `provision device` removes it from Syncthing and adds it again at the new path, and a
+        file that exists only at the new path must then reach the hub."""
+        self.hub.start()
+        self.deck.start()
+        hub_id, deck_id = self.hub.client().my_id(), self.deck.client().my_id()
+        root = self.base / "hub-root"
+        hub_dir = root / "saves/shadps4/saves"
+        hub_dir.mkdir(parents=True)
+        self.home = self.base / "home"
+        old = self.home / ".local/share/shadPS4/savedata"
+        new = self.home / ".local/share/shadPS4/home/1000/savedata"
+        old.mkdir(parents=True)
+        new.mkdir(parents=True)
+        folder = "wz-save-shadps4-saves"
+        config = self.base / "config.toml"
+        config.write_text(
+            f"""
+[hub]
+name = "nas"
+device_id = "{hub_id}"
+root = "{root}"
+api_url = "{self.hub.url}"
+api_key = "{self.hub.api_key}"
+addresses = ["{self.hub.address}"]
+
+[devices.deck]
+device_id = "{deck_id}"
+profile = "steamos-emudeck"
+folders = ["saves"]
+addresses = ["{self.deck.address}"]
+rescan_seconds = 10
+"""
+        )
+        cfg = ["--config", str(config)]
+        device_args = [*cfg, "--syncthing-config", str(self.deck.config_xml), "--timeout", "150"]
+        self.wz("provision", "hub", *cfg)
+        # What the release before the move left: the folder at the retired path, synced with
+        # the hub (which has never held a file in it, like a save folder nobody has used yet).
+        deck = self.deck.client()
+        deck.add_device({"deviceID": hub_id, "name": "nas", "addresses": [self.hub.address]})
+        deck.add_folder(
+            {
+                "id": folder,
+                "label": folder,
+                "path": str(old),
+                "type": "sendreceive",
+                "rescanIntervalS": 10,
+                "devices": [{"deviceID": deck_id}, {"deviceID": hub_id}],
+            }
+        )
+        if hub_has_files:
+            # A console that upgrades second: its old folder holds what the hub has.
+            self.write(old / "TITLE1/old.sav", "saved before the move")
+            wait_for(lambda: (hub_dir / "TITLE1/old.sav").exists(), "the old save to reach the hub")
+        wait_for(lambda: self.connected(self.hub, deck_id), "the hub to see the device", 60)
+        wait_for(lambda: self.connected(self.deck, hub_id), "the device to see the hub", 60)
+        # Both sides know the other's state of the folder: the connection is settled, not new.
+        wait_for(lambda: self.knows(self.hub, folder, deck_id), "the hub to know the device", 60)
+        wait_for(lambda: self.knows(self.deck, folder, hub_id), "the device to know the hub", 60)
+        wait_for(lambda: self.settled_or_empty(self.deck, folder), "the device folder to idle", 60)
+        wait_for(
+            lambda: self.deck.client().completion(folder, hub_id).get("completion") == 100,
+            "the hub to have all of the device folder",
+            60,
+        )
+
+        # The emulator wrote its saves at the new path.
+        self.write(new / "TITLE2/user.sav", "saved after the move")
+        out = self.wz("provision", "device", "deck", *device_args)
+        self.assertIn("moves from", out)
+        try:
+            wait_for(
+                lambda: (hub_dir / "TITLE2/user.sav").exists(),
+                "the save at the new path to reach the hub",
+                60,
+            )
+        except AssertionError as exc:
+            raise AssertionError(f"{exc}\n{self.sync_state(folder, hub_id, deck_id)}") from exc
+        self.assertEqual((hub_dir / "TITLE2/user.sav").read_text(), "saved after the move")
+        if hub_has_files:
+            wait_for(
+                lambda: (new / "TITLE1/old.sav").exists(), "the hub's save to reach the new path"
+            )
+
+    def connected(self, inst: Instance, other_id: str) -> bool:
+        return bool(inst.client().connections().get(other_id, {}).get("connected"))
+
+    @staticmethod
+    def knows(inst: Instance, folder: str, other_id: str) -> bool:
+        return inst.client().completion(folder, other_id).get("remoteState") == "valid"
+
+    @staticmethod
+    def settled_or_empty(inst: Instance, folder: str) -> bool:
+        st = inst.client().db_status(folder)
+        return st.get("state") == "idle" and st.get("needTotalItems", 0) == 0
+
+    def sync_state(self, folder: str, hub_id: str, deck_id: str) -> str:
+        lines = []
+        for inst, other in ((self.hub, deck_id), (self.deck, hub_id)):
+            client = inst.client()
+            status = client.db_status(folder)
+            keys = ("state", "globalFiles", "localFiles", "needFiles", "needTotalItems")
+            lines.append(f"{inst.name} db/status: " + str({k: status.get(k) for k in keys}))
+            lines.append(f"{inst.name} db/completion: {client.completion(folder, other)}")
+            conn = client.connections().get(other, {})
+            lines.append(f"{inst.name} connection: connected={conn.get('connected')}")
+        return "\n".join(lines)
 
     def settings_scenario(self, root: Path) -> None:
         """The settings folder is two-way: a hub layer reaches the device and a capture the hub."""

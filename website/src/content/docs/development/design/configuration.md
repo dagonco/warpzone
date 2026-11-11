@@ -228,6 +228,6 @@ re-check right before acting.
   Syncthing see a mass delete); the user is told to remove the folder first. The one
   exception is a save folder whose old path the profile lists in `previous_paths` and whose
   old directory is empty or fully on the hub: it is removed from Syncthing and added again
-  at the new path, after a second check right before (see `previous_paths` in
-  `development/design/profiles.md`).
+  at the new path, after a second check right before and with the hub device paused in the
+  console's Syncthing meanwhile (see `previous_paths` in `development/design/profiles.md`).
 - Devices are never removed from Syncthing by warpzone; only `provision hub` takes a configured device off a hub `wz-*` folder it no longer subscribes to.
