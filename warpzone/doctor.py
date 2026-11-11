@@ -51,6 +51,7 @@ from warpzone import (
     model,
     prune,
     ra,
+    runners,
     saveconvert_device,
     selfupdate,
     settings_state,
@@ -573,15 +574,9 @@ class RunOutput:
 
 
 def _run(command: Sequence[str]) -> RunOutput:
-    proc = subprocess.run(
-        list(command),
-        capture_output=True,
-        text=True,
-        errors="replace",
-        timeout=RUN_TIMEOUT_SECONDS,
-        stdin=subprocess.DEVNULL,
-        check=False,
-    )
+    # Through `run_tool`: a tool of the user's may be a wrapper that starts other processes, and
+    # when the limit runs out all of them are killed, not only the wrapper.
+    proc = runners.run_tool(command, RUN_TIMEOUT_SECONDS, stdin=subprocess.DEVNULL)
     return RunOutput(proc.returncode, (proc.stdout or "") + (proc.stderr or ""))
 
 

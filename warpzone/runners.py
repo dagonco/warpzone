@@ -2,8 +2,12 @@
 
 The device commands take them through `probes.DeviceProbes` (`FlatpakRunner`, `ImportCheck`,
 `SystemctlRunner` and the rest), so tests pass a fake and nothing here is unit-tested without
-a real command. `run_tool` is the exception: the inbox and `ra.hash_image` call it directly
-and their tests run stand-in tools.
+a real command. `run_tool` is the exception: the inbox, Vita3K, the doctor's tool probes and
+`ra.hash_image` call it directly and their tests run stand-in tools.
+
+A command that can start children of its own (a tool of the user's, an emulator) goes through
+`run_tool`, which kills its whole process group when the time limit runs out. A short query that
+starts nothing keeps `subprocess.run(timeout=...)`, which kills only the direct child.
 """
 
 from __future__ import annotations
@@ -13,13 +17,15 @@ import os
 import signal
 import subprocess
 import tempfile
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 
 FlatpakRunner = Callable[[Sequence[str]], tuple[int, str]]
 
 
 def run_flatpak(command: Sequence[str]) -> tuple[int, str]:
     """(exit code, stdout and stderr) of a `flatpak` command; raises OSError if it cannot run."""
+    # The direct-child kill is enough: `flatpak override` and `systemctl --user show-environment`
+    # edit a file or ask a daemon over D-Bus, and start nothing that could outlive them.
     proc = subprocess.run(
         list(command),
         capture_output=True,
@@ -44,6 +50,7 @@ def run_import_check(python: str) -> bool:
     """
     env = {k: v for k, v in os.environ.items() if k not in ("PYTHONPATH", "PYTHONHOME")}
     try:
+        # The direct-child kill is enough: `python -c "import warpzone"` starts no process.
         proc = subprocess.run(
             [python, "-c", "import warpzone"],
             cwd="/",
@@ -111,7 +118,12 @@ def kill_group(proc: subprocess.Popen[str], *, drain: bool) -> None:
 
 
 def run_tool(
-    cmd: Sequence[str], timeout: float, *, stdin: int | None = None
+    cmd: Sequence[str],
+    timeout: float,
+    *,
+    stdin: int | None = None,
+    cwd: str | os.PathLike[str] | None = None,
+    env: Mapping[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Run a tool, capturing its output as text, for at most `timeout` seconds. A tool that
     runs longer is killed with every process it started and `subprocess.TimeoutExpired` is
@@ -122,6 +134,8 @@ def run_tool(
     proc = subprocess.Popen(
         list(cmd),
         stdin=stdin,
+        cwd=cwd,
+        env=env,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -145,6 +159,8 @@ SystemctlRunner = Callable[[Sequence[str]], bool]
 def run_user_systemctl(args: Sequence[str]) -> bool:
     """Whether `systemctl --user <args>` succeeded."""
     try:
+        # The direct-child kill is enough: systemctl asks the user manager over D-Bus to do the
+        # work, so every process the units start belongs to the manager, not to this call.
         proc = subprocess.run(
             ["systemctl", "--user", *args],
             capture_output=True,

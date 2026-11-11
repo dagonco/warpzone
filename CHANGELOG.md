@@ -13,6 +13,7 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ### Fixed
 
+- Vita3K and the tools `warpzone doctor` probes with `--version` are killed with every process they started when they run past their time limit. Only the program itself was killed, so a helper process it had started could outlive the run, or keep the pipes open. The one-hour limit of a Vita3K package install and the 10-second limit of a doctor probe now kill the whole process group, as the inbox already did for `chdman` and the other tools; both start in a session of their own, so neither can ask anything on the terminal. See [Time limit of the tools](https://dagonco.github.io/warpzone/development/design/inbox/).
 - A play-state ledger over 32 MiB is no longer loaded whole. The library UI server read each `frontend/play-state/<device>.jsonl` with no size limit, so a damaged or hostile file of several gigabytes written by a console filled the server's memory on each refresh; a device reading the ledgers of the others had the same flaw. A ledger is now read through a limit (at most one byte past it is read, even if the file grows meanwhile) and one over it is left out like any ledger that cannot be read. A real ledger is far smaller: a line is about 150 bytes. See [Play state](https://dagonco.github.io/warpzone/development/design/play-state/).
 
 ## [0.4.0rc2] - 2026-11-11
