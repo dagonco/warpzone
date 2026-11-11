@@ -551,6 +551,22 @@ them in this order:
 // Other
 !/bios
 
+// Folders
+/roms/ps4/games/*
+!/roms/ps4/games
+/roms/ps4/shortcuts/*
+!/roms/ps4/shortcuts
+/extras/switch/*
+!/extras/switch
+/roms/ps4/*
+!/roms/ps4
+/roms/wii/*
+!/roms/wii
+/extras/*
+!/extras
+/roms/*
+!/roms
+
 *
 ```
 
@@ -562,6 +578,22 @@ them in this order:
   below `roms/` and `extras/switch/`, **Other** the rest; both sorted by path (code point order
   of the unescaped path). A section with no lines is left out, comment included. The file always
   ends with `*` and one newline.
+- **Folders** comes last, right before the `*`: for every folder above a path that is on and
+  that is not on itself (`whitelist.parents`, pure), deepest first, `/<folder>/*` and then
+  `!/<folder>`. Everything below such a folder has already been decided by the lines above, so
+  the first line keeps the rest of the folder out, as `*` did, and the second delivers the
+  folder itself and nothing in it. Without the section Syncthing creates the folder for the
+  files it holds (a console that receives one game of `roms/ps2` needs `roms` and `roms/ps2`)
+  but records it as a local change of the console, which the hub counts as needed forever: the
+  console reads as never fully in sync. The section is derived from the model, so `parse` skips
+  its lines (after checking that each is `/<folder>/*` or `!/<folder>`) and `is_managed` proves
+  it, since a file whose section differs by one byte from the one `render` writes does not
+  render back to itself. It changes which files arrive for no path: only the folders it lists
+  go from ignored to delivered, as directories. One visible effect: a console whose whitelist
+  includes a game the hub no longer has receives the empty folder of that game's system
+  (`roms/gc`), which ES-DE hides. The same rule covers a folder that is not a system, such as
+  `extras` and `extras/switch` for the Switch updates and DLC, and the system folder of Xbox 360,
+  Wii U and Model 2, which are whitelisted by their `roms/` subfolder.
 - The model is kept **normalized** (`whitelist.normalize`, pure): an include covered by a system
   root or by another include is dropped, an include covered by an exclude is dropped, and an
   exclude not covered by any system root or include is dropped, since `*` already leaves it out.
@@ -611,7 +643,10 @@ the same bytes (`render(parse(text)) == text`). The API reports each device's wh
 `managed`, `needs-migration` (it exists in another shape, hand-edited included) or `missing`. A
 file that is not managed is shown read-only, evaluated with the migration's parser where it can
 be, and every write to it is refused with `not-managed` until `warpzone whitelist migrate` has
-run: the UI never guesses what a hand edit meant.
+run: the UI never guesses what a hand edit meant. A file written by 0.4.0rc1 or rc2 has no
+Folders section, so it no longer renders back to itself and reads as `needs-migration` too: one
+`warpzone whitelist migrate` rewrites it (the proof compares the same paths as for any hand file,
+since `decide` is unchanged), and until then the console keeps receiving exactly the files it did.
 
 Every read hands out an `etag`, the SHA-256 of the file's bytes (`"absent"` for a missing file).
 A write names, for each device it touches, the `etag` it was computed from. The server holds one
@@ -669,7 +704,9 @@ The decisions are pure (`whitelist_history`, and `library_api.plan_restore` on t
 
 A backup of a hand-written whitelist (from before [the migration](#the-migration)) can be
 restored. The UI marks it (`managed: false`) and the file is not managed again until the next
-`warpzone whitelist migrate`.
+`warpzone whitelist migrate`. So is a managed backup from before the Folders section existed
+(a file written by 0.4.0rc1 or rc2). The comparison of a restore ignores the Folders section:
+its lines are derived, so they are never read as a path turned on or off.
 
 `warpzone whitelist restore <device> [backup]` does the same from the command line, where the hub
 root is mounted. Without a backup it lists them, newest first, each with its time and how it

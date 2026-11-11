@@ -174,6 +174,19 @@ arrived. Provisioning therefore does, for each whitelisted folder:
 3. Replace the ignores with `#include patterns-<device>.stignore` and trigger a
    rescan.
 
+**Folders above a partial include.** Syncthing matches an ignore line against a path and, as
+the implicit `/**` it adds to every pattern, against everything below it, and the first line
+that matches decides. A whitelist that turns on one game of a system (`!/roms/psx/Some Game`)
+therefore leaves `roms` and `roms/psx` matched only by the final `*`: the console creates them
+for the game's files, never takes the hub's record for them, and the hub counts them as needed
+forever (the bytes are complete, the items are not). No line in the fixed part can fix this: a
+`!` line that matches a folder also matches everything under it, so it would deliver whole
+systems, and the part after the `#include` is never reached. The pair of lines belongs in the
+whitelist itself, after every other line: `/<folder>/*` keeps what is below the folder out and
+`!/<folder>` delivers the folder alone. The library UI's file carries them as its derived
+`// Folders` section; see [the file the UI writes](/warpzone/development/design/library-ui/#the-file-the-ui-writes).
+A hand-written whitelist does not have them and keeps the defect until it is migrated.
+
 **Applying later edits.** After provisioning, `patterns-<device>.stignore` changes
 on the hub only, written by the [library UI](/warpzone/development/design/library-ui/#the-whitelist-model). It reaches the device through
 normal sync, but Syncthing v2.1.7 re-evaluates ignores (and pulls files that

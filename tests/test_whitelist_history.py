@@ -71,6 +71,20 @@ class DeltaTests(unittest.TestCase):
         on, off = hist.lines_of("!roms/*\nplain\n(?d).DS_Store\n")
         self.assertEqual((on, off), (frozenset(), frozenset()))
 
+    def test_the_folders_section_names_no_path(self) -> None:
+        text = managed(systems=("psx",), includes=("roms/ps4/games/CUSA00000", "bios"))
+        self.assertIn("// Folders\n/roms/ps4/games/*\n!/roms/ps4/games\n", text)
+        on, off = hist.lines_of(text)
+        self.assertEqual(on, {"roms/psx", "roms/ps4/games/CUSA00000", "bios"})
+        self.assertEqual(off, frozenset())
+
+    def test_a_file_with_the_section_and_one_without_it_have_no_delta(self) -> None:
+        text = managed(systems=("psx",), includes=("roms/ps4/games/CUSA00000", "bios"))
+        without = text[: text.index("// Folders\n")] + "*\n"
+        self.assertNotEqual(text, without)
+        self.assertTrue(hist.delta(without, text).empty)
+        self.assertTrue(hist.delta(text, without).empty)
+
     def test_a_pattern_with_a_wildcard_is_kept_as_written(self) -> None:
         on, _ = hist.lines_of("!/roms/*/x\n")
         self.assertEqual(on, {"/roms/*/x"})

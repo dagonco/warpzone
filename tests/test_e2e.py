@@ -186,6 +186,9 @@ class EndToEndTests(unittest.TestCase):
     def test_whitelist_matcher_agrees_with_syncthing(self) -> None:
         self.run_logged(self.matcher_scenario)
 
+    def test_partial_system_reaches_full_sync(self) -> None:
+        self.run_logged(self.partial_system_scenario)
+
     def scenario(self) -> None:
         self.hub.start()
         self.deck.start()
@@ -351,6 +354,141 @@ rescan_seconds = 10
         self.assertTrue(expected and expected != set(names), rendered)
         got = self.included_by_syncthing(client, "rendered", names, lines)
         self.assertEqual(got, expected, rendered)
+        # The folders above what is on are in the index too (the `// Folders` section).
+        folders = wl.parents(model)
+        self.assertTrue(folders, rendered)
+        for folder in folders:
+            self.assertTrue(in_index(client.db_file("wz-matcher-rendered", folder)), folder)
+
+    def partial_system_scenario(self) -> None:
+        """A console whose whitelist turns on one game of a system is fully in sync on the hub.
+
+        The folders above that game (`roms`, `roms/psx`) used to be created on the console but
+        recorded as local changes, so the hub counted them as needed forever. After `whitelist
+        migrate` writes the `// Folders` section they must be normal records, with no command run
+        on the console, no scan of any sub-path and no file touched there."""
+        self.hub.start()
+        self.deck.start()
+        hub_id, deck_id = self.hub.client().my_id(), self.deck.client().my_id()
+        root = self.base / "hub-root"
+        library = root / "library"
+        shutil.copy(
+            REPO / "templates" / "patterns-common.stignore", library_file(library, "common")
+        )
+        # The hand-written example: whole systems and one game of psx. It starts with a second
+        # game of psx turned on, so that game is on the console and in its index when the
+        # whitelist drops it (Syncthing keeps no record of a file that was never allowed in).
+        example = (REPO / "templates" / "patterns-device.example.stignore").read_text()
+        both = example.replace(
+            "!/roms/psx/Some Game (USA)\n",
+            "!/roms/psx/Some Game (USA)\n!/roms/psx/Other Game (USA)\n",
+        )
+        self.assertNotEqual(both, example)
+        whitelist = library_file(library, "deck")
+        whitelist.write_text(both)
+        self.write(library / "roms/nes/mario.nes", "nes rom")
+        self.write(library / "roms/psx/Some Game (USA)/game.cue", "cue")
+        self.write(library / "roms/psx/Other Game (USA)/other.cue", "hub content")
+        self.write(library / "roms/n64/other.z64", "not whitelisted")
+
+        self.home = self.base / "home"
+        emulation = self.home / "Emulation"
+        emulation.mkdir(parents=True)
+        config = self.base / "config.toml"
+        config.write_text(
+            f"""
+[hub]
+name = "nas"
+device_id = "{hub_id}"
+root = "{root}"
+api_url = "{self.hub.url}"
+api_key = "{self.hub.api_key}"
+addresses = ["{self.hub.address}"]
+
+[devices.deck]
+device_id = "{deck_id}"
+profile = "steamos-emudeck"
+folders = ["library"]
+addresses = ["{self.deck.address}"]
+rescan_seconds = 10
+"""
+        )
+        cfg = ["--config", str(config)]
+        device_args = [*cfg, "--syncthing-config", str(self.deck.config_xml), "--timeout", "150"]
+        self.wz("provision", "hub", *cfg)
+        wait_for(lambda: self.wz_ok("check", *cfg), "hub to scan its whitelists", 120)
+        self.wz("provision", "device", "deck", *device_args)
+        game = emulation / "roms/psx/Some Game (USA)/game.cue"
+        other = emulation / "roms/psx/Other Game (USA)/other.cue"
+        wait_for(game.exists, "the whitelisted game on the device")
+        wait_for(other.exists, "the second game on the device")
+        wait_for(lambda: self.settled(self.deck, "wz-library"), "device library to settle")
+
+        # The whitelist drops the second game: its files stay on the console, recorded as ignored.
+        # The console also holds a file the hub does not have, and the game with other content.
+        deck = self.deck.client()
+        whitelist.write_text(example)
+        name = "roms/psx/Other Game (USA)/other.cue"
+
+        def ignored() -> bool:
+            local = (deck.db_file("wz-library", name) or {}).get("local") or {}
+            return bool(local.get("ignored"))
+
+        wait_for(ignored, "the dropped game to be ignored on the console", 90)
+        mine = emulation / "roms/psx/mine.txt"
+        self.write(mine, "device only")
+        self.write(other, "device content")
+        hub = self.hub.client()
+        before = hub.completion("wz-library", deck_id)
+        print(f"needItems before the migration: {before.get('needItems')}", file=sys.stderr)
+
+        # Nothing is run on the console from here on.
+        self.wz("whitelist", "migrate", "deck", "--root", str(root), *cfg)
+
+        def in_sync() -> bool:
+            done = hub.completion("wz-library", deck_id)
+            need = hub.get("/rest/db/remoteneed", folder="wz-library", device=deck_id)
+            return (
+                done.get("needItems") == 0
+                and done.get("completion") == 100
+                and not (need or {}).get("files")
+                and all(self.normal_record(deck, name) for name in ("roms", "roms/psx"))
+                and not (deck.get("/rest/db/localchanged", folder="wz-library") or {}).get("files")
+            )
+
+        wait_for(in_sync, "the hub to see the console fully in sync", 90)
+        done = hub.completion("wz-library", deck_id)
+        self.assertEqual((done["needItems"], done["completion"]), (0, 100), done)
+        need = hub.get("/rest/db/remoteneed", folder="wz-library", device=deck_id)
+        self.assertEqual((need or {}).get("files") or [], [])
+        for folder in ("roms", "roms/psx"):
+            local = (deck.db_file("wz-library", folder) or {}).get("local") or {}
+            self.assertFalse(local.get("ignored"), (folder, local))
+            self.assertFalse(local.get("invalid"), (folder, local))
+            self.assertEqual(local.get("localFlags", 0), 0, (folder, local))
+        changed = deck.get("/rest/db/localchanged", folder="wz-library") or {}
+        self.assertEqual(changed.get("files") or [], [])
+
+        # Nothing on the console was deleted or changed, and what is not whitelisted stays out.
+        self.assertEqual(mine.read_text(), "device only")
+        self.assertEqual(other.read_text(), "device content")
+        local = (deck.db_file("wz-library", "roms/psx/Other Game (USA)/other.cue") or {}).get(
+            "local"
+        ) or {}
+        self.assertTrue(local.get("ignored"), local)
+        self.assertEqual(game.read_text(), "cue")
+        self.assertEqual((emulation / "roms/nes/mario.nes").read_text(), "nes rom")
+        self.assertFalse((emulation / "roms/n64").exists())
+
+    @staticmethod
+    def normal_record(client: Client, name: str) -> bool:
+        local = (client.db_file("wz-library", name) or {}).get("local") or {}
+        return (
+            bool(local)
+            and not local.get("ignored")
+            and not local.get("invalid")
+            and not local.get("localFlags", 0)
+        )
 
     def included_by_syncthing(
         self, client: Client, label: str, files: list[str], ignores: list[str]
