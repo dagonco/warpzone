@@ -57,6 +57,16 @@ for every problem, the exact fix for this platform.
   container) or is not a mounted folder, and the missing-DATs fix says to mount a folder.
   Image tools that cannot run (a wrong architecture) are `[!!]` with "build the image
   again".
+- **Leftover folders.** On a configured device, `Leftover folders` is `[! ]` when the local
+  Syncthing `config.xml` has a `wz-*` folder that none of the device's config describes (a
+  group taken out of its `folders`), and says nothing otherwise. Doctor is offline, so it
+  finds the device as for `settings`: the configured device whose ID is listed in
+  `config.xml` and one of whose folders is there at the path the config gives it (the hub
+  lists the same IDs but keeps its folders under its own root, so it gets no line). The text
+  is `provision_folders.undescribed` (pure), the one `provision device` prints as a warning;
+  the fix says to put the group back in `devices.<name>.folders` and run `warpzone provision
+  device <name>`, or to remove the folders in the device's Syncthing (their files stay).
+  Nothing in `doctor` or `health` reported such a folder before.
 - **Game Mode (SteamOS).** With a local Syncthing on SteamOS, `Game Mode` says whether
   Syncthing runs without a desktop session. Game Mode starts no desktop session, so
   `~/.config/autostart/*.desktop` entries never run there; only a systemd user unit

@@ -32,7 +32,7 @@ from warpzone.provision import (
     provision_device,
     provision_hub,
 )
-from warpzone.provision_folders import folder_patch, wait_for_files
+from warpzone.provision_folders import folder_patch, undescribed, wait_for_files
 from warpzone.provision_hub import (
     additive_plan,
     provision_hub_additive,
@@ -920,6 +920,66 @@ class DeviceTests(DeviceFixture):
             self.assertNotIn(API_KEY, "\n".join(lines))
 
 
+class LeftoverFolderTests(DeviceFixture):
+    """A `wz-*` folder the device's config no longer describes is reported and left alone."""
+
+    LEFT = "wz-songs"  # a group the deck's config does not list
+
+    def provisioned(self, local: FakeSyncthing, hub: FakeSyncthing) -> None:
+        self.hub_with_whitelists(hub)
+        for name in ("patterns-common.stignore", "patterns-deck.stignore"):
+            local.arrives_after[("wz-library", name)] = 0
+        self.run_device(local, hub)
+        for folder in local.folders.values():
+            (Path(folder["path"]) / ".stfolder").mkdir(parents=True, exist_ok=True)
+        local.folders[self.LEFT] = {
+            "id": self.LEFT,
+            "path": str(self.home / "Songs"),
+            "type": "receiveonly",
+            "paused": False,
+        }
+        local.requests.clear()
+
+    def about_it(self, rep) -> list[str]:
+        return [w for w in rep.warnings if w.startswith(f"{self.LEFT} ")]
+
+    def writes_for_it(self, local: FakeSyncthing) -> list[tuple[str, str, Any]]:
+        return [w for w in local.writes() if self.LEFT in w[1] or (w[2] and self.LEFT in str(w[2]))]
+
+    def test_a_real_run_warns_and_sends_nothing_for_it(self) -> None:
+        with FakeSyncthing(DECK_ID) as local, FakeSyncthing(HUB_ID) as hub:
+            self.provisioned(local, hub)
+            rep, _ = self.run_device(local, hub)
+            (warning,) = self.about_it(rep)
+            self.assertIn(str(self.home / "Songs"), warning)
+            self.assertIn("no longer describes it", warning)
+            self.assertEqual(self.writes_for_it(local), [])
+            self.assertIn(self.LEFT, local.folders)
+
+    def test_a_dry_run_warns_too(self) -> None:
+        with FakeSyncthing(DECK_ID) as local, FakeSyncthing(HUB_ID) as hub:
+            self.provisioned(local, hub)
+            rep, _ = self.run_device(local, hub, dry_run=True)
+            self.assertEqual(len(self.about_it(rep)), 1)
+            self.assertEqual(local.writes(), [])
+
+    def test_an_unattended_run_warns_and_writes_nothing(self) -> None:
+        with FakeSyncthing(DECK_ID) as local, FakeSyncthing(HUB_ID) as hub:
+            self.provisioned(local, hub)
+            rep, _ = self.run_device(local, hub, unattended=True, timeout=0.0)
+            self.assertEqual(len(self.about_it(rep)), 1)
+            self.assertEqual(self.writes_for_it(local), [])
+
+    def test_a_folder_the_config_describes_is_not_reported(self) -> None:
+        with FakeSyncthing(DECK_ID) as local, FakeSyncthing(HUB_ID) as hub:
+            self.provisioned(local, hub)
+            rep, _ = self.run_device(local, hub)
+            self.assertEqual(
+                [w for w in rep.warnings if "no longer describes" in w and self.LEFT not in w],
+                [],
+            )
+
+
 LIBRARY_LISTS = ("patterns-common.stignore", "patterns-deck.stignore")
 
 
@@ -1367,6 +1427,46 @@ class UnsubscribedTests(unittest.TestCase):
             "wz-empty": {"devices": None},
         }
         self.assertEqual(unclaimed(_hub_specs(), existing, self.NAMES), ())
+
+
+class UndescribedTests(unittest.TestCase):
+    """Which `wz-*` folders a device's Syncthing has that its config no longer describes."""
+
+    @staticmethod
+    def specs():
+        return [s for s in _hub_specs() if s.id in ("wz-library", "wz-tools")]
+
+    @staticmethod
+    def folders(*ids: str) -> dict[str, dict[str, Any]]:
+        return {i: {"id": i, "path": f"/data/{i}"} for i in ids}
+
+    def test_a_wz_folder_no_spec_describes_gives_one_warning_naming_it(self) -> None:
+        existing = self.folders("wz-library", "wz-old")
+        (text,) = undescribed(self.specs(), existing)
+        self.assertEqual(
+            text,
+            "wz-old (/data/wz-old): this device's config no longer describes it, so warpzone "
+            "leaves it as it is (remove it in this device's Syncthing if it should go; its "
+            "files stay on disk)",
+        )
+
+    def test_a_folder_with_a_spec_gives_none(self) -> None:
+        existing = self.folders("wz-library", "wz-tools")
+        self.assertEqual(undescribed(self.specs(), existing), ())
+
+    def test_a_folder_that_is_not_wz_gives_none(self) -> None:
+        existing = self.folders("photos", "default", "wzx-old")
+        self.assertEqual(undescribed(self.specs(), existing), ())
+
+    def test_several_leftovers_come_in_a_stable_order(self) -> None:
+        one = undescribed(self.specs(), self.folders("wz-b", "wz-library", "wz-a", "wz-c"))
+        two = undescribed(self.specs(), self.folders("wz-c", "wz-a", "wz-library", "wz-b"))
+        self.assertEqual(one, two)
+        self.assertEqual([t.split(" ")[0] for t in one], ["wz-a", "wz-b", "wz-c"])
+
+    def test_a_folder_without_a_path_is_still_named(self) -> None:
+        (text,) = undescribed(self.specs(), {"wz-old": {"id": "wz-old"}})
+        self.assertTrue(text.startswith("wz-old: "))
 
 
 class AdditivePlanTests(unittest.TestCase):

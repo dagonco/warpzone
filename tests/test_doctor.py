@@ -41,6 +41,7 @@ from warpzone.doctor import (
     check_syncthing,
     check_syncthing_unit,
     check_tool,
+    check_undescribed_folders,
     check_update_timer,
     check_updater,
     check_vita3k,
@@ -2326,6 +2327,74 @@ class PruneGuardCheckTests(TmpCase):
 
     def test_runs_with_the_other_checks(self) -> None:
         self.assertIn(check_prune_guard, doctor.CHECKS)
+
+
+class UndescribedFolderCheckTests(TmpCase):
+    """A `wz-*` folder in this device's Syncthing that its config no longer describes."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.home = self.tmp / "home"
+        self.config = FULL.replace(
+            "BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB", DECK_ID
+        )
+
+    def syncthing(self, *extra: tuple[str, str]) -> None:
+        folder = self.home / ".config/syncthing"
+        folder.mkdir(parents=True, exist_ok=True)
+        folders = [("wz-library", f"{self.home}/Emulation/"), *extra]
+        xml = "".join(
+            f'<folder id="{i}" path="{p}"><device id="{HUB_ID}"/></folder>' for i, p in folders
+        )
+        (folder / "config.xml").write_text(
+            f'<configuration>{xml}<device id="{DECK_ID}" name="x"/>'
+            f"<gui><address>127.0.0.1:8384</address><apikey>{ST_KEY}</apikey></gui>"
+            "</configuration>"
+        )
+
+    def check(self, **kw):
+        return check_undescribed_folders(
+            context(self.tmp, kw.pop("config", self.config), system="Linux", home=self.home, **kw)
+        )
+
+    def test_a_leftover_wz_folder_is_a_warning_naming_it_and_its_path(self) -> None:
+        self.syncthing(("wz-songs", f"{self.home}/Songs"))
+        (result,) = self.check()
+        self.assertEqual((result.status, result.group), (WARN, doctor.G_SYNCTHING))
+        self.assertIn("wz-songs", result.detail)
+        self.assertIn(f"{self.home}/Songs", result.detail)
+        self.assertIn("files stay on disk", result.detail)
+        self.assertIn("warpzone provision device deck", result.fix)
+
+    def test_several_are_one_line_in_a_stable_order(self) -> None:
+        self.syncthing(("wz-b", "/x/b"), ("wz-a", "/x/a"))
+        (result,) = self.check()
+        self.assertLess(result.detail.index("wz-a"), result.detail.index("wz-b"))
+
+    def test_a_device_with_only_described_folders_has_no_line(self) -> None:
+        self.syncthing()
+        self.assertEqual(self.check(), [])
+
+    def test_a_folder_that_is_not_wz_is_ignored(self) -> None:
+        self.syncthing(("photos", "/x/photos"))
+        self.assertEqual(self.check(), [])
+
+    def test_silent_on_a_machine_that_is_not_a_configured_device(self) -> None:
+        # The hub keeps wz-library under its own root, so it is not taken for the deck.
+        self.syncthing(("wz-songs", "/x/songs"))
+        path = self.home / ".config/syncthing/config.xml"
+        path.write_text(path.read_text().replace(f"{self.home}/Emulation/", "/data/games/"))
+        self.assertEqual(self.check(), [])
+
+    def test_silent_without_a_local_syncthing(self) -> None:
+        self.assertEqual(self.check(), [])
+
+    def test_silent_without_a_device_config(self) -> None:
+        self.syncthing(("wz-songs", "/x/songs"))
+        self.assertEqual(self.check(config=FULL.split("[devices.deck]")[0]), [])
+
+    def test_runs_with_the_other_checks(self) -> None:
+        self.assertIn(check_undescribed_folders, doctor.CHECKS)
 
 
 RA_APP = "org.libretro.RetroArch"

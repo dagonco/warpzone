@@ -25,8 +25,12 @@ per file there are no conflicts, and `wz-esde` and `wz-media` stay exactly as th
 compares their hub and device specs with and without the group). The folder carries one more
 file per device, `<device>.status.json`, the disk report of the library UI (see
 `development/design/library-ui.md`, "Disk space"); the ledger readers glob `*.jsonl`, so it is
-invisible to them and to the merge. A device whose file cannot be
-read is left out of the merge with a warning; a device whose own file cannot be read changes
+invisible to them and to the merge. A ledger is read through `playstate_device.read_ledger`,
+which refuses a file over 32 MiB (`MAX_LEDGER_BYTES`; a line is about 150 bytes, so that is
+over 200000 games) after reading at most one byte past it, because any machine can write a
+file into the folder. A device whose file cannot be
+read, or is over the limit, is left out of the merge with a warning (the library UI server
+leaves it out silently); a device whose own file cannot be read changes
 nothing. Conflict copies are ignored. Files of devices that left the config still count: their
 plays happened.
 

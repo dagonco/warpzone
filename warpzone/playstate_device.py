@@ -42,8 +42,23 @@ def replica_of(device: str, profile: Profile) -> str:
     return ESDE_ID if "esde" in profile.paths else device
 
 
-def _read(path: Path) -> str:
-    return path.read_bytes().decode("utf-8")
+# The largest ledger read. A line is a system, a ROM path and a few numbers (about 150 bytes), so
+# this holds over 200000 games, more than a library has; and a console can write any file into
+# the shared folder, which the hub and every other device would then load whole.
+MAX_LEDGER_BYTES = 32 * 1024 * 1024
+
+
+def read_ledger(path: Path) -> str:
+    """The text of a ledger file; `LedgerError` when it is over the size limit.
+
+    At most one byte more than the limit is read, so a file that grows after it was looked at
+    is bounded too.
+    """
+    with path.open("rb") as handle:
+        raw = handle.read(MAX_LEDGER_BYTES + 1)
+    if len(raw) > MAX_LEDGER_BYTES:
+        raise LedgerError(f"too large (the limit is {MAX_LEDGER_BYTES} bytes)")
+    return raw.decode("utf-8")
 
 
 def load(where: Path, device: str, replica: str, warn: Say) -> tuple[Ledger, list[Ledger]] | None:
@@ -55,7 +70,7 @@ def load(where: Path, device: str, replica: str, warn: Say) -> tuple[Ledger, lis
             continue
         name = path.stem
         try:
-            ledger = playstate.parse_ledger(_read(path), name)
+            ledger = playstate.parse_ledger(read_ledger(path), name)
         except (OSError, UnicodeDecodeError, LedgerError) as exc:
             if name == device:
                 warn(f"{path} cannot be read ({exc}), so the play state was left alone")

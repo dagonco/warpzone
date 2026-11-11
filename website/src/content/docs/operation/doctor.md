@@ -32,6 +32,7 @@ Inbox tools
 - warpzone and Python.
 - The config file, and what each table enables.
 - The local Syncthing and its REST API.
+- On a configured device, `wz-*` folders in its Syncthing that its config no longer describes (a group taken out of its `folders`). They are a warning: `warpzone` leaves them as they are, and removing one in the device's Syncthing keeps its files. `provision device` prints the same warning.
 - RetroArch's Flycast option for per-game VMUs, when the core has run.
 - Vita3K's active user, when Vita3K has a config.
 - The emulator settings layers, the ES-DE startup script and the last `settings apply`, on a device that subscribes to `settings`.

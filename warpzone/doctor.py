@@ -19,6 +19,7 @@ Statuses and what they mean for the exit code:
 
 from __future__ import annotations
 
+import dataclasses
 import os
 import platform as platform_mod
 import re
@@ -78,7 +79,7 @@ from warpzone.flatpak import (
     override_command,
     show_command,
 )
-from warpzone.model import ModelError
+from warpzone.model import FolderSpec, ModelError
 from warpzone.paths import expand_home
 from warpzone.profiles import (
     Profile,
@@ -88,6 +89,7 @@ from warpzone.profiles import (
     available_profiles,
     load_profile,
 )
+from warpzone.provision_folders import PREFIX, undescribed
 from warpzone.settings_layers import LayerError, conflict_copies, parse_layer, validate
 from warpzone.syncthing import _is_loopback
 from warpzone.versions import tag_key
@@ -723,6 +725,15 @@ class SettingsDevice:
 
 
 @dataclass(frozen=True)
+class DeviceFolders:
+    """A configured device and the folders its config describes (paths still with `~`)."""
+
+    name: str
+    device_id: str
+    specs: tuple[FolderSpec, ...]
+
+
+@dataclass(frozen=True)
 class ConfigState:
     """What could be read from the config file. `settings` is salvaged even when other
     parts of the file are invalid, so the checks that depend on it still make sense."""
@@ -748,6 +759,9 @@ class ConfigState:
     update_devices: tuple[SettingsDevice, ...] = ()
     # The devices that subscribe to `library` and have not turned `auto_prune` off.
     prune_devices: tuple[SettingsDevice, ...] = ()
+    # Every configured device with the folders its config describes; empty when the config
+    # does not load.
+    device_folders: tuple[DeviceFolders, ...] = ()
     # [hub] api_url and whether [hub] api_cert_sha256 is set; None/False when the config does
     # not load.
     hub_api_url: str | None = None
@@ -835,6 +849,7 @@ def load_config_state(path: Path) -> ConfigState:
     play_state_devices: list[SettingsDevice] = []
     update_devices: list[SettingsDevice] = []
     prune_devices: list[SettingsDevice] = []
+    device_folders: list[DeviceFolders] = []
     hub_api_url: str | None = None
     hub_cert_pinned = False
     try:
@@ -846,8 +861,10 @@ def load_config_state(path: Path) -> ConfigState:
                 name: load_profile(name) for name in {d.profile for d in cfg.devices.values()}
             }
             for device in cfg.devices.values():
-                for spec in model.device_specs(cfg, device.name, profiles[device.profile]):
+                specs = model.device_specs(cfg, device.name, profiles[device.profile])
+                for spec in specs:
                     sync_paths[spec.path] = None
+                device_folders.append(DeviceFolders(device.name, device.device_id, tuple(specs)))
                 if "settings" in device.folders:
                     entry = SettingsDevice(device.name, device.device_id, profiles[device.profile])
                     settings_devices.append(entry)
@@ -900,6 +917,7 @@ def load_config_state(path: Path) -> ConfigState:
     sharing = tuple(play_state_devices) if error is None else ()
     updating = tuple(update_devices) if error is None else ()
     pruning = tuple(prune_devices) if error is None else ()
+    described = tuple(device_folders) if error is None else ()
     return ConfigState(
         path,
         True,
@@ -914,6 +932,7 @@ def load_config_state(path: Path) -> ConfigState:
         sharing,
         updating,
         pruning,
+        described,
         hub_api_url if error is None else None,
         hub_cert_pinned and error is None,
     )
@@ -1216,6 +1235,58 @@ def check_syncthing_unit(ctx: Context) -> list[Result]:
         return []
     status, detail, fix = verdict
     return [Result("Syncthing unit", G_SYNCTHING, status, detail, fix)]
+
+
+def check_undescribed_folders(ctx: Context) -> list[Result]:
+    """On a configured device: `wz-*` folders in its Syncthing that its config no longer describes.
+
+    A console that stops subscribing to a group keeps that folder in its own Syncthing, and
+    `provision device` only walks the folders the config describes. Doctor is offline, so it
+    finds the device in the local `config.xml` the way `_local_device` does: the configured
+    device whose ID is listed there and one of whose folders is there at the path the config
+    gives it (the hub lists the same IDs but keeps its folders under its own root). Any other
+    machine says nothing. The text comes from `provision_folders.undescribed`."""
+    p = ctx.probes
+    if not ctx.config.device_folders:
+        return []
+    platform_name = "darwin" if p.system == "Darwin" else p.system.lower() or "linux"
+    try:
+        config = localst.find_config(env=p.env, home=p.home, platform=platform_name)
+        root = ET.fromstring(p.read_text(config))
+    except (localst.LocalSyncthingError, ET.ParseError):
+        return []
+    ids = {d.get("id") for d in root.findall("device")}
+    existing = {
+        f.get("id") or "": {"path": (f.get("path") or "").rstrip("/")}
+        for f in root.findall("folder")
+        if (f.get("id") or "").startswith(PREFIX)
+    }
+    for device in ctx.config.device_folders:
+        if device.device_id not in ids:
+            continue
+        specs = [
+            dataclasses.replace(spec, path=expand_home(spec.path, p.home).rstrip("/"))
+            for spec in device.specs
+        ]
+        if not any(
+            spec.id in existing and existing[spec.id]["path"] == spec.path for spec in specs
+        ):
+            continue
+        texts = undescribed(specs, existing)
+        if not texts:
+            return []
+        return [
+            Result(
+                "Leftover folders",
+                G_SYNCTHING,
+                WARN,
+                "; ".join(texts),
+                "if this device should still have them, put their group back in "
+                f"devices.{device.name}.folders and run `warpzone provision device "
+                f"{device.name}`; otherwise remove them in this device's Syncthing",
+            )
+        ]
+    return []
 
 
 def check_flycast(ctx: Context) -> list[Result]:
@@ -3018,6 +3089,7 @@ CHECKS: tuple[Callable[[Context], list[Result]], ...] = (
     check_game_mode,
     check_flatpak_access,
     check_syncthing_unit,
+    check_undescribed_folders,
     check_flycast,
     check_vita3k,
     check_settings,
