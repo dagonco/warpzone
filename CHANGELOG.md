@@ -10,6 +10,10 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 - `warpzone inbox` places Nintendo DS games: a `.nds` rom (loose or in an archive) that matches the No-Intro `Nintendo - Nintendo DS` DAT is filed as `roms/nds/<game>.zip`. Until now it went to review as "no DAT match".
 
+### Fixed
+
+- `warpzone inbox --apply` files the first game of a system. Before, a system with no `library/roms/<system>/` folder yet sent its game to review with "No such file or directory".
+
 ## [0.4.0rc3] - 2026-11-11
 
 The third candidate lets the hub's Syncthing API be reached over https by pinning its certificate, makes the hub see a console with a partly whitelisted system as fully in sync, fixes a save folder that stopped syncing after its path moved, and closes three more ways a bad file, a slow client or a stuck tool could tie up a command or the library UI server.

@@ -126,7 +126,8 @@ The contract:
   checked against the DAT where it is a plain file, and only then renamed. If the name
   exists: the same content (equal chdman data SHA1, equal zip members, equal SHA1) is
   reported as "already in the library" and the item counts as done; anything else goes
-  to review as a conflict. An existing `<game>.m3u/` folder is never merged into.
+  to review as a conflict. An existing `<game>.m3u/` folder is never merged into. The first
+  game of a system makes its `library/roms/<system>/` folder.
 - **Where the originals go.** Items fully handled go to `inbox/_done/<YYYY-MM-DD>/`.
   Items with anything that could not be placed go to `inbox/_revisar/` with
   `<item>.reason.txt` (no DAT match, ambiguous match, files not in any DAT, incomplete
