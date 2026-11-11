@@ -10,6 +10,7 @@ The token is never printed, logged or echoed.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import hmac
 import json
@@ -71,6 +72,12 @@ RA_LISTS_PERIOD = 24 * 3600.0
 UI_DIR = Path(__file__).resolve().parent / "data" / "ui"
 CSP = "default-src 'self'"
 CHUNK = 64 * 1024  # bytes of a media file read and sent at a time
+# Total time to receive one request body, the read and the discard alike. The per-read timeout
+# above only bounds the silence between two reads, so a client sending a byte just inside it, again
+# and again, would keep a thread for as long as it liked. Four times that timeout lets a body
+# of the biggest size that is discarded (1 MiB) arrive at 18 KiB/s and one that is read (64 KiB)
+# at about 1 KiB/s: slower than any real client on a LAN or a phone link.
+BODY_SECONDS = 4.0 * SOCKET_TIMEOUT
 MAX_DRAIN = 1024 * 1024  # bytes of a rejected request body read and thrown away before the answer
 LIBRARY_FOLDER = "wz-library"
 CONTENT_TYPES = {
@@ -788,8 +795,10 @@ class App:
         log: Callable[[str], None] = lambda text: None,
         now: Callable[[], datetime] = lambda: datetime.now(UTC),
         clock: Callable[[], float] = time.monotonic,
+        body_seconds: float = BODY_SECONDS,
     ) -> None:
         self.cfg = cfg
+        self.body_seconds = body_seconds
         self.root = root or Path(cfg.hub.root)
         self.files = files or HubFiles(self.root)
         self._token = token
@@ -804,7 +813,7 @@ class App:
         self.progress_failure_seconds = progress_failure_seconds
         self.log = log
         self.now = now
-        self._clock = clock
+        self.clock = clock
         self.write_lock = threading.Lock()
         self._progress_lock = threading.Lock()
         self._progress: tuple[float, list[dict[str, Any]]] | None = None
@@ -1384,18 +1393,18 @@ class App:
     def _progress_entries(self) -> list[dict[str, Any]]:
         with self._progress_lock:
             held = self._progress
-            if held is not None and self._clock() - held[0] < self.progress_seconds:
+            if held is not None and self.clock() - held[0] < self.progress_seconds:
                 return held[1]
             failed = self._progress_failed
-            if failed is not None and self._clock() - failed < self.progress_failure_seconds:
+            if failed is not None and self.clock() - failed < self.progress_failure_seconds:
                 raise ApiError("hub-unreachable", "the hub's Syncthing did not answer")
             try:
                 entries = self._read_progress()
             except ApiError:  # a down Syncthing is not asked again by every poll
-                self._progress_failed = self._clock()
+                self._progress_failed = self.clock()
                 raise
             self._progress_failed = None
-            self._progress = (self._clock(), entries)
+            self._progress = (self.clock(), entries)
             return entries
 
     def _read_progress(self) -> list[dict[str, Any]]:
@@ -1483,6 +1492,18 @@ def _printable(text: str) -> str:
     return text.encode("unicode_escape").decode("ascii")
 
 
+def body_budget(
+    left: int, started: float, now: float, limit: float, per_read: float
+) -> tuple[int, float] | None:
+    """How much of a request body may be read next and for how long: at most one chunk of the
+    `left` bytes, waiting the per-read timeout or what remains of the total `limit` that began at
+    `started`, whichever is less. None once the limit has run out."""
+    remaining = limit - (now - started)
+    if remaining <= 0:
+        return None
+    return min(CHUNK, left), min(per_read, remaining)
+
+
 class _Handler(BaseHTTPRequestHandler):
     server: UiServer
     server_version = "warpzone"
@@ -1537,22 +1558,38 @@ class _Handler(BaseHTTPRequestHandler):
             if response.stream is not None:
                 response.stream.close()
 
-    def _discard(self, left: int) -> bool:
-        """Read and throw away `left` bytes of a body that is refused, so the client has sent all
-        of it before the answer and the close of the socket cannot reset the connection with its
-        answer still unread. False when the client stalled or went away: the connection is
-        dropped, as for a body that stops half way."""
+    def _receive(self, length: int, keep: bool) -> bytes | None:
+        """Read `length` bytes of the body within the total time limit. Returns what arrived
+        (less than `length` if the client closed first), empty when `keep` is false: a body that
+        is refused is read and thrown away so the client has sent all of it before the answer and
+        the close of the socket cannot reset the connection with its answer still unread. None
+        when the client stalled, went away or ran past the limit: the connection is dropped."""
+        app = self.server.app
+        started = app.clock()
+        kept = bytearray()
+        left = length
         try:
             while left > 0:
-                chunk = self.rfile.read(min(CHUNK, left))
+                budget = body_budget(left, started, app.clock(), app.body_seconds, self.timeout)
+                if budget is None:
+                    raise TimeoutError("total time limit")
+                count, timeout = budget
+                self.connection.settimeout(timeout)
+                # read1: one read of the socket, so the limit is checked between the pieces.
+                chunk = self.rfile.read1(count)
                 if not chunk:  # the client closed before sending all it announced
                     break
+                if keep:
+                    kept += chunk
                 left -= len(chunk)
         except OSError as exc:
-            self.server.app.log(f"connection: body not received ({type(exc).__name__})")
+            app.log(f"connection: body not received ({type(exc).__name__})")
             self.close_connection = True
-            return False
-        return True
+            return None
+        finally:
+            with contextlib.suppress(OSError):
+                self.connection.settimeout(self.timeout)
+        return bytes(kept)
 
     def _handle(self) -> None:
         length_text = self.headers.get("Content-Length")
@@ -1569,15 +1606,13 @@ class _Handler(BaseHTTPRequestHandler):
                     # Not read, and the connection is dropped after the answer so the bytes
                     # still to come are never parsed as a request. The client may see a reset.
                     self.close_connection = True
-                elif not self._discard(int(text)):
+                elif self._receive(int(text), keep=False) is None:
                     return
             else:
-                try:
-                    body = self.rfile.read(int(text))
-                except OSError as exc:  # the client stalled or went away mid-body
-                    self.server.app.log(f"connection: body not received ({type(exc).__name__})")
-                    self.close_connection = True
+                received = self._receive(int(text), keep=True)
+                if received is None:  # the client stalled or went away mid-body
                     return
+                body = received
         request = Request(
             self.command,
             self.path,
