@@ -93,13 +93,20 @@ def lines_of(text: str) -> tuple[frozenset[str], frozenset[str]]:
     """The paths a whitelist file names: (those it turns on with `!`, those it excludes).
 
     Comments, `#include`, the final `*` and any line that is not an anchored path are not
-    paths. A path is shown unescaped when it can be.
+    paths. A path is shown unescaped when it can be. The lines of a managed file's
+    `// Folders` section (from that comment up to the `*`) are derived, not paths turned on
+    or off, so they are skipped.
     """
     on: set[str] = set()
     off: set[str] = set()
+    in_folders = False
     for raw in text.splitlines():
         line = raw.strip()
-        if not line or line.startswith(_COMMENT_OR_FIXED) or line == "*":
+        if line == "// Folders":
+            in_folders = True
+        elif line == "*":
+            in_folders = False
+        if in_folders or not line or line.startswith(_COMMENT_OR_FIXED) or line == "*":
             continue
         target = on if line.startswith("!") else off
         pattern = line.removeprefix("!")
