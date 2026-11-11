@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import os
 import time
-from collections.abc import Callable, Collection, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from typing import Any
 
 from warpzone.errors import WarpzoneError
@@ -26,6 +26,30 @@ class ProvisionError(WarpzoneError):
 
 def same_path(a: str, b: str) -> bool:
     return (a.rstrip("/") or "/") == (b.rstrip("/") or "/")
+
+
+def undescribed(
+    specs: Collection[FolderSpec], existing: Mapping[str, Mapping[str, Any]]
+) -> tuple[str, ...]:
+    """Warnings for a device's `wz-*` folders that none of its specs describes (pure).
+
+    The mirror of the hub's `unclaimed`: a console that stops subscribing to a group keeps
+    that group's folder in its own Syncthing, and nothing else mentions it. Nothing is changed
+    for these folders. `existing` maps a folder ID to the folder as Syncthing has it (only
+    `path` is read). The warnings come sorted by folder ID."""
+    described = {spec.id for spec in specs}
+    texts: list[str] = []
+    for folder_id in sorted(existing):
+        if not folder_id.startswith(PREFIX) or folder_id in described:
+            continue
+        path = existing[folder_id].get("path")
+        where = f" ({path})" if path else ""
+        texts.append(
+            f"{folder_id}{where}: this device's config no longer describes it, so warpzone "
+            "leaves it as it is (remove it in this device's Syncthing if it should go; its "
+            "files stay on disk)"
+        )
+    return tuple(texts)
 
 
 def is_move(spec: FolderSpec, current: dict[str, Any]) -> bool:

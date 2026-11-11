@@ -121,6 +121,17 @@ group taken out of every device, or an admin checkout older than a console's rel
 does not know a folder yet) is only reported, never changed. Run `provision hub` from the
 release the consoles run, so that two checkouts do not add and remove the same share.
 
+The console has the mirror of that report. Its own Syncthing keeps the `wz-*` folder of a
+group it no longer subscribes to, and `provision device` only walks the folders its config
+describes, so `provision_folders.undescribed` (pure, shared by `provision device` and
+`doctor`) names every `wz-*` folder of the device's Syncthing that none of its specs
+describes, sorted by folder ID, with its path. `provision device` reports each as a warning
+after its folders (in a dry run and in an unattended run too) and never writes anything for
+it: removing the folder is a person's decision, in the console's Syncthing, and its files stay.
+All the specs of the device count as described, also those skipped because their directory
+does not exist yet. `doctor` reports the same condition (see
+[Doctor](/warpzone/development/design/doctor/)).
+
 ## Ignore files and the bootstrap problem
 
 All whitelist files live **inside the synced folder on the hub** and are synced
