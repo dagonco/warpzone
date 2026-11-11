@@ -21,7 +21,7 @@ from unittest import mock
 from library_support import GIB, config, games, managed, write_catalog
 from support import API_KEY, DECK_ID, HUB_ID, MACHINE_ID, FakeSyncthing
 from test_cli import run
-from warpzone import __version__, artwork, catalog, library_api, serve
+from warpzone import __version__, artwork, catalog, library_api, playstate, playstate_device, serve
 from warpzone import whitelist as wl
 from warpzone.config import ServeSettings, parse_config
 from warpzone.syncthing import Client
@@ -587,6 +587,93 @@ class GamelistLimitTests(ServeCase):
             list(serve.HubFiles(self.root, interval=0).extras("psx").meta),
             ["./Example Game (Europe).chd"],
         )
+
+
+class LedgerLimitTests(ServeCase):
+    def put_ledger(self, device: str = "deck") -> tuple[Path, str]:
+        ledger = playstate.Ledger(
+            device, device, {("psx", "Example Game (Europe).chd"): playstate.Record(plays=2)}
+        )
+        text = playstate.render_ledger(ledger)
+        path = self.root / "frontend" / "play-state" / f"{device}.jsonl"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+        return path, text
+
+    def ledgers(self) -> tuple[playstate.Ledger, ...]:
+        return serve.HubFiles(self.root, interval=0).play_ledgers()
+
+    def test_a_ledger_over_the_limit_is_left_out_without_being_read_whole(self) -> None:
+        path, text = self.put_ledger()
+        size = len(text.encode())
+        read: list[int] = []
+        real = Path.open
+
+        def spy(self: Path, *args: Any, **kwargs: Any) -> Any:
+            handle = real(self, *args, **kwargs)
+            if self.name != "deck.jsonl":
+                return handle
+            inner = handle.read
+
+            def counting(n: int = -1) -> Any:
+                data = inner(n)
+                read.append(len(data))
+                return data
+
+            handle.read = counting
+            return handle
+
+        with (
+            mock.patch.object(playstate_device, "MAX_LEDGER_BYTES", size - 1),
+            mock.patch.object(Path, "open", spy),
+            mock.patch.object(
+                Path, "read_bytes", autospec=True, side_effect=Path.read_bytes
+            ) as whole,
+        ):
+            self.assertEqual(self.ledgers(), ())
+        self.assertEqual([c for c in whole.call_args_list if c.args[0] == path], [])
+        self.assertLessEqual(sum(read), size)
+        # Within the limit the same file is read.
+        with mock.patch.object(playstate_device, "MAX_LEDGER_BYTES", size):
+            (ledger,) = self.ledgers()
+        self.assertEqual(ledger.device, "deck")
+
+    def test_a_ledger_that_grows_after_the_size_check_is_still_bounded(self) -> None:
+        path, text = self.put_ledger()
+        asked: list[int] = []
+
+        class Endless:
+            def __enter__(self) -> "Endless":
+                return self
+
+            def __exit__(self, *exc: object) -> None:
+                return None
+
+            def read(self, n: int = -1) -> bytes:
+                asked.append(n)
+                return b"x" * (n if n >= 0 else 1 << 26)
+
+        real = Path.open
+
+        def grown(self: Path, *args: Any, **kwargs: Any) -> Any:
+            return Endless() if self == path else real(self, *args, **kwargs)
+
+        with (
+            mock.patch.object(playstate_device, "MAX_LEDGER_BYTES", len(text.encode())),
+            mock.patch.object(Path, "open", grown),
+        ):
+            self.assertEqual(self.ledgers(), ())
+        self.assertEqual(asked, [len(text.encode()) + 1])
+
+    def test_the_reader_names_the_limit_and_not_the_contents(self) -> None:
+        path, text = self.put_ledger()
+        with (
+            mock.patch.object(playstate_device, "MAX_LEDGER_BYTES", len(text.encode()) - 1),
+            self.assertRaises(playstate.LedgerError) as caught,
+        ):
+            playstate_device.read_ledger(path)
+        self.assertIn(f"the limit is {len(text.encode()) - 1}", str(caught.exception))
+        self.assertNotIn("Example Game", str(caught.exception))
 
 
 class ReadTests(ServeCase):
