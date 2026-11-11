@@ -1463,5 +1463,6 @@ damaged files). The e2e test adds the matcher check above and the completion che
 - Per-game progress, unless the completion check above calls for it.
 - Users and roles, TLS, and access from outside the LAN.
 - The Decky plugin itself; only the API above is kept for it.
-- Editing a whitelist by hand once it is managed (it is refused until migrated again), and
-  wildcard lines in whitelists.
+- Editing a whitelist by hand once it is managed (it is refused until migrated again, and the
+  migration takes it only after its `// Folders` section is deleted, since the hand-file parser
+  refuses the wildcards of those lines), and wildcard lines in whitelists.
