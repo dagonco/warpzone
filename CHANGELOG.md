@@ -9,6 +9,12 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 ### Added
 
 - `warpzone inbox` places Nintendo DS games: a `.nds` rom (loose or in an archive) that matches the No-Intro `Nintendo - Nintendo DS` DAT is filed as `roms/nds/<game>.zip`. Until now it went to review as "no DAT match".
+- The `anbernic-rg40xxv` profile, for an Anbernic RG40XX V (or another handheld) running Knulli: the library in `/userdata/warpzone/library`, the hub's systems moved in EmulationStation's system list (ports and tools stay), RetroArch's BIOS and save folders set through `knulli.conf`, RetroArch saves and Nintendo DS saves (DraStic) synced, and the hub's scrape as covers and logos. Knulli has no systemd and no git: warpzone is installed by hand and runs no timers. See [Anbernic RG40XX V (Knulli)](https://dagonco.github.io/warpzone/guides/anbernic-rg40xxv/).
+- Profiles take `[retroarch] format = "batocera-conf"`, to set RetroArch's keys as `global.retroarch.<key>` lines of Batocera's settings file, and `[es_systems] systems`, to move only the listed systems to the library. The artwork converter has a `batocera` format that keeps Batocera's `<gametime>`.
+
+### Fixed
+
+- `[es_systems.rename]` also renames a system whose path in the system list does not end with `/`. On an RG351MP whose list writes `segacd`, `coleco` or `pokemonmini` that way, those systems pointed at folders the hub does not have; the next `provision device` points them at `megacd`, `colecovision` and `pokemini`.
 
 ## [0.4.0rc3] - 2026-11-11
 

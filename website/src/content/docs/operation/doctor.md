@@ -36,8 +36,8 @@ Inbox tools
 - RetroArch's Flycast option for per-game VMUs, when the core has run.
 - Vita3K's active user, when Vita3K has a config.
 - The emulator settings layers, the ES-DE startup script and the last `settings apply`, on a device that subscribes to `settings`.
-- The frontend's system list override and RetroArch's paths, and the generated artwork gamelists and their timer, on a device whose profile sets them (`anbernic-rg351mp`).
-- The save conversion, on a device that lists `saves` and whose profile has `[save_convert.*]` (`anbernic-rg351mp`): when it last ran, the games it skipped as not valid saves, and the times the newest file won when both sides had changed (see [Save conversion](/warpzone/development/design/save-conversion/)). The system list override must also wrap the emulator's command.
+- The frontend's system list override and RetroArch's paths, and the generated artwork gamelists and their timer, on a device whose profile sets them (`anbernic-rg351mp`, `anbernic-rg40xxv`).
+- The save conversion, on a device that lists `saves` and whose profile has `[save_convert.*]` (`anbernic-rg351mp`, `anbernic-rg40xxv`): when it last ran, the games it skipped as not valid saves, and the times the newest file won when both sides had changed (see [Save conversion](/warpzone/development/design/save-conversion/)). The system list override must also wrap the emulator's command.
 - shadPS4's install folder (`~/Emulation/roms/ps4/games` in its config files) and DLC folder (`~/Emulation/roms/ps4/dlc`), on a device whose profile declares it (`steamos-emudeck`).
 - Cemu's paths in `~/.config/Cemu/settings.xml`, on a device whose profile declares them (`steamos-emudeck`): `mlc_path` must be `~/Emulation/roms/wiiu/mlc01`, the folder whose `usr/save` warpzone syncs (an empty value means Cemu keeps its saves in `~/.local/share/Cemu/mlc01`, which nothing syncs), and `GamePaths` must list `~/Emulation/roms/wiiu/roms`. The fix is `warpzone provision device <name>` with Cemu closed; with no settings file yet, start Cemu once first.
 - The shadPS4 launcher: warpzone's launch script exists, is executable and is the text `provision device` writes, and ES-DE's `SHADPS4` find rule runs it (EmuDeck can put its own entry back). The fix is `warpzone provision device <name>` with ES-DE closed.
@@ -45,7 +45,7 @@ Inbox tools
 - Vita3K's game links (`~/Emulation/storage/Vita3K/ux0/app/<TITLEID>`) and licence links (`ux0/license/<TITLEID>`), the ES-DE startup script that keeps them, and dangling links, on a device whose profile declares `[links.*]` (`steamos-emudeck`). The fix is `warpzone links sync <name>` with Vita3K closed.
 - The updater, on a Linux device (see [Updating a device](/warpzone/operation/self-update/)): its timer (installed, running the updater, enabled), the live copy of the script, its settings against the config, and its state. A warning for a rollback in the last 14 days, a `dirty` or `dev` checkout, a retired `pin`, signatures not required, and more than 14 days without a successful run; a problem when it is `stuck`.
 - The unattended prune, on a device that lists `library` without `auto_prune = false`: a warning when its timer refused to delete anything because a folder would lose more than half of what the device holds (it names the folders and how long ago, and the fix is to check the whitelist, run `warpzone prune <name>` to review and then `warpzone prune <name> --apply` by hand). See [Automatic pruning](/warpzone/setup/whitelists/#automatic-pruning).
-- The frontend's system list override and RetroArch's paths, on a device whose profile sets them (`anbernic-rg351mp`).
+- The frontend's system list override and RetroArch's paths, on a device whose profile sets them (`anbernic-rg351mp`, `anbernic-rg40xxv`).
 - The inbox tools (`chdman`, `bsdtar`, `RAHasher`, `dolphin-tool`, `nsz`, `orbis-pkg-util`, `Vita3K`; Vita3K is only found, never run, and on macOS `/Applications/Vita3K.app` counts; a Vita3K that inbox would refuse, such as an AppImage, is a warning), the Switch titledb folder and keys file (presence only).
 - The DAT folder and how old the newest DAT is, and the optional arcade DAT files.
 - The hub folder and its free space.
@@ -90,7 +90,7 @@ On a console that subscribes to the `settings` group, `doctor` finds the device 
 
 ## Frontend
 
-On a device that subscribes to `library` with a profile that moves the frontend and RetroArch to the library (`anbernic-rg351mp`), `doctor` finds the device the same way, through the local Syncthing's `config.xml`, and adds two lines, and two more when it lists `frontend`. See [the Anbernic guide](/warpzone/guides/anbernic/).
+On a device that subscribes to `library` with a profile that moves the frontend and RetroArch to the library (`anbernic-rg351mp`, `anbernic-rg40xxv`), `doctor` finds the device the same way, through the local Syncthing's `config.xml`, and adds two lines, and two more when it lists `frontend`. See [the Anbernic guide](/warpzone/guides/anbernic/).
 
 - **ES systems override.** `~/.emulationstation/es_systems.cfg` is exactly the system list of the OS with the ROM folders moved into the library (and, for a system whose saves are converted, its command wrapped in the conversion). Missing or out of date (dArkOS updated its list) is a warning, and the fix is `warpzone provision device <name>` with EmulationStation closed.
 - **Save conversion.** The last run of `warpzone saves convert`: a warning when it never ran, failed on some game, or skipped games that are not valid saves (named, with the reason); the games where both sides had changed and the newest won are listed, with where the other copy is kept. The fix is to correct or remove the file named, then `warpzone saves convert <name>`.

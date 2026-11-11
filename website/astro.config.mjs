@@ -45,7 +45,8 @@ export default defineConfig({
           label: 'Console guides',
           items: [
             { label: 'Steam Deck / EmuDeck', slug: 'guides/emudeck' },
-            { label: 'Anbernic', slug: 'guides/anbernic' },
+            { label: 'Anbernic RG351MP', slug: 'guides/anbernic' },
+            { label: 'Anbernic RG40XX V (Knulli)', slug: 'guides/anbernic-rg40xxv' },
             { label: 'Steam Machine', slug: 'guides/steam-machine' },
             { label: 'Adding a new console', slug: 'guides/new-console' },
           ],

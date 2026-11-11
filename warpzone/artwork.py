@@ -10,6 +10,7 @@ See development/design/frontend-artwork.md, "Frontend artwork".
 
 from __future__ import annotations
 
+import dataclasses
 import posixpath
 import re
 from collections.abc import Callable, Collection, Mapping, Sequence
@@ -205,7 +206,11 @@ def parse_gamelist(data: str | bytes) -> list[Entry]:
 
 
 def frontend_systems(
-    text: str, prefix: str, target: str, renames: Mapping[str, str] | None = None
+    text: str,
+    prefix: str,
+    target: str,
+    renames: Mapping[str, str] | None = None,
+    only: Collection[str] | None = None,
 ) -> list[FrontendSystem]:
     """The systems of the frontend's system list that read from `target` (the library).
 
@@ -214,7 +219,7 @@ def frontend_systems(
     The name is the `<name>` of the entry, which is also the folder the frontend keeps its
     gamelist in, and it is not always the ROM folder (`ppsspp` reads `psp`).
     """
-    moved = frontend.rewrite_system_paths(text, prefix, target, renames)
+    moved = frontend.rewrite_system_paths(text, prefix, target, renames, only)
     try:
         root = ET.fromstring(moved)
     except ET.ParseError as exc:
@@ -454,9 +459,10 @@ def gamelist_systems(
     prefix: str,
     renames: Mapping[str, str],
     hubs: Collection[str],
+    only: Collection[str] | None = None,
 ) -> dict[str, list[FrontendSystem]]:
     """The frontend's systems that get a gamelist, by hub folder, as `plan_gamelists` picks them."""
-    systems = frontend_systems(system_list, prefix, f"{layout.roms}/", renames)
+    systems = frontend_systems(system_list, prefix, f"{layout.roms}/", renames, only)
     return assign(systems, set(hubs))[0]
 
 
@@ -471,13 +477,14 @@ def plan_gamelists(
     hubs: Collection[str],
     files: Files = REAL_FILES,
     overlay: Mapping[str, Mapping[str, str]] | None = None,
+    only: Collection[str] | None = None,
 ) -> GamelistPlan:
     """What the gamelists of the device should be, and whether each already is.
 
     `hubs` are the hub system folders on the device; `overlay` is `build`'s, by hub-relative
     path prefixed with `<hub>/`. Raises `ArtworkError` when the system list is unreadable.
     """
-    systems = frontend_systems(system_list, prefix, f"{layout.roms}/", renames)
+    systems = frontend_systems(system_list, prefix, f"{layout.roms}/", renames, only)
     chosen, dropped = assign(systems, set(hubs))
     items: list[Planned] = []
     waiting: list[str] = []
@@ -608,4 +615,23 @@ EMULATIONSTATION = Format(
     state_tags=STATE_TAGS,  # RetroPie's EmulationStation has no playtime
 )
 
-FORMATS: dict[str, Format] = {EMULATIONSTATION.name: EMULATIONSTATION}
+_BATOCERA_ORDER = (*_ES_ORDER, "gametime")
+
+
+def _render_batocera(entries: Sequence[Entry]) -> str:
+    return _render_xml(_BATOCERA_ORDER, entries)
+
+
+# Batocera's EmulationStation, the one Knulli ships. It reads the same tags as RetroPie's and
+# also saves the seconds played in `<gametime>`, which belongs to the device like the other
+# user fields: without it here a regeneration would drop the playtime the player built up.
+BATOCERA = dataclasses.replace(
+    EMULATIONSTATION,
+    name="batocera",
+    user_fields=(*EMULATIONSTATION.user_fields, "gametime"),
+    render=_render_batocera,
+    order=_BATOCERA_ORDER,
+    state_tags={**STATE_TAGS, "playtime": "gametime"},
+)
+
+FORMATS: dict[str, Format] = {f.name: f for f in (EMULATIONSTATION, BATOCERA)}

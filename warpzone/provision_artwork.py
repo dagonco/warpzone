@@ -162,7 +162,12 @@ def ensure_gamelists(
                 home,
                 layout,
                 artwork.gamelist_systems(
-                    layout, system_list, prefix=rule.prefix, renames=rule.renames, hubs=hubs
+                    layout,
+                    system_list,
+                    prefix=rule.prefix,
+                    renames=rule.renames,
+                    hubs=hubs,
+                    only=rule.systems,
                 ),
                 files,
                 warn=rep.warn,
@@ -177,6 +182,7 @@ def ensure_gamelists(
             hubs=hubs,
             files=files,
             overlay=state.overlay() if state is not None else None,
+            only=rule.systems,
         )
     except artwork.ArtworkError as exc:
         rep.warn(f"{source}: {exc}, so no gamelist was written")

@@ -19,17 +19,25 @@ from warpzone import settings_formats
 from warpzone.settings_formats import Value
 
 LIBRARY_PLACEHOLDER = "{library}"
+# The first folder of what follows a prefix inside a `<path>` element (it may be empty).
+_FOLDER = re.compile(r"[^/<\s]*")
 
 
 def rewrite_system_paths(
-    text: str, prefix: str, target: str, renames: Mapping[str, str] | None = None
+    text: str,
+    prefix: str,
+    target: str,
+    renames: Mapping[str, str] | None = None,
+    only: Collection[str] | None = None,
 ) -> str:
     """`text` with every `<path>` element that starts with `prefix` moved below `target`.
 
     Only the start of the element's text changes, so every other byte is kept, line endings
     included. An element that is already below `target` is left alone, which makes the rule
     safe to apply to its own output (`/roms/` and `/roms/library/roms/` overlap). `renames`
-    maps a system folder of the list to the name the hub uses for it.
+    maps a system folder of the list to the name the hub uses for it. With `only`, an element
+    moves only when the folder right below `prefix` is one of those names; the others keep
+    reading the device's own folder.
     """
     pattern = re.compile(r"(<path>\s*)" + re.escape(prefix))
 
@@ -37,11 +45,19 @@ def rewrite_system_paths(
         rest = text[match.end() :]
         if (prefix + rest).startswith(target):
             return match.group(0)
+        folder = _FOLDER.match(rest)
+        if only is not None and (folder is None or folder.group(0) not in only):
+            return match.group(0)
         return match.group(1) + target
 
     moved = pattern.sub(move, text)
     for old, new in (renames or {}).items():
-        moved = moved.replace(f"{target}{old}/", f"{target}{new}/")
+        # The folder name ends at a `/`, at the end of the element or at white space before it.
+        moved = re.sub(
+            re.escape(f"{target}{old}") + r"(?=[/<\s])",
+            (f"{target}{new}").replace("\\", r"\\"),
+            moved,
+        )
     return moved
 
 
@@ -52,6 +68,7 @@ def systems_current(
     target: str,
     renames: Mapping[str, str] | None = None,
     unwrap: Collection[str] = (),
+    only: Collection[str] | None = None,
 ) -> bool:
     """Whether `override` is exactly what the rule makes of `source`.
 
@@ -59,7 +76,7 @@ def systems_current(
     (`wrap_systems`), so a copy that has one is still current.
     """
     return override is not None and unwrap_systems(override, unwrap) == rewrite_system_paths(
-        source, prefix, target, renames
+        source, prefix, target, renames, only
     )
 
 
@@ -142,8 +159,8 @@ class RetroArchGap:
     unwritable: frozenset[str]
 
 
-def retroarch_gap(text: str, wants: Mapping[str, str]) -> RetroArchGap:
-    read = settings_formats.handler("retroarch-cfg").read(text)
+def retroarch_gap(text: str, wants: Mapping[str, str], fmt: str = "retroarch-cfg") -> RetroArchGap:
+    read = settings_formats.handler(fmt).read(text)
     unwritable = frozenset(k for k in wants if k in read.fixed)
     differs = {
         key: read.values.get(key)
@@ -153,8 +170,8 @@ def retroarch_gap(text: str, wants: Mapping[str, str]) -> RetroArchGap:
     return RetroArchGap(differs, unwritable)
 
 
-def retroarch_apply(text: str, wants: Mapping[str, str]) -> str:
+def retroarch_apply(text: str, wants: Mapping[str, str], fmt: str = "retroarch-cfg") -> str:
     """`text` with the wanted keys set; only those values change."""
-    gap = retroarch_gap(text, wants)
+    gap = retroarch_gap(text, wants, fmt)
     changes = {key: wants[key] for key in gap.differs}
-    return settings_formats.handler("retroarch-cfg").write(text, changes)
+    return settings_formats.handler(fmt).write(text, changes)

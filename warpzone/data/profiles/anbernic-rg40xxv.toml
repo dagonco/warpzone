@@ -1,0 +1,140 @@
+name = "anbernic-rg40xxv"
+description = "Anbernic RG40XX V running Knulli (EmulationStation and RetroArch, /userdata on exFAT)"
+
+# The profile describes Knulli more than the handheld: nothing in it is specific to the
+# RG40XX V, so the other handhelds Knulli runs on with the same layout can use it too.
+#
+# /userdata is exFAT: no POSIX permissions and no symlinks. Every folder of the device ignores
+# permissions (the hub's would otherwise show up as local changes on every file), and
+# nothing below depends on a symlink.
+ignore_perms = true
+
+# The library has a place on this device. There is no ES-DE, no songs folder, no tools folder
+# and no emulator settings layer, so a device of this profile that lists `tools`, `songs`,
+# `settings` or `frontend` in its folders is refused with a clear error.
+#
+# The library goes in its own folder next to Knulli's own: games land in
+# /userdata/warpzone/library/roms/<system> and BIOS files in /userdata/warpzone/library/bios.
+# Knulli's /userdata/roms keeps its ports, tools and the systems the hub does not deliver.
+[paths]
+library = "/userdata/warpzone/library"
+
+# EmulationStation reads /userdata/system/configs/emulationstation/es_systems.cfg in place of
+# the system list in /usr/share, so `provision device` writes a copy of that list with the ROM
+# folders of the systems below moved into the library. The copy is made only while
+# EmulationStation is not running (`/etc/init.d/S31emulationstation stop`). Knulli keeps
+# ports, tools and game engines in /userdata/roms too (PortMaster, pygame, the tools menu), so
+# only the systems named in `systems` move: every other entry keeps reading /userdata/roms. A
+# system that moved lists the hub's games only; ROMs left in its /userdata/roms folder stay on
+# the card and are not listed any more.
+# EmulationStation's process name is cut to 15 characters by the kernel.
+[es_systems]
+source = "/usr/share/emulationstation/es_systems.cfg"
+override = "/userdata/system/configs/emulationstation/es_systems.cfg"
+prefix = "/userdata/roms/"
+process = ["emulationstatio", "emulationstation"]
+systems = [
+    "3do", "arduboy", "atari2600", "atari5200", "atari7800", "atari800", "atomiswave",
+    "c64", "channelf", "colecovision", "dos", "dreamcast", "fbneo", "fds", "gameandwatch",
+    "gamegear", "gb", "gba", "gbc", "intellivision", "jaguar", "lutro", "lynx", "mame",
+    "mastersystem", "megadrive", "megaduck", "msx1", "msx2", "n64", "naomi", "naomi2", "nds",
+    "neogeo", "neogeocd", "nes", "ngp", "ngpc", "o2em", "pc88", "pcengine", "pcenginecd",
+    "pico8", "pokemini", "psp", "psx", "satellaview", "saturn", "scummvm", "sega32x",
+    "segacd", "sg1000", "snes", "sufami", "supergrafx", "supervision", "tic80", "uzebox",
+    "vectrex", "videopacplus", "virtualboy", "wswan", "wswanc", "xegs", "zxspectrum",
+]
+
+# Systems Knulli and the hub name differently: list folder = hub folder.
+[es_systems.rename]
+megadrive = "genesis"
+segacd = "megacd"
+lynx = "atarilynx"
+jaguar = "atarijaguar"
+wswan = "wonderswan"
+wswanc = "wonderswancolor"
+sg1000 = "sg-1000"
+o2em = "odyssey2"
+msx1 = "msx"
+xegs = "atarixe"
+videopacplus = "videopac"
+
+# Knulli writes RetroArch's config again at every launch, so a key set in retroarch.cfg is
+# lost. Its launcher copies every `global.retroarch.<key>` line of knulli.conf into that
+# config last, over its own values, which is where the keys go. Without them Knulli keeps the
+# saves of each system in /userdata/saves/<system>; the hub has one folder for every system
+# (`saves/retroarch/saves`, the same as the Steam Deck). BIOS files are read from the library,
+# so the cores no longer see /userdata/bios: copy the files Knulli put there that a core needs
+# (blueMSX's `Machines` and `Databases`, for example) to the hub's `library/bios`.
+#
+# Save states stay where Knulli keeps them (/userdata/saves/<system>): its save state
+# manager looks for them there, so they are not synced.
+[retroarch]
+cfg = ["/userdata/system/knulli.conf"]
+process = ["retroarch"]
+format = "batocera-conf"
+[retroarch.set]
+"global.retroarch.system_directory" = "{library}/bios"
+"global.retroarch.savefile_directory" = "/userdata/warpzone/saves/retroarch"
+
+# The same hub folder as the Steam Deck and the RG351MP (`saves/retroarch/saves`), a real
+# directory on the card. Saves made before `provision device` stay in /userdata/saves/<system>:
+# move the `.srm` files here by hand once.
+[saves.retroarch-saves]
+path = "/userdata/warpzone/saves/retroarch"
+create_when = "/userdata/saves"
+
+# Paths in the library folder that the device never receives from the hub. EmulationStation
+# writes a gamelist.xml next to the ROMs of a system when it saves its metadata; it is
+# per-device data and not on the hub, so a receive-only folder would list it as a local
+# change. `(?d)` lets Syncthing remove a ROM folder that the hub deleted anyway.
+[library]
+ignore = [
+    "(?d)/roms/*/gamelist.xml",
+    # What Knulli's own scraper downloads next to the ROMs, if it is ever used on the device.
+    "(?d)/roms/*/images",
+    "(?d)/roms/*/videos",
+    "(?d)/roms/*/manuals",
+]
+
+# EmulationStation here shows only what sits in <rom folder>/gamelist.xml, where it also saves
+# what the player does. The hub's ES-DE data (scraped gamelists and media, the `frontend`
+# folders) arrives receive-only, limited to the `kinds` below and to the systems that have a
+# folder in the library's `roms/`, so it follows the whitelist without being edited. The
+# folders are outside the library, on the card. The `batocera` converter turns each ES-DE
+# gamelist into one for this frontend (absolute paths to the images that exist, only games
+# that are on the device, the player's own fields such as favourites and playtime kept) under
+# the name the system list gives the system. Covers become the main image and the logos the
+# marquee; videos stay on the hub. It runs at `provision device` and with
+# `warpzone frontend refresh`, only while EmulationStation is closed. Knulli has no systemd,
+# so there is no refresh timer: run the refresh by hand after a scrape.
+[artwork]
+format = "batocera"
+kinds = ["covers", "marquees"]
+systems = "library"
+media = "/userdata/warpzone/media"
+metadata = "/userdata/warpzone/es-de"
+gamelists = "{rompath}"
+
+# Knulli has no git and no systemd: warpzone is installed by hand (see the Knulli guide) and
+# nothing updates it. `self_update = false` and `auto_prune = false` go in the device's table.
+[updater]
+install = "manual"
+
+# Nintendo DS saves. The hub keeps them as raw cartridge dumps (`<game>.sav`, the melonDS
+# format) in its `saves/melonds/saves` folder, which lands here in a real folder on the
+# card. DraStic keeps its own `<game>.dsv` (the same dump plus a 122-byte footer) in
+# /userdata/saves/nds/advanced_drastic/saves and cannot read anything else, so
+# `warpzone saves convert` reconciles the two before DraStic starts and after it exits (the
+# `nds` system's command is wrapped in the system list copy), never while DraStic runs.
+# `*.wz-tmp` is the temporary file of its atomic writes and must not sync.
+[saves.melonds-saves]
+path = "/userdata/warpzone/saves/melonds"
+ignore = ["*.wz-tmp"]
+create_when = "/userdata/saves"
+
+[save_convert.drastic]
+format = "desmume-dsv"
+saves = "melonds-saves"
+path = "/userdata/saves/nds/advanced_drastic/saves"
+process = ["drastic"]
+es_system = "nds"
