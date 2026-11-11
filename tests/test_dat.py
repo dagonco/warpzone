@@ -102,6 +102,7 @@ class ParseTests(unittest.TestCase):
         self.assertEqual(dat_system("Sony - PlayStation 2.dat"), "ps2")
         self.assertEqual(dat_system("Nintendo - Game Boy (20240101-123456).dat"), "gb")
         self.assertEqual(dat_system("Sega - Mega Drive - Genesis.dat"), "genesis")
+        self.assertEqual(dat_system("Nintendo - Nintendo DS.dat"), "nds")
         self.assertIsNone(dat_system("Microsoft - Xbox.dat"))
         self.assertEqual(len(set(dat.SYSTEMS.values())), len(dat.SYSTEMS))
 

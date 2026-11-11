@@ -136,7 +136,7 @@ vita_zrif = "~/keys/PSV_GAMES.tsv"            # optional: zRIF keys for PS Vita 
    | `ps2` | `<game>.chd` (`createdvd` for an `.iso`, `createcd` for cue/bin), then `verify` |
    | `psp` | the plain `.iso`, its CRC32 checked against the DAT |
    | `gc` | `.iso` stays `.iso` (the report shows the `dolphin-tool convert -f rvz ...` command); a `.gcz` is identified with `dolphin-tool` and kept as it is. An `.rvz` or `.wia` is read by its header instead, see [Wii and GameCube compressed images](#wii-and-gamecube-compressed-images) |
-   | `nes`, `snes`, `n64`, `gb`, `gbc`, `gba`, `genesis`, `mastersystem`, `gamegear` | `<game>.zip` holding the ROM under its DAT name |
+   | `nes`, `snes`, `n64`, `gb`, `gbc`, `gba`, `nds`, `genesis`, `mastersystem`, `gamegear` | `<game>.zip` holding the ROM under its DAT name |
 
    A multi-disc game of a CHD system goes in `<game without disc tag>.m3u/` with every disc and a `<game>.m3u` playlist, and only when all its discs are in the item; otherwise it goes to review.
 4. **Checks RetroAchievements** (optional). With `rahasher` configured it hashes the source and the result and refuses to place a game whose hash changed. With `RA_API_KEY` in the environment it looks the hash up and reports `supported (<title>)` or `hash not linked`. The key is never printed.

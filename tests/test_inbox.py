@@ -955,6 +955,18 @@ class CartridgeTests(Base):
             self.review(), ["m (2).nes", "m (2).nes.reason.txt", "m.nes", "m.nes.reason.txt"]
         )
 
+    def test_nintendo_ds_rom_is_placed_from_its_dat(self) -> None:
+        write_dat(
+            self.dats / "no-intro",
+            "Nintendo - Nintendo DS",
+            [("Puzzle (Europe)", [rom("Puzzle (Europe).nds", b"nds rom")])],
+        )
+        (self.hub / "library" / "roms" / "nds").mkdir()
+        self.drop("puzzle.nds", b"nds rom")
+        self.assertEqual(self.go(tools=Tools()), 0)
+        self.assertEqual(self.library(), ["nds/Puzzle (Europe).zip"])
+        self.assertIn("!/roms/nds/Puzzle (Europe).zip", self.out)
+
     def test_ambiguous_dat_match_is_reviewed(self) -> None:
         write_dat(
             self.dats / "no-intro",

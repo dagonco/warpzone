@@ -66,7 +66,7 @@ The contract:
   table (`SYSTEMS` in `warpzone/dat.py`: PlayStation `psx`, PlayStation 2 `ps2`,
   PlayStation Portable `psp`, Saturn `saturn`, Dreamcast `dreamcast`, GameCube `gc`,
   NES `nes`, SNES `snes`, Nintendo 64 `n64`, Game Boy `gb`, Game Boy Color `gbc`, Game
-  Boy Advance `gba`, Mega Drive / Genesis `genesis`, Master System `mastersystem`, Game
+  Boy Advance `gba`, Nintendo DS `nds`, Mega Drive / Genesis `genesis`, Master System `mastersystem`, Game
   Gear `gamegear`); a trailing No-Intro date stamp is ignored. DATs are parsed only when
   a lookup needs them (the system the file extensions and sizes point at first, and the
   search stops once every file is explained) and each parsed DAT is cached as JSON in
