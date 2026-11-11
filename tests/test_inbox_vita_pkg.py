@@ -3,7 +3,9 @@ import io
 import os
 import shutil
 import struct
+import sys
 import tempfile
+import time
 import unittest
 import zlib
 from collections.abc import Mapping, Sequence
@@ -13,6 +15,7 @@ from unittest import mock
 
 from console_iso_support import sfo
 from inbox_support import make_stub
+from process_support import SPAWNER, GroupKillCase
 from test_inbox import Base
 from test_inbox_vita import ENCRYPTED, rif, vita_sfo
 from warpzone import inbox, inbox_core
@@ -735,6 +738,43 @@ class ReviewTests(FlowBase):
         self.drop("psp.pkg", vita_pkg(content_type=0x07))
         self.assertEqual(self.go(), 1, self.out)
         self.assertIn("not supported by inbox yet", self.reason("psp.pkg"))
+
+
+class RunVita3kTests(GroupKillCase):
+    """`run_vita3k` is `runners.run_tool` with Vita3K's folder, environment and messages."""
+
+    def run_it(
+        self, argv: Sequence[str], timeout: float = 30.0, env: Mapping[str, str] | None = None
+    ) -> tuple[int, str]:
+        return vp.run_vita3k(argv, Path(self._tmp.name), env or {}, timeout)
+
+    def test_a_vita3k_that_runs_past_its_limit_is_killed_with_the_processes_it_started(
+        self,
+    ) -> None:
+        started = time.monotonic()
+        code, text = self.run_it(["sh", "-c", SPAWNER, "sh", str(self.pidfile)], timeout=1.0)
+        self.assertLess(time.monotonic() - started, 10.0)
+        self.assertEqual((code, text), (-1, "Vita3K did not finish within 1 seconds"))
+        self.assert_gone(self.child_pid())
+
+    def test_output_and_exit_code_of_a_vita3k_that_ends_in_time(self) -> None:
+        code, text = self.run_it(["sh", "-c", "printf 'a\\rb\\n'; echo err >&2; exit 3"])
+        self.assertEqual((code, text), (3, "a\nb\nerr\n"))
+
+    def test_it_runs_in_the_given_folder_with_the_extra_environment(self) -> None:
+        source = "import os; print(os.getcwd()); print(os.environ['WZ_X'])"
+        code, text = self.run_it([sys.executable, "-c", source], env={"WZ_X": "1"})
+        self.assertEqual(code, 0)
+        cwd, value = text.split()
+        self.assertEqual(os.path.realpath(cwd), os.path.realpath(self._tmp.name))
+        self.assertEqual(value, "1")
+
+    def test_it_does_not_read_the_terminal(self) -> None:
+        self.assertEqual(self.run_it(["cat"]), (0, ""))
+
+    def test_a_program_that_cannot_start_raises_oserror(self) -> None:
+        with self.assertRaises(OSError):
+            self.run_it(["/nonexistent/vita3k"])
 
 
 class LayoutTests(unittest.TestCase):

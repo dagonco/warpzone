@@ -168,7 +168,9 @@ The contract:
   of several GB and stays well under the 12 hours after which a lock is stale. The exception
   is `RAHasher`, whose hash is optional: when it is killed the RA line says the hash is
   unavailable (or, after a conversion, the item fails as for any RAHasher failure), as before.
-  Vita3K keeps its own, shorter limits (see [PS Vita packages](#ps-vita-packages)).
+  Vita3K keeps its own, shorter limits (see [PS Vita packages](#ps-vita-packages)); it starts in
+  a session of its own as well, and a Vita3K that runs past its limit is killed with every
+  process it started.
 - **Arcade (MAME) sets.** See [Arcade sets](#arcade-sets) below; they do not go through
   DAT matching or conversion.
 - **Switch games.** See [Switch games](#switch-games) below; they do not go through DAT
@@ -694,7 +696,8 @@ packages or keys.
   Then `Vita3K --version` runs first: in a new portable folder it writes `config.yml`,
   without which `--pkg` stops with exit code 134. If `portable/config.yml` is not there afterwards, Vita3K is not using
   the folder, and the package goes to review before `--pkg` ever runs. Then
-  `Vita3K --pkg <file> --zrif <zRIF>` runs in that folder with a one-hour limit; it opens no
+  `Vita3K --pkg <file> --zrif <zRIF>` runs in that folder with a one-hour limit (past it, Vita3K is killed with every process it
+  started, through `runners.run_tool`); it opens no
   window and needs no firmware. The work folder is deleted afterwards (the link is removed,
   never followed); if it cannot be deleted, a warning names it, since it holds the licence.
 - **Result.** Vita3K exits 0 even when the install fails, so the result is judged on disk

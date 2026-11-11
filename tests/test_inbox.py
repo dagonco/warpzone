@@ -1,4 +1,3 @@
-import contextlib
 import hashlib
 import json
 import os
@@ -17,6 +16,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 from inbox_support import CHDMAN, RAHASHER, age, make_hub, make_stub, stub_md5, write_dat
+from process_support import SPAWNER, GroupKillCase, alive
 from test_cli import run
 from warpzone import dat, inbox, inbox_core, ra, runners
 from warpzone.config import InboxSettings
@@ -641,10 +641,7 @@ class ToolTimeoutTests(Base):
         self.assertNotIn("Traceback", self.out)
 
 
-# A tool that starts a child of its own, writes the child's PID to the file named by $1 and
-# waits for it. The child inherits the tool's process group.
-SPAWNER = 'sleep 60 & echo $! > "$1.tmp" && mv "$1.tmp" "$1"; wait'
-# The same, but the child leaves the group (a session of its own) and keeps the tool's pipes.
+# Like SPAWNER, but the child leaves the group (a session of its own) and keeps the tool's pipes.
 ESCAPER = (
     "import subprocess, sys, time\n"
     "child = subprocess.Popen(['sleep', '60'], start_new_session=True)\n"
@@ -653,43 +650,9 @@ ESCAPER = (
 )
 
 
-def alive(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    return True
-
-
-class RunProcessGroupTests(unittest.TestCase):
+class RunProcessGroupTests(GroupKillCase):
     """`run_process` kills the whole process group of a tool that runs past its limit or whose
     wait is interrupted, so no process of the tool outlives the run."""
-
-    def setUp(self) -> None:
-        self._tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(self._tmp.cleanup)
-        self.pidfile = Path(self._tmp.name) / "child.pid"
-
-    def child_pid(self, deadline: float = 5.0) -> int:
-        end = time.monotonic() + deadline
-        while not self.pidfile.exists() and time.monotonic() < end:
-            time.sleep(0.01)
-        pid = int(self.pidfile.read_text())
-        self.addCleanup(self.reap, pid)  # never leave a stand-in behind, whatever happens
-        return pid
-
-    @staticmethod
-    def reap(pid: int) -> None:
-        with contextlib.suppress(ProcessLookupError):
-            os.kill(pid, 9)
-
-    def assert_gone(self, pid: int) -> None:
-        # A killed child is reparented to init, which reaps it a moment later; until then
-        # kill(pid, 0) still succeeds on the zombie, so wait for the real disappearance.
-        end = time.monotonic() + 5.0
-        while alive(pid) and time.monotonic() < end:
-            time.sleep(0.01)
-        self.assertFalse(alive(pid), f"process {pid} of the killed tool is still there")
 
     def test_a_tool_that_hangs_is_killed_with_the_processes_it_started(self) -> None:
         cmd = ["sh", "-c", SPAWNER, "sh", str(self.pidfile)]

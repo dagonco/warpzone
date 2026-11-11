@@ -5,12 +5,14 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import ClassVar
 from unittest import mock
 
+from process_support import SPAWNER, GroupKillCase
 from support import API_KEY, DECK_ID, HUB_ID
 from test_cli import run
 from warpzone import __version__, doctor, esde, prune, selfupdate, updatetimer
@@ -1204,6 +1206,32 @@ def layers(common: str | None = LAYER, own: str | None = LAYER, names=("common.t
         own=own,
         names=names,
     )
+
+
+class RunToolProcessTests(GroupKillCase):
+    """`doctor._run` runs a tool of the user's (`--version`) or a query of the system, with the
+    time limit of the probes, and kills everything the tool started when it runs past it."""
+
+    def test_a_tool_that_runs_past_the_limit_is_killed_with_the_processes_it_started(self) -> None:
+        started = time.monotonic()
+        with (
+            mock.patch.object(doctor, "RUN_TIMEOUT_SECONDS", 1.0),
+            self.assertRaises(subprocess.TimeoutExpired),
+        ):
+            doctor._run(["sh", "-c", SPAWNER, "sh", str(self.pidfile)])
+        self.assertLess(time.monotonic() - started, 10.0)
+        self.assert_gone(self.child_pid())
+
+    def test_the_output_is_stdout_and_stderr_together_with_the_exit_code(self) -> None:
+        out = doctor._run(["sh", "-c", "echo out; echo err >&2; exit 3"])
+        self.assertEqual((out.returncode, out.output), (3, "out\nerr\n"))
+
+    def test_the_tool_does_not_read_the_terminal(self) -> None:
+        self.assertEqual(doctor._run(["cat"]), RunOutput(0, ""))
+
+    def test_a_program_that_cannot_start_raises_oserror(self) -> None:
+        with self.assertRaises(OSError):
+            doctor._run(["/nonexistent/tool"])
 
 
 class SettingsJudgeTests(unittest.TestCase):
