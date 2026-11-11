@@ -21,7 +21,7 @@ refresh = "15min"                  # optional: a systemd --user timer interval
 `format` must be in `profiles.ARTWORK_FORMATS` (a test keeps it in step with
 `artwork.FORMATS`), `kinds` a non-empty list without repeats of `covers`, `screenshots`,
 `miximages`, `marquees`, `3dboxes`, `physicalmedia`. The table needs `paths.library` and, for
-`emulationstation`, `[es_systems]` (the system list names the systems and its `process` tells
+`emulationstation` and `batocera`, `[es_systems]` (the system list names the systems and its `process` tells
 whether the frontend runs). It replaces `paths.media` and `paths.esde`, so setting both is an
 error, and neither folder may be the library, inside it or inside each other (Syncthing
 folders do not nest).
@@ -134,3 +134,9 @@ already has older units gets the new text from the next `provision device`, whic
 unit whose text differs.
 
 The doctor reports missing, unreadable and stale gamelists and the timer (see [Doctor](/warpzone/development/design/doctor/)).
+
+**Batocera.** The `batocera` format is the `emulationstation` one for Batocera's EmulationStation
+(Knulli ships it). It reads the same tags and also saves the seconds played in `<gametime>`, which is
+one more user field: without it a regeneration would drop the playtime. For play state, `gametime`
+is the playtime tag. Knulli has no systemd, so its profile sets no `refresh`: the gamelists are
+rewritten by `provision device` and `frontend refresh`, run with EmulationStation closed.

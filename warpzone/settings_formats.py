@@ -1,7 +1,8 @@
 """Format handlers of the settings layer: config file text in, canonical keys out.
 
 A handler is pure (text in, text out). This module holds the line-oriented formats
-(`ini`, `qt-ini`, `retroarch-cfg`, `yaml-flat`); `json` and `toml` live in
+(`ini`, `qt-ini`, `retroarch-cfg`, `yaml-flat`, and `batocera-conf`, which only the
+`[retroarch]` pins of a profile use); `json` and `toml` live in
 `settings_tree` and `esde-xml` in `settings_xml`, imported on demand. See "Format handlers" in
 development/design/emulator-settings.md.
 """
@@ -435,6 +436,99 @@ class _RetroArchHandler:
         return out
 
 
+# --- batocera-conf --------------------------------------------------------------------
+
+# Batocera and the systems built on it (Knulli) keep their settings in one flat file of
+# `key=value` lines (`batocera.conf`, `knulli.conf`) that their launcher reads with Python's
+# ConfigParser as one unnamed section. The handler follows that reader: a key ends at the
+# first `=` or `:`, spaces around the key and the value are dropped, `#` and `;` start a
+# comment line, an indented line continues the value above it, and a `[section]` line ends
+# the part of the file the launcher reads. A value is raw text, never quoted.
+_BC_KEY = re.compile(r"(?P<key>[^\s=:#;\[][^=:]*?)(?P<sep>[ \t]*[=:][ \t]*)(?P<value>.*)")
+_BC_NEW_KEY = re.compile(r"[^\s=:#;\[][^\s=:]*")
+
+
+@dataclass(frozen=True)
+class _BcLine:
+    index: int
+    start: int
+    end: int
+    value: str
+
+
+def _bc_parse(lines: list[str]) -> tuple[dict[str, list[_BcLine]], set[str], bool]:
+    """The keys, the keys that cannot be edited, and whether a `[section]` line was seen."""
+    keys: dict[str, list[_BcLine]] = {}
+    fixed: set[str] = set()
+    current: str | None = None
+    sectioned = False
+    for i, line in enumerate(lines):
+        body = _body(line)
+        stripped = body.strip()
+        if not stripped or stripped[0] in "#;":
+            continue
+        if body[0].isspace():
+            # ConfigParser reads an indented line as more of the value above it.
+            if current is not None:
+                fixed.add(current)
+            continue
+        if stripped.startswith("["):
+            sectioned, current = True, None
+            continue
+        m = _BC_KEY.fullmatch(body.rstrip())
+        if not m:
+            current = None
+            continue
+        current = m["key"]
+        if sectioned:
+            fixed.add(current)
+        keys.setdefault(current, []).append(
+            _BcLine(i, m.start("value"), m.end("value"), m["value"])
+        )
+    return keys, fixed, sectioned
+
+
+class _BatoceraConfHandler:
+    name = "batocera-conf"
+    typed = False
+    can_add = True
+
+    def read(self, text: str) -> ReadResult:
+        _, lines = _lines(text)
+        keys, broken, _ = _bc_parse(lines)
+        fixed = {k for k, occ in keys.items() if len(occ) > 1} | broken
+        return ReadResult(
+            {k: occ[0].value for k, occ in keys.items() if k not in fixed}, frozenset(fixed)
+        )
+
+    def write(self, text: str, changes: Mapping[str, Value]) -> str:
+        if not changes:
+            return text
+        bom, lines = _lines(text)
+        keys, broken, sectioned = _bc_parse(lines)
+        tail: list[str] = []
+        checked: dict[str, Value] = {}
+        for key, raw in changes.items():
+            value = _check_text_value(key, raw)
+            if value != value.strip():
+                raise NotWritable(key, "the value cannot start or end with a space")
+            if key in broken or len(keys.get(key, ())) > 1:
+                raise NotWritable(key, "the key is present more than once or malformed")
+            checked[key] = value
+            if key in keys:
+                kl = keys[key][0]
+                lines[kl.index] = _replace_span(lines[kl.index], kl.start, kl.end, value)
+            elif sectioned:
+                raise NotWritable(key, "the file has a [section], so a new key cannot be added")
+            elif _BC_NEW_KEY.fullmatch(key):
+                tail.append(f"{key}={value}")
+            else:
+                raise NotWritable(key, "not a valid key name")
+        out = bom + "".join(_append(lines, {}, tail))
+        _verify(self, out, checked)
+        return out
+
+
 # --- yaml-flat ------------------------------------------------------------------------
 
 _YAML_KEY = re.compile(
@@ -532,5 +626,6 @@ _HANDLERS: dict[str, Handler] = {
     "ini": _IniHandler("ini", qt=False),
     "qt-ini": _IniHandler("qt-ini", qt=True),
     "retroarch-cfg": _RetroArchHandler(),
+    "batocera-conf": _BatoceraConfHandler(),
     "yaml-flat": _YamlFlatHandler(),
 }
