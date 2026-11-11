@@ -832,6 +832,15 @@ answer goes out; a client that stalls in the middle of it is dropped as for any 
 `400` at once and closes the connection, so the bytes still to come are never taken for a request.
 A client that keeps sending may see a reset there; the server spends no memory or time on it.
 
+Receiving a body, the read and the discard alike, has also a total time limit of 60 seconds
+(`BODY_SECONDS`, four times the silence limit), because the silence limit alone is a limit on
+each read: a client sending one byte just inside it, again and again, would hold a thread for
+as long as it liked. The body is read in pieces of at most 64 KiB, one read of the socket at a
+time, the limit is checked between pieces, and the timeout of each read shrinks to the time
+that remains. When it runs out the server stops reading, logs `body not received`, and closes
+the connection without an answer, as for a body that stalls. A client that sends 1 MiB at
+18 KiB/s or faster is not affected.
+
 The traffic is plain HTTP, so anyone who can read the LAN can read the token. Access from
 outside the home goes through the user's own reverse proxy with TLS, which is out of scope.
 
