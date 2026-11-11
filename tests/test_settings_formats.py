@@ -682,6 +682,102 @@ class RetroArchTests(unittest.TestCase):
         self.assertEqual(out, 'reicast_region = "Japan"\nreicast_cable_type = "TV (RGB)"\n')
 
 
+BATOCERA = (
+    "# ------------ A - System Options ----------- #\n"
+    "\n"
+    "system.language=es_ES\n"
+    "wifi.ssid = My Net \n"
+    "#global.retroarch.menu_driver=rgui\n"
+    "; another comment\n"
+    "global.videomode=default\n"
+    "odd: colon=value\n"
+    "twice=1\n"
+    "twice=2\n"
+    "empty=\n"
+)
+
+
+class BatoceraConfTests(unittest.TestCase):
+    """`key=value` lines read the way Batocera's launcher reads them (ConfigParser)."""
+
+    h = sf.handler("batocera-conf")
+
+    def test_read_values_without_the_spaces_around_them(self) -> None:
+        r = self.h.read(BATOCERA)
+        self.assertEqual(r.values["system.language"], "es_ES")
+        self.assertEqual(r.values["wifi.ssid"], "My Net")
+        self.assertEqual(r.values["global.videomode"], "default")
+        self.assertEqual(r.values["empty"], "")
+
+    def test_a_key_ends_at_the_first_equals_or_colon(self) -> None:
+        self.assertEqual(self.h.read(BATOCERA).values["odd"], "colon=value")
+        self.assertEqual(self.h.read("a=b=c:d\n").values, {"a": "b=c:d"})
+
+    def test_comments_are_not_keys(self) -> None:
+        r = self.h.read(BATOCERA)
+        self.assertNotIn("global.retroarch.menu_driver", r.values)
+        self.assertFalse([k for k in r.values if k[0] in "#;"])
+
+    def test_a_key_present_twice_cannot_be_written(self) -> None:
+        self.assertEqual(self.h.read(BATOCERA).fixed, {"twice"})
+        with self.assertRaises(NotWritable):
+            self.h.write(BATOCERA, {"twice": "3"})
+
+    def test_change_a_value_keeps_every_other_byte(self) -> None:
+        out = self.h.write(BATOCERA, {"system.language": "en_US", "wifi.ssid": "Other"})
+        self.assertEqual(changed(BATOCERA, out), [2, 3])
+        self.assertIn("\nsystem.language=en_US\n", out)
+        self.assertIn("\nwifi.ssid = Other \n", out)
+
+    def test_a_new_key_is_added_at_the_end_without_spaces_or_quotes(self) -> None:
+        out = self.h.write(BATOCERA, {"global.retroarch.savefile_directory": "/userdata/x y"})
+        self.assertEqual(out, BATOCERA + "global.retroarch.savefile_directory=/userdata/x y\n")
+
+    def test_a_file_without_a_final_newline_stays_without_one(self) -> None:
+        self.assertEqual(self.h.write("a=1", {"b": "2"}), "a=1\nb=2")
+
+    def test_crlf_lines_are_kept(self) -> None:
+        self.assertEqual(self.h.write("a=1\r\n", {"a": "2", "b": "3"}), "a=2\r\nb=3\r\n")
+
+    def test_an_empty_file_gets_the_key(self) -> None:
+        self.assertEqual(self.h.write("", {"a": "1"}), "a=1\n")
+
+    def test_a_value_the_reader_would_change_is_rejected(self) -> None:
+        for bad in (" lead", "trail ", "two\nlines"):
+            with self.subTest(bad=bad), self.assertRaises(NotWritable):
+                self.h.write(BATOCERA, {"system.language": bad})
+
+    def test_a_key_the_reader_would_split_is_rejected(self) -> None:
+        for bad in ("a b", "a=b", "a:b", "#a", "[a]", ""):
+            with self.subTest(bad=bad), self.assertRaises(NotWritable):
+                self.h.write(BATOCERA, {bad: "1"})
+
+    def test_an_indented_line_continues_the_value_above(self) -> None:
+        r = self.h.read("a=1\n  more\nb=2\n")
+        self.assertEqual(r.fixed, {"a"})
+        self.assertEqual(r.values, {"b": "2"})
+
+    def test_keys_after_a_section_line_are_out_of_reach(self) -> None:
+        text = "a=1\n[other]\nb=2\n"
+        r = self.h.read(text)
+        self.assertEqual((r.values, r.fixed), ({"a": "1"}, {"b"}))
+        self.assertEqual(self.h.write(text, {"a": "9"}), "a=9\n[other]\nb=2\n")
+        with self.assertRaises(NotWritable):
+            self.h.write(text, {"c": "3"})
+
+    def test_it_reads_like_the_launcher_does(self) -> None:
+        # The launcher puts `[DEFAULT]` in front and uses ConfigParser without interpolation.
+        import configparser
+
+        parser = configparser.ConfigParser(interpolation=None, strict=False)
+        parser.optionxform = str  # type: ignore[assignment,method-assign]
+        text = self.h.write(BATOCERA.replace("twice=1\n", ""), {"new.key": "50%(x)"})
+        parser.read_string("[DEFAULT]\n" + text)
+        mine = self.h.read(text).values
+        self.assertEqual({k: parser["DEFAULT"][k] for k in mine}, mine)
+        self.assertEqual(parser["DEFAULT"]["new.key"], "50%(x)")
+
+
 class YamlFlatTests(unittest.TestCase):
     h = sf.handler("yaml-flat")
 

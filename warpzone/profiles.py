@@ -19,6 +19,8 @@ from warpzone.shadps4 import kind_of
 PATH_KEYS = ("library", "songs", "tools", "media", "esde", "settings", "play_state")
 # The handlers of the settings layer (`settings_formats.handler`); keep in step.
 SETTINGS_FORMATS = ("ini", "qt-ini", "retroarch-cfg", "yaml-flat", "json", "toml", "esde-xml")
+# The formats of the files a `[retroarch]` table pins keys in; the first is the default.
+RETROARCH_FORMATS = ("retroarch-cfg", "batocera-conf")
 _NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 # `<emu>-<kind>`: both halves are single words so the hub path stays unambiguous.
 _SAVE_KEY_RE = re.compile(r"^([a-z0-9]+)-([a-z0-9]+)$")
@@ -28,7 +30,7 @@ _HUB_PATH_RE = re.compile(r"^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$")
 # Emulator, file and data ids of the settings layer.
 _ID_RE = re.compile(r"^[a-z0-9-]+$")
 # The converters of `warpzone.artwork.FORMATS` and the hub's artwork folders; keep in step.
-ARTWORK_FORMATS = ("emulationstation",)
+ARTWORK_FORMATS = ("emulationstation", "batocera")
 ARTWORK_KINDS = ("covers", "screenshots", "miximages", "marquees", "3dboxes", "physicalmedia")
 # Which systems get artwork: `library` is every system folder below the library's `roms/`.
 ARTWORK_SYSTEMS = ("library",)
@@ -125,7 +127,9 @@ class EsSystems:
     `source` is the list that ships with the OS and `override` the copy the frontend
     reads first. Every `<path>` element that starts with `prefix` moves below the
     profile's library folder (`<library>/roms/`). `process` names the frontend: the copy
-    is written only while it is not running.
+    is written only while it is not running. With `systems`, only the entries whose folder
+    below `prefix` is listed move; the others keep the device's own folder (an OS that keeps
+    ports and tools next to the ROMs).
     """
 
     source: str
@@ -133,6 +137,7 @@ class EsSystems:
     prefix: str
     process: tuple[str, ...]
     renames: Mapping[str, str] = field(default_factory=dict)
+    systems: tuple[str, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -140,12 +145,15 @@ class RetroArchPins:
     """Keys of `retroarch.cfg` (one file per build) that `provision device` sets.
 
     A value may contain `{library}`, replaced by the profile's library path. `process`
-    names RetroArch: a file is edited only while none of them runs.
+    names RetroArch: a file is edited only while none of them runs. `format` is the format
+    of the files: `retroarch-cfg`, or `batocera-conf` for an OS that writes `retroarch.cfg`
+    itself at every launch and takes the keys from its own settings file instead.
     """
 
     cfg: tuple[str, ...]
     process: tuple[str, ...]
     set: dict[str, str]
+    format: str = "retroarch-cfg"
 
     def wants(self, library: str) -> dict[str, str]:
         return {k: v.replace("{library}", library) for k, v in self.set.items()}
@@ -493,7 +501,7 @@ def _parse_es_systems(raw: Any, has_library: bool, err: Callable[[str], None]) -
     if not isinstance(raw, dict):
         err("`es_systems` must be a table")
         return None
-    extras = sorted(set(raw) - {"source", "override", "prefix", "process", "rename"})
+    extras = sorted(set(raw) - {"source", "override", "prefix", "process", "rename", "systems"})
     for extra in extras:
         err(f"es_systems.{extra}: unknown key")
     problems = len(extras)
@@ -519,8 +527,17 @@ def _parse_es_systems(raw: Any, has_library: bool, err: Callable[[str], None]) -
     ):
         err("es_systems.rename: must map folder names to folder names")
         return None
+    systems = raw.get("systems")
+    if systems is not None and not _names(systems):
+        err("es_systems.systems: must be a non-empty list of folder names")
+        return None
     return EsSystems(
-        raw["source"], raw["override"], raw["prefix"], tuple(raw["process"]), dict(renames)
+        raw["source"],
+        raw["override"],
+        raw["prefix"],
+        tuple(raw["process"]),
+        dict(renames),
+        tuple(systems) if systems is not None else None,
     )
 
 
@@ -707,10 +724,8 @@ def _parse_artwork(
     if "library" not in paths:
         err("artwork needs paths.library (the ROMs it decorates are there)")
         problems += 1
-    if fmt == "emulationstation" and not has_es_systems:
-        err(
-            "artwork.format emulationstation needs [es_systems] (the system list names the systems)"
-        )
+    if fmt in ARTWORK_FORMATS and not has_es_systems:
+        err(f"artwork.format {fmt} needs [es_systems] (the system list names the systems)")
         problems += 1
     for key in ("media", "esde"):
         if key in paths:
@@ -746,10 +761,14 @@ def _parse_retroarch(
     if not isinstance(raw, dict):
         err("`retroarch` must be a table")
         return None
-    extras = sorted(set(raw) - {"cfg", "process", "set"})
+    extras = sorted(set(raw) - {"cfg", "process", "set", "format"})
     for extra in extras:
         err(f"retroarch.{extra}: unknown key")
     problems = len(extras)
+    fmt = raw.get("format", RETROARCH_FORMATS[0])
+    if fmt not in RETROARCH_FORMATS:
+        err(f"retroarch.format: must be one of {', '.join(RETROARCH_FORMATS)}")
+        problems += 1
     if not _names(raw.get("cfg")):
         err("retroarch.cfg: required, a non-empty list of non-empty strings")
         problems += 1
@@ -770,7 +789,7 @@ def _parse_retroarch(
             problems += 1
     if problems:
         return None
-    return RetroArchPins(tuple(raw["cfg"]), tuple(raw["process"]), dict(values))
+    return RetroArchPins(tuple(raw["cfg"]), tuple(raw["process"]), dict(values), fmt)
 
 
 def _parse_shadps4(raw: Any, has_library: bool, err: Callable[[str], None]) -> ShadPS4Dirs | None:

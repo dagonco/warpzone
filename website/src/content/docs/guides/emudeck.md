@@ -4,7 +4,7 @@ title: "EmuDeck and the steamos-emudeck profile"
 
 What the shipped profile covers, why save folders point at real directories, and the few steps that stay manual.
 
-A profile says where things live on one kind of device: [`warpzone/data/profiles/`](https://github.com/dagonco/warpzone/tree/main/warpzone/data/profiles). warpzone ships `steamos-emudeck` (Steam Deck, Steam Machine) and `anbernic-rg351mp` (see [the Anbernic guide](/warpzone/guides/anbernic/)). Profiles are plain TOML, so adding a setup is a small pull request. A save entry like `[saves.dolphin-gc]` maps to the folder ID `wz-save-dolphin-gc` and the hub path `saves/dolphin/gc`. A `[bios.cemu-keys]` placement maps to `wz-bios-cemu-keys`.
+A profile says where things live on one kind of device: [`warpzone/data/profiles/`](https://github.com/dagonco/warpzone/tree/main/warpzone/data/profiles). warpzone ships `steamos-emudeck` (Steam Deck, Steam Machine) `anbernic-rg351mp` (see [the Anbernic RG351MP guide](/warpzone/guides/anbernic/)) and `anbernic-rg40xxv` (see [the Anbernic RG40XX V guide](/warpzone/guides/anbernic-rg40xxv/)). Profiles are plain TOML, so adding a setup is a small pull request. A save entry like `[saves.dolphin-gc]` maps to the folder ID `wz-save-dolphin-gc` and the hub path `saves/dolphin/gc`. A `[bios.cemu-keys]` placement maps to `wz-bios-cemu-keys`.
 
 ## Saves covered
 

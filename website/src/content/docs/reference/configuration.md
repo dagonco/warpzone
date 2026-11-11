@@ -62,7 +62,7 @@ One table per console. The table name is the device's name, used in commands (`w
 | Key | Type | Default | Required | Rules |
 |---|---|---|---|---|
 | `device_id` | string | none | yes | Same format as the hub's. Must be unique across the hub and all devices. `provision device` refuses to run if the local Syncthing is a different device. |
-| `profile` | string | none | yes | Non-empty and the name of a [shipped profile](#device-profiles) (`anbernic-rg351mp`, `steamos-emudeck`). |
+| `profile` | string | none | yes | Non-empty and the name of a [shipped profile](#device-profiles) (`anbernic-rg351mp`, `anbernic-rg40xxv`, `steamos-emudeck`). |
 | `folders` | array of strings | none | yes | Non-empty. Each item must be one of the folder groups below; repeats are dropped. The profile must define where each group lives (see [`[paths]`](#paths)), or every command that loads the config refuses the device. Taking a group out makes the next `provision hub` stop sharing its folders with the device, unless no other device subscribes to a folder (then it is only reported and stays shared). |
 | `addresses` | array of strings | `["dynamic"]` | no | Same rules as the hub's. Where the hub finds this device. |
 | `rescan_seconds` | integer | `300` | no | At least `5` (a boolean is rejected). A whitelist edited on the hub reaches the device within seconds but is only applied on a full scan, so the whitelisted folders (`library`, `songs`) are rescanned this often. |
@@ -192,6 +192,7 @@ A profile describes where things live on one kind of device: its folders, saves,
 |---|---|
 | `steamos-emudeck` | SteamOS with EmuDeck (Steam Deck, Steam Machine). Uses `paths`, `library`, `saves`, `bios`, `settings`, `play_state`, `shadps4`, `cemu` and `links`. |
 | `anbernic-rg351mp` | An Anbernic RG351MP running dArkOS, with ROMs on an exFAT card. Uses `ignore_perms`, `paths`, `es_systems`, `retroarch`, `saves`, `artwork` and `library`. |
+| `anbernic-rg40xxv` | An Anbernic RG40XX V running Knulli, with `/userdata` on exFAT. Uses `ignore_perms`, `paths`, `es_systems` (with `systems`), `retroarch` (with `format = "batocera-conf"`), `saves`, `save_convert`, `artwork` (format `batocera`) and `library`. |
 
 The file name (without `.toml`) must equal the profile's `name`. Paths use `~`, expanded on the device. A profile fails to load when any table breaks the rules below; the shipped ones are checked by the test suite.
 

@@ -277,7 +277,11 @@ profile data, not code that tests the profile name.
   and writes nothing. A different existing override is backed up first (to the settings
   state folder, as for `settings apply`); a fresh one has nothing to back up; the write is
   atomic and refused when the file changed in between. A second run changes nothing.
-- **`[retroarch]`** (`cfg`, `process`, `set`). Each file of `cfg` (a device may have two
+  Optional `rename` maps a folder of the list to the hub's name for it; the folder name ends at a
+  `/`, at the end of the element or at white space, so `<path>/roms/segacd</path>` is renamed too.
+  Optional `systems` lists the folders below `prefix` that move; the others keep the device's own
+  folder, for an OS that keeps ports and tools next to the ROMs (`anbernic-rg40xxv`).
+- **`[retroarch]`** (`cfg`, `process`, `set`, optional `format`). Each file of `cfg` (a device may have two
   RetroArch builds with a config each) gets the keys of `set` with their values, `{library}`
   replaced by the library path: `system_directory` for BIOS files, and
   `savefiles_in_content_dir` and `savestates_in_content_dir` off with
@@ -287,7 +291,13 @@ profile data, not code that tests the profile name.
   while no process in `process` runs, with a backup before each edit. A missing file is
   never created (RetroArch writes it on its first start); a file where a wanted key is
   present twice or malformed is left alone with a warning. Saves already next to the ROMs
-  are not moved.
+  are not moved. `format` is `retroarch-cfg` by default; `batocera-conf` is for an OS that
+  writes `retroarch.cfg` at every launch and copies `global.retroarch.<key>=value` lines of its
+  settings file into it last (Batocera's `batocera.conf`, Knulli's `knulli.conf`). That handler
+  reads the file the way the launcher does (ConfigParser with one unnamed section: a key ends at
+  the first `=` or `:`, spaces around key and value are dropped, `#` and `;` start a comment, an
+  indented line continues the value above, keys after a `[section]` line are out of reach) and
+  appends a missing key as `key=value`, never quoted.
 
 Both overrides run at the end of `provision device`, for a device that subscribes to
 `library`. `--dry-run` prints what would be written.

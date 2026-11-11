@@ -74,7 +74,7 @@ def ensure_systems_override(
     except (OSError, UnicodeDecodeError) as exc:
         rep.warn(f"cannot read the system list {source} ({exc}), so {override} was not written")
         return
-    new = frontend.rewrite_system_paths(text, rule.prefix, target, rule.renames)
+    new = frontend.rewrite_system_paths(text, rule.prefix, target, rule.renames, rule.systems)
     if new == text:
         rep.warn(f"{source} has no <path> below {rule.prefix}, so {override} was not written")
         return
@@ -189,7 +189,7 @@ def ensure_retroarch_pins(
         except (OSError, UnicodeDecodeError) as exc:
             rep.warn(f"cannot read {path} ({exc}), so it was left alone")
             continue
-        gap = frontend.retroarch_gap(text, wants)
+        gap = frontend.retroarch_gap(text, wants, rule.format)
         if gap.unwritable:
             keys = ", ".join(sorted(gap.unwritable))
             rep.warn(f"{path} was left alone: {keys} appears more than once; fix it by hand")
@@ -209,7 +209,7 @@ def ensure_retroarch_pins(
             continue
         outcome = safefile.guarded_edit(
             path,
-            frontend.retroarch_apply(text, wants).encode("utf-8"),
+            frontend.retroarch_apply(text, wants, rule.format).encode("utf-8"),
             expect=safefile.stamp(path),
             busy=lambda: busy(rule.process, "RetroArch", what, again, rep, probes),
             backup=partial(

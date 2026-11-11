@@ -95,7 +95,7 @@ warpzone/
   updatetimer.py     the systemd user units that start `updater.sh tick` (pure; quotes with `timers.exec_word`)
   timers.py          the systemd user units of the artwork, play state, prune and settings timers, their names and the `ExecStart=` quoting (pure)
   settings.py        `settings apply`, `capture`, `audit`: loading, prompts, output
-  settings_formats.py  format handlers ini, qt-ini, retroarch-cfg, yaml-flat (pure)
+  settings_formats.py  format handlers ini, qt-ini, retroarch-cfg, yaml-flat, batocera-conf (pure)
   settings_tree.py   format handlers json, toml (pure)
   settings_xml.py    format handler esde-xml: ES-DE's es_settings.xml (pure)
   settings_layers.py layer files: parse, validate, merge, render (pure) and atomic write
@@ -150,6 +150,7 @@ warpzone/
   data/allowed_signers  the keys that sign releases, in the format of `ssh-keygen -Y` (see "Autonomous updates")
   data/profiles/steamos-emudeck.toml
   data/profiles/anbernic-rg351mp.toml
+  data/profiles/anbernic-rg40xxv.toml
 templates/
   patterns-common.stignore
   patterns-device.example.stignore

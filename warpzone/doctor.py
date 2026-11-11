@@ -1448,6 +1448,7 @@ def judge_systems_override(
     target: str,
     convert_systems: Collection[str] = (),
     convert_wanted: bool = False,
+    systems: Collection[str] | None = None,
 ) -> tuple[str, str, str]:
     """Verdict on the frontend's system list copy (`None`: the file is absent).
 
@@ -1470,7 +1471,9 @@ def judge_systems_override(
             "not the library",
             fix,
         )
-    if not frontend.systems_current(source, override, prefix, target, renames, convert_systems):
+    if not frontend.systems_current(
+        source, override, prefix, target, renames, convert_systems, systems
+    ):
         return (
             WARN,
             f"{override_path} is out of date: it no longer matches {source_path} with the "
@@ -1579,7 +1582,11 @@ def judge_artwork(
 
 
 def judge_retroarch_paths(
-    *, device: str, files: Sequence[tuple[str, str | None]], wants: Mapping[str, str]
+    *,
+    device: str,
+    files: Sequence[tuple[str, str | None]],
+    wants: Mapping[str, str],
+    fmt: str = "retroarch-cfg",
 ) -> tuple[str, str, str]:
     """Verdict on the RetroArch config files: `files` holds (path, text or None if absent)."""
     parts: list[tuple[str, str, str]] = []
@@ -1588,7 +1595,7 @@ def judge_retroarch_paths(
         if text is None:
             parts.append((WARN, f"{path} not found", f"start RetroArch once, then {again}"))
             continue
-        gap = frontend.retroarch_gap(text, wants)
+        gap = frontend.retroarch_gap(text, wants, fmt)
         if gap.unwritable:
             keys = ", ".join(sorted(gap.unwritable))
             parts.append(
@@ -2020,6 +2027,7 @@ def check_frontend(ctx: Context) -> list[Result]:
             target=f"{library}/roms/",
             convert_systems=[r.es_system for r in profile.save_convert.values() if r.es_system],
             convert_wanted="saves" in device.folders,
+            systems=rule.systems,
         )
         results.append(Result("ES systems override", G_FRONTEND, *verdict))
     if profile.artwork is not None and "frontend" in device.folders:
@@ -2039,6 +2047,7 @@ def check_frontend(ctx: Context) -> list[Result]:
             device=device.name,
             files=[(str(x), p.read_text(x) if p.is_file(x) else None) for x in paths],
             wants=pins.wants(library),
+            fmt=pins.format,
         )
         results.append(Result("RetroArch paths", G_FRONTEND, *verdict))
     if (dirs := profile.shadps4) is not None:
@@ -2215,6 +2224,7 @@ def _check_artwork(ctx: Context, device: SettingsDevice, library: str) -> list[R
                     renames=rule.renames,
                     hubs=hubs,
                     files=files,
+                    only=rule.systems,
                 )
             except artwork.ArtworkError as exc:
                 error = f"{source}: {exc}"
