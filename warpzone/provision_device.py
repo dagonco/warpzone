@@ -34,7 +34,10 @@ from warpzone.provision_folders import (
     apply_ignores,
     can_move,
     ensure_device,
+    holds_data,
+    hub_disconnected,
     in_sync,
+    move_merge_warning,
     move_refusal,
     rescan,
     unattended_refusals,
@@ -428,23 +431,33 @@ def provision_device(
 
     for spec in todo:
         current = existing.get(spec.id)
-        if current is not None and spec.id in moving:
+        move = current is not None and spec.id in moving
+        if current is not None and move:
             # Look again right before acting: whitelist waits and the other folders came
-            # between the decision and now, and files may have been written meanwhile.
+            # between the decision and now, and files may have been written meanwhile. This
+            # reads what the hub reports, so it is done before the hub is paused.
             if not can_move(local, spec, current):
                 raise ProvisionError(move_refusal(spec, current))
             rep.note(
                 spec.id,
-                f"moves from {current.get('path')} to {spec.path}: removed from Syncthing, no "
-                "file touched, added again at the new path (files already on the hub come "
-                "back into it; the old directory is left as it is)",
+                f"moves from {current.get('path')} to {spec.path}: removed from Syncthing, "
+                "no file touched, added again at the new path (files already on the hub "
+                "come back into it; the old directory is left as it is)",
             )
-            local.remove_folder(spec.id)
-            current = None
-        created = upsert_folder(local, spec, current, rep)
-        if spec.bootstrap_ignores is None:
-            apply_ignores(local, spec, current, created, rep)
-        else:
+            try:
+                merge = move_merge_warning(spec, local.db_status(spec.id), holds_data(spec.path))
+            except SyncthingError:
+                merge = None  # only a heads-up: the move itself does not depend on it
+            if merge is not None:
+                rep.warn(merge)
+        with hub_disconnected(local, cfg.hub.device_id, rep, spec.id, active=move):
+            if move:
+                local.remove_folder(spec.id)
+                current = None
+            created = upsert_folder(local, spec, current, rep)
+            if spec.bootstrap_ignores is None:
+                apply_ignores(local, spec, current, created, rep)
+        if spec.bootstrap_ignores is not None:
             _provision_whitelisted(
                 local,
                 spec,

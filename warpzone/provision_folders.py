@@ -6,9 +6,10 @@ wait for files to arrive.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import time
-from collections.abc import Callable, Collection, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
 from typing import Any
 
 from warpzone.errors import WarpzoneError
@@ -129,6 +130,77 @@ def move_refusal(spec: FolderSpec, current: dict[str, Any]) -> str:
         "remove (or pause) the folder in Syncthing first (the files stay on disk), then move "
         f"the files into {spec.path} and run provision again"
     )
+
+
+def hub_is_running(devices: Sequence[Mapping[str, Any]], hub_id: str) -> bool:
+    """Whether the device list has the hub and has not paused it (pure)."""
+    return any(d.get("deviceID") == hub_id and not d.get("paused") for d in devices)
+
+
+def move_merge_warning(
+    spec: FolderSpec, status: Mapping[str, Any], new_path_holds_files: bool
+) -> str | None:
+    """What to warn about when a moved folder meets files on both sides (pure).
+
+    `status` is `db/status` of the folder before it is removed: its global state counts the
+    files of the whole cluster, the hub's among them. If the new directory already holds
+    files and the hub has some too, each side gets the other's: a file that is on both with
+    other content is resolved by Syncthing (the newer one wins and the other is kept as a
+    `.sync-conflict` copy), which is how two consoles that moved the same folder with
+    different saves of one game end up."""
+    hub_files = status.get("globalFiles") or 0
+    if not new_path_holds_files or not hub_files:
+        return None
+    return (
+        f"{spec.id}: {spec.path} already holds files and the hub already has {hub_files} in "
+        "this folder, so both sets are merged file by file. A file on both sides with "
+        "different content keeps the newer one and the other is kept next to it as a "
+        ".sync-conflict copy (a save of another console for the same game, for example): "
+        "look at them before playing"
+    )
+
+
+RESUME_HUB = "resume it in Syncthing (Remote Devices, Resume)"
+
+
+@contextlib.contextmanager
+def hub_disconnected(
+    client: Client, hub_id: str, rep: Reporter, folder_id: str, *, active: bool
+) -> Iterator[None]:
+    """Keep the hub device paused while a folder is removed and added again.
+
+    A folder added again under the same ID, while the connection to the hub stays open, can
+    end up with the hub never receiving its index (the hub shows nothing in it, the device
+    shows the hub as having nothing, no error on either side) until the connection is made
+    again. With the hub paused over the change and resumed after, the connection that comes
+    back already finds the folder complete. Does nothing unless `active`, or when the hub is
+    not a running device here (a hub the user paused stays paused). If the hub cannot be
+    resumed the run fails, and says how to do it by hand."""
+    hold = active and hub_is_running(client.devices(), hub_id)
+    if hold:
+        client.set_device_paused(hub_id, True)
+        rep.note(folder_id, "hub connection paused while the folder is added again")
+
+    def resume() -> None:
+        client.set_device_paused(hub_id, False)
+        rep.note(folder_id, "hub connection resumed")
+
+    try:
+        yield
+    except BaseException:
+        if hold:
+            try:
+                resume()
+            except SyncthingError as exc:
+                rep.warn(f"{folder_id}: the hub device is still paused ({exc}); {RESUME_HUB}")
+        raise
+    if hold:
+        try:
+            resume()
+        except SyncthingError as exc:
+            raise ProvisionError(
+                f"{folder_id}: the hub device could not be resumed ({exc}); {RESUME_HUB}"
+            ) from exc
 
 
 def _subset(wanted: Any, actual: Any) -> bool:
