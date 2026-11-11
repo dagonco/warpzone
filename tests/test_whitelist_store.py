@@ -241,6 +241,25 @@ class MigrationTests(StoreCase):
         self.assertEqual(self.log, ["deck: already managed, left alone"])
         self.assertEqual(len(list(whitelist_store.backups_dir(self.root, "deck").iterdir())), 1)
 
+    def test_a_managed_file_without_the_folders_section_is_migrated(self) -> None:
+        model = wl.Model(
+            frozenset({"snes"}), frozenset({"roms/ps4/games/CUSA00000", "bios"}), frozenset()
+        )
+        new = wl.render(model)
+        rc = new[: new.index("// Folders\n")] + "*\n"  # as 0.4.0rc1 and rc2 wrote it
+        self.assertNotEqual(rc, new)
+        path = self.put("deck", rc)
+        self.assertFalse(wl.is_managed(rc))
+        self.assertEqual(self.migrate("deck"), 0)
+        self.assertTrue(self.log[0].startswith("deck: migrated"), self.log)
+        self.assertEqual(path.read_text(), new)
+        self.assertIn("// Folders\n/roms/ps4/games/*\n!/roms/ps4/games\n", new)
+        backups = list(whitelist_store.backups_dir(self.root, "deck").iterdir())
+        self.assertEqual([b.read_text() for b in backups], [rc])
+        self.log.clear()
+        self.assertEqual(self.migrate("deck"), 0)
+        self.assertEqual(self.log, ["deck: already managed, left alone"])
+
     def test_the_included_set_of_the_library_is_unchanged(self) -> None:
         path = self.put("deck", HAND)
         old = wl.LineMatcher(wl.parse_hand(HAND).lines)

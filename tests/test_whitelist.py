@@ -38,8 +38,27 @@ MANAGED = """\
 // Other
 !/bios
 
+// Folders
+/roms/ps4/games/*
+!/roms/ps4/games
+/roms/ps4/shortcuts/*
+!/roms/ps4/shortcuts
+/extras/switch/*
+!/extras/switch
+/roms/ps4/*
+!/roms/ps4
+/roms/wii/*
+!/roms/wii
+/extras/*
+!/extras
+/roms/*
+!/roms
+
 *
 """
+
+# The same file as 0.4.0rc1 and rc2 wrote it: no Folders section.
+MANAGED_RC = MANAGED[: MANAGED.index("// Folders\n")] + "*\n"
 
 MANAGED_MODEL = Model(
     frozenset({"gba", "psx", "switch"}),
@@ -152,7 +171,7 @@ class RenderTests(unittest.TestCase):
         text = wl.render(Model(systems=frozenset({"gba"})))
         self.assertNotIn("Excluded", text)
         self.assertNotIn("Games", text)
-        self.assertTrue(text.endswith("// Systems\n!/roms/gba\n\n*\n"))
+        self.assertTrue(text.endswith("// Folders\n/roms/*\n!/roms\n\n*\n"))
         nothing = wl.render(Model())
         self.assertTrue(nothing.endswith("#include patterns-common.stignore\n\n*\n"))
         self.assertEqual(wl.parse(nothing), Model())
@@ -160,7 +179,7 @@ class RenderTests(unittest.TestCase):
     def test_sorting_is_by_unescaped_code_point_order(self) -> None:
         model = Model(includes=frozenset({"roms/b/B", "roms/b/a", "roms/a/z", "roms/b/[x]"}))
         text = wl.render(model)
-        lines = [ln for ln in text.splitlines() if ln.startswith("!")]
+        lines = [ln for ln in text.split("// Folders")[0].splitlines() if ln.startswith("!")]
         self.assertEqual(
             lines,
             ["!/roms/a/z", "!/roms/b/B", "!/roms/b/[x]".replace("[x]", "\\[x\\]"), "!/roms/b/a"],
@@ -204,9 +223,175 @@ class RenderTests(unittest.TestCase):
         with self.assertRaises(wl.ParseError):
             wl.parse(MANAGED.replace("// Systems", "// Games"))
 
+    def test_the_folders_section_is_derived_so_parse_skips_it(self) -> None:
+        self.assertEqual(wl.parse(MANAGED), wl.parse(MANAGED_RC))
+        self.assertEqual(wl.parse(MANAGED), MANAGED_MODEL)
+
+    def test_a_round_trip_is_stable_for_models_with_folders(self) -> None:
+        for model in (
+            MANAGED_MODEL,
+            Model(frozenset({"wiiu", "xbox360"}), frozenset({"roms/psvita/license/PCSE00000"})),
+            Model(includes=frozenset({"roms/arcade/Set {1} [x]/Game.zip", "extras/switch/dlc/A"})),
+            Model(frozenset({"psx"}), frozenset({"roms/psx/Odd/x"}), frozenset({"roms/psx/a/b"})),
+        ):
+            text = wl.render(model)
+            self.assertTrue(wl.is_managed(text), text)
+            self.assertEqual(wl.render(wl.parse(text)), text)
+
+    def test_a_managed_file_without_the_folders_section_needs_the_migration(self) -> None:
+        self.assertFalse(wl.is_managed(MANAGED_RC))
+        reading = wl.read(MANAGED_RC)
+        self.assertEqual(reading.status, "needs-migration")
+        self.assertEqual(reading.model, MANAGED_MODEL)
+        self.assertEqual(wl.read(MANAGED).status, "managed")
+
+    def test_the_folders_section_must_be_byte_for_byte_the_derived_one(self) -> None:
+
+        def pair(folder: str) -> str:
+            return f"/{folder}/*\n!/{folder}\n"
+
+        for text in (
+            MANAGED.replace(pair("roms/wii"), ""),
+            MANAGED.replace(
+                pair("roms/ps4") + pair("roms/wii"), pair("roms/wii") + pair("roms/ps4")
+            ),
+            MANAGED.replace(pair("extras") + pair("roms"), pair("roms") + pair("extras")),
+            MANAGED.replace(pair("roms"), pair("roms") + pair("roms/zz")),
+            MANAGED.replace("!/roms/wii\n", ""),
+            MANAGED.replace("/roms/wii/*\n", ""),
+            MANAGED.replace("!/roms/wii\n", "!/roms/wii\n!/roms/wii\n"),
+            MANAGED.replace("// Folders\n", "// Folders\n// note\n"),
+            MANAGED.replace("// Folders\n", "// Folders\n!/bios\n"),  # well formed, not derived
+            MANAGED.replace("\n// Folders\n", "\n\n// Folders\n"),
+        ):
+            self.assertFalse(wl.is_managed(text), text)
+        # A Folders title with nothing under it is not what render writes either.
+        self.assertFalse(wl.is_managed(MANAGED_RC.replace("*\n", "// Folders\n\n*\n")))
+
+    def test_parse_refuses_a_folders_line_it_cannot_read(self) -> None:
+        for bad in (
+            MANAGED.replace("/roms/*\n!/roms\n", "roms/*\n!/roms\n"),
+            MANAGED.replace("/roms/*\n!/roms\n", "/roms/*\n!/roms/*\n"),
+            MANAGED.replace("/roms/*\n!/roms\n", "/ro*ms/*\n!/roms\n"),
+            MANAGED.replace("/roms/*\n!/roms\n", "/roms\n!/roms\n"),
+            MANAGED.replace("/roms/*\n!/roms\n", "/roms/*\n!/roms/\n"),
+        ):
+            with self.assertRaises(wl.ParseError, msg=bad):
+                wl.parse(bad)
+        with self.assertRaises(wl.ParseError):  # the Folders section comes last
+            wl.parse(MANAGED.replace("// Other", "// Folders\n/roms/*\n!/roms\n\n// Other"))
+
     def test_etag(self) -> None:
         self.assertEqual(wl.etag(None), "absent")
         self.assertEqual(len(wl.etag(b"x")), 64)
+
+
+def first_match(text: str, path: str) -> bool:
+    """Whether a file written by `render` leaves `path` on, by Syncthing's first-match rule.
+
+    Test-only: the lines are anchored literals, `/D/*` and `*`. A pattern also matches
+    everything below what it names (the implicit `/**`), and `/D/*` does not match `D` itself.
+    """
+    for raw in text.splitlines():
+        if not raw or raw.startswith(("//", "#")):
+            continue
+        negated = raw.startswith("!")
+        pattern = raw.removeprefix("!")
+        if pattern == "*":
+            return negated
+        if pattern.endswith("/*"):
+            hit = path.startswith(wl.unescape(pattern[:-2]) + "/")
+        else:
+            base = wl.unescape(pattern)
+            hit = path == base or path.startswith(base + "/")
+        if hit:
+            return negated
+    return True
+
+
+class FoldersTests(unittest.TestCase):
+    def test_the_folders_above_what_is_on(self) -> None:
+        self.assertEqual(
+            wl.parents(MANAGED_MODEL),
+            [
+                "roms/ps4/games",
+                "roms/ps4/shortcuts",
+                "extras/switch",
+                "roms/ps4",
+                "roms/wii",
+                "extras",
+                "roms",
+            ],
+        )
+        self.assertEqual(wl.parents(Model(frozenset({"gba"}))), ["roms"])
+        self.assertEqual(wl.parents(Model(includes=frozenset({"bios"}))), [])
+        self.assertEqual(wl.parents(Model()), [])
+        self.assertEqual(wl.parents(Model(frozenset({"wiiu"}))), ["roms/wiiu", "roms"])
+
+    def test_nothing_is_added_below_a_folder_that_is_on(self) -> None:
+        model = Model(
+            frozenset({"psx"}),
+            frozenset({"roms/psx/Deep/er/Game.chd"}),
+            frozenset({"roms/psx/a/b"}),
+        )
+        self.assertEqual(wl.parents(model), ["roms"])
+        self.assertEqual(
+            wl.parents(Model(includes=frozenset({"roms/gba", "roms/gba/x"}))), ["roms"]
+        )
+
+    def test_the_section_is_the_last_before_the_final_star(self) -> None:
+        text = wl.render(MANAGED_MODEL)
+        titles = [ln for ln in text.splitlines() if ln.startswith("// ") and "Managed" not in ln]
+        self.assertEqual(
+            titles[1:], ["// Excluded", "// Systems", "// Games", "// Other", "// Folders"]
+        )
+        self.assertTrue(text.endswith("!/roms\n\n*\n"))
+
+    def test_the_lines_are_escaped_and_only_the_last_star_is_a_wildcard(self) -> None:
+        model = Model(includes=frozenset({"roms/arcade/Set {1}/Game.zip"}))
+        self.assertEqual(wl.parents(model), ["roms/arcade/Set {1}", "roms/arcade", "roms"])
+        text = wl.render(model)
+        self.assertIn("/roms/arcade/Set \\{1\\}/*\n!/roms/arcade/Set \\{1\\}\n", text)
+        self.assertEqual(wl.parse(text), model)
+
+    def test_an_unlistable_folder_is_refused_like_any_path(self) -> None:
+        with self.assertRaises(Unlistable):
+            wl.render(Model(includes=frozenset({"roms/bad\nname/x"})))
+
+    def test_files_are_decided_as_before_and_only_the_folders_are_added(self) -> None:
+        files = [
+            PSX_GAME,
+            "roms/psx/Other Game (USA).chd",
+            "roms/gba/Advance.gba",
+            "roms/n64/Other.z64",
+            "roms/wii/Example Game [ABCD01].rvz",
+            "roms/wii/Other Game [WXYZ01].rvz",
+            "roms/ps4/games/CUSA00000/eboot.bin",
+            "roms/ps4/games/CUSA00001/eboot.bin",
+            PS4_SHORTCUT,
+            "roms/ps4/shortcuts/Other.desktop",
+            "roms/ps4/dlc/CUSA00000/dlc.pkg",
+            "roms/switch/Base.nsp",
+            "extras/switch/updates/U/u.nsp",
+            "extras/switch/base/b.nsp",
+            "extras/other/o.txt",
+            "bios/psx/scph.bin",
+            "notes.txt",
+        ]
+        folders = {a for f in files for a in wl.ancestors(f) if a != f}
+        for model in (MANAGED_MODEL, Model(), Model(frozenset({"wiiu"}), frozenset({PS4_GAME}))):
+            text = wl.render(model)
+            wanted = set(wl.parents(model))
+            for path in files:
+                self.assertEqual(first_match(text, path), wl.decide(model, path), (path, text))
+            for path in folders:
+                self.assertEqual(
+                    first_match(text, path), wl.decide(model, path) or path in wanted, (path, text)
+                )
+            # The same file without the section: the decision of every file is the same.
+            rc = text[: text.index("// Folders\n")] + "*\n" if wanted else text
+            for path in files:
+                self.assertEqual(first_match(rc, path), first_match(text, path), path)
 
 
 class NormalizeTests(unittest.TestCase):
@@ -515,11 +700,13 @@ class HandParseTests(unittest.TestCase):
         crlf = HAND.replace("\n", "\r\n")
         self.assertTrue(wl.parse_hand(crlf).errors)
 
-    def test_a_managed_file_parses_as_a_hand_file_too(self) -> None:
-        # The migration of a managed file is a no-op, but its parser accepts the format.
-        hand = wl.parse_hand(MANAGED)
+    def test_a_managed_file_of_the_release_candidates_parses_as_a_hand_file_too(self) -> None:
+        # The file 0.4.0rc1 and rc2 wrote has no Folders section, so it is a valid hand file and
+        # `whitelist migrate` rewrites it. A file with the section is managed, never migrated.
+        hand = wl.parse_hand(MANAGED_RC)
         self.assertEqual(hand.errors, ())
         self.assertEqual(wl.plan_migration(hand).model, MANAGED_MODEL)
+        self.assertTrue(wl.parse_hand(MANAGED).errors)
 
 
 class MigrationTests(unittest.TestCase):

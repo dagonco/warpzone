@@ -23,7 +23,7 @@ HEADER = (
     f"// warpzone-whitelist {FORMAT_VERSION}",
 )
 COMMON_INCLUDE = "#include patterns-common.stignore"
-SECTIONS = ("Excluded", "Systems", "Games", "Other")
+SECTIONS = ("Excluded", "Systems", "Games", "Other", "Folders")
 # Syncthing's ignore syntax on Linux: a backslash escapes the next character.
 _SPECIAL = re.compile(r"([\\*?\[\]{}])")
 _UNESCAPED_SPECIAL = frozenset("*?[]{}")
@@ -228,6 +228,25 @@ def _game_path(path: str) -> bool:
     return path.startswith(("roms/", "extras/switch/"))
 
 
+def parents(model: Model) -> list[str]:
+    """The folders the file's `// Folders` section delivers, deepest first (pure).
+
+    Every proper ancestor of a system root or include that is on, when the ancestor is not on
+    itself: Syncthing creates such a folder for the files below it but, matched only by the
+    final `*`, never takes the hub's record for it, and the hub counts it as needed forever.
+    Sorted by depth, deepest first, then by the code point order of the unescaped path.
+    """
+    model = normalize(model)
+    found: set[str] = set()
+    for path in model.roots | model.includes:
+        if not decide(model, path):
+            continue
+        for above in list(ancestors(path))[1:]:
+            if not decide(model, above):
+                found.add(above)
+    return sorted(found, key=lambda folder: (-folder.count("/"), folder))
+
+
 def render(model: Model) -> str:
     """The managed file for `model` (normalized first, so one set of paths is one file)."""
     model = normalize(model)
@@ -239,6 +258,10 @@ def render(model: Model) -> str:
         ("Games", ["!" + _line(p) for p in games]),
         ("Other", ["!" + _line(p) for p in other]),
     ]
+    folders = parents(model)
+    sections.append(
+        ("Folders", [line for p in folders for line in (_line(p) + "/*", "!" + _line(p))])
+    )
     lines = [*HEADER, COMMON_INCLUDE]
     for title, body in sections:
         if body:
@@ -251,7 +274,9 @@ def parse(text: str) -> Model:
     """The model of a file in the managed shape; `ParseError` for anything else.
 
     The shape is strict (header, include, sections in order, a final `*`), but not
-    canonical: `is_managed` also demands that the model renders back to the same bytes.
+    canonical: `is_managed` also demands that the model renders back to the same bytes. The
+    lines of the `Folders` section are checked for shape and left out of the model, since
+    `parents` derives them from it.
     """
     if not text.endswith("\n"):
         raise ParseError(0, "the file does not end with a newline")
@@ -285,6 +310,9 @@ def parse(text: str) -> Model:
             continue
         if section is None:
             raise ParseError(number, "a pattern before any section")
+        if section == "Folders":
+            _check_folder_line(number, line)
+            continue
         negated = section != "Excluded"
         if negated != line.startswith("!"):
             raise ParseError(number, f"{line!r} does not belong in the {section} section")
@@ -304,6 +332,26 @@ def parse(text: str) -> Model:
     if not star:
         raise ParseError(0, "the file does not end with *")
     return Model(_systems_of_roots(roots), frozenset(includes), frozenset(excludes))
+
+
+def _check_folder_line(number: int, line: str) -> None:
+    """A line of the `// Folders` section must be `/<folder>/*` or `!/<folder>`.
+
+    The lines are derived from the model, so they are not read into it; `is_managed` proves
+    them byte for byte against what `render` writes.
+    """
+    try:
+        if line.startswith("!"):
+            path = unescape(line[1:])
+        elif line.endswith("/*"):
+            path = unescape(line[:-2])
+        else:
+            raise ValueError("expected /<folder>/* or !/<folder>")
+    except ValueError as exc:
+        raise ParseError(number, str(exc)) from exc
+    reason = check_path(path)
+    if reason:
+        raise ParseError(number, reason)
 
 
 def _systems_of_roots(roots: Collection[str]) -> frozenset[str]:
