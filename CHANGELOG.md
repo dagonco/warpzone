@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ## [Unreleased]
 
+### Added
+
+- `warpzone provision device` (a dry run and an unattended run too) and `warpzone doctor` warn about a `wz-*` folder in the console's own Syncthing that its config no longer describes, for example after a group is taken out of its `folders`. The warning names the folder and its path and says that warpzone leaves it as it is; it can be removed in the console's Syncthing, and its files stay on disk. Nothing is changed for such a folder.
+
 ## [0.4.0rc2] - 2026-11-11
 
 The second candidate adds to the library UI (a play queue, recommendation shelves and the history of each console's whitelist), lets `settings` share ES-DE's and shadPS4's own settings, files homebrew through `inbox`, and hardens the inbox and the library UI server against bad input from DATs, shared folders and the network.

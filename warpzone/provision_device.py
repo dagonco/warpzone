@@ -38,6 +38,7 @@ from warpzone.provision_folders import (
     move_refusal,
     rescan,
     unattended_refusals,
+    undescribed,
     unpause,
     upsert_folder,
     wait_for_files,
@@ -456,6 +457,9 @@ def provision_device(
                 unattended=unattended,
             )
         rep.flush(spec.id)
+
+    for text in undescribed(specs, existing):
+        rep.warn(text)
 
     if "library" in device.folders:
         root = state_root if state_root is not None else settings_state.state_dir(home=home)
