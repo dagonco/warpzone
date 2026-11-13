@@ -108,12 +108,15 @@ _STATIC: dict[str, tuple[_Def, ...]] = {
     ),
     "frontend": (
         # Videos stay on the hub: a device that receives the whole folder ignores them.
+        # `*.wz-tmp` is the temporary file of an atomic write (`scrape` writes media and
+        # gamelists that way), so a scan never sends a half-written file.
         _Def(
             MEDIA_ID,
             "frontend/media",
             "sendreceive",
             "sendreceive",
             "media",
+            fixed_ignores=("*.wz-tmp",),
             device_ignores=MEDIA_DEVICE_IGNORES,
         ),
         _Def(
@@ -122,7 +125,7 @@ _STATIC: dict[str, tuple[_Def, ...]] = {
             "sendreceive",
             "sendreceive",
             "esde",
-            fixed_ignores=("!/gamelists", "!/collections", "*"),
+            fixed_ignores=("*.wz-tmp", "!/gamelists", "!/collections", "*"),
         ),
     ),
     # Layers captured on a device travel to the hub, so the folder is two-way; `*.wz-tmp`

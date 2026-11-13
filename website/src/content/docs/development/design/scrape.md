@@ -2,9 +2,10 @@
 title: "Scraping"
 ---
 
-**Status: design, not implemented.** This page is the contract for scraping game metadata and
-media into the hub: `inbox --apply` scrapes the games it just placed, and `warpzone scrape` fills
-in the games already in the library. The pages it touches when it is implemented
+**Status: `warpzone scrape` and the doctor checks are implemented; the scrape inside
+`inbox --apply` (and `--no-scrape`) is not yet.** This page is the contract for scraping game
+metadata and media into the hub: `inbox --apply` scrapes the games it just placed, and
+`warpzone scrape` fills in the games already in the library. The pages it touches when it is implemented
 ([Inbox](/warpzone/development/design/inbox/), [Configuration and command line](/warpzone/development/design/configuration/),
 [Doctor](/warpzone/development/design/doctor/), [Hub, folders and ignores](/warpzone/development/design/hub-and-folders/),
 [Code, testing and CI](/warpzone/development/design/code-and-testing/)) are updated in the same
@@ -79,7 +80,9 @@ Skyscraper is located like the other inbox tools: the `[inbox] skyscraper` path,
 `Skyscraper` on `PATH`. A configured path that does not exist is a configuration error (exit 2).
 When neither finds it, `inbox` does not scrape and says so once in its report; `warpzone scrape`
 exits 2. The other `[inbox]` keys it uses are `root`, `work_dir` (the staged and temporary
-folders live there) and `tool_timeout_minutes`, which applies to every Skyscraper call. The
+folders and the logs live in `<work_dir>/scrape/`; without it, in `$XDG_CACHE_HOME/warpzone/scrape/`,
+since a system temp folder may be small and a log should stay for the user to read) and
+`tool_timeout_minutes`, which applies to every Skyscraper call. The
 version tested is Skyscraper 3.21.1.
 
 ### Credentials
@@ -254,20 +257,23 @@ The I/O layer (`scrape_io.py`) applies the plan:
 
 - **Media first, then the gamelist,** so an entry never names a game whose cover is still being
   written. Each file is written to `.<name>.wz-tmp` in the target folder, compared with the source
-  by size, and renamed; right before the rename the target is checked again and, if a file of that
-  kind and stem has appeared, the copy is dropped and nothing is replaced. The implementation adds
-  the fixed `*.wz-tmp` ignore line to `wz-media` and `wz-esde` on both sides, as `wz-settings`
-  has, so a scan never sends a half-written file.
+  by size, and moved into place; right before that the target folder is checked again and, if a
+  file of that kind and stem has appeared, the copy is dropped and nothing is replaced. The name
+  is taken with a hard link where the file system has them (which cannot replace a file), else with
+  a rename right after the check. `wz-media` and `wz-esde` carry the fixed `*.wz-tmp` ignore line
+  on both sides, as `wz-settings` has, so a scan never sends a half-written file.
 - **The gamelist is edited as text** with the helpers the arcade and PS3 edits use
   (`inbox_mame`): the new entries go before `</gameList>`, indentation and newline style are
   copied, comments and ES-DE's `<alternativeEmulator>` block are left as they are, and the result
-  is checked to be well-formed before it is written to `gamelist.xml.part` and renamed. A missing
-  gamelist is created, with the system folder, when there is an entry to add.
+  is checked to be well-formed before it is written to `.gamelist.xml.wz-tmp` beside the gamelist
+  (`safefile.atomic_write`) and renamed. A missing gamelist is created, with the system folder,
+  when there is an entry to add.
 - **Re-check before replacing.** Consoles write the hub gamelist through Syncthing at any time.
   The file is read with its stamp (size, modification time, and its bytes); right before the
   rename it is read again, and if it changed the plan is made again from the new content and the
   write retried, three times, then the system's entries are left for the next run with a warning.
-  The plan only adds, so making it again is always safe.
+  The plan only adds, so making it again is always safe: an entry a console wrote for the same
+  game in the meantime is kept as it is and the new one is not added.
 - **Backup.** Before the run's first change to a gamelist, a copy goes to
   `<root>/tools/logs/gamelist-backups/<system>-gamelist-<YYYYMMDD-HHMMSS>.xml`, as for the inbox's
   gamelist edits (outside every synced folder, so it reaches no console). `scrape` is a
@@ -306,11 +312,12 @@ Skyscraper's default `artwork.xml` turns the `screenshot` output into a 640x480 
 (screenshot, 3D box and wheel), which would land in the hub's `screenshots/`. warpzone never uses
 the user's artwork file; it passes its own, shipped in `warpzone/data/skyscraper/`:
 
-- `artwork-esde.xml`: a plain `cover` output, a `marquee` output from the `wheel` resource, and a
+- `artwork-esde.xml`: a plain `cover` output (`<output type="cover" resource="cover"/>`), a `marquee` output from the `wheel` resource, and a
   `screenshot` output that is the miximage: ES-DE's miximage layout, 1280x960, with the screenshot
   as the background, the box at the bottom left and the logo at the top. With `--flags miximages`
   this output goes to `miximages/` and the plain screenshot to `screenshots/`.
-- `artwork-3dbox.xml`: one `cover` output with the `gamebox` effect (`side="wheel"`).
+- `artwork-3dbox.xml`: one `cover` output with the `gamebox` effect (`side="wheel"`), on a fixed
+  600 by 600 transparent canvas (without a width the box comes out off centre and cropped).
 
 They are data: a test parses them and checks the outputs above, and the look is a manual check
 against a miximage and a 3D box made by ES-DE.
@@ -335,6 +342,14 @@ counts them (`skipped 4 not found in the last 30 days`). `warpzone scrape --retr
 them all now. A game that is found later, or whose file changes size (a new dump under the same
 name), drops its record. A file that cannot be read or parsed counts as empty and is rewritten.
 
+A game is recorded only when Skyscraper itself said "not found" for it (a game it never got to,
+after the quota, says nothing) and that answer did not come after a retry line. If ScreenScraper
+is down, Skyscraper retries each request and then reports every game as not found, which
+`classify_output` does not see as `NETWORK`; since the output is in order with one thread, the
+lines between the previous answer and a game's belong to it, and a game answered after "Retrying
+request with timeout of" or the too-busy line (`Outcome.retried`) is not recorded, so a bad day
+does not hide a library for 30 days.
+
 In the test, a game took about 10 seconds and 2.6 MB of media, most of it the video, so a library
 of 1,000 games is about three hours and 2.6 GB on the hub, plus about as much in the cache on the
 machine that scrapes. The videos stay on the hub: devices ignore `/*/videos` (see
@@ -353,7 +368,7 @@ changes the exit code and never undoes a placement. The report ends with the lin
 
 ## `warpzone scrape`
 
-`warpzone scrape [--root PATH] [--system NAME ...] [--retry-not-found] [--dry-run]` scrapes the games of the library
+`warpzone scrape [--root PATH] [--system NAME ...] [--retry-not-found] [--dry-run] [--force-lock]` scrapes the games of the library
 that have no gamelist entry or lack media, for every system in the platform table, or only the
 ones named with `--system` (a name not in the table is a usage error, exit 2, which says why a
 system is left out when it is in `UNSCRAPED`). It reads `[inbox]` only, like `inbox`, and needs
@@ -361,7 +376,8 @@ the catalog: a system without a catalog file is skipped with the hint to run `wa
 It takes the inbox lock (`inbox/.warpzone.lock`, with its stale rules and `--force-lock`), so it
 never runs while `inbox --apply` places games or edits gamelists.
 
-`--dry-run` runs no Skyscraper (no request, no change to the cache) and writes nothing. It prints,
+`--dry-run` runs no Skyscraper (no request, no change to the cache), writes nothing and takes no
+lock. It prints,
 per system, the games it would scrape, split into "no entry" and "missing media" with the kinds,
 and the totals, which is how a user sizes a first run over a whole library before starting it.
 

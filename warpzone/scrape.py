@@ -5,23 +5,26 @@ copy of the games and merge what it produced into the hub's ES-DE gamelists and 
 module holds the parts that need no filesystem and no subprocess: which systems are scraped
 and under which Skyscraper platform (`PLATFORMS`, `UNSCRAPED`), which games need a scrape
 (`select`), the command lines (`skyscraper_args`), what Skyscraper's output says
-(`classify_output`), what to merge into the hub (`plan_merge`) and what the run prints
-(`render_report`, `stop_message`). See development/design/scrape.md.
+(`classify_output`), what to merge into the hub (`plan_merge`, `add_entries`), what is
+remembered about the not-found memory, the presence check of the account in
+Skyscraper's config, and what the run prints (`render_report`, `stop_message`). The disk and
+the tool are in `scrape_io`. See development/design/scrape.md.
 """
 
 from __future__ import annotations
 
 import posixpath
 import re
-from collections.abc import Collection, Mapping, Sequence
-from dataclasses import dataclass
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
+from dataclasses import dataclass, field
 from datetime import date
 from enum import Enum
-from pathlib import PurePath
-from typing import Literal
+from pathlib import Path, PurePath
+from typing import Any, Literal
 
 from warpzone import artwork, gamelist
 from warpzone.catalog import DIR, Game
+from warpzone.errors import UsageError
 
 # The version the flags below were tested with.
 SKYSCRAPER_VERSION = "3.21.1"
@@ -95,6 +98,24 @@ NOT_FOUND_DAYS = 30
 NO_MULTISCRAPE = "nomultiscrape"
 # Games per Skyscraper call.
 BATCH_SIZE = 100
+
+
+def choose_systems(requested: Sequence[str] | None) -> list[str]:
+    """The systems a `scrape` run goes through: the ones named (once each, in the order
+    given) or every scraped system. `UsageError` for a name that is not scraped, with the
+    reason when it is one `inbox` places that is left out."""
+    if not requested:
+        return sorted(PLATFORMS)
+    chosen: list[str] = []
+    for name in requested:
+        if name in UNSCRAPED:
+            raise UsageError(f"--system {name}: not scraped yet: {UNSCRAPED[name]}")
+        if name not in PLATFORMS:
+            raise UsageError(f"--system {name}: not a system warpzone scrapes")
+        if name not in chosen:
+            chosen.append(name)
+    return chosen
+
 
 # ------------------------------------------------------------------ select
 
@@ -201,6 +222,38 @@ def select(
     return Selection(tuple(picks), skipped)
 
 
+def render_dry_run(system: str, selection: Selection) -> str:
+    """What `scrape --dry-run` prints for a system (no trailing newline): the games a run would
+    scrape, split into "no entry" and "missing media" with the kinds."""
+    picks = selection.picks
+    noun = "game" if len(picks) == 1 else "games"
+    lines = [f"scrape: {system}: would scrape {len(picks)} {noun}"]
+    for pick in picks:
+        name = artwork.relative(pick.game.gamelist) or pick.game.gamelist
+        if pick.has_entry:
+            lines.append(f"  {'missing media':<13}  {name}: {', '.join(pick.missing)}")
+        else:
+            lines.append(f"  {'no entry':<13}  {name}")
+    if selection.skipped_not_found:
+        lines.append(
+            f"  skipped {selection.skipped_not_found} not found in the last {NOT_FOUND_DAYS} days"
+        )
+    return "\n".join(lines)
+
+
+def render_dry_totals(selections: Mapping[str, Selection]) -> str:
+    """The last line of `scrape --dry-run`: the totals over every system."""
+    picks = [p for sel in selections.values() for p in sel.picks]
+    entryless = sum(1 for p in picks if not p.has_entry)
+    systems = sum(1 for sel in selections.values() if sel.picks)
+    noun = "game" if len(picks) == 1 else "games"
+    return (
+        f"scrape: would scrape {len(picks)} {noun} in {systems} "
+        f"{'system' if systems == 1 else 'systems'} "
+        f"({entryless} with no entry, {len(picks) - entryless} missing media)"
+    )
+
+
 # ------------------------------------------------------------------ command lines
 
 Step = Literal["gather", "main", "box"]
@@ -288,11 +341,16 @@ class Stop(Enum):
 
 @dataclass(frozen=True)
 class Outcome:
-    """What a Skyscraper run said: the condition that stops the scrape, if any, and the names
-    (staged file names without their last extension) of the games it reported as not found."""
+    """What a Skyscraper run said: the condition that stops the scrape, if any, the names
+    (staged file names without their last extension) of the games it reported as not found,
+    and, among those, the ones whose answer came after a retry line (ScreenScraper may have
+    been down, so the answer is not to be trusted). `answered` counts the games it said
+    anything about, found or not."""
 
     stop: Stop | None = None
     not_found: tuple[str, ...] = ()
+    retried: tuple[str, ...] = ()
+    answered: int = field(default=0, compare=False)
 
 
 # Skyscraper 3.21.1 (src/screenscraper.cpp, src/scraperworker.cpp), after dropping the colour codes.
@@ -316,15 +374,33 @@ _NOT_FOUND = re.compile(
 
 def classify_output(text: str) -> Outcome:
     """Classify the output of a Skyscraper run. Text that matches nothing known gives an
-    `Outcome` with no stop and no games: an unknown output is not a failure."""
+    `Outcome` with no stop and no games: an unknown output is not a failure.
+
+    A game answered "not found" after a retry line (the request was tried again, or
+    ScreenScraper said it was too busy) since the previous answer is in `retried`: with one
+    thread the output is in order, so those lines belong to that game."""
     lines = [_ANSI.sub("", line).strip() for line in text.splitlines()]
     joined = "\n".join(lines)
     stop: Stop | None = next((s for s, needle in _HARD_STOPS if needle in joined), None)
-    names = tuple(m["name"] for line in lines if (m := _NOT_FOUND.match(line)))
-    answered = bool(names) or any(_FOUND.match(line) for line in lines)
+    names: list[str] = []
+    retried: list[str] = []
+    answered = 0
+    retrying = False
+    for line in lines:
+        if any(needle in line for _, needle in _SOFT_STOPS):
+            retrying = True
+        elif m := _NOT_FOUND.match(line):
+            names.append(m["name"])
+            if retrying:
+                retried.append(m["name"])
+            answered += 1
+            retrying = False
+        elif _FOUND.match(line):
+            answered += 1
+            retrying = False
     if stop is None and not answered:
         stop = next((s for s, needle in _SOFT_STOPS if needle in joined), None)
-    return Outcome(stop, names)
+    return Outcome(stop, tuple(names), tuple(retried), answered)
 
 
 # ------------------------------------------------------------------ merge
@@ -553,20 +629,43 @@ def plan_merge(
     return MergePlan(tuple(games), tuple(dropped))
 
 
-def render_entries(entries: Sequence[artwork.Entry], *, indent: str = "\t", eol: str = "\n") -> str:
+def render_entries(
+    entries: Sequence[artwork.Entry],
+    *,
+    indent: str = "\t",
+    eol: str = "\n",
+    child: str | None = None,
+) -> str:
     """The text of new gamelist entries, to go before `</gameList>`: each one's `<path>` and
     its fields in `ENTRY_FIELDS` order, XML-escaped, with the characters XML 1.0 cannot hold
-    dropped. `indent` is the file's own indentation of an entry and `eol` its line ending."""
+    dropped. `indent` is the file's own indentation of an entry, `child` that of its fields
+    (twice `indent` when unset) and `eol` its line ending."""
+    inner = indent * 2 if child is None else child
     lines: list[str] = []
     for item in entries:
         lines.append(f"{indent}<{item.tag}>")
-        lines.append(f"{indent * 2}<path>{gamelist.escape(_clean(item.path))}</path>")
+        lines.append(f"{inner}<path>{gamelist.escape(_clean(item.path))}</path>")
         for key in ENTRY_FIELDS:
             if key in item.fields:
                 text = gamelist.escape(_clean(item.fields[key]))
-                lines.append(f"{indent * 2}<{key}>{text}</{key}>")
+                lines.append(f"{inner}<{key}>{text}</{key}>")
         lines.append(f"{indent}</{item.tag}>")
     return "".join(line + eol for line in lines)
+
+
+def add_entries(text: str, entries: Sequence[artwork.Entry]) -> str:
+    """`text` (a gamelist) with `entries` added before `</gameList>`, in the file's own
+    indentation and line ending. Nothing else changes: comments, ES-DE's
+    `<alternativeEmulator>` block and every existing entry stay byte for byte. `GamelistError`
+    when the result would not be well-formed XML, or the text has no `<gameList>`."""
+    if not entries:
+        return text
+    new = gamelist.append_games(
+        text, lambda entry, child, eol: render_entries(entries, indent=entry, child=child, eol=eol)
+    )
+    if gamelist.well_formed(text) and not gamelist.well_formed(new):
+        raise gamelist.GamelistError("the edited gamelist would not be well-formed XML")
+    return new
 
 
 # ------------------------------------------------------------------ report
@@ -651,3 +750,143 @@ def gamelist_message(system: str, reason: str) -> str:
     """The line for a hub gamelist that cannot be written (it changed three times during the
     write, or cannot be read): the entries wait for the next run."""
     return f"{system}: {reason}; the entries are left for the next run"
+
+
+# ------------------------------------------------------------------ the not-found memory
+
+NotFoundRecords = dict[str, NotFound]  # gamelist path -> the record, for one system
+
+
+def parse_not_found(data: object) -> dict[str, NotFoundRecords]:
+    """The not-found memory (`scrape-not-found.json`) by system. Anything that is not the
+    expected shape counts as empty: a record that cannot be read is simply asked for again."""
+    memory: dict[str, NotFoundRecords] = {}
+    systems = data.get("systems") if isinstance(data, dict) else None
+    if not isinstance(systems, dict):
+        return memory
+    for system, rows in systems.items():
+        if not isinstance(system, str) or not isinstance(rows, dict):
+            continue
+        records: NotFoundRecords = {}
+        for path, row in rows.items():
+            size = row.get("size") if isinstance(row, dict) else None
+            tried = row.get("tried") if isinstance(row, dict) else None
+            if not isinstance(path, str) or not isinstance(tried, str):
+                continue
+            if not isinstance(size, int) or isinstance(size, bool):
+                continue
+            try:
+                records[path] = NotFound(size, date.fromisoformat(tried))
+            except ValueError:
+                continue
+        memory[system] = records
+    return memory
+
+
+def render_not_found(memory: Mapping[str, Mapping[str, NotFound]]) -> dict[str, Any]:
+    """The JSON value of the memory; a system with no record is left out."""
+    return {
+        "version": 1,
+        "systems": {
+            system: {
+                path: {"size": rec.size, "tried": rec.tried.isoformat()}
+                for path, rec in sorted(records.items())
+            }
+            for system, records in sorted(memory.items())
+            if records
+        },
+    }
+
+
+def remember_not_found(
+    records: Mapping[str, NotFound],
+    merges: Sequence[GameMerge],
+    asked_not_found: Collection[str],
+    retried: Collection[str],
+    today: date,
+) -> NotFoundRecords:
+    """The records of a system after a batch was merged.
+
+    A game whose merge found something (anything but `NOT_FOUND`) loses its record. A game
+    with the verdict `NOT_FOUND` gets one only when Skyscraper said so itself (its stem is in
+    `asked_not_found`: a game it never got to, after the quota, says nothing) and the answer
+    did not come after a retry line (`retried`: ScreenScraper may have been down, and
+    remembering that would hide the game for 30 days). The record keeps the file's size, so a
+    new dump under the same name is tried again."""
+    result = dict(records)
+    for merge in merges:
+        key = merge.game.gamelist
+        if merge.result is not Result.NOT_FOUND:
+            result.pop(key, None)
+            continue
+        stem = posixpath.splitext(posixpath.basename(artwork.relative(key) or key))[0]
+        if stem in asked_not_found and stem not in retried:
+            result[key] = NotFound(merge.game.size, today)
+    return result
+
+
+# ------------------------------------------------------------------ Skyscraper's config
+
+_VERSION = re.compile(r"(?<![\d.])(\d+)\.(\d+)\.(\d+)(?![\d])")
+
+
+def parse_version(text: str) -> tuple[int, int, int] | None:
+    """The first `X.Y.Z` of `Skyscraper --version`'s output (a banner with the version in it)."""
+    m = _VERSION.search(_ANSI.sub("", text))
+    return (int(m[1]), int(m[2]), int(m[3])) if m else None
+
+
+def tested_version() -> tuple[int, int, int]:
+    major, minor, patch = (int(n) for n in SKYSCRAPER_VERSION.split("."))
+    return major, minor, patch
+
+
+def config_ini_path(env: Mapping[str, str], home: Path, exists: Callable[[Path], bool]) -> Path:
+    """Where Skyscraper keeps `config.ini`: `~/.skyscraper/` when that folder exists, else
+    `$XDG_CONFIG_HOME/skyscraper/` (`~/.config/skyscraper/` when the variable is unset) in a
+    build with XDG paths. Only the place is decided here; nothing is read."""
+    legacy = home / ".skyscraper"
+    if exists(legacy):
+        return legacy / "config.ini"
+    base = env.get("XDG_CONFIG_HOME")
+    return (Path(base) if base else home / ".config") / "skyscraper" / "config.ini"
+
+
+def has_user_creds(lines: Iterable[str]) -> bool:
+    """Whether `[screenscraper]` of a `config.ini` has a `userCreds` key. Pure, over the file's
+    lines, and the only code that looks into the file.
+
+    It tracks the `[section]` it is in, ignores comment lines (`;` or `#`), and for a line
+    `key = value` looks at the key alone: the value is never sliced out, stored, compared or
+    printed. A key with an empty value counts as present (it is what the question asks)."""
+    section = ""
+    for raw in lines:
+        line = raw.strip()
+        if not line or line[0] in ";#":
+            continue
+        if line[0] == "[":
+            end = line.find("]")
+            section = line[1:end].strip() if end > 0 else ""
+            continue
+        eq = line.find("=")
+        if (
+            eq > 0
+            and section == "screenscraper"
+            and line[:eq].strip().strip("\"'").strip() == "userCreds"
+        ):
+            return True
+    return False
+
+
+# ------------------------------------------------------------------ the ES-DE warning
+
+
+def recent_message(system: str, minutes: int) -> str:
+    """The warning for a hub gamelist written a few minutes ago: a console with ES-DE open
+    keeps its own copy in memory and writes it back without the new entries."""
+    return (
+        f"{system}: the gamelist was modified {minutes} min ago. ES-DE on a console keeps its "
+        "gamelist in memory and writes it back when a game is launched, which would drop the "
+        "new entries. If they do not stick, quit ES-DE on every console and run "
+        "`warpzone scrape` again (it adds them from the cache, with no request)"
+    )

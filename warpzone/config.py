@@ -104,6 +104,7 @@ INBOX_KEYS = (
     "vita_zrif",
     "titledb_dir",
     "switch_keys",
+    "skyscraper",
 )
 # The one number of the table: the minutes any external tool of `inbox` may run (see below).
 TOOL_TIMEOUT_KEY = "tool_timeout_minutes"
@@ -117,7 +118,8 @@ class InboxSettings:
     (RAHasher only when set). `titledb_dir` (a clone of blawar/titledb) and `switch_keys`
     (the console keys file, default ~/.switch/prod.keys) are for Switch games. `orbis_pkg_util`
     unpacks PS4 packages. `vita3k` (Vita3K.app or its binary) installs PS Vita packages with the
-    zRIF keys of `vita_zrif`, a file the user keeps. `tool_timeout_minutes` is how long any
+    zRIF keys of `vita_zrif`, a file the user keeps. `skyscraper` is the Skyscraper program that
+    `warpzone scrape` runs (`Skyscraper` on PATH when unset). `tool_timeout_minutes` is how long any
     one call of an external tool may run before it is killed and its item goes to review."""
 
     root: str | None = None
@@ -138,6 +140,7 @@ class InboxSettings:
     vita_zrif: str | None = None
     titledb_dir: str | None = None
     switch_keys: str | None = None
+    skyscraper: str | None = None
     tool_timeout_minutes: int = DEFAULT_TOOL_TIMEOUT_MINUTES
 
 

@@ -280,6 +280,42 @@ def _build_parser() -> argparse.ArgumentParser:
         "else the system temp folder)",
     )
 
+    scr = sub.add_parser(
+        "scrape",
+        parents=[common],
+        help="fill the hub's gamelists and media for the games that lack them, with Skyscraper "
+        "(ScreenScraper); only adds, never changes an entry or a file",
+    )
+    scr.add_argument(
+        "--root",
+        type=Path,
+        help="the hub root as mounted on this machine, holding inbox/ and library/ "
+        "(default: [inbox] root in the config)",
+    )
+    scr.add_argument(
+        "--system",
+        nargs="+",
+        action="extend",
+        metavar="NAME",
+        help="scrape only these systems (default: every system warpzone scrapes)",
+    )
+    scr.add_argument(
+        "--retry-not-found",
+        action="store_true",
+        help="also try the games ScreenScraper did not know in the last 30 days",
+    )
+    scr.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="list the games it would scrape per system and write nothing (runs no Skyscraper)",
+    )
+    scr.add_argument(
+        "--force-lock",
+        action="store_true",
+        help="take over a stale inbox lock (older than 12 hours, or held by a process that is "
+        "gone from this machine); a live lock is never taken",
+    )
+
     cat = sub.add_parser(
         "catalog",
         parents=[common],
@@ -738,6 +774,38 @@ def _inbox(args: argparse.Namespace, rep: Reporter) -> int:
     return EXIT_RUNTIME if inbox.run_inbox(options, rep) else EXIT_OK
 
 
+def _scrape(args: argparse.Namespace, rep: Reporter) -> int:
+    from warpzone import scrape, scrape_io
+    from warpzone.inbox_core import InboxError
+
+    settings = load_inbox_settings(_config_path(args))
+    root = args.root or (Path(settings.root) if settings.root else None)
+    if root is None:
+        raise InboxError(
+            "no hub root: pass --root or set `root` in the [inbox] table of the config"
+        )
+    systems = scrape.choose_systems(args.system)
+    program = scrape_io.find_skyscraper(settings.skyscraper)
+    if program is None:
+        raise scrape_io.ScrapeError(
+            "Skyscraper not found: put it on PATH or set `skyscraper` in the [inbox] table "
+            "(https://github.com/Gemba/skyscraper/releases)"
+        )
+    options = scrape_io.Options(
+        root=root,
+        skyscraper=program,
+        systems=tuple(systems),
+        explicit=bool(args.system),
+        timeout=settings.tool_timeout_minutes * 60.0,
+        work_dir=Path(settings.work_dir) if settings.work_dir else None,
+        config_ini=scrape.config_ini_path(os.environ, Path.home(), Path.exists),
+        dry_run=args.dry_run,
+        retry_not_found=args.retry_not_found,
+        force_lock=args.force_lock,
+    )
+    return scrape_io.run_scrape(options, rep)
+
+
 def _settings(args: argparse.Namespace, cfg: Config, profiles: dict[str, Profile]) -> int:
     capturing = args.settings_command == "capture"
     if capturing and args.key and not args.seed:
@@ -1128,6 +1196,7 @@ _STANDALONE_COMMANDS: dict[str, Callable[[argparse.Namespace, Reporter], int]] =
     "doctor": _doctor,  # offline, read-only, needs no valid config
     "bios": _bios,  # works without a config when --root is given
     "inbox": _inbox,  # needs at most the [inbox] table
+    "scrape": _scrape,  # the same: the [inbox] table only
     "catalog": _catalog,  # needs the config only for the hub root
 }
 # These load and validate the config first. Every handler takes the same four arguments,

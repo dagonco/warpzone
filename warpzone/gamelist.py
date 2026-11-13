@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import re
 import xml.etree.ElementTree as ET
+from collections.abc import Callable
 
 from warpzone.errors import WarpzoneError
 
@@ -171,7 +172,7 @@ def update_entry(text: str, file_name: str, emulator: str | None) -> tuple[str, 
     if target is None:
         if emulator is None:
             return text, "unchanged"
-        new = _insert_entry(text, file_name, emulator, nl)
+        new = _insert_entry(text, file_name, emulator)
         action = "added"
     else:
         block = target.group(0)
@@ -221,7 +222,12 @@ def _drop_block(text: str, match: re.Match[str]) -> str:
     return text[:start] + text[end:]
 
 
-def _insert_entry(text: str, file_name: str, emulator: str, nl: str) -> str:
+def append_games(text: str, render: Callable[[str, str, str], str]) -> str:
+    """`text` with the lines `render(entry_indent, child_indent, eol)` returns added before
+    `</gameList>`. The indentation is the file's own (that of its first `<game>`, else one
+    tab deeper than the list's) and `eol` its line ending; every line `render` returns ends
+    with `eol`. `GamelistError` when the text has no `<gameList>`."""
+    nl = eol_of(text)
     text = expand_empty_list(text, nl)
     close = last_outside_comments(_LIST_CLOSE, text)
     if close is None:
@@ -239,14 +245,21 @@ def _insert_entry(text: str, file_name: str, emulator: str, nl: str) -> str:
         if wrapper:
             entry = wrapper + "\t"
             child = entry + "\t"
-    lines = (
-        f"{entry}<game>{nl}"
-        f"{child}<path>./{escape(file_name)}</path>{nl}"
-        f"{child}<altemulator>{escape(emulator)}</altemulator>{nl}"
-        f"{entry}</game>{nl}"
-    )
+    lines = render(entry, child, nl)
     at = close.start()
     indent = indent_before(text, at)
     if indent is not None:
         return text[: at - len(indent)] + lines + text[at - len(indent) :]
     return text[:at] + nl + lines + text[at:]
+
+
+def _insert_entry(text: str, file_name: str, emulator: str) -> str:
+    def render(entry: str, child: str, eol: str) -> str:
+        return (
+            f"{entry}<game>{eol}"
+            f"{child}<path>./{escape(file_name)}</path>{eol}"
+            f"{child}<altemulator>{escape(emulator)}</altemulator>{eol}"
+            f"{entry}</game>{eol}"
+        )
+
+    return append_games(text, render)

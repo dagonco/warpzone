@@ -35,7 +35,7 @@ packages = ["warpzone", "warpzone.data", "warpzone.data.profiles"]
 version = { attr = "warpzone.__version__" }
 
 [tool.setuptools.package-data]
-"warpzone.data" = ["*.toml", "*.sh", "allowed_signers", "ui/*"]
+"warpzone.data" = ["*.toml", "*.sh", "allowed_signers", "ui/*", "skyscraper/*.xml"]
 "warpzone.data.profiles" = ["*.toml"]
 
 [tool.mypy]

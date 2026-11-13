@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Skyscraper artwork for warpzone's 3D box pass (see development/design/scrape.md): one
+     cover output, the box art with the gamebox effect and the wheel (the logo) on the
+     spine. The canvas has a fixed size: without a width Skyscraper derives it from the
+     cover and the box comes out off centre and cropped. Only the covers/ folder of this
+     pass is used, as the hub's 3dboxes. -->
+<artwork>
+  <output type="cover" width="600" height="600">
+    <layer resource="cover" height="560" align="center" valign="middle">
+      <gamebox side="wheel" rotate="90"/>
+    </layer>
+  </output>
+</artwork>
