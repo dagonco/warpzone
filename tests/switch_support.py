@@ -104,6 +104,9 @@ def entry(tid: str, name: str, ids: Sequence[str] | None = None, demo: bool = Fa
 #   garbage     `-D` says [DONE] but writes something that is not a PFS0
 #   verify      `-V` exits 1
 #   unverified  `-V` exits 0 without saying [VERIFIED]
+#   ticketless  `-V` exits 0 and prints what nsz 5.0.0 prints for a ticketless dump
+#   mixed       `-V` exits 0 with one NCA [VERIFIED] and one [TICKETLESS]
+#   mismatch    `-V` exits 0, says [TICKETLESS], and also reports a MISMATCH
 # Every call is appended to STUB_NSZ_LOG (arguments only). Like the real nsz, `-i` prints
 # key material; the stand-in prints the content of the keys file to prove it is never shown.
 NSZ = r"""
@@ -168,7 +171,20 @@ elif "-V" in args:
     if fail == "verify":
         print("Error while verifying file: " + path, file=sys.stderr)
         sys.exit(1)
-    if fail != "unverified":
+    if fail == "ticketless":
+        print("[VERIFY NSP] base.nsp")
+        for name in ("a48ae7a4dfba73d215b4b53b4da22301", "cc891b522473097171eaef74db61431c"):
+            print("[EXISTS] " + name + ".nca")
+            print("[TICKETLESS] " + name + ".nca")
+        print("[EXISTS] edce42d40cae948c87a1f72733eafc59.cnmt.nca")
+        print("[NSP SHA256] 69ac8a73852ecb5399cf1d8ffa3ba1ed6586c8a5ac8471915e951d08b0b189c4")
+    elif fail == "mixed":
+        print("[VERIFIED] a48ae7a4dfba73d215b4b53b4da22301.nca")
+        print("[TICKETLESS] cc891b522473097171eaef74db61431c.nca")
+    elif fail == "mismatch":
+        print("[TICKETLESS] a48ae7a4dfba73d215b4b53b4da22301.nca")
+        print("[NSP SHA256] MISMATCH")
+    elif fail != "unverified":
         print("[VERIFIED] x.nca")
 else:
     sys.exit(2)
