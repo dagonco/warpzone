@@ -162,8 +162,8 @@ for every problem, the exact fix for this platform.
   rules that write and clear it are in [Unattended runs](/warpzone/development/design/prune/#unattended-runs).
   It is never `[!!]`: nothing is broken, a removal is waiting for a person.
 - **Exit codes.** `0` when no check is a problem, `1` otherwise.
-- **Install hints** live in one table in `warpzone/doctor.py` (`TOOLS` and the `*_HINTS`
-  dicts), keyed by platform family: `macos`, `debian`, `fedora`, `arch`, `steamos`,
+- **Install hints** live in one table in `warpzone/doctor_hints.py` (the `*_HINTS` dicts, with `TOOLS` in
+  `warpzone/doctor_tools.py`), keyed by platform family: `macos`, `debian`, `fedora`, `arch`, `steamos`,
   `linux` (any other Linux) and `other`, with an `any` fallback. A hint is added only
   when it is known to be right for that family. SteamOS has a read-only root, so its hints
   point at a container instead of a system package.

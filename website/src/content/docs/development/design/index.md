@@ -52,6 +52,7 @@ The pages after this one cover one subject each.
 - [Pruning](/warpzone/development/design/prune/): detecting and deleting what a device no longer whitelists.
 - [BIOS check](/warpzone/development/design/bios/): the manifest and the judgements.
 - [Inbox](/warpzone/development/design/inbox/): identifying, converting and filing new games, kind by kind.
+  - [Unattended inbox](/warpzone/development/design/inbox-unattended/) (design, not implemented): `inbox --apply --unattended` from a scheduled task on the hub, the stable-size rule, the memory of failed items, the heartbeat lock and the run record the library UI shows.
   - [Scraping](/warpzone/development/design/scrape/) (design, not implemented): metadata and media from ScreenScraper through Skyscraper, added to the hub's gamelists and media without changing what is there.
 - [Library UI](/warpzone/development/design/library-ui/): the catalog index, the managed whitelists, the web page and its API, the container on the hub.
   - [Play queue](/warpzone/development/design/play-queue/) (file, API and page implemented): the games the user wants to play next, kept on the hub, and how queueing for a console turns the game on there.
