@@ -1192,6 +1192,17 @@ class MenuTests(UpdaterCase):
             (["es-de"], [("es-de-helper", ["es-de-helper"])]),
             (["emulationstation-long"], [("emulationstatio", ["emulationstation"])]),
             (["es-de", "other"], [("a", ["a"]), ("other", ["/bin/other"])]),
+            # a name longer than 15 characters: comm holds its first 15, argv[0] all of it
+            (["emulationstation-long"], [("emulationstatio", ["/x/emulationstation-long"])]),
+            (["emulationstation-long"], [("emulationstatio", ["emulationstation-longer"])]),
+            (["emulationstation-long"], [("emulationstatio", ["emulationstation-lon"])]),
+            # comm only, argv[0] only, neither (the name sits in a later argument)
+            (["steam"], [("steam", ["/usr/lib/steam/bin"])]),
+            (["steam"], [("bin", ["steam-runtime/steam"])]),
+            (["steam"], [("python3", ["python3", "/x/steam"])]),
+            # no cmdline at all (a kernel thread) and an empty one
+            (["es-de"], [("kworker", [])]),
+            (["es-de"], [("es-de", [])]),
         ]
         for names, procs in trees:
             with self.subTest(names=names, procs=procs):
@@ -1203,6 +1214,38 @@ class MenuTests(UpdaterCase):
                 proc = rig.run("menu")
                 self.assertEqual(proc.returncode == 0, expected, proc.output)
                 self.assertIn(proc.returncode, (0, 1))
+
+    def menu(self, rig: Rig, **kwargs: str) -> int:
+        return rig.run("menu", **kwargs).returncode
+
+    def test_a_comm_match_a_long_name_matched_by_argv0_and_no_match(self) -> None:
+        rig = self.rig
+        rig.write_conf(frontend="es-de emulationstation-long")
+        rig.proc.add(7000001, "other", ["/usr/bin/other", "--arg", "es-de"])
+        self.assertEqual(self.menu(rig), 1, "no match")
+        rig.proc.add(7000002, "es-de", ["/x/runner"])
+        self.assertEqual(self.menu(rig), 0, "comm match")
+        shutil.rmtree(rig.proc.path / "7000002")
+        self.assertEqual(self.menu(rig), 1)
+        rig.proc.add(7000003, "emulationstatio", ["/x/emulationstation-long", "--fs"])
+        self.assertEqual(self.menu(rig), 0, "argv0 match of a name longer than 15 characters")
+
+    def test_the_updater_and_its_parent_are_not_the_menu(self) -> None:
+        rig = self.rig
+        rig.write_conf(frontend="es-de")
+        # the parent of the script is this test process
+        rig.proc.add(os.getpid(), "es-de")
+        self.assertEqual(self.menu(rig), 1)
+        # the script itself: a wrapper adds a process with its own pid and execs the updater
+        wrapper = rig.root / "wrapper.sh"
+        wrapper.write_text(
+            '#!/bin/sh\nmkdir -p "$WZ_PROC/$$"\nprintf "es-de\\n" >"$WZ_PROC/$$/comm"\n'
+            'exec "${WZ_TEST_SHELL:-sh}" "$@"\n'
+        )
+        wrapper.chmod(0o755)
+        self.assertEqual(self.menu(rig, shell=str(wrapper)), 1)
+        rig.proc.add(7000001, "es-de")
+        self.assertEqual(self.menu(rig, shell=str(wrapper)), 0)
 
     def test_a_missing_proc_is_not_a_reason_to_wait(self) -> None:
         rig = self.rig
