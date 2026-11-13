@@ -318,14 +318,42 @@ def _busy_message(who: str, info: LockInfo | None) -> str:
     )
 
 
+def _put_back(aside: Path, path: Path) -> None:
+    """Return a lock that was moved aside by mistake to its place; the caller looks again.
+
+    `link` puts it back without ever replacing a lock that is there now (EEXIST: that other lock
+    stands, and the moved one is dropped). Some shares (SMB mounts) have no hard links, and then
+    a `rename` does it, only when nothing is at `path`: that leaves a tiny window in which another
+    run could create a lock that the rename then replaces. If it cannot be put back at all, the
+    moved file is kept and named, never deleted: it is somebody's live lock."""
+    try:
+        os.link(aside, path)
+    except FileExistsError:
+        aside.unlink(missing_ok=True)
+        return
+    except OSError:
+        if os.path.lexists(path):  # another lock took the place
+            aside.unlink(missing_ok=True)
+            return
+        try:
+            os.rename(aside, path)
+        except OSError as exc:
+            raise InboxError(
+                f"cannot take over {_SHOWN}: a lock that is not stale was moved aside and cannot "
+                f"be put back ({exc.strerror or exc}); it is kept as inbox/{aside.name}. "
+                f"Rename it to {_SHOWN} if its run is still working, or delete it"
+            ) from exc
+        return
+    aside.unlink(missing_ok=True)
+
+
 def _take_stale(path: Path, judged: tuple[LockInfo | None, float]) -> bool:
     """Remove the stale lock that was judged, without ever removing another one.
 
     Two runs can judge the same lock stale; an unlink after a re-read would let the slower one
     remove the lock the faster one just created. So the file is renamed (atomic) to a name of its
     own first, and deleted only if what was renamed is what was judged. If it is not, it was
-    somebody's live lock: it goes back to its place (`link` fails if another lock is there
-    already, and then that one stands) and the caller looks again."""
+    somebody's live lock: it goes back to its place (`_put_back`) and the caller looks again."""
     aside = path.with_name(f"{path.name}.{uuid.uuid4().hex}.taken")
     try:
         os.rename(path, aside)
@@ -334,13 +362,14 @@ def _take_stale(path: Path, judged: tuple[LockInfo | None, float]) -> bool:
     except OSError as exc:
         raise InboxError(f"cannot take over {_SHOWN}: {exc.strerror or exc}") from exc
     try:
-        if _read(aside) == judged:
-            return True
-        with suppress(OSError):  # a lock was put there meanwhile: that one stands
-            os.link(aside, path)
-        return False
-    finally:
+        same = _read(aside) == judged
+    except OSError:  # cannot tell what it is: treat it as live
+        same = False
+    if same:
         aside.unlink(missing_ok=True)
+        return True
+    _put_back(aside, path)
+    return False
 
 
 def _acquire(

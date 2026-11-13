@@ -1,3 +1,4 @@
+import errno
 import os
 import subprocess
 import sys
@@ -623,6 +624,44 @@ class LockTests(Base):
         self.assertEqual(
             [p.name for p in self.inbox.iterdir() if p.name.startswith(LOCK_NAME)], [LOCK_NAME]
         )
+
+    def test_a_live_lock_moved_aside_survives_a_share_that_has_no_hard_links(self) -> None:
+        self.put_beating(age_seconds=11 * 60)
+        no_links = OSError(errno.ENOTSUP, "Operation not supported")
+        with (
+            mock.patch.object(inbox_lock, "_read", self.fresh_lock_after(1)),
+            mock.patch.object(os, "link", side_effect=no_links),
+            self.assertRaises(LockBusy),
+        ):
+            self.hold(force=True).__enter__()
+        self.assertIn("desktop-c", self.lock.read_text())
+        self.assertEqual(
+            [p.name for p in self.inbox.iterdir() if p.name.startswith(LOCK_NAME)], [LOCK_NAME]
+        )
+
+    def test_a_live_lock_that_cannot_be_put_back_is_kept_aside_and_named(self) -> None:
+        self.put_beating(age_seconds=11 * 60)
+        real_rename = os.rename
+        renames = 0
+
+        def rename(src, dst):  # type: ignore[no-untyped-def]
+            nonlocal renames
+            renames += 1
+            if renames == 2:  # the way back
+                raise PermissionError(errno.EPERM, "Operation not permitted")
+            real_rename(src, dst)
+
+        with (
+            mock.patch.object(inbox_lock, "_read", self.fresh_lock_after(1)),
+            mock.patch.object(os, "link", side_effect=OSError(errno.ENOTSUP, "no links")),
+            mock.patch.object(os, "rename", rename),
+            self.assertRaises(InboxError) as caught,
+        ):
+            self.hold(force=True).__enter__()
+        kept = [p for p in self.inbox.iterdir() if p.name.endswith(".taken")]
+        self.assertEqual(len(kept), 1)
+        self.assertIn("desktop-c", kept[0].read_text())
+        self.assertIn(kept[0].name, str(caught.exception))
 
     def test_busy_and_stale_are_inbox_errors_so_an_attended_run_still_exits_2(self) -> None:
         self.assertTrue(issubclass(LockBusy, InboxError))
