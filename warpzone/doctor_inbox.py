@@ -370,19 +370,35 @@ def check_inbox_way(ctx: Context) -> list[Result]:
                 "[inbox] to it",
             )
         )
-    elif not p.is_dir(Path(work)):
+    elif p.is_dir(Path(work)):
+        results.append(Result("Work folder", G_WAY, OK, work))
+    elif p.is_dir(Path(work).parent) and p.is_writable(Path(work).parent):
+        # inbox creates the folder itself, one level, on its first run; the parent is what has
+        # to be a mounted folder.
+        results.append(Result("Work folder", G_WAY, OK, f"{work} (created on the first run)"))
+    elif p.is_dir(Path(work).parent):
         results.append(
             Result(
                 "Work folder",
                 G_WAY,
                 WARN,
-                f"{work} does not exist in this container",
+                f"{work} does not exist and its parent folder is not writable, so inbox "
+                "cannot create it",
+                "mount the parent read-write (the compose file's volumes), or point work_dir "
+                "at a folder that is",
+            )
+        )
+    else:
+        results.append(
+            Result(
+                "Work folder",
+                G_WAY,
+                WARN,
+                f"{work} does not exist in this container, nor does its parent folder",
                 "mount a folder at that path (the compose file's volumes), or point work_dir "
                 "at one that is mounted",
             )
         )
-    else:
-        results.append(Result("Work folder", G_WAY, OK, work))
     return results
 
 

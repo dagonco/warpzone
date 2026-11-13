@@ -982,10 +982,32 @@ class HubContainerTests(TmpCase):
         self.assertEqual(r.status, WARN)
         self.assertIn("memory", r.detail)
 
-    def test_a_work_folder_that_is_not_mounted_warns(self) -> None:
-        cfg = f'[inbox]\nroot = "/mnt/hub"\nwork_dir = "{self.tmp / "gone"}"\n'
+    def test_a_work_folder_whose_parent_is_missing_warns(self) -> None:
+        cfg = f'[inbox]\nroot = "/mnt/hub"\nwork_dir = "{self.tmp / "gone" / "tmp"}"\n'
         results = check_inbox_way(context(self.tmp, cfg, **self.IN_CONTAINER))
-        self.assertEqual(by_name(results, "Work folder").status, WARN)
+        r = by_name(results, "Work folder")
+        self.assertEqual(r.status, WARN)
+        self.assertIn("nor does its parent", r.detail)
+
+    def test_a_work_folder_not_yet_created_is_fine_when_its_parent_is_writable(self) -> None:
+        # inbox creates the leaf itself on its first run.
+        mount = self.tmp / "work"
+        mount.mkdir()
+        cfg = f'[inbox]\nroot = "/mnt/hub"\nwork_dir = "{mount / "tmp"}"\n'
+        r = by_name(check_inbox_way(context(self.tmp, cfg, **self.IN_CONTAINER)), "Work folder")
+        self.assertEqual(r.status, OK)
+        self.assertIn("created on the first run", r.detail)
+
+    def test_a_work_folder_whose_parent_is_read_only_warns(self) -> None:
+        mount = self.tmp / "work"
+        mount.mkdir()
+        cfg = f'[inbox]\nroot = "/mnt/hub"\nwork_dir = "{mount / "tmp"}"\n'
+        results = check_inbox_way(
+            context(self.tmp, cfg, is_writable=lambda path: False, **self.IN_CONTAINER)
+        )
+        r = by_name(results, "Work folder")
+        self.assertEqual(r.status, WARN)
+        self.assertIn("not writable", r.detail)
 
     def test_inbox_root_unset_with_a_hub_root_warns_and_names_the_value(self) -> None:
         cfg = '[hub]\nroot = "/data/games"\n[inbox]\ndats_dir = "/dats"\n'

@@ -98,6 +98,11 @@ def _is_executable(path: str) -> bool:
     return os.path.isfile(path) and os.access(path, os.X_OK)
 
 
+def _is_writable(path: Path) -> bool:
+    """Whether this process can create entries inside the folder `path`."""
+    return os.access(path, os.W_OK | os.X_OK)
+
+
 def _python_version() -> tuple[int, int, int]:
     v = sys.version_info
     return v.major, v.minor, v.micro
@@ -167,6 +172,7 @@ class Probes:
     now: Callable[[], float] = time.time
     is_dir: Callable[[Path], bool] = Path.is_dir
     is_file: Callable[[Path], bool] = Path.is_file
+    is_writable: Callable[[Path], bool] = _is_writable
     is_executable: Callable[[str], bool] = _is_executable
     mtime: Callable[[Path], float] = _mtime
     list_dir: Callable[[Path], list[str]] = _list_dir

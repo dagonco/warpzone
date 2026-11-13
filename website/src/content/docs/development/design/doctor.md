@@ -58,7 +58,9 @@ for every problem, the exact fix for this platform.
   image and fails when a tool of the image is not `[ok]`. `Hub root for inbox` is `[! ]` when `[inbox] root` is unset but `[hub] root` is
   there, because `inbox` needs its own `root` (the same path as `[hub] root` in the
   container). `Work folder` is `[! ]` when `work_dir` is unset (`/tmp` is memory in the
-  container) or is not a mounted folder, and the missing-DATs fix says to mount a folder.
+  container), or when it does not exist and its parent is not a writable folder (`inbox` creates
+  the folder itself, so a missing leaf under a mounted parent is `[ok]` with "created on the
+  first run"), and the missing-DATs fix says to mount a folder.
   Image tools that cannot run (a wrong architecture) are `[!!]` with "build the image
   again".
 - **Skyscraper.** With an `[inbox]` table, two lines in the inbox tools group (see
