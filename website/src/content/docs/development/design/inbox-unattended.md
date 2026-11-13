@@ -1,0 +1,533 @@
+---
+title: "Unattended inbox"
+---
+
+**Status: design, not implemented.** This page is the contract for running `warpzone inbox
+--apply` on the hub by itself, from a scheduled task, with nobody watching. The pages it touches
+when it is implemented ([Inbox](/warpzone/development/design/inbox/),
+[Configuration and command line](/warpzone/development/design/configuration/),
+[Pruning](/warpzone/development/design/prune/) for the shared webhook,
+[Doctor](/warpzone/development/design/doctor/), [Library UI](/warpzone/development/design/library-ui/),
+[Hub, folders and ignores](/warpzone/development/design/hub-and-folders/),
+[Code, testing and CI](/warpzone/development/design/code-and-testing/)) and the guides
+([Adding new games](/warpzone/setup/inbox/), [The hub container](/warpzone/setup/hub-container/))
+are updated in the same pull request as the code.
+
+Today a person runs `inbox` on a computer that mounts the share, or in the hub container, reads
+the report and runs it again with `--apply`. The goal here is that a game dropped in `inbox/`
+from any computer (an SMB copy, no warpzone installed there) is filed, added to the catalog and
+shown in the library UI with nothing run by hand.
+
+## Decisions
+
+Decided by the maintainer before the design, not reopened here:
+
+1. **Trigger.** A scheduled task of the NAS (on a Synology, DSM's Task Scheduler) runs every 15
+   minutes, as root because Docker on the NAS needs it, and starts
+   `docker compose run --rm` of the hub container's inbox service. The image carries the inbox
+   tools (that work is done apart from this page).
+2. **Stable items only.** An item is processed only once its size has held for a few minutes.
+3. **Empty is cheap.** With nothing to do the run exits at once: no tool starts, nothing is logged.
+4. **The report is in the library UI.** What the last runs placed, the whitelist lines to add and
+   the items for review are visible there.
+5. **An exception to the rule for destructive commands**, documented like the unattended prune
+   (see [The exception](#the-exception)).
+6. **No scraping.** Skyscraper in the hub image is deferred (see
+   [Scraping: Deferred](/warpzone/development/design/scrape/#deferred)), so the unattended run
+   does not scrape (see [Scraping](#scraping)).
+
+**Done when** the maintainer drops a game in `inbox/` from a computer that has no warpzone, and
+within two ticks of the timer it is in the catalog and on the library UI's inbox view, with
+nothing run by hand.
+
+## The exception
+
+[Writing commands](/warpzone/development/design/configuration/#writing-commands) says that a
+destructive command acts only when a person runs it with `--apply`, with one exception, the
+[unattended prune](/warpzone/development/design/prune/#unattended-runs). This is the second, and
+`configuration.md` names both. The case for it:
+
+- **What it can do is bounded.** `inbox` only adds to the library and never overwrites a file
+  there (`.part`, read back, re-checked right before the rename). What it moves are the originals,
+  inside `inbox/`, to `_done/<date>/` or `_revisar/`. What it deletes are the folders of `_done`
+  older than 7 days, as every `--apply` run does today.
+- **The report a person reads first is replaced by three things:** the run record in the library
+  UI ([The run record](#the-run-record-and-the-library-ui)), the 7 days the originals stay in
+  `_done`, and the rule that a run never acts on an item that is still being written
+  ([Readiness](#readiness)).
+- **What stays for a person.** The one place where `inbox` replaces something in the library, a
+  PS4 update newer than the one there (see
+  [PS4 packages](/warpzone/development/design/inbox/#ps4-packages)), is not done unattended: the
+  package goes to review with "a newer update replaces the one in the library only in a run you
+  start: run `warpzone inbox --apply`". Taking over a stale lock of an older warpzone (one with
+  no heartbeat, see [Locking](#locking)) stays with `--force-lock` too.
+
+Every other rule of the [Inbox](/warpzone/development/design/inbox/) contract holds unchanged:
+content identification, unsafe names and archives, the tool time limit, missing tools sending
+only their item to review, whitelists never edited, the gamelist edits with their backup.
+
+## How it runs
+
+### What the user sets up once
+
+1. **The inbox service.** The `warpzone-inbox` service of
+   [Running it in the container](/warpzone/setup/inbox/#running-it-in-the-container), with the
+   additions of [Resource limits](#resource-limits) and [Secrets and data](#secrets-and-data):
+   `cpus`, the `keys` volume, and the work folder on a volume.
+2. **The config.** `[inbox]` in the container's config with `root`, `dats_dir`, `work_dir` (a
+   path on a mounted volume; required for `--unattended`), and the optional paths of the tools,
+   keys and databases as the container sees them.
+3. **A trial by hand**, from the folder with `compose.yaml`:
+
+   ```bash
+   docker compose run --rm -T warpzone-inbox doctor
+   docker compose run --rm -T warpzone-inbox inbox                          # report only
+   docker compose run --rm -T warpzone-inbox inbox --apply --unattended     # what the task runs
+   ```
+
+   With an empty inbox the last line prints nothing and exits `0`.
+4. **The scheduled task.** On a Synology: Control Panel, Task Scheduler, Create, Scheduled Task,
+   User-defined script. User `root`; daily, first run at 00:00, every 15 minutes, last run at
+   23:45; the script:
+
+   ```sh
+   cd /path/to/the/compose/folder && /usr/local/bin/docker compose run --rm -T warpzone-inbox inbox --apply --unattended
+   ```
+
+   The full path of `docker` is needed because the task's `PATH` is short (`which docker` over
+   SSH shows it). `-T` gives the container no terminal, which a scheduled task does not have.
+   "Save output results" in the Task Scheduler's settings keeps each run's output in a folder of
+   the user's choice (see [Logging](#logging-and-exit-codes)); its email "when the script
+   terminates abnormally" works with the exit codes below, but repeats every 15 minutes while an
+   item is held, so the [webhook](#notifications) or the UI is the better channel. Other NAS
+   systems use their own scheduler or root's crontab with the same line.
+
+Root runs only `docker`. warpzone itself runs in the container as the uid of the service's
+`user:` (the one that owns the games share), with no capabilities and a read-only root, as the
+server does. A long-running service that watches the inbox was not chosen: the scheduler needs
+no daemon, a container that is not running holds no memory between ticks, and a new image is
+used at the next tick without restarting anything.
+
+### The command
+
+`warpzone inbox --apply --unattended [--notify-url URL]`. `--unattended` requires `--apply` and
+refuses `--force-lock` (usage error, exit 2). A run goes through these steps, and stops at the
+first that says so:
+
+1. **Load the config** and find the hub root (`[inbox] root` or `--root`). `inbox/` and
+   `library/.stfolder` must exist (as for `serve`, an unmounted share never looks like an empty
+   library); otherwise it is a run-level error (see [The memory](#the-memory)).
+2. **List the items** (`scan` and `scan_unverified`: directory listings only) and read the state
+   file. With no item and no state entry to drop, the run writes the heartbeat if it is due
+   (`checked` older than one hour) and exits `0`, printing nothing. No DAT, tool, lock or work
+   folder is touched.
+3. **Busy.** If `inbox/.warpzone.lock` exists and is not stale by the rules of
+   [Locking](#locking), the run prints one line naming the holder (`busy: the unattended inbox on
+   the hub has been working since 10:15`, or `a run from <host>`), records what it saw of the lock
+   in `lock_seen` and exits `0`.
+4. **Judge readiness** of each item (`inbox_unattended.decide`, pure; see [Readiness](#readiness)
+   and [The memory](#the-memory)): waiting, ready or held. With no ready item the run writes the
+   state if it changed and exits (`0`, or `1` while an item is held).
+5. **Check what the work needs**, as an attended run does at its start (DATs, the handlers'
+   `validate`, configured paths), plus the work folder: set, and not on a memory filesystem.
+   A failure is a run-level error.
+6. **Take the lock** with a heartbeat. Lower its own CPU priority (`os.nice(10)`; the tools
+   inherit it). Remove work folders a killed run left behind ([Resource limits](#resource-limits)).
+7. **Process the ready items one at a time**, in scan order: check that the lock is still this
+   run's, check free space, record the attempt, `process_item`, file the original away, record the
+   outcome. A run started by an earlier tick takes only the items that were ready at its step 4;
+   items that become ready meanwhile wait for the next tick.
+8. **Finish** as an attended run does (purge `_done` folders older than 7 days, update the
+   catalog for the systems it placed something in), then write the run record and the state,
+   send the webhook, release the lock and exit.
+
+An attended `--apply` (from a computer or in the container) is unchanged except for three things:
+it writes a run record too, so the UI shows its result; its lock has the heartbeat; and it reads
+nothing of the state file. It processes every item as today, held ones included, which is how a
+person clears a hold (the next unattended tick drops the entries of items that are gone).
+
+## Readiness
+
+### The stable-size rule
+
+A single run sees one moment, so stability is judged across ticks. For each item the run computes
+a fingerprint (`inbox_unattended.fingerprint`, pure, over what a walk returns): for the item and
+every entry under it, without following symbolic links and including hidden files (a copier's
+temporary file inside a folder counts), the line `<kind> <size> <mtime_ns> <path relative to the
+item>`; the lines are sorted, joined with NUL bytes and hashed with SHA-256. Only `stat` is called,
+no file is read. The state keeps, per item, the fingerprint, when it was first seen with it, its
+file count and bytes.
+
+An item is ready when the fingerprint now equals the recorded one and that one was first seen at
+least `STABLE_SECONDS` (300, five minutes) ago by the judging run's clock. Any change (a byte
+written, a file added, a size or a modification time that moved) records the new fingerprint with
+the time now and starts the wait again. With a tick of 15 minutes a new item is processed at the
+second tick that sees it, so between 15 and 30 minutes after the copy ends.
+
+Size alone is not enough: a Windows copy can set a file to its full size when it starts and fill
+it afterwards, so the size holds while the content does not. Every write moves the modification time
+on the hub's filesystem, which the fingerprint includes. Comparing two of the hub's own readings,
+never a modification time against the clock, keeps a computer with a wrong clock, or a copier that
+sets the source's old time at the end, from making an item look ready or never ready. The
+30-second rule of an attended run (`SETTLE_SECONDS`) is not applied in an unattended run: the
+fingerprint replaces it.
+
+### Partial copies
+
+A copy that stops and does not resume (a laptop that slept, a dropped network) leaves an item that
+is stable but incomplete. It is processed: a file cut short matches no DAT, or fails its header
+check or its archive listing, so the item goes to `_revisar/` with its reason and nothing is
+placed. If the copier resumes later it fails, since the item has moved; the user copies again. The
+guide recommends, for large copies over an unreliable link, copying into a folder whose name starts
+with `_` (never an item) and moving it into `inbox/` when the copy is done: a move within the share
+is instant and the item is then judged as new.
+
+### Items of several files
+
+A folder or an archive is one item, and its fingerprint covers every file in it: while a folder is
+still receiving files, it keeps changing. A copy that pauses longer than five minutes between two
+files of one folder is a partial copy as above.
+
+A disc dropped as loose files at the top of `inbox/` (a `.cue` or `.gdi` next to its tracks) is
+several items today, and the cue of such a set is followed only when its tracks are in the same
+item. A person sees that in the report; an unattended run must not place half of it. So in an
+unattended run a top-level `.cue` or `.gdi`, and every top-level file it names, is held with the
+reason "a disc dropped as loose files: put the sheet and its tracks in one folder"
+(`inbox_unattended.loose_sheets`, pure, over the top-level names and the sheets' references). The
+user moves them into a folder, which is a new item. A loose `.bin` that no sheet names keeps
+today's behaviour.
+
+## The memory
+
+The state of the unattended runs lives in `catalog/inbox/state.json` on the hub (next to the
+catalog index: outside every Syncthing folder, covered by the hub's snapshots, readable by
+`serve`). `warpzone catalog` leaves `catalog/inbox/` alone.
+
+```json
+{"v": 1, "checked": "2026-11-13T10:15:02Z",
+ "items": {"Example Game (Europe).zip": {"fingerprint": "sha256:...", "files": 1, "bytes": 52428800,
+                                          "seen": "2026-11-13T10:00:01Z", "attempts": 0,
+                                          "held": null}},
+ "lock_seen": null,
+ "error": null}
+```
+
+- **Keys** are the item names as the report shows them (`<name>`, or
+  `_unverified/<system>/<name>`). Entries of names no longer in the inbox are dropped.
+- **Attempts.** Right before an item is processed, `attempts` goes up by one and the state is
+  written. When the item has been filed away (to `_done` or `_revisar`) its entry is removed. An
+  entry found with `attempts` above zero and the same fingerprint therefore belongs to a run that
+  died while working on it (the container killed for memory, a power cut), since this run holds
+  the lock. The item is tried once more; at the second death it is held with "the run stopped
+  twice while working on this item; it may need more memory than the container's limit
+  (`mem_limit`), or run inbox on a computer".
+- **Held items** are not processed again while their fingerprint stays the same: `held` holds the
+  reason and the time. An item is held when the run died twice on it, when its original could not
+  be moved after its games were placed ("could not move the original: ..."), and for loose disc
+  files. A changed fingerprint (the user replaced, renamed or touched it) clears the hold and the
+  item waits as new; an attended `--apply` processes it whatever the state says.
+- **Items for review are not held:** they are moved to `_revisar/` with their reason file, as
+  today, so they leave the inbox and are never retried.
+- **Run-level errors** (the config, the DATs, a missing `library/.stfolder`, a work folder on
+  memory, a stale lock of an older warpzone) are kept in `error`: the message, when it first
+  happened and how many runs met it since. The next run that gets past the failed step clears it.
+  The run exits `2` every time (`1` for an unexpected failure outside an item), but the webhook is
+  sent only when the message changes (see [Notifications](#notifications)).
+- **Writes.** The state is written with `safefile.atomic_write` against the stamp of the file as it
+  was read; a file that changed in between is read again, the change applied again and the write
+  retried (three times, then a warning), as the catalog files are. A state file that cannot be
+  parsed is treated as empty with a warning and replaced: the worst case is that items wait one
+  more tick.
+
+`inbox_unattended.render_state` and `parse_state` are the pure ends; `decide` takes an entry, the
+fingerprint now and the time, and returns the verdict and the new entry.
+
+## Locking
+
+The lock is the one of today (`inbox/.warpzone.lock`, created with `O_CREAT | O_EXCL`), so an
+unattended run and a person's run from a computer on the mounted share never work at once: each
+finds the other's lock. What a container changes is how a dead holder is recognised. Each
+`docker compose run` gets a new host name (the container's id) and a pid in a namespace of its
+own, so the "pid not alive on the same host" rule never applies, and a lock left by a container
+killed for memory would block every tick for 12 hours.
+
+- **Heartbeat.** The lock's JSON gains `"beat": 60` and `"mode": "unattended"` or `"attended"`.
+  While it holds the lock, every run (attended too) touches the file's modification time every 60
+  seconds from a thread (`inbox_lock.Heartbeat`), and only while the file still holds this run's
+  host, pid and start time.
+- **Stale by silence, judged on one clock.** An unattended run that finds a lock with `beat` in the
+  way records its modification time and the time it looked in `lock_seen` and exits as busy. A
+  later run that finds the same lock with the same modification time, at least 10 minutes later by
+  its own clock, judges it stale ("no heartbeat for 10 minutes"). Comparing two readings of the
+  file, never its time against the clock, keeps a computer whose clock is off from looking dead or
+  alive. The unattended run then takes the lock over itself, with the re-read right before the
+  unlink as `--force-lock` does, and says so in its record.
+- **Older locks.** A lock without `beat` (an older warpzone) keeps today's rules (12 hours, or a
+  pid of the same host), and an unattended run never takes it over: it is a run-level error that
+  names it, and a person runs `--force-lock`.
+- **Attended runs** look once, as today: a lock with `beat` whose modification time is more than
+  10 minutes old by this machine's clock is reported as stale ("no heartbeat since 10:15"), and
+  `--force-lock` takes it over; a person sees the time and decides, so the clock of one machine is
+  enough there. The message says who holds it (`the unattended inbox on the hub`, from `mode`).
+- **Still mine.** Before each item and before each move of an original, the run reads the lock;
+  if it no longer holds this run's identity it stops at once (runtime error, exit 1) and leaves the
+  item where it is. A rerun reports what it had placed as "already in the library".
+- `warpzone scrape`, which takes the same lock, gets the heartbeat with it.
+
+Two ticks of the scheduler never overlap as two workers: the second container finds the first's
+lock and exits as busy, costing one container start.
+
+## Resource limits
+
+- **One item at a time**, as today; each tool call within the item runs alone.
+- **CPU.** The compose service sets `cpus: "2"` (or fewer than the NAS's cores), so SMB and
+  Syncthing keep the rest. The run lowers its own priority with `os.nice(10)` and every tool
+  inherits it. The standard library has no call for the I/O priority, and the I/O schedulers of
+  NAS kernels vary, so none is set; if the share is slow while a conversion runs, a later change
+  can start the tools under `ionice -c 3`.
+- **chdman's threads.** chdman counts the host's cores, not the container's CPU limit, and each
+  thread holds its own compressor. A new optional key `[inbox] chdman_threads` passes
+  `--numprocessors N` to `chdman create*`; the container guide sets it to the service's `cpus`.
+- **Memory.** `mem_limit: 2g`, as the guide has it. A run killed for memory exits `137` in the
+  task's output; [The memory](#the-memory) turns a second death on the same item into a hold with
+  the reason, so the timer never loops on it.
+- **Temporary space.** `work_dir` must be set and on a mounted volume: `--unattended` refuses a
+  work folder on `tmpfs` or `ramfs` (`inbox_unattended.memory_fs`, pure, over
+  `/proc/self/mountinfo`; elsewhere the check is skipped), since the container's `/tmp` is memory
+  and a disc image would count against `mem_limit`. The per-item free space checks of the inbox
+  (an archive's members plus 5%, a GCZ image, an NSZ's NSP, a PS4 or Vita package) are unchanged.
+  At the start of a run that holds the lock, the `warpzone-inbox-*` folders in `work_dir` older
+  than 24 hours are deleted (a killed run's leftovers; `stale_work_dirs`, pure, never follows a
+  link), since they may hold a Vita licence.
+- **Space on the hub.** Before each item the run compares the free space of the filesystem that
+  holds `library/` with twice the item's bytes plus 20 GiB (the doctor's threshold for the hub,
+  `MIN_FREE_GIB`). An item that does not fit waits, it does not go to review, and its state says
+  "waiting for space: N GiB more needed"; doctor shows it (`space_verdict`, pure).
+
+## Safety rules that still hold
+
+- Never overwrite: every placement goes through `.part`, read back, the re-check right before the
+  rename, and "already in the library" or a conflict for a name that exists.
+- Never edit a whitelist: the record lists the lines, the UI turns games on through its own guarded
+  write.
+- Re-check right before acting: the lock is checked before each item and each move; the
+  fingerprint is taken again right before the item is processed, and an item that changed since it
+  was judged ready waits again.
+- Never follow symbolic links in the inbox, never extract unsafe archives, never write under a name
+  a DAT gave that is not a plain file name.
+- The `_done` purge deletes only date-named folders older than 7 days and does not follow links.
+- Report-only runs stay read-only: they write no run record and no state.
+
+## The run record and the library UI
+
+### Files on the hub
+
+Every `--apply` run that processed at least one item, attended or not, writes
+`catalog/inbox/runs/<started>.json` (UTC, `20261113T101500Z`, with `-2`, `-3` for runs that
+started in the same second), mode 0644, atomically. The newest 50 are kept; the writer deletes the
+older ones (`select_records_purge`, pure). Paths in it are relative to the hub root; no absolute
+path, host name, key or URL is written.
+
+```json
+{"v": 1, "id": "20261113T101500Z", "mode": "unattended",
+ "started": "2026-11-13T10:15:00Z", "finished": "2026-11-13T10:21:40Z", "exit": 1,
+ "items": [
+   {"item": "Example Game (Europe).zip", "outcome": "done",
+    "moved_to": "inbox/_done/2026-11-13/Example Game (Europe).zip",
+    "games": [{"system": "psx", "entry": "Example Game (Europe).chd", "outcome": "placed",
+               "path": "library/roms/psx/Example Game (Europe).chd",
+               "whitelist": ["!/roms/psx/Example Game (Europe).chd"],
+               "ra": ["RA: hash not linked"], "notes": []}],
+    "reasons": [], "notes": []},
+   {"item": "some dump.7z", "outcome": "review",
+    "moved_to": "inbox/_revisar/some dump.7z", "games": [],
+    "reasons": ["no DAT match: track01.bin"], "notes": []}],
+ "counts": {"placed": 1, "already": 0, "review": 1, "held": 0, "waiting": 2},
+ "whitelist": ["!/roms/psx/Example Game (Europe).chd"],
+ "purged": ["2026-11-05"], "warnings": []}
+```
+
+`outcome` of an item is `done`, `review` or `held`; of a game, the report's `placed`, `already`
+or `review`. `reasons` and `notes` are the report's text, with what the report already redacts (a
+zRIF, nsz's key lines) redacted the same way. `render_record` is pure and is built from the same
+`ItemResult` values the printed report comes from, so the two never disagree.
+
+### API
+
+`serve` reads these files like the other hub files it serves (kept in memory, reloaded when size
+or mtime changed, checked at most every 5 seconds) and writes none of them. Two read-only routes
+join the [endpoints](/warpzone/development/design/library-ui/#endpoints):
+
+| Method and path | Answers |
+|---|---|
+| `GET /api/v1/inbox` | the state of the unattended runs and the newest records |
+| `GET /api/v1/inbox/runs/{id}` | one record in full, or `404 not-found` |
+
+```json
+{"checked": "2026-11-13T10:30:01Z", "busy": null, "error": null,
+ "waiting": [{"item": "Other Game.zip", "since": "2026-11-13T10:30:01Z", "bytes": 734003200,
+              "why": "settling"}],
+ "held": [{"item": "Game.cue", "since": "2026-11-13T09:45:00Z",
+           "reason": "a disc dropped as loose files: put the sheet and its tracks in one folder"}],
+ "runs": [{"id": "20261113T101500Z", "mode": "unattended", "finished": "2026-11-13T10:21:40Z",
+           "placed": 1, "already": 0, "review": 1, "exit": 1}],
+ "last": {"...": "the newest record in full, each placed game with its catalog id"}}
+```
+
+`busy` is `{"since", "mode"}` while `inbox/.warpzone.lock` exists, else `null`. `why` is
+`settling` or `space`. `runs` lists the newest 10 records, newest first. In `last` (and in a record
+from the second route) each game gets `id`, the catalog game whose primary part is at `path`
+(`null` when the catalog has none yet, for example before its update finished). A missing or
+damaged state or record is the same as none (`checked` `null`, empty lists), never an error.
+`library_api.inbox_response` is pure over the parsed files and the catalog.
+
+### Page
+
+An "Inbox" view on the page, reached from the header, where a dot shows when the newest record is
+newer than the last one this browser opened (kept in `localStorage`). It shows the time of the last
+check and any error; the newest run's placed games, each linking to its game page, where the usual
+controls turn it on for a console; the whitelist lines as text; the items for review with their
+reasons and the place of the original (`inbox/_revisar/...`); the held and waiting items; and the
+older runs, opened one at a time through the second route. The view only reads.
+
+## Notifications
+
+`inbox --apply` takes `--notify-url URL` (http or https), attended or not, and POSTs one JSON
+object per run that placed a game, sent an item to review, held an item, or met a run-level error
+whose message differs from the one in the state (a repeated error is not sent again, so a broken
+config does not post every 15 minutes):
+
+```json
+{"source": "inbox", "mode": "unattended", "run": "20261113T101500Z",
+ "placed": 1, "already": 0, "review": 1, "held": 0,
+ "games": ["psx/Example Game (Europe).chd"], "review_items": ["some dump.7z"], "error": null}
+```
+
+The lists hold at most 20 names. It is the prune webhook's code (`prune.notify`, moved to
+`notify.py` and shared): meant for a Home Assistant webhook, the URL never printed, a failure a
+warning and never a failure of the run, no API key or path outside the hub in the payload. The
+payload is built by `notify_payload` and the decision to send by `should_notify`, both pure. An
+empty, busy or waiting-only run sends nothing.
+
+## Secrets and data
+
+- **RetroAchievements key.** `RA_API_KEY` from `warpzone.env` (`env_file:`), as the server has it;
+  never on the task's command line, never in the record.
+- **Switch keys and the zRIF table.** A `keys` folder next to `compose.yaml`, mounted read-only at
+  `/keys`, outside the hub root (so outside every Syncthing folder and every share a console
+  reads): `switch_keys = "/keys/prod.keys"`, `vita_zrif = "/keys/PSV_GAMES.tsv"`. The files are
+  readable only by the service's uid (mode 0600 or 0640 with the share's group). warpzone never
+  opens `prod.keys` (it is passed to `nsz`); a zRIF is on Vita3K's command line for under a second,
+  where the NAS's process list can see it, as on a computer.
+- **DATs and databases.** The `dats` folder, read-only at `/dats`: libretro-database's `metadat`,
+  a clone of titledb (`titledb_dir`) and the arcade databases (`mame_dat`, `fbneo_dat`,
+  `mame2003plus_dat`). The parsed caches go to `XDG_CACHE_HOME`, set to a folder of the work
+  volume. warpzone never downloads them; updating them is a `git pull` by the user.
+- **The webhook URL** is on the task's command line, which only the NAS's administrators see.
+
+## Logging and exit codes
+
+The run prints the same lines as an attended run (one block per item, the whitelist lines, the
+summary) plus one line per newly seen or held item, to the task's output. An empty run prints
+nothing; a busy run one line. The run records are the durable log, and `_revisar/<item>.reason.txt`
+keeps each review's reason as today. warpzone writes no other log file.
+
+Exit codes, as for the unattended prune, say whether a person is needed:
+
+- `0`: nothing to do, busy, only waiting items, or every processed item placed or already in the
+  library.
+- `1`: an item went to review in this run, an item is held (every run while it is), a runtime
+  error (the lock taken away, a failure outside an item).
+- `2`: a usage or configuration error, and the run-level errors of steps 1, 5 and 6 (the lock of
+  an older warpzone).
+
+## Doctor
+
+With an `[inbox]` table and a readable hub root, `doctor` gets one line, `Unattended inbox`, in the
+inbox group, on a computer as well as in the container (the state is on the share).
+`judge_unattended_inbox` (pure, over the parsed state, the newest record, the lock and the clock):
+
+- `[--]` "no unattended run has recorded anything": no state file. A setup without the task.
+- `[!!]` a run-level error in the state: its message, since when and how many runs met it, with
+  the fix that the message implies.
+- `[! ]` the last check is more than two hours old: "the unattended inbox last ran N h ago; is the
+  scheduled task enabled?" (the heartbeat writes at least hourly).
+- `[! ]` held items: each with its reason, and the fix "look at it, run `warpzone inbox` to see the
+  report, then `warpzone inbox --apply` by hand, or replace the item to retry".
+- `[! ]` an item waiting for more than two hours (a copy that keeps writing, a file a program keeps
+  open, or no space).
+- `[! ]` a lock held for more than six hours.
+- `[ok]` otherwise: "last check N min ago; last run <date>: placed X, for review Y".
+
+`health` does not read it: it judges a console's version, not the hub.
+
+## Scraping
+
+The unattended run does not scrape. Skyscraper is not in the hub image (deferred, see
+[Scraping: Deferred](/warpzone/development/design/scrape/#deferred)), so in the container it is
+never found, and `--unattended` implies `--no-scrape` even if it were. The record lists the games
+placed, so a person can run `warpzone scrape --system <system>` from a computer later. Scraping in
+unattended runs is a decision for when Skyscraper enters the image: it talks to a service with a
+daily quota, and its failures need a person.
+
+## Code and testing
+
+- `inbox_unattended.py` (pure): `fingerprint`, `decide`, `loose_sheets`, `render_state`,
+  `parse_state`, `space_verdict`, `memory_fs`, `stale_work_dirs`, `render_record`,
+  `select_records_purge`, `notify_payload`, `should_notify`.
+- `inbox_unattended_io.py`: the walk with `stat`, the state and record writes through `safefile`,
+  the work folder cleanup, `os.nice`, the free space.
+- `inbox_lock.py`: `beat` and `mode`, the `Heartbeat` thread, `judge` over two readings,
+  `still_mine`.
+- `notify.py`: the webhook POST, moved from `prune.py`.
+- `library_api.inbox_response` (pure) and the two routes in `serve`; `doctor.judge_unattended_inbox`
+  (pure).
+- `inbox.py`: `--unattended` in `run_inbox` (the early exit, the readiness, the per-item checks,
+  the record), `Options.unattended`, the PS4 update replacement sent to review, `chdman_threads`.
+
+The modules are added to the [code layout](/warpzone/development/design/code-and-testing/#code-layout).
+
+Unit tests, pure parts first, with no Docker, no scheduler and no real tools:
+
+- `fingerprint`: order of the listing does not matter; a size, an mtime, a new file or a hidden
+  file changes it; a symbolic link is not followed.
+- `decide`: a new item, a changed one, a stable one before and after 300 seconds, a held item with
+  the same and with another fingerprint, an entry with one and with two attempts, a name that is
+  gone; a clock that goes back does not make an item ready.
+- `loose_sheets`: a loose cue and the tracks it names, a gdi, a cue naming a file that is not
+  there, a loose `.bin` alone, a cue inside a folder (not loose).
+- `inbox_lock`: a lock with `beat` whose mtime moved is live, one unchanged for 10 minutes across
+  two readings is stale on any host for an unattended run, an attended run judges the age on its own
+  clock, a lock without `beat` keeps the 12-hour and pid rules and is
+  never taken over unattended; the heartbeat stops touching a lock that is no longer this run's.
+- `render_state`/`parse_state` round trip; a damaged state is empty; `render_record` from
+  `ItemResult` values (placed, already, review, held), with no absolute path and the zRIF redacted;
+  `select_records_purge` keeps 50.
+- `space_verdict` at the edges; `memory_fs` on `mountinfo` samples (a volume, `tmpfs`, a nested
+  mount); `stale_work_dirs` by age, never a link.
+- `notify_payload` caps the lists at 20 and holds no path outside the hub; `should_notify` sends a
+  new error once and nothing for an empty or waiting run.
+- `judge_unattended_inbox` for each line above; `inbox_response` with missing, damaged and
+  complete files and a placed game not yet in the catalog.
+- The CLI: `--unattended` without `--apply`, or with `--force-lock`, exits 2; an empty inbox
+  prints nothing, exits 0, creates no lock, reads no DAT (a `dats_dir` that does not exist does not
+  matter) and writes only a due heartbeat.
+
+Flow tests with a temporary hub and stand-in tools, the clock injected (`Options.now`):
+
+- Two ticks: the first records a cartridge zip and a CHD system folder item, the second (five
+  minutes later) places them, writes the record, updates the catalog and empties the state; the
+  API then lists the games with their catalog ids.
+- A file that grows between ticks waits; a folder that gains a file waits.
+- A run that "dies" (an attempt left in the state): the next tick retries, the one after a second
+  death holds it; touching the item clears the hold.
+- A live lock: the tick exits 0 as busy. A silent lock with `beat`: taken over at the second tick
+  10 minutes later. A lock without `beat`: a run-level error, and the webhook sent once over three
+  ticks (a stand-in HTTP server).
+- A PS4 update newer than the library's goes to review unattended and is replaced attended.
+
+Manual checks on a NAS, recorded in the pull request: the scheduled task as written in the guide;
+a game copied from macOS and from Windows over SMB, one of several GiB over Wi-Fi, and a copy cut
+off half-way; a manual `--apply` from a computer while the task holds the lock and the reverse; a
+container killed for memory (a small `mem_limit` and a PS2 image); the UI's inbox view and doctor's
+line after each.
