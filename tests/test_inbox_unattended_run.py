@@ -187,6 +187,52 @@ class TickTests(Ticks, Base):
         self.assertIn("changed since it was judged ready", self.out)
         self.assertEqual(self.state()["items"]["adventure.nes"]["attempts"], 0)
 
+    def test_an_item_that_cannot_be_read_before_processing_waits_without_failing_the_run(
+        self,
+    ) -> None:
+        self.drop("adventure.nes", NES_ROM)
+        self.drop("other.nes", NES_ROM)
+        self.tick(0)
+        real = inbox_unattended_io.walk
+
+        def walk(item: Path) -> Any:
+            calls.append(item.name)
+            if calls.count("adventure.nes") == 2 and item.name == "adventure.nes":  # pre-check
+                raise PermissionError(13, "Permission denied")
+            return real(item)
+
+        calls: list[str] = []
+        with mock.patch("warpzone.inbox_unattended_run.walk", walk):
+            self.assertEqual(self.tick(5), 0, self.out)
+        self.assertTrue(any("cannot read it" in w for w in self.rep.warnings), self.rep.warnings)
+        self.assertIsNone(self.state()["error"])
+        self.assertTrue((self.inbox / "adventure.nes").exists())
+        self.assertEqual(self.done(), ["other.nes"])
+
+    def test_an_item_that_changes_while_it_is_processed_is_not_filed_away(self) -> None:
+        self.drop("adventure.nes", NES_ROM)
+        self.tick(0)
+        real = inbox.process_item
+
+        def process(*args: Any, **kw: Any) -> Any:
+            result = real(*args, **kw)
+            path = self.inbox / "adventure.nes"
+            path.write_bytes(NES_ROM)  # the user copies it again over the old one
+            os.utime(path, (T0 - 77, T0 - 77))
+            return result
+
+        with mock.patch.object(inbox, "process_item", process):
+            self.assertEqual(self.tick(5), 0, self.out)  # no news
+        self.assertTrue((self.inbox / "adventure.nes").exists())  # not moved to _done
+        self.assertEqual(self.done(), [])
+        entry = self.state()["items"]["adventure.nes"]
+        self.assertEqual(entry["attempts"], 0)  # it waits again
+        self.assertTrue(any("changed while" in w for w in self.rep.warnings), self.rep.warnings)
+        self.assertEqual(self.tick(6), 0)  # not five minutes since it changed
+        self.assertEqual(self.done(), [])
+        self.tick(11)
+        self.assertEqual(self.done(), ["adventure.nes"])
+
     def test_a_run_that_dies_twice_on_an_item_holds_it_and_touching_it_clears_the_hold(
         self,
     ) -> None:
@@ -209,6 +255,42 @@ class TickTests(Ticks, Base):
         self.assertIsNone(self.state()["items"]["adventure.nes"]["held"])
         self.assertEqual(self.tick(35), 0, self.out)
         self.assertEqual(self.library(), ["nes/Adventure (USA).zip"])
+
+    def test_an_attempt_that_cannot_be_written_skips_the_item_this_tick(self) -> None:
+        self.drop("adventure.nes", NES_ROM)
+        self.tick(0)
+        real = safefile.atomic_write
+
+        def write(target: Path, data: bytes, *, expect: Any, **kw: Any) -> bool:
+            items = json.loads(data).get("items", {}) if target.name == "state.json" else {}
+            if any(e["attempts"] for e in items.values()):
+                return False  # the state kept changing under the write of the attempt
+            return real(target, data, expect=expect, **kw)
+
+        with (
+            mock.patch.object(safefile, "atomic_write", write),
+            mock.patch.object(inbox, "process_item", side_effect=AssertionError("processed")),
+        ):
+            self.assertEqual(self.tick(5), 0, self.out)
+        self.assertTrue(any("kept changing" in w for w in self.rep.warnings), self.rep.warnings)
+        self.assertEqual(self.state()["items"]["adventure.nes"]["attempts"], 0)
+        self.assertEqual(self.library(), [])
+        self.assertEqual(self.tick(6), 0, self.out)  # the next tick takes it
+        self.assertEqual(self.library(), ["nes/Adventure (USA).zip"])
+
+    def test_an_item_sent_to_review_whose_reason_file_fails_is_reviewed_not_held(self) -> None:
+        self.drop("mystery.nes", b"?")
+        self.tick(0)
+        failing = mock.patch.object(inbox, "write_reason", side_effect=OSError(28, "No space"))
+        with failing:
+            self.assertEqual(self.tick(5), 1, self.out)
+        self.assertFalse((self.inbox / "mystery.nes").exists())
+        self.assertEqual(self.review(), ["mystery.nes"])
+        self.assertEqual(self.state()["items"], {})  # not held: it is gone from the inbox
+        self.assertTrue(any("reason file" in w for w in self.rep.warnings), self.rep.warnings)
+        (record,) = self.records()
+        self.assertEqual(record["items"][0]["outcome"], "review")
+        self.assertEqual(self.tick(10), 0)
 
     def test_an_item_for_review_is_news_once_each(self) -> None:
         self.drop("mystery.nes", b"?")
@@ -396,6 +478,32 @@ class EmptyAndLayoutTests(Ticks, Base):
         self.assertIsNone(self.state()["error"])
         self.assertEqual(self.library(), ["nes/Adventure (USA).zip"])
 
+    def test_dats_that_are_not_configured_are_an_error_of_the_work_kept_once(self) -> None:
+        self.drop("adventure.nes", NES_ROM)
+        config = self.tmp / "config.toml"
+        config.write_text(f'[inbox]\nroot = "{self.hub}"\nwork_dir = "{self.tmp / "work"}"\n')
+        args = ("inbox", "--config", str(config), "--apply", "--unattended")
+        with mock.patch("os.nice"), mock.patch.dict(os.environ, {"XDG_CACHE_HOME": str(self.tmp)}):
+            self.assertEqual(run(*args)[0], 0)  # waiting: the DATs are not needed yet
+            doc = self.state()
+            for entry in doc["items"].values():
+                entry["first"] = entry["seen"] = "2020-01-01T00:00:00Z"
+            self.state_file.write_text(json.dumps(doc))
+            code, out, err = run(*args)
+            self.assertEqual(code, 2, (out, err))
+            self.assertEqual(self.state()["error"]["step"], 5)
+            self.assertIn("dats_dir", self.state()["error"]["message"])
+            self.assertEqual(run(*args)[0], 0)  # the same problem again: not news
+            self.assertEqual(self.state()["error"]["count"], 2)
+            (self.inbox / "adventure.nes").unlink()
+            self.assertEqual(run(*args)[0], 0)  # an empty inbox is not affected
+
+    def test_the_cli_empty_run_without_dats_exits_0(self) -> None:
+        config = self.tmp / "config.toml"
+        config.write_text(f'[inbox]\nroot = "{self.hub}"\nwork_dir = "{self.tmp / "work"}"\n')
+        code, out, err = run("inbox", "--config", str(config), "--apply", "--unattended")
+        self.assertEqual((code, out, err), (0, "", ""))
+
     def test_an_error_of_the_work_is_not_cleared_by_a_run_with_only_waiting_items(self) -> None:
         self.drop("adventure.nes", NES_ROM)
         self.tick(0)
@@ -470,7 +578,7 @@ class LockTests(Ticks, Base):
         self.assertTrue(any("taking over a stale lock" in w for w in self.rep.warnings))
         self.assertTrue(any("taking over" in w for w in self.records()[0]["warnings"]))
 
-    def test_a_lock_made_between_the_look_and_taking_it_is_busy_exit_0_and_one_webhook(
+    def test_a_lock_made_between_the_look_and_taking_it_is_busy_exit_0_and_no_webhook(
         self,
     ) -> None:
         self.drop("adventure.nes", NES_ROM)
@@ -596,6 +704,28 @@ class StateFileTests(unittest.TestCase):
             _, warnings = inbox_unattended_io.update_state(self.root, with_checked(STAMP))
         self.assertEqual(write.call_count, 3)
         self.assertIn("kept changing", warnings[0])
+
+    def test_a_collision_on_the_temporary_file_is_retried(self) -> None:
+        real = safefile.atomic_write
+        errors = [FileExistsError(17, "File exists"), FileNotFoundError(2, "No such file")]
+
+        def racing(target: Path, data: bytes, *, expect: Any) -> bool:
+            if errors:  # concurrent writers share the fixed temporary name
+                raise errors.pop(0)
+            return real(target, data, expect=expect)
+
+        with mock.patch.object(safefile, "atomic_write", racing):
+            state, warnings = inbox_unattended_io.update_state(self.root, with_checked(STAMP))
+        self.assertEqual(warnings, [])
+        self.assertEqual(inbox_unattended_io.read_state(self.root)[0], state)
+
+    def test_a_collision_that_does_not_end_is_an_inbox_error_after_three_tries(self) -> None:
+        broken = mock.patch.object(
+            safefile, "atomic_write", side_effect=FileExistsError(17, "File exists")
+        )
+        with broken as write, self.assertRaises(InboxError):
+            inbox_unattended_io.update_state(self.root, with_checked(STAMP))
+        self.assertEqual(write.call_count, 3)
 
     def test_a_state_that_cannot_be_written_is_an_inbox_error(self) -> None:
         broken = mock.patch.object(safefile, "atomic_write", side_effect=OSError(30, "Read-only"))

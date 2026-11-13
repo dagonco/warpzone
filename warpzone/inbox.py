@@ -54,6 +54,7 @@ from warpzone.dat import (
 from warpzone.inbox_core import (
     ARCHIVE_EXTENSIONS,
     CHUNK,
+    DATS_UNSET,
     INES_MAGIC,
     SIDECAR_EXTENSIONS,
     Context,
@@ -1033,6 +1034,8 @@ def check_layout(root: Path) -> str | None:
 
 def open_library(opts: Options) -> DatLibrary:
     """What the work needs before anything runs: the DATs and the handlers' configuration."""
+    if opts.dats_dir is None:
+        raise InboxError(DATS_UNSET)
     if not opts.dats_dir.is_dir():
         raise InboxError(f"DAT folder not found: {opts.dats_dir} (set [inbox] dats_dir or --dats)")
     for handler in kind_handlers():

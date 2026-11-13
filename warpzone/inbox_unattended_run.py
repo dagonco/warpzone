@@ -11,6 +11,7 @@ items one at a time, and the finish. Every state change is a read-modify-write o
 
 from __future__ import annotations
 
+import os
 import shutil
 import tempfile
 from collections.abc import Sequence
@@ -55,7 +56,7 @@ from warpzone.inbox_unattended_io import (
     on_memory,
     read_sheet,
     read_state,
-    update_state,
+    update_state_checked,
     walk,
 )
 from warpzone.report import Reporter
@@ -74,6 +75,7 @@ LOST_MESSAGE = (
     "the inbox lock is no longer this run's; the run stopped and left the item where it is"
 )
 LOST_REASON = "the inbox lock is no longer this run's"
+CHANGED_REASON = "it changed while it was being processed"
 WAIT_LINE = "waiting until it has held still for 5 minutes"
 
 
@@ -123,6 +125,7 @@ class _Run:
         self.state = State()  # the state as this run last wrote it
         self.total = 0  # items in the inbox
         self.present: frozenset[str] = frozenset()  # the names the state keeps entries for
+        self.wrote = True  # whether the last `commit` reached the file
 
     def clock(self) -> datetime:
         return datetime.fromtimestamp(self.opts.now(), UTC)
@@ -130,7 +133,7 @@ class _Run:
     # ------------------------------------------------------------ state and outcome
 
     def commit(self, *changes: Change) -> State:
-        state, warnings = update_state(self.root, *changes)
+        state, warnings, self.wrote = update_state_checked(self.root, *changes)
         for warning in warnings:
             self.rep.warn(warning)
         self.state = state
@@ -414,7 +417,11 @@ class _Run:
         opts, rep = self.opts, self.rep
         if not held.still_mine():
             return True
-        entries = walk(item.path)
+        try:
+            entries = walk(item.path)
+        except OSError as exc:  # as in `judge`: the item waits, the run goes on
+            rep.warn(f"{item.key}: cannot read it ({_why(exc)}); it waits")
+            return False
         if entries is None:  # gone while the run worked on others
             return False
         observed: Observed = observe(entries)
@@ -428,26 +435,70 @@ class _Run:
             rep.out(f"{item.key}: {space.reason}")
             return False
         self.commit(with_attempt(item.key, entry.fingerprint))
+        if not self.wrote:  # without the count, a run that dies twice would never hold it
+            rep.warn(f"{item.key}: the attempt could not be noted; it waits for the next run")
+            return False
         result = inbox.process_item(ctx, item.path, n, item.unverified)
         results.append(result)
         lost = not held.still_mine()
         if lost:  # the item stays where it is; a rerun finds its games "already in the library"
             result.unmoved = LOST_REASON
             result.reasons.append(MOVE_REASON.format(LOST_REASON))
+        elif self.changed(item, entry):
+            # it was copied over (or is still being written) while the tools worked: the games
+            # it held when judged are placed, but this content was never processed
+            result.unmoved = CHANGED_REASON
+            result.reasons.append(MOVE_REASON.format(CHANGED_REASON))
+            rep.warn(f"{item.key}: {CHANGED_REASON}; it stays in the inbox and waits again")
         else:
             try:
                 inbox._file_away(self.inbox, item.path, result, opts.today())
             except OSError as exc:
-                result.unmoved = _why(exc)
-                reason = MOVE_REASON.format(result.unmoved)
-                result.reasons.append(reason)
-                self.commit(with_held(item.key, reason, self.clock()))
+                self.filing_failed(item, result, exc, reviewed)
             else:
                 self.commit(with_item_filed(item.key))
                 if result.review:
                     reviewed.append(item.key)
         inbox._print_item(rep, n, total, result, True, opts.today())
         return lost
+
+    def changed(self, item: Item, entry: Entry) -> bool:
+        """Whether the item is no longer what was judged ready, looked at again after the
+        work. A change resets its entry through `decide`, so it waits again; an item that
+        cannot be read waits too, because it cannot be shown to be unchanged."""
+        try:
+            entries = walk(item.path)
+        except OSError:
+            entries = []
+        if entries is None:  # gone: nothing to file away, nothing to wait for
+            return False
+        observed = observe(entries)
+        if entries and observed.fingerprint == entry.fingerprint:
+            return False
+        _, again = decide(entry, observed, self.clock())
+        self.commit(with_judged({item.key: again}, self.present))
+        return True
+
+    def filing_failed(
+        self, item: Item, result: ItemResult, exc: OSError, reviewed: list[str]
+    ) -> None:
+        """`_file_away` raised. When the item is already gone it was moved to `_revisar/` and
+        only its reason file failed: it is reviewed, with a warning, and not held."""
+        if not os.path.lexists(item.path):
+            target = self.inbox / inbox.REVIEW_DIR / item.path.name
+            where = f"{inbox.REVIEW_DIR}/{item.path.name}"
+            result.moved_to = where if os.path.lexists(target) else f"{inbox.REVIEW_DIR}/"
+            self.rep.warn(
+                f"{item.key}: moved to {inbox.REVIEW_DIR}/ but its reason file was not "
+                f"written ({_why(exc)})"
+            )
+            self.commit(with_item_filed(item.key))
+            reviewed.append(item.key)
+            return
+        result.unmoved = _why(exc)
+        reason = MOVE_REASON.format(result.unmoved)
+        result.reasons.append(reason)
+        self.commit(with_held(item.key, reason, self.clock()))
 
     def finish(
         self,

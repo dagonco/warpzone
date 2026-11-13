@@ -15,6 +15,7 @@ import hashlib
 import os
 import shutil
 import stat
+import time
 from collections.abc import Callable, Mapping
 from datetime import datetime
 from pathlib import Path
@@ -43,6 +44,7 @@ CATALOG_DIR = "catalog"
 INBOX_DIR = "inbox"
 RUNS_DIR = "runs"
 STATE_TRIES = 3  # reads and writes of the state file before giving up
+RETRY_PAUSE = 0.05  # seconds, times the number of the retry, between two tries
 MOUNTINFO = "/proc/self/mountinfo"
 NICE = 10  # how much lower the run's own CPU priority is made; the tools inherit it
 MAX_SAME_SECOND = 1000  # a loop that cannot find a free id is a bug, not a busy hub
@@ -125,10 +127,23 @@ def update_state(root: Path, *changes: Change) -> tuple[State, list[str]]:
     what was read. A file that changed in between is read again and the same changes are applied
     to it (three tries, then a warning). Returns the state written (or, after the warning, the
     one that could not be) and the warnings; an OSError is an `InboxError`."""
+    state, warnings, _ = update_state_checked(root, *changes)
+    return state, warnings
+
+
+def update_state_checked(root: Path, *changes: Change) -> tuple[State, list[str], bool]:
+    """`update_state` that also says whether the file was written. Concurrent writers share the
+    temporary name of `safefile.atomic_write`, so a collision on it (the file exists, or was
+    taken from under this writer) is retried like a changed file; any other OSError, or a
+    collision on the last try, is an `InboxError`."""
     path = state_path(root)
     warnings: list[str] = []
     new = State()
-    for _ in range(STATE_TRIES):
+    collision: OSError | None = None
+    for attempt in range(STATE_TRIES):
+        if attempt:
+            time.sleep(RETRY_PAUSE * attempt)
+        collision = None
         try:
             text, stamp = _read_with_stamp(path)
             old, warning = parse_state(text)
@@ -136,11 +151,15 @@ def update_state(root: Path, *changes: Change) -> tuple[State, list[str]]:
             if warning and warning not in warnings:
                 warnings.append(warning)
             if safefile.atomic_write(path, render_state(new).encode("utf-8"), expect=stamp):
-                return new, warnings
+                return new, warnings, True
+        except (FileNotFoundError, FileExistsError) as exc:
+            collision = exc
         except OSError as exc:
             raise InboxError(f"cannot write {_SHOWN}: {exc.strerror or exc}") from exc
+    if collision is not None:
+        raise InboxError(f"cannot write {_SHOWN}: {collision.strerror or collision}")
     warnings.append(f"{_SHOWN} was not written: it kept changing")
-    return new, warnings
+    return new, warnings, False
 
 
 _SHOWN = f"{CATALOG_DIR}/{INBOX_DIR}/{STATE_FILE}"

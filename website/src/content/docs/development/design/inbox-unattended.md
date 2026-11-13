@@ -186,8 +186,9 @@ first that says so:
    folder is touched. The state is written only when it has something to say (a heartbeat that
    is due, an entry to drop, an error of step 1 to clear).
 3. **Busy.** If `inbox/.warpzone.lock` exists and is not stale by the rules of
-   [Locking](#locking), the run prints one line naming the holder (`busy: the unattended inbox on
-   the hub has been working since 10:15`, or `a run from <host>`), records what it saw of the lock
+   [Locking](#locking), the run prints one line naming the holder (`busy: held by the unattended
+   inbox on the hub since 2026-11-13 10:15 (12 min ago)`, or `busy: held by <host> (pid <pid>)
+   since ...`), records what it saw of the lock
    in `lock_seen` and exits `0`. A lock that is stale by silence is not busy: the run goes on and
    the note stays in the state until the run holds the lock, so a tick with no ready item does not
    lose it. A lock of an older warpzone is a run-level error of this step (its message has no
@@ -198,12 +199,19 @@ first that says so:
    else `0`).
 5. **Check what the work needs**, as an attended run does at its start (DATs, the handlers'
    `validate`, configured paths), plus the work folder: set, and not on a memory filesystem.
-   A failure is a run-level error.
+   A failure is a run-level error. An unset `dats_dir` is one of them: it is checked here, not
+   before the state is read, so it is reported once (with its step) and an empty inbox is not
+   affected; an attended run still refuses it at once.
 6. **Take the lock** with a heartbeat. Lower its own CPU priority (`os.nice(10)`; the tools
    inherit it). Remove work folders a killed run left behind ([Resource limits](#resource-limits)).
 7. **Process the ready items one at a time**, in scan order: check that the lock is still this
-   run's, check free space, record the attempt, `process_item`, file the original away, record the
-   outcome. A run started by an earlier tick takes only the items that were ready at its step 4;
+   run's, check free space, record the attempt (when the state cannot be written, the item skips
+   this tick and stays waiting), `process_item`, check again that the lock is still this run's and
+   that the item still has the fingerprint it was judged ready with (a conversion can take
+   minutes: an item copied over meanwhile is not filed away, its entry is reset through `decide`
+   so it waits again, and the record gets a warning; it is not news), file the original away,
+   record the outcome. An original that reached `_revisar/` but whose reason file could not be
+   written is reviewed, with a warning, not held. A run started by an earlier tick takes only the items that were ready at its step 4;
    items that become ready meanwhile wait for the next tick.
 8. **Finish** as an attended run does (purge `_done` folders older than 7 days, update the
    catalog for the systems it placed something in, scrape the games it placed: see
@@ -680,7 +688,9 @@ pass it); nothing implies it.
   lock) and is not part of this design.
 - **Resources.** Skyscraper runs under the run's `os.nice(10)` like the other tools, one call at
   a time, within `mem_limit` (a gather holds little) and the `tool_timeout_minutes` of `[inbox]`.
-  Its staged folders and logs go to `work_dir` and are removed with the run's other leftovers.
+  Its staged folders and logs go to `scrape/` inside `work_dir` (not to a `warpzone-inbox-*`
+  folder), and each scrape removes its own staging when it ends, so the cleanup of killed runs'
+  leftovers does not touch them.
 
 ## Code and testing
 

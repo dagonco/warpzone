@@ -777,10 +777,9 @@ def _inbox(args: argparse.Namespace, rep: Reporter) -> int:
         raise InboxError(
             "no hub root: pass --root or set `root` in the [inbox] table of the config"
         )
-    if dats is None:
-        raise InboxError(
-            "no DATs: pass --dats or set `dats_dir` in the [inbox] table of the config"
-        )
+    if dats is None and not args.unattended:
+        # an unattended run reports it at its step 5, once, and only when there is work
+        raise InboxError(inbox_core.DATS_UNSET)
     work = args.work_dir or (Path(settings.work_dir) if settings.work_dir else None)
     options = inbox_core.Options(
         root=root,
