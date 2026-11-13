@@ -23,6 +23,7 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ### Changed
 
+- The inbox lock (`inbox/.warpzone.lock`, taken by `warpzone inbox --apply` and `warpzone scrape`) now has a heartbeat: the run that holds it touches the file every minute, and a lock whose file has not been touched for 10 minutes is reported as stale (`no heartbeat since 10:15`) and taken over with `--force-lock`, instead of waiting 12 hours. A long conversion no longer risks its lock being reported as stale after 12 hours. A lock left by an older warpzone keeps the 12-hour rule. See [Inbox](https://dagonco.github.io/warpzone/development/design/inbox/).
 - `warpzone inbox` checks the free space for a `.nsz` against the exact size of the `.nsp` that decompressing it produces, read from the file's headers, instead of the size of the `.nsz` plus 5%. The `.nsp` of a compressed game is usually much bigger than the `.nsz`, so a work folder too small for it is now caught before `nsz` starts, not when the disk fills up.
 - The updater's idle tick is faster on a console with many processes: looking for the menu no longer starts a program per process, which took about 1.4 s on a Steam Deck with ~430 processes and now takes about 40 ms.
 

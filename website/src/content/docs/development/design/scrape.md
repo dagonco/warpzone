@@ -445,8 +445,9 @@ that have no gamelist entry or lack media, for every system in the platform tabl
 ones named with `--system` (a name not in the table is a usage error, exit 2, which says why a
 system is left out when it is in `UNSCRAPED`). It reads `[inbox]` only, like `inbox`, and needs
 the catalog: a system without a catalog file is skipped with the hint to run `warpzone catalog`.
-It takes the inbox lock (`inbox/.warpzone.lock`, with its stale rules and `--force-lock`), so it
-never runs while `inbox --apply` places games or edits gamelists.
+It takes the inbox lock (`inbox/.warpzone.lock`, with its heartbeat, its stale rules and
+`--force-lock`, see `development/design/inbox.md`), so it never runs while `inbox --apply`
+places games or edits gamelists.
 
 `--dry-run` runs no Skyscraper (no request, no change to the cache), writes nothing and takes no
 lock. It prints,

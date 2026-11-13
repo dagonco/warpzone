@@ -4,9 +4,11 @@ title: "Unattended inbox"
 
 **Status: partly implemented.** The pure decisions are in the code (`inbox_unattended.py`: the
 fingerprint, readiness, the state file and the changes made to it, space, news and the exit code),
-and so is `[inbox] chdman_threads` (see [Resource limits](#resource-limits)); the rest (the I/O
-layer, the lock heartbeat, the run records, the webhook, `--unattended` in `inbox`, the UI and
-doctor) is design, not implemented. This page is the contract for running
+and so are `[inbox] chdman_threads` (see [Resource limits](#resource-limits)) and the lock heartbeat
+(see [Locking](#locking): `inbox_lock.py` with `beat`, `mode`, `Heartbeat`, `judge` and
+`still_mine`, used today by an attended run and by `warpzone scrape`); the rest (the I/O layer, the
+run records, the webhook, `--unattended` in `inbox` with its per-item "still mine" checks, the UI
+and doctor) is design, not implemented. This page is the contract for running
 `warpzone inbox --apply` on the hub by itself, from a scheduled task, with nobody watching. The
 pages it touches when it is implemented ([Inbox](/warpzone/development/design/inbox/),
 [Configuration and command line](/warpzone/development/design/configuration/),
@@ -341,8 +343,8 @@ killed for memory would block every tick for 12 hours.
   later run that finds the same lock with the same modification time, at least 10 minutes later by
   its own clock, judges it stale ("no heartbeat for 10 minutes"). Comparing two readings of the
   file, never its time against the clock, keeps a computer whose clock is off from looking dead or
-  alive. The unattended run then takes the lock over itself, with the re-read right before the
-  unlink as `--force-lock` does, and says so in its record.
+  alive. The unattended run then takes the lock over itself, with the rename-and-verify
+  takeover that `--force-lock` uses (see Inbox), and says so in its record.
 - **Older locks.** A lock without `beat` (an older warpzone) keeps today's rules (12 hours, or a
   pid of the same host), and an unattended run never takes it over: it is a run-level error that
   names it, and a person runs `--force-lock`.
@@ -354,6 +356,18 @@ killed for memory would block every tick for 12 hours.
   if it no longer holds this run's identity it stops at once (runtime error, exit 1) and leaves the
   item where it is. A rerun reports what it had placed as "already in the library".
 - `warpzone scrape`, which takes the same lock, gets the heartbeat with it.
+
+Implemented in `inbox_lock.py`: `hold(inbox, force=, now=, out=, mode="attended" | "unattended",
+previous=)` yields a handle with `still_mine()`. `judge(reading, here, alive, unattended=,
+previous=)` returns `live`, `stale`, `unknown` (an unattended run with one reading, or two too close
+together, or a clock gone back: busy) or `legacy` (stale by the old rules, which an unattended run
+never takes). A lock held by someone else, including one created between the look and taking it,
+raises `LockBusy`, which carries the `LockReading` (the lock, its modification time and when it was
+looked at) for `lock_seen`, so the unattended run can exit `0` for it; a stale lock the run may not
+take (no `--force-lock`, or a legacy one unattended) raises `LockStale`. Both are `InboxError`s, so
+an attended run still exits `2`. An unattended `hold` cannot be given `force`. The "Still mine" check
+before each item and each move is not wired yet: `Held.still_mine()` exists, and the calls in
+`inbox` come with `--unattended`, as the rest of the run.
 
 Two ticks of the scheduler never overlap as two workers: the second container finds the first's
 lock and exits as busy, costing one container start.

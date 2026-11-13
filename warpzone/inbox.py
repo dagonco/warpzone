@@ -1024,7 +1024,9 @@ def run_inbox(opts: Options, rep: Reporter) -> int:
         raise InboxError(f"no Redump or No-Intro DATs warpzone knows in {opts.dats_dir}")
     if not opts.apply:  # a report reads only, so it needs no lock
         return _run(opts, rep, inbox, library)
-    with inbox_lock.hold(inbox, force=opts.force_lock, now=opts.now, out=rep.out):
+    with inbox_lock.hold(
+        inbox, force=opts.force_lock, now=opts.now, out=rep.out, mode=inbox_lock.ATTENDED
+    ):
         return _run(opts, rep, inbox, library)
 
 

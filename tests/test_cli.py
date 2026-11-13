@@ -542,6 +542,8 @@ class ExitCodeTests(unittest.TestCase):
             "CatalogError",
             "ConfigError",
             "InboxError",
+            "LockBusy",
+            "LockStale",
             "ModelError",
             "ProfileError",
             "ScrapeError",
