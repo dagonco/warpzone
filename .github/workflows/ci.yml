@@ -280,6 +280,27 @@ jobs:
             if python -c "import Crypto" 2>/dev/null || python -c "import zstandard" 2>/dev/null; then echo "nsz leaked into python"; exit 1; fi
             test "$(id -u)" != 0
           '
+      # dolphin-tool reads a disc image under the limits of the compose file (not root, a read-only
+      # root file system, memory for /tmp): a synthetic GameCube header, a megabyte long, is enough
+      # for its `header` command to print the game ID.
+      - name: Run dolphin-tool on a synthetic image
+        run: |
+          set -euo pipefail
+          mkdir "$RUNNER_TEMP/gc"
+          python3 - "$RUNNER_TEMP/gc/check.iso" <<'EOF'
+          import sys
+          data = bytearray(0x100000)
+          data[0:6] = b"GTSE01"
+          data[0x1C:0x20] = bytes.fromhex("C2339F3D")
+          data[0x20:0x2E] = b"Warpzone check"
+          open(sys.argv[1], "wb").write(data)
+          EOF
+          chmod 755 "$RUNNER_TEMP/gc"
+          chmod 644 "$RUNNER_TEMP/gc/check.iso"
+          docker run --rm --read-only --tmpfs /tmp --user 65534:65534 \
+            -v "$RUNNER_TEMP/gc:/data:ro" --entrypoint dolphin-tool warpzone:ci \
+            header -i /data/check.iso | tee "$RUNNER_TEMP/header.txt"
+          grep -q "GTSE01" "$RUNNER_TEMP/header.txt"
       # `doctor` in the container must find every tool the image ships, on PATH or at the path it
       # is told, from the config it would read in /config. Vita3K is not in the image, so its line
       # is not checked. The output is shown whatever doctor's exit code is.
