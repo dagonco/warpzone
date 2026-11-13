@@ -160,6 +160,10 @@ The contract:
   something in (the same derivation `warpzone catalog` runs, plus the SHA-1, DAT name, DAT serials,
   filing date and RA hash it knows); a failure is a warning, never a review. See
   [Building and updating it](/warpzone/development/design/library-ui/#building-and-updating-it).
+- **Scraping.** After the catalog update, `--apply` scrapes the games it placed with Skyscraper
+  when it is configured or found; `--no-scrape` skips it. A failure is a warning, never a review
+  and never an exit code. Without `--apply` the report says how many games would be scraped.
+  See [Scraping](/warpzone/development/design/scrape/#in-inbox---apply).
 - **Missing tools.** `chdman`, `bsdtar`, `RAHasher` and `dolphin-tool` are located with
   `[inbox]` config keys or PATH (RAHasher only when configured). A tool that an item
   needs and is missing sends that item to review with a clear reason; other items

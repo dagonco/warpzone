@@ -121,6 +121,10 @@ class Base(unittest.TestCase):
         self.addCleanup(env.stop)
         for key in ("STUB_CHDMAN_FAIL", "STUB_RA_MODE", ra.KEY_ENV):
             os.environ.pop(key, None)
+        # A Skyscraper on this machine's PATH must never be run (or reach the network) by a test.
+        no_skyscraper = mock.patch.object(inbox_core, "SKYSCRAPER_COMMAND", "no-such-skyscraper")
+        no_skyscraper.start()
+        self.addCleanup(no_skyscraper.stop)
 
     def drop(self, name: str, content: bytes | dict[str, bytes]) -> Path:
         """An item in the inbox, old enough that it is not taken for a copy in progress."""

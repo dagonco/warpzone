@@ -36,6 +36,7 @@ export default defineConfig({
           items: [
             { label: 'Whitelists', slug: 'setup/whitelists' },
             { label: 'Adding games', slug: 'setup/inbox' },
+            { label: 'Scraping', slug: 'setup/scrape' },
             { label: 'Hub container and library UI', slug: 'setup/hub-container' },
             { label: 'BIOS', slug: 'setup/bios' },
             { label: 'Emulator settings', slug: 'setup/settings' },

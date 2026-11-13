@@ -1054,8 +1054,15 @@ def _run(opts: Options, rep: Reporter, inbox: Path, library: DatLibrary) -> int:
             )
     if purged:
         rep.out(f"{DONE_DIR}: deleted {len(purged)} folder(s) older than {DONE_KEEP_DAYS} days")
+    from warpzone import (
+        inbox_scrape,
+    )  # late: it imports `scrape`, and `catalog` imports this module
+
     if opts.apply:
         _update_catalog(opts, rep, results)
+        inbox_scrape.after_apply(opts, rep, results)
+    else:
+        inbox_scrape.report_only(opts, rep, results)
     return _summary(rep, results, opts.apply)
 
 

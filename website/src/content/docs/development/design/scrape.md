@@ -2,14 +2,14 @@
 title: "Scraping"
 ---
 
-**Status: `warpzone scrape` and the doctor checks are implemented; the scrape inside
-`inbox --apply` (and `--no-scrape`) is not yet.** This page is the contract for scraping game
+**Status: implemented** (`warpzone scrape`, the doctor checks, and the scrape inside
+`inbox --apply` with `--no-scrape`). This page is the contract for scraping game
 metadata and media into the hub: `inbox --apply` scrapes the games it just placed, and
-`warpzone scrape` fills in the games already in the library. The pages it touches when it is implemented
+`warpzone scrape` fills in the games already in the library. The pages it touches
 ([Inbox](/warpzone/development/design/inbox/), [Configuration and command line](/warpzone/development/design/configuration/),
 [Doctor](/warpzone/development/design/doctor/), [Hub, folders and ignores](/warpzone/development/design/hub-and-folders/),
-[Code, testing and CI](/warpzone/development/design/code-and-testing/)) are updated in the same
-pull request as the code.
+[Code, testing and CI](/warpzone/development/design/code-and-testing/)) were updated in the same
+pull requests as the code. The setup guide is [Scraping](/warpzone/setup/scrape/).
 
 Until now the hub's gamelists and media came from ES-DE's own scraper, run by hand on a console.
 A game `inbox` files arrives on every console without a description, a cover or a video, and the
@@ -360,11 +360,34 @@ machine that scrapes. The videos stay on the hub: devices ignore `/*/videos` (se
 After the catalog update, when Skyscraper is configured or found, `inbox --apply` scrapes the
 games it placed in this run (not those "already in the library"), system by system, inside its
 own lock. `--no-scrape` skips it for one run. The report mode (no `--apply`) runs no Skyscraper
-and prints `would scrape N games` per system.
+and prints `scrape: <system>: would scrape N games` per system.
 
 A scrape failure of any kind is a warning in the report: it never sends an item to review, never
 changes the exit code and never undoes a placement. The report ends with the line to run later:
 `warpzone scrape --system <system>`.
+
+How it is done (`inbox_scrape.py`, called from `inbox._run` right after `_update_catalog`):
+
+- **The games.** The units with outcome `placed` whose library folder is `roms/<system>` and whose
+  system is in `scrape.PLATFORMS` (extras such as Switch updates, and the systems in `UNSCRAPED`,
+  are left out). `scrape.is_placed` keeps the catalog games whose primary path is one of those
+  entries or lies inside one (an `.m3u` folder's playlist); `scrape_io.Options.only` carries them,
+  so `select` sees nothing else of the library.
+- **The lock.** `inbox` already holds `inbox/.warpzone.lock`, so it calls `scrape_io.run_placed`,
+  which is `run_scrape` without taking the lock. `warpzone scrape` is the only caller that takes it.
+- **Failures are warnings.** `Options.as_warning` sends the failure rows of the table below to
+  `Reporter.warn` instead of the plain report, and any exception of the scrape is caught and
+  warned (`scrape: failed (...)`). The return code of the scrape only decides whether the closing
+  line `scrape: not finished; run `warpzone scrape --system <systems>` later` is printed. The
+  return value of `inbox` stays the number of items for review.
+- **Without Skyscraper.** `inbox_core.find_tools` locates it like the other tools: a configured path
+  that does not exist is a configuration error (exit 2, before anything is placed), else
+  `Skyscraper` on `PATH`. When none is found, the report says once `scrape: Skyscraper not found; N
+  games placed, not scraped.` with the hint, and only when something scrapable was placed. With
+  `--no-scrape` it says `scrape: skipped (--no-scrape)` in the same cases. In the report mode the
+  first line reads `scrape: Skyscraper not found; N games would not be scraped.`
+- **Cache and logs.** Staged folders, logs and the Skyscraper config check are those of `warpzone
+  scrape` (`<work_dir>/scrape/` from `[inbox] work_dir` or `--work-dir`).
 
 ## `warpzone scrape`
 

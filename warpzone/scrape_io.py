@@ -95,6 +95,8 @@ class Options:
     dry_run: bool = False
     retry_not_found: bool = False
     force_lock: bool = False
+    only: frozenset[str] | None = None  # `inbox`: scrape only the games under these primary paths
+    as_warning: bool = False  # `inbox`: a failure is a warning of its report, not a plain line
     artwork_dir: Path = ARTWORK_DIR
     now: Callable[[], float] = time.time
     today: Callable[[], date] = date.today
@@ -440,7 +442,7 @@ class Run:
 
     def fail(self, message: str) -> None:
         self.failed = True
-        self.rep.out(message)
+        (self.rep.warn if self.opts.as_warning else self.rep.out)(message)
 
     @property
     def memory_path(self) -> Path:
@@ -612,6 +614,8 @@ def _scrape_system(run: Run, system: str) -> scrape.Selection | None:
             rep.out(f"scrape: {system}: nothing in the library")
         return None
     games = sorted(doc.games.values(), key=lambda g: g.gamelist)
+    if opts.only is not None:
+        games = [g for g in games if scrape.is_placed(g, opts.only)]
     try:
         hub = read_hub_gamelist(gamelist_path(opts.root, system))
     except HubError as exc:
@@ -688,6 +692,12 @@ def run_scrape(opts: Options, rep: Reporter) -> int:
         return _run(opts, rep)
     with inbox_lock.hold(root / "inbox", force=opts.force_lock, now=opts.now, out=rep.out):
         return _run(opts, rep)
+
+
+def run_placed(opts: Options, rep: Reporter) -> int:
+    """`inbox --apply`: scrape the games of `opts.only`, with the inbox lock the caller already
+    holds (taking it again would fail). The same flow and exit code as `run_scrape`."""
+    return _run(opts, rep)
 
 
 def _run(opts: Options, rep: Reporter) -> int:
