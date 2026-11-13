@@ -66,6 +66,9 @@ def tracks(path):
     return [path]
 
 cmd = args[0]
+if os.environ.get("STUB_CHDMAN_LOG"):
+    with open(os.environ["STUB_CHDMAN_LOG"], "a") as log:
+        log.write(" ".join(args) + "\n")
 if cmd in ("createcd", "createdvd"):
     if os.environ.get("STUB_CHDMAN_FAIL") == "create":
         print("Error: compression failed", file=sys.stderr)

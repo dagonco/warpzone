@@ -2,7 +2,7 @@
 title: "Unattended inbox"
 ---
 
-**Status: design, not implemented.** This page is the contract for running `warpzone inbox
+**Status: design, partly implemented** (`[inbox] chdman_threads` is; see [Resource limits](#resource-limits)). This page is the contract for running `warpzone inbox
 --apply` on the hub by itself, from a scheduled task, with nobody watching. The pages it touches
 when it is implemented ([Inbox](/warpzone/development/design/inbox/),
 [Configuration and command line](/warpzone/development/design/configuration/),
@@ -318,8 +318,10 @@ lock and exits as busy, costing one container start.
   NAS kernels vary, so none is set; if the share is slow while a conversion runs, a later change
   can start the tools under `ionice -c 3`.
 - **chdman's threads.** chdman counts the host's cores, not the container's CPU limit, and each
-  thread holds its own compressor. A new optional key `[inbox] chdman_threads` passes
-  `--numprocessors N` to `chdman create*`; the container guide sets it to the service's `cpus`.
+  thread holds its own compressor. The optional key `[inbox] chdman_threads` (a whole number, at
+  least 1; implemented) passes `--numprocessors N` to `chdman createcd` and `createdvd`
+  (`inbox.make_chd`; unset passes nothing and chdman counts the cores, `verify` and `info` get
+  nothing); the container guide sets it to the service's `cpus`.
 - **Memory.** `mem_limit: 2g`, as the guide has it. A run killed for memory exits `137` in the
   task's output; [The memory](#the-memory) turns a second death on the same item into a hold with
   the reason, so the timer never loops on it.

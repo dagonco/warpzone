@@ -202,6 +202,7 @@ class Tools:
     vita3k: str | None = None  # Vita3K.app (a folder) or the Vita3K binary
     skyscraper: str | None = None  # scrapes what `--apply` placed (see inbox_scrape)
     timeout: float = DEFAULT_TOOL_TIMEOUT  # seconds one call of any tool may run
+    chdman_threads: int | None = None  # `--numprocessors` of chdman's conversions; None: its own
 
 
 SKYSCRAPER_COMMAND = "Skyscraper"  # searched on PATH when `[inbox] skyscraper` is unset
@@ -261,6 +262,7 @@ def find_tools(
         vita3k=pick_vita3k(),
         skyscraper=pick("skyscraper", settings.skyscraper, SKYSCRAPER_COMMAND),
         timeout=settings.tool_timeout_minutes * 60.0,
+        chdman_threads=settings.chdman_threads,
     )
 
 

@@ -50,6 +50,7 @@ gamelist_mame = "/Volumes/hub/frontend/es-de/gamelists/mame/gamelist.xml"  # opt
 gamelist_ps3 = "/Volumes/hub/frontend/es-de/gamelists/ps3/gamelist.xml"  # optional
 skyscraper = "/usr/local/bin/Skyscraper"     # optional; PATH is searched when unset (scraping)
 tool_timeout_minutes = 240                   # optional, the default: kills a tool that hangs
+chdman_threads = 2                           # optional; chdman's --numprocessors (unset: chdman's own count)
 
 [serve]                                      # optional, read only by `warpzone serve`
 listen = "0.0.0.0:8780"                      # optional, the default
