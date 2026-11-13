@@ -343,8 +343,8 @@ killed for memory would block every tick for 12 hours.
   later run that finds the same lock with the same modification time, at least 10 minutes later by
   its own clock, judges it stale ("no heartbeat for 10 minutes"). Comparing two readings of the
   file, never its time against the clock, keeps a computer whose clock is off from looking dead or
-  alive. The unattended run then takes the lock over itself, with the re-read right before the
-  unlink as `--force-lock` does, and says so in its record.
+  alive. The unattended run then takes the lock over itself, with the rename-and-verify
+  takeover that `--force-lock` uses (see Inbox), and says so in its record.
 - **Older locks.** A lock without `beat` (an older warpzone) keeps today's rules (12 hours, or a
   pid of the same host), and an unattended run never takes it over: it is a run-level error that
   names it, and a person runs `--force-lock`.
@@ -365,7 +365,9 @@ never takes). A lock held by someone else, including one created between the loo
 raises `LockBusy`, which carries the `LockReading` (the lock, its modification time and when it was
 looked at) for `lock_seen`, so the unattended run can exit `0` for it; a stale lock the run may not
 take (no `--force-lock`, or a legacy one unattended) raises `LockStale`. Both are `InboxError`s, so
-an attended run still exits `2`. An unattended `hold` cannot be given `force`.
+an attended run still exits `2`. An unattended `hold` cannot be given `force`. The "Still mine" check
+before each item and each move is not wired yet: `Held.still_mine()` exists, and the calls in
+`inbox` come with `--unattended`, as the rest of the run.
 
 Two ticks of the scheduler never overlap as two workers: the second container finds the first's
 lock and exits as busy, costing one container start.

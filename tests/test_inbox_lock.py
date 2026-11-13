@@ -2,6 +2,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from collections.abc import Callable
@@ -283,6 +284,50 @@ class HeartbeatTests(unittest.TestCase):
         self.assertEqual(self.touches, 1)
         self.assertIn("desktop-b", self.path.read_text())
 
+    def test_a_read_error_skips_one_beat_and_the_heartbeat_goes_on(self) -> None:
+        real = inbox_lock._read
+        reads = 0
+
+        def flaky(path: Path):  # type: ignore[no-untyped-def]
+            nonlocal reads
+            reads += 1
+            if reads == 2:  # the share hiccups on the second beat only
+                raise OSError("input/output error")
+            return real(path)
+
+        waits: list[float] = []
+
+        def wait(seconds: float) -> bool:
+            waits.append(seconds)
+            return len(waits) > 3
+
+        with mock.patch.object(inbox_lock, "_read", flaky):
+            inbox_lock.Heartbeat(self.path, self.mine, 7, touch=self.touch, wait=wait).run()
+        self.assertEqual(len(waits), 4)
+        self.assertEqual(self.touches, 2)  # beats 1 and 3; beat 2 was skipped
+
+    def test_still_mine_is_not_false_when_the_lock_cannot_be_read(self) -> None:
+        with mock.patch.object(inbox_lock, "_read", side_effect=OSError("stale file handle")):
+            self.assertTrue(inbox_lock.still_mine(self.path, self.mine))
+
+    def test_stop_does_not_hang_on_a_touch_stuck_on_a_stalled_share(self) -> None:
+        entered = threading.Event()
+        release = threading.Event()
+        self.addCleanup(release.set)
+
+        def stuck(path: Path) -> None:
+            entered.set()
+            release.wait(30)
+
+        beat = inbox_lock.Heartbeat(self.path, self.mine, 0.01, touch=stuck, stop_wait=0.2)
+        beat.start()
+        self.assertTrue(entered.wait(10))
+        started = time.monotonic()
+        beat.stop()  # the thread is still inside the touch
+        self.assertLess(time.monotonic() - started, 5)
+        self.assertTrue(beat._thread.is_alive())
+        self.assertTrue(beat._thread.daemon)
+
     def test_the_thread_beats_for_real_and_stop_ends_it(self) -> None:
         before = self.path.stat().st_mtime
         beat = inbox_lock.Heartbeat(self.path, self.mine, 0.01)
@@ -534,6 +579,50 @@ class LockTests(Base):
             self.hold("unattended").__enter__()
         self.assertIn("desktop-b", str(caught.exception))
         self.assertTrue(self.lock.exists())
+
+    def fresh_lock_after(self, call: int):  # type: ignore[no-untyped-def]
+        """A `_read` that, once the given call has returned, lets another run replace the lock
+        (atomically) with a live one of its own: the moment two takers of a stale lock race."""
+        real = inbox_lock._read
+        calls = 0
+
+        def read(path: Path):  # type: ignore[no-untyped-def]
+            nonlocal calls
+            result = real(path)
+            calls += 1
+            if calls == call:
+                fresh = self.inbox / "other-run.tmp"
+                fresh.write_text(
+                    inbox_lock.render(
+                        LockInfo("desktop-c", 99, time.time(), BEAT_SECONDS, "attended")
+                    )
+                )
+                os.replace(fresh, self.lock)
+            return result
+
+        return read
+
+    def test_a_fresh_lock_that_replaces_the_stale_one_after_it_was_checked_survives(self) -> None:
+        self.put_beating(age_seconds=11 * 60)
+        with mock.patch.object(inbox_lock, "_read", self.fresh_lock_after(2)):
+            try:
+                with self.hold(force=True):
+                    pass
+            except LockBusy:
+                pass
+        self.assertIn("desktop-c", self.lock.read_text())
+
+    def test_a_fresh_lock_that_replaces_the_stale_one_before_the_takeover_is_put_back(self) -> None:
+        self.put_beating(age_seconds=11 * 60)
+        with (
+            mock.patch.object(inbox_lock, "_read", self.fresh_lock_after(1)),
+            self.assertRaises(LockBusy),
+        ):
+            self.hold(force=True).__enter__()
+        self.assertIn("desktop-c", self.lock.read_text())
+        self.assertEqual(
+            [p.name for p in self.inbox.iterdir() if p.name.startswith(LOCK_NAME)], [LOCK_NAME]
+        )
 
     def test_busy_and_stale_are_inbox_errors_so_an_attended_run_still_exits_2(self) -> None:
         self.assertTrue(issubclass(LockBusy, InboxError))

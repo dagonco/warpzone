@@ -22,6 +22,7 @@ import os
 import socket
 import threading
 import time
+import uuid
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass
@@ -32,6 +33,7 @@ from warpzone.inbox_core import InboxError
 LOCK_NAME = ".warpzone.lock"
 LOCK_MAX_AGE = 12 * 3600  # seconds; the rule for a lock without a heartbeat
 BEAT_SECONDS = 60  # how often a run holding the lock touches it
+STOP_WAIT_SECONDS = 5  # how long releasing the lock waits for a heartbeat stuck on the share
 STALE_BEAT_SECONDS = 10 * 60  # silence after which a lock with a heartbeat is stale
 ATTENDED = "attended"
 UNATTENDED = "unattended"
@@ -220,25 +222,37 @@ def _read(path: Path) -> tuple[LockInfo | None, float] | None:
         return None
 
 
-def still_mine(path: Path, mine: LockInfo) -> bool:
-    """Whether the lock file is there and holds this run's host, pid and start time."""
+def holds(path: Path, mine: LockInfo) -> bool | None:
+    """Whether the lock file holds this run's host, pid and start time: True, False when it is
+    gone or somebody else's, None when it could not be read (a share that hiccups)."""
     try:
         held = _read(path)
     except OSError:
-        return False
+        return None
     return held is not None and same_run(held[0], mine)
 
 
+def still_mine(path: Path, mine: LockInfo) -> bool:
+    """False only when the lock is gone or somebody else's; a read that fails is not proof."""
+    return holds(path, mine) is not False
+
+
 def beat_once(path: Path, mine: LockInfo, touch: Callable[[Path], None] = os.utime) -> bool:
-    """Touch the lock's modification time if it is still this run's; False when it is not."""
-    if not still_mine(path, mine):
+    """Touch the lock's modification time if it is still this run's.
+
+    False when the lock is gone or not this run's (the heartbeat ends); a read or a touch that
+    fails on a share that hiccups skips this beat and is retried at the next one."""
+    state = holds(path, mine)
+    if state is False:
         return False
+    if state is None:
+        return True
     try:
         touch(path)
     except FileNotFoundError:
         return False
     except OSError:
-        pass  # a share that hiccups: try again at the next beat
+        pass
     return True
 
 
@@ -256,10 +270,12 @@ class Heartbeat:
         *,
         touch: Callable[[Path], None] = os.utime,
         wait: Callable[[float], bool] | None = None,
+        stop_wait: float = STOP_WAIT_SECONDS,
     ) -> None:
         self.path = path
         self.mine = mine
         self.interval = interval
+        self._stop_wait = stop_wait
         self._touch = touch
         self._stopped = threading.Event()
         self._wait = wait or self._stopped.wait
@@ -274,9 +290,11 @@ class Heartbeat:
         self._thread.start()
 
     def stop(self) -> None:
+        """End the thread; a touch stuck on a stalled share is left behind (it is a daemon)
+        after `stop_wait` seconds, so releasing the lock and Ctrl-C never hang on it."""
         self._stopped.set()
         if self._thread.is_alive():
-            self._thread.join()
+            self._thread.join(timeout=self._stop_wait)
 
 
 def _create(path: Path, info: LockInfo) -> None:
@@ -300,6 +318,31 @@ def _busy_message(who: str, info: LockInfo | None) -> str:
     )
 
 
+def _take_stale(path: Path, judged: tuple[LockInfo | None, float]) -> bool:
+    """Remove the stale lock that was judged, without ever removing another one.
+
+    Two runs can judge the same lock stale; an unlink after a re-read would let the slower one
+    remove the lock the faster one just created. So the file is renamed (atomic) to a name of its
+    own first, and deleted only if what was renamed is what was judged. If it is not, it was
+    somebody's live lock: it goes back to its place (`link` fails if another lock is there
+    already, and then that one stands) and the caller looks again."""
+    aside = path.with_name(f"{path.name}.{uuid.uuid4().hex}.taken")
+    try:
+        os.rename(path, aside)
+    except FileNotFoundError:
+        return False  # released between the look and now
+    except OSError as exc:
+        raise InboxError(f"cannot take over {_SHOWN}: {exc.strerror or exc}") from exc
+    try:
+        if _read(aside) == judged:
+            return True
+        with suppress(OSError):  # a lock was put there meanwhile: that one stands
+            os.link(aside, path)
+        return False
+    finally:
+        aside.unlink(missing_ok=True)
+
+
 def _acquire(
     path: Path,
     mine: LockInfo,
@@ -310,6 +353,7 @@ def _acquire(
     previous: LockReading | None = None,
 ) -> None:
     unattended = mine.mode == UNATTENDED
+    last: LockReading | None = None
     for _ in range(3):
         try:
             _create(path, mine)
@@ -322,7 +366,7 @@ def _acquire(
         if held is None:  # released between our two looks
             continue
         info, mtime = held
-        reading = LockReading(info, mtime, now())  # one clock for the verdict and the message
+        reading = last = LockReading(info, mtime, now())  # one clock for verdict and message
         who = describe(info, mtime, reading.looked)
         verdict = judge(reading, mine.host, pid_alive, unattended=unattended, previous=previous)
         if verdict.state in (LIVE, UNKNOWN):
@@ -341,11 +385,10 @@ def _acquire(
                 "If no other run is working on the inbox, run again with --force-lock",
                 reading,
             )
-        if _read(path) != held:  # re-check right before acting: it changed under us
+        if not _take_stale(path, held):  # it changed under us: look again
             continue
         out(f"inbox: taking over a stale lock: {who}; stale because {verdict.reason}")
-        path.unlink(missing_ok=True)
-    raise LockBusy(f"could not take {_SHOWN}: another run keeps changing it")
+    raise LockBusy(f"could not take {_SHOWN}: another run keeps changing it", last)
 
 
 def _release(path: Path, mine: LockInfo) -> None:
@@ -387,11 +430,13 @@ def hold(
     path = inbox / LOCK_NAME
     mine = LockInfo(hostname(), os.getpid(), now(), BEAT_SECONDS, mode)
     _acquire(path, mine, force=force, now=now, out=out, previous=previous)
-    heartbeat = Heartbeat(path, mine, interval)
+    heartbeat: Heartbeat | None = None
     try:
+        heartbeat = Heartbeat(path, mine, interval)
         heartbeat.start()
         yield Held(path, mine)
     finally:
-        heartbeat.stop()
+        if heartbeat is not None:
+            heartbeat.stop()
         with suppress(OSError):  # a lock we cannot remove must not hide the error behind it
             _release(path, mine)

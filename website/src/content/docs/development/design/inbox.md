@@ -52,8 +52,12 @@ The contract:
   an older warpzone): older than 12 hours (an unreadable lock, such as one still being written,
   goes by the age of the file), or the same pid rule; a run longer than 12 hours is no
   longer stale on that count, because its heartbeat keeps the lock fresh. A stale lock is taken
-  over only with `--force-lock` (`LockStale` says so otherwise), after a re-read right before the
-  unlink, and with a report line; a live one never. The lock is released in a `finally` (errors
+  over only with `--force-lock` (`LockStale` says so otherwise), and with a report line; a live one
+  never. The takeover renames the stale file to a name of its own (atomic) and deletes it only if
+  what it renamed is what was judged; otherwise it was somebody's live lock and goes back. The
+  heartbeat ends when the lock is gone or not this run's, but a read or a touch that fails on the
+  share only skips that beat, and releasing the lock waits at most 5 seconds for a touch stuck on
+  a stalled share. The lock is released in a `finally` (errors
   and Ctrl-C), after the heartbeat stops, and only if it still holds this run's host, pid and
   start time. It is a hidden file, so scanning skips it. A `SIGKILL` or a power cut leaves it
   behind, which is what the stale rules are for. The `mode` parameter of `inbox_lock.hold` also
