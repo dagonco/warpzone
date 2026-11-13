@@ -122,7 +122,8 @@ The contract:
   drops in `inbox/_unverified/<system>/` and no DAT identifies is filed as it is.
 - **Formats follow the library.** `psx`, `saturn`, `dreamcast`: `chdman createcd` from
   the cue or gdi, then `chdman verify`. `ps2`: `createdvd` for an `.iso`, `createcd`
-  for cue/bin. A lone `.bin` without a cue gets a generated one (PlayStation only).
+  for cue/bin. A lone `.bin` without a cue gets a generated one (PlayStation only). A
+  `.chd` is extracted first and identified by its image, see [CHD images](#chd-images).
   `psp`: the plain `.iso`, copied and its CRC32 checked against the DAT. `gc`: an
   `.iso` stays an `.iso` (the report prints the `dolphin-tool convert -f rvz -c zstd
   -l 5 -b 131072` command; warpzone never converts it); a `.gcz` is identified by
@@ -512,6 +513,78 @@ A `.3ds` or `.cci` file has no DAT here, so it is identified by its headers. The
   (`!/roms/n3ds/<name>.cci`).
 - **One target name.** Two files of one item that would be filed under the same name (`X.3ds`
   and `X.cci`) are not placed together: the second goes to review.
+
+## CHD images
+
+A `.chd` dropped in the inbox for a CHD system (`psx`, `ps2`, `saturn`, `dreamcast`) is not
+compared with the DAT as it is: a CHD's own SHA1s describe the compressed container, and
+chdman makes a different one for the same disc depending on how it was run (`createcd` or
+`createdvd`, the hunk size, the compression). The DATs list the images, so the CHD is
+extracted to the work folder, the extracted files are identified like dropped ones, and the
+library's CHD is made from them as for any other disc. The code is in
+`warpzone/inbox_chd.py` (`expand_chds` runs right after `.gcz` expansion in
+`inbox._identify_and_place`); a `.chd` that is not claimed by the arcade handler gets here.
+
+- **Which CHD it is.** `chdman info -i` is parsed by the pure `parse_info`: `Logical size`, the
+  metadata tags and the `TRACK:<n> TYPE:<t>` lines. A `CHGD` or `CHGT` tag is a GD-ROM
+  (Dreamcast), `CHT2`, `CHTR` or `CHCD` a CD, a `DVD ` tag a DVD. A CHD with none (a hard
+  disk, a laserdisc, an arcade disk) is refused with a reason that names it; it is not
+  hashed.
+- **How it is extracted.** `plan_extraction` is pure and returns the chdman command and the
+  names of the files it writes, which are named after the CHD's stem (cut to 120 bytes, and
+  with `%` written as `_` because chdman expands `%t` and the like in the names of `-sb` and
+  `.gdi` output) so that a LibCrypt `.sbi` named like the CHD is found next to them (see `find_sbi`).
+
+  | CHD | Command | Result |
+  |---|---|---|
+  | DVD | `extractdvd -o <stem>.iso` | one `.iso` |
+  | CD with one `MODE1` (2048-byte) track | `extractcd -o <stem>.cue -ob <stem>.iso` | the `.iso` the CHD was made from, plus a cue |
+  | CD with one other track | `extractcd -o <stem>.cue -ob <stem>.bin` | one `.bin`, plus a cue |
+  | CD with several tracks | `extractcd -o <stem>.cue -sb` | `<stem> (Track N).bin` per track, plus a cue |
+  | GD-ROM | `extractcd -o <stem>.gdi` | `<stem>NN.bin` / `.raw` per track, plus a gdi (chdman always splits a GDI) |
+
+  A PlayStation 2 DVD game that was made into a CD-mode CHD (`createcd` from its `.iso`, which
+  gives one `MODE1` track of 2048-byte sectors) extracts to the identical `.iso`, so it
+  matches the DAT's `.iso` and is rebuilt with `createdvd`. `-ob` and `-sb` do not go together
+  (chdman fails), which is why the one-track and many-track cases differ. The default of
+  `extractcd` for a many-track CD, one bin with every track, would not match Redump, which
+  lists each track.
+- **Split bins.** `--splitbin` (`-sb`), `-ob`, the `.gdi` output, `extractdvd` and the lines of
+  `chdman info` that `parse_info` reads exist in both chdman versions in use. For MAME 0.276
+  (Debian's `mame-tools` in the hub image) that was checked against the source, not run:
+  `do_extract_cd` and `do_extract_dvd` are identical in `mame0276` and `mame0289`. With 0.289
+  (Homebrew) it was checked by hand, once, outside the test suite (nothing in the repository
+  runs a real chdman for this): a round trip of a two-track CD and of a three-track GD-ROM gave
+  back each track byte for byte. Nothing falls back to a single bin: a chdman that rejects the
+  option fails the item with chdman's own message. What can still differ from Redump is the
+  disc itself (a re-ripped or trimmed image, pregap data kept in a track by one tool and not
+  by another): such a CHD is reviewed, never placed.
+- **Identification and output.** The extracted files are staged with the name of the CHD they
+  came from (`Staged.chd`) and go through `identify`, `group_discs`, `plan_units`, the
+  `.sbi` rule and `process_unit` unchanged: the output is the library's standard form
+  (`createdvd` from an `.iso` of `ps2`, `createcd` from a cue or gdi otherwise), then
+  `chdman verify`, and the RetroAchievements hash is taken of the extracted image before and
+  of the new CHD after, as for any disc. Multi-disc CHDs go in one `<game>.m3u/` folder when
+  all discs are present. The original `.chd` is only read: it goes to `_done/` as any
+  original.
+- **A CHD that matches nothing.** The item goes to review with the reason
+  `<name>.chd: extracted with chdman (<what it is>), but its content matches no Redump entry (a CHD made from a changed, trimmed or re-ripped image cannot be matched; drop the original cue/bin, gdi or iso instead)`,
+  where `<what it is>` is the disc type and track count from `describe` (`CD, 2 tracks`,
+  `CD, 1 track`, `GD-ROM, 3 tracks`, `DVD`).
+- **Space.** Before anything is extracted, every CHD of the item is read and the room is
+  checked once: the sum of the logical sizes, plus the sizes of the CHD files themselves when
+  `--apply` will build the new ones (the same work folder holds both), plus the 5% margin of
+  `free_space_check`. Without room, the CHDs are refused with the usual
+  "not enough free space" reason, naming each, before chdman writes anything.
+- **Report only.** `inbox` without `--apply` extracts too, exactly as it expands a `.gcz`:
+  the verdict (placed as `<game>.chd`, already in the library, or review with its reason) is
+  only known after the extracted image is identified, and a preview that said "would verify
+  after extraction" could not tell the maintainer about a CHD that is going to review.
+  Extraction is decompression, the cheap half of the work; the conversion and `verify` are
+  what report-only skips, and the work folder is emptied at the end. The cost is the
+  work-folder room of the logical size, which the space check reports first.
+- **Not covered.** A CHD that needs a parent CHD fails at the extraction with chdman's
+  message, and a hard disk, laserdisc or arcade CHD is refused as not being a disc image.
 
 ## Compressed Wii and GameCube images
 
