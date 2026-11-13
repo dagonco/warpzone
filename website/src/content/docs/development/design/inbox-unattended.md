@@ -2,7 +2,9 @@
 title: "Unattended inbox"
 ---
 
-**Status: design, not implemented.** This page is the contract for running `warpzone inbox
+**Status: partly implemented.** The lock heartbeat is done (the [Locking](#locking) section:
+`inbox_lock.py` with `beat`, `mode`, `Heartbeat`, `judge` and `still_mine`, used by an attended run
+and by `warpzone scrape`); the rest is design, not implemented. This page is the contract for running `warpzone inbox
 --apply` on the hub by itself, from a scheduled task, with nobody watching. The pages it touches
 when it is implemented ([Inbox](/warpzone/development/design/inbox/),
 [Configuration and command line](/warpzone/development/design/configuration/),
@@ -305,6 +307,16 @@ killed for memory would block every tick for 12 hours.
   if it no longer holds this run's identity it stops at once (runtime error, exit 1) and leaves the
   item where it is. A rerun reports what it had placed as "already in the library".
 - `warpzone scrape`, which takes the same lock, gets the heartbeat with it.
+
+Implemented in `inbox_lock.py`: `hold(inbox, force=, now=, out=, mode="attended" | "unattended",
+previous=)` yields a handle with `still_mine()`. `judge(reading, here, alive, unattended=,
+previous=)` returns `live`, `stale`, `unknown` (an unattended run with one reading, or two too close
+together, or a clock gone back: busy) or `legacy` (stale by the old rules, which an unattended run
+never takes). A lock held by someone else, including one created between the look and taking it,
+raises `LockBusy`, which carries the `LockReading` (the lock, its modification time and when it was
+looked at) for `lock_seen`, so the unattended run can exit `0` for it; a stale lock the run may not
+take (no `--force-lock`, or a legacy one unattended) raises `LockStale`. Both are `InboxError`s, so
+an attended run still exits `2`. An unattended `hold` cannot be given `force`.
 
 Two ticks of the scheduler never overlap as two workers: the second container finds the first's
 lock and exits as busy, costing one container start.

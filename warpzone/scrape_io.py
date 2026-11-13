@@ -711,7 +711,13 @@ def run_scrape(opts: Options, rep: Reporter) -> int:
         )
     if opts.dry_run:  # it reads only, so it needs no lock
         return _run(opts, rep)
-    with inbox_lock.hold(root / "inbox", force=opts.force_lock, now=opts.now, out=rep.out):
+    with inbox_lock.hold(
+        root / "inbox",
+        force=opts.force_lock,
+        now=opts.now,
+        out=rep.out,
+        mode=inbox_lock.ATTENDED,
+    ):
         return _run(opts, rep)
 
 

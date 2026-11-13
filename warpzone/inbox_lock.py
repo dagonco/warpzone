@@ -1,9 +1,18 @@
 """The lock that keeps two `warpzone inbox --apply` runs off the same hub inbox.
 
-`inbox/.warpzone.lock` is created atomically (O_CREAT | O_EXCL) and holds the host name,
-the pid and the start time of the run. A lock in the way is live, or stale: older than
-`LOCK_MAX_AGE`, or held by a pid that is not running on this same host. A stale lock is
-only taken over with `--force-lock`, never silently. See development/design/inbox.md.
+`inbox/.warpzone.lock` is created atomically (O_CREAT | O_EXCL) and holds the host name, the pid,
+the start time, the heartbeat interval (`beat`) and the mode of the run. While a run holds it, a
+`Heartbeat` thread touches the file's modification time every `BEAT_SECONDS`, and only while the
+file still holds this run's identity.
+
+A lock in the way is live or stale (`judge`, pure). An attended run looks once: a lock with a
+heartbeat is stale when its modification time is older than `STALE_BEAT_SECONDS` by this machine's
+clock; a lock of an older warpzone (no `beat`) is stale when older than `LOCK_MAX_AGE`; both are
+stale when held by a pid that is not running on this same host. An unattended run compares two
+readings of the file instead, never its time against the clock, and never takes over a lock
+without `beat`. A stale lock is taken over with `--force-lock`, or by an unattended run when it has
+a heartbeat; never silently otherwise. See development/design/inbox.md and
+development/design/inbox-unattended.md.
 """
 
 from __future__ import annotations
@@ -11,6 +20,7 @@ from __future__ import annotations
 import json
 import os
 import socket
+import threading
 import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager, suppress
@@ -20,8 +30,18 @@ from pathlib import Path
 from warpzone.inbox_core import InboxError
 
 LOCK_NAME = ".warpzone.lock"
-LOCK_MAX_AGE = 12 * 3600  # seconds
+LOCK_MAX_AGE = 12 * 3600  # seconds; the rule for a lock without a heartbeat
+BEAT_SECONDS = 60  # how often a run holding the lock touches it
+STALE_BEAT_SECONDS = 10 * 60  # silence after which a lock with a heartbeat is stale
+ATTENDED = "attended"
+UNATTENDED = "unattended"
 _SHOWN = f"inbox/{LOCK_NAME}"  # what messages call it: never a path outside the hub
+
+# The verdicts of `judge`.
+LIVE = "live"  # the holder is working
+STALE = "stale"  # the holder is gone and the lock may be taken over
+UNKNOWN = "unknown"  # unattended and one reading is not enough: treat as busy
+LEGACY = "legacy"  # stale, but a lock of an older warpzone: only a person takes it over
 
 
 @dataclass(frozen=True)
@@ -29,6 +49,43 @@ class LockInfo:
     host: str
     pid: int
     started: float
+    beat: int | None = None  # heartbeat interval in seconds; None for a lock of an older warpzone
+    mode: str | None = None  # ATTENDED or UNATTENDED; None for a lock of an older warpzone
+
+
+@dataclass(frozen=True)
+class LockReading:
+    """What one look at the lock found: its content, its modification time, and when we looked."""
+
+    info: LockInfo | None
+    mtime: float
+    looked: float
+
+
+@dataclass(frozen=True)
+class Verdict:
+    state: str
+    reason: str | None = None  # why it is stale, for the messages
+
+
+class LockBusy(InboxError):
+    """Another run holds the lock (live, or not yet provably silent). The message names it.
+
+    This also covers a lock created by someone else between a look and taking it, so a caller
+    that wants "busy" to be a normal outcome catches this and not every `InboxError`.
+    `reading` is what was seen of the lock, for the next look to compare against."""
+
+    def __init__(self, message: str, reading: LockReading | None = None) -> None:
+        super().__init__(message)
+        self.reading = reading
+
+
+class LockStale(InboxError):
+    """A stale lock this run may not take over (no `--force-lock`, or a legacy lock unattended)."""
+
+    def __init__(self, message: str, reading: LockReading | None = None) -> None:
+        super().__init__(message)
+        self.reading = reading
 
 
 def hostname() -> str:
@@ -51,7 +108,11 @@ def pid_alive(pid: int) -> bool:
 
 
 def render(info: LockInfo) -> str:
-    return json.dumps({"host": info.host, "pid": info.pid, "started": info.started}) + "\n"
+    data: dict[str, object] = {"host": info.host, "pid": info.pid, "started": info.started}
+    if info.beat is not None:  # a lock of an older warpzone has neither key
+        data["beat"] = info.beat
+        data["mode"] = info.mode or ATTENDED
+    return json.dumps(data) + "\n"
 
 
 def parse(text: str) -> LockInfo | None:
@@ -65,17 +126,30 @@ def parse(text: str) -> LockInfo | None:
         return None
     if isinstance(started, bool) or not isinstance(started, (int, float)):
         return None
-    return LockInfo(host, pid, float(started))
+    beat = data.get("beat")
+    if beat is not None and (isinstance(beat, bool) or not isinstance(beat, int) or beat <= 0):
+        return None
+    mode = data.get("mode")
+    if mode not in (None, ATTENDED, UNATTENDED):
+        mode = None
+    return LockInfo(host, pid, float(started), beat, mode)
 
 
-def judge(
-    info: LockInfo | None,
-    mtime: float,
-    now: float,
-    here: str,
-    alive: Callable[[int], bool],
+def same_run(a: LockInfo | None, b: LockInfo | None) -> bool:
+    """Whether two readings are of the lock of one run (its host, pid and start time)."""
+    if a is None or b is None:
+        return False
+    return (a.host, a.pid, a.started) == (b.host, b.pid, b.started)
+
+
+def _clock(stamp: float) -> str:
+    return time.strftime("%H:%M", time.localtime(stamp))
+
+
+def _legacy_reason(
+    info: LockInfo | None, mtime: float, now: float, here: str, alive: Callable[[int], bool]
 ) -> str | None:
-    """Why a lock that is in the way is stale, or None when it is live.
+    """The rules of a lock with no heartbeat: age since it started, or a dead pid on this host.
 
     An unreadable lock (just being written, or damaged) goes by the age of the file."""
     started = mtime if info is None else info.started
@@ -86,6 +160,45 @@ def judge(
     return None
 
 
+def judge(
+    reading: LockReading,
+    here: str,
+    alive: Callable[[int], bool],
+    *,
+    unattended: bool = False,
+    previous: LockReading | None = None,
+) -> Verdict:
+    """Whether a lock that is in the way is live or stale, and why (pure).
+
+    Attended (one look): a lock with a heartbeat is stale when its modification time is more than
+    STALE_BEAT_SECONDS old by this clock, or its pid is not running on this host; a lock without
+    one keeps the rules of an older warpzone (LOCK_MAX_AGE, the pid).
+
+    Unattended: only two readings of the same lock count. A modification time that moved is live;
+    the same one at least STALE_BEAT_SECONDS later by this clock is silence (stale). With no
+    earlier reading of this lock, or too short a gap, the verdict is UNKNOWN. A lock without a
+    heartbeat is never judged stale here: when the old rules say it is, the verdict is LEGACY."""
+    info, mtime, now = reading.info, reading.mtime, reading.looked
+    if info is None or info.beat is None:
+        reason = _legacy_reason(info, mtime, now, here, alive)
+        if reason is None:
+            return Verdict(LIVE)
+        return Verdict(LEGACY if unattended else STALE, reason)
+    if not unattended:
+        if now - mtime > STALE_BEAT_SECONDS:
+            return Verdict(STALE, f"no heartbeat since {_clock(mtime)}")
+        if info.host == here and not alive(info.pid):
+            return Verdict(STALE, f"process {info.pid} is not running on this host")
+        return Verdict(LIVE)
+    if previous is None or not same_run(previous.info, info):
+        return Verdict(UNKNOWN)
+    if previous.mtime != mtime:
+        return Verdict(LIVE)
+    if now - previous.looked >= STALE_BEAT_SECONDS:
+        return Verdict(STALE, f"no heartbeat for {STALE_BEAT_SECONDS // 60} minutes")
+    return Verdict(UNKNOWN)
+
+
 def describe(info: LockInfo | None, mtime: float, now: float) -> str:
     started = mtime if info is None else info.started
     since = time.strftime("%Y-%m-%d %H:%M", time.localtime(started))
@@ -93,6 +206,8 @@ def describe(info: LockInfo | None, mtime: float, now: float) -> str:
     ago = f"{minutes // 60} h {minutes % 60} min" if minutes >= 60 else f"{minutes} min"
     if info is None:
         return f"held by an unknown run since {since} ({ago} ago)"
+    if info.mode == UNATTENDED:
+        return f"held by the unattended inbox on the hub since {since} ({ago} ago)"
     return f"held by {info.host} (pid {info.pid}) since {since} ({ago} ago)"
 
 
@@ -105,6 +220,65 @@ def _read(path: Path) -> tuple[LockInfo | None, float] | None:
         return None
 
 
+def still_mine(path: Path, mine: LockInfo) -> bool:
+    """Whether the lock file is there and holds this run's host, pid and start time."""
+    try:
+        held = _read(path)
+    except OSError:
+        return False
+    return held is not None and same_run(held[0], mine)
+
+
+def beat_once(path: Path, mine: LockInfo, touch: Callable[[Path], None] = os.utime) -> bool:
+    """Touch the lock's modification time if it is still this run's; False when it is not."""
+    if not still_mine(path, mine):
+        return False
+    try:
+        touch(path)
+    except FileNotFoundError:
+        return False
+    except OSError:
+        pass  # a share that hiccups: try again at the next beat
+    return True
+
+
+class Heartbeat:
+    """A thread that touches the lock every `interval` seconds while it is this run's.
+
+    It stops by itself when the lock is gone or somebody else's (`beat_once` is False), and on
+    `stop()`. `wait(seconds)` returns True when told to stop; tests replace it."""
+
+    def __init__(
+        self,
+        path: Path,
+        mine: LockInfo,
+        interval: float = BEAT_SECONDS,
+        *,
+        touch: Callable[[Path], None] = os.utime,
+        wait: Callable[[float], bool] | None = None,
+    ) -> None:
+        self.path = path
+        self.mine = mine
+        self.interval = interval
+        self._touch = touch
+        self._stopped = threading.Event()
+        self._wait = wait or self._stopped.wait
+        self._thread = threading.Thread(target=self.run, name="inbox-lock-heartbeat", daemon=True)
+
+    def run(self) -> None:
+        while not self._wait(self.interval):
+            if not beat_once(self.path, self.mine, self._touch):
+                return
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stopped.set()
+        if self._thread.is_alive():
+            self._thread.join()
+
+
 def _create(path: Path, info: LockInfo) -> None:
     fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
     try:
@@ -115,6 +289,17 @@ def _create(path: Path, info: LockInfo) -> None:
         raise
 
 
+def _busy_message(who: str, info: LockInfo | None) -> str:
+    if info is not None and info.beat is not None:
+        rule = f"counts as stale after {STALE_BEAT_SECONDS // 60} minutes without a heartbeat"
+    else:
+        rule = f"counts as stale after {LOCK_MAX_AGE // 3600} hours"
+    return (
+        f"another warpzone inbox is working on this inbox: {_SHOWN} is {who}. "
+        f"Wait for it to finish; if that run is gone, the lock {rule} (or delete {_SHOWN} yourself)"
+    )
+
+
 def _acquire(
     path: Path,
     mine: LockInfo,
@@ -122,7 +307,9 @@ def _acquire(
     force: bool,
     now: Callable[[], float],
     out: Callable[[str], None],
+    previous: LockReading | None = None,
 ) -> None:
+    unattended = mine.mode == UNATTENDED
     for _ in range(3):
         try:
             _create(path, mine)
@@ -135,31 +322,46 @@ def _acquire(
         if held is None:  # released between our two looks
             continue
         info, mtime = held
-        here = now()  # one clock for the verdict and the message
-        who = describe(info, mtime, here)
-        reason = judge(info, mtime, here, mine.host, pid_alive)
-        if reason is None:
-            raise InboxError(
-                f"another warpzone inbox is working on this inbox: {_SHOWN} is {who}. "
-                "Wait for it to finish; if that run is gone, the lock counts as stale "
-                f"after {LOCK_MAX_AGE // 3600} hours (or delete {_SHOWN} yourself)"
+        reading = LockReading(info, mtime, now())  # one clock for the verdict and the message
+        who = describe(info, mtime, reading.looked)
+        verdict = judge(reading, mine.host, pid_alive, unattended=unattended, previous=previous)
+        if verdict.state in (LIVE, UNKNOWN):
+            raise LockBusy(_busy_message(who, info), reading)
+        if verdict.state == LEGACY:
+            raise LockStale(
+                f"{_SHOWN} is {who}, and is stale ({verdict.reason}), but it is the lock of an "
+                "older warpzone, which an unattended run never takes over. "
+                "If no other run is working on the inbox, run warpzone inbox --apply "
+                "--force-lock yourself",
+                reading,
             )
-        if not force:
-            raise InboxError(
-                f"{_SHOWN} is {who}, and is stale ({reason}). "
-                "If no other run is working on the inbox, run again with --force-lock"
+        if not (force or unattended):
+            raise LockStale(
+                f"{_SHOWN} is {who}, and is stale ({verdict.reason}). "
+                "If no other run is working on the inbox, run again with --force-lock",
+                reading,
             )
         if _read(path) != held:  # re-check right before acting: it changed under us
             continue
-        out(f"inbox: taking over a stale lock: {who}; stale because {reason}")
+        out(f"inbox: taking over a stale lock: {who}; stale because {verdict.reason}")
         path.unlink(missing_ok=True)
-    raise InboxError(f"could not take {_SHOWN}: another run keeps changing it")
+    raise LockBusy(f"could not take {_SHOWN}: another run keeps changing it")
 
 
 def _release(path: Path, mine: LockInfo) -> None:
-    held = _read(path)
-    if held is not None and held[0] == mine:  # never remove somebody else's lock
+    if still_mine(path, mine):  # never remove somebody else's lock
         path.unlink(missing_ok=True)
+
+
+@dataclass(frozen=True)
+class Held:
+    """What `hold` gives the body: a way to ask whether the lock is still this run's."""
+
+    path: Path
+    mine: LockInfo
+
+    def still_mine(self) -> bool:
+        return still_mine(self.path, self.mine)
 
 
 @contextmanager
@@ -169,13 +371,27 @@ def hold(
     force: bool,
     now: Callable[[], float],
     out: Callable[[str], None],
-) -> Iterator[None]:
-    """Hold `inbox/.warpzone.lock` for the body; it is released on any exit."""
+    mode: str = ATTENDED,
+    previous: LockReading | None = None,
+    interval: float = BEAT_SECONDS,
+) -> Iterator[Held]:
+    """Hold `inbox/.warpzone.lock` for the body, with a heartbeat; it is released on any exit.
+
+    `mode` is ATTENDED or UNATTENDED. An unattended run takes over a silent lock by itself
+    (judged against `previous`, the reading of an earlier run) and cannot be forced. A lock
+    held by someone else raises `LockBusy`; a stale one it may not take, `LockStale`."""
+    if mode not in (ATTENDED, UNATTENDED):
+        raise ValueError(f"unknown lock mode {mode!r}")
+    if force and mode == UNATTENDED:
+        raise ValueError("an unattended run never forces a lock")
     path = inbox / LOCK_NAME
-    mine = LockInfo(hostname(), os.getpid(), now())
-    _acquire(path, mine, force=force, now=now, out=out)
+    mine = LockInfo(hostname(), os.getpid(), now(), BEAT_SECONDS, mode)
+    _acquire(path, mine, force=force, now=now, out=out, previous=previous)
+    heartbeat = Heartbeat(path, mine, interval)
     try:
-        yield
+        heartbeat.start()
+        yield Held(path, mine)
     finally:
+        heartbeat.stop()
         with suppress(OSError):  # a lock we cannot remove must not hide the error behind it
             _release(path, mine)
