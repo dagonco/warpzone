@@ -46,7 +46,10 @@ def write_record(
     for n in range(1, MAX_SAME_SECOND):
         record = build(record_id(started, n))
         target = folder / f"{record['id']}.json"
-        if safefile.atomic_write(target, render_record(record).encode(), expect=None):
+        # A name that is not valid text (undecodable bytes) holds a lone surrogate: it is
+        # written as the JSON escape `\\udcff`, which parses back to the same name.
+        data = render_record(record).encode("utf-8", errors="backslashreplace")
+        if safefile.atomic_write(target, data, expect=None):
             return record
     raise OSError(f"no free record name in {RUNS_DIR}/ for {record_id(started)}")
 

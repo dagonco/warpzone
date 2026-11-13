@@ -1130,16 +1130,24 @@ def _record_run(
 
     try:
         record = inbox_unattended_io.write_record(opts.root, started, build)
-        inbox_unattended_io.purge_records(opts.root)
-    except OSError as exc:
-        rep.warn(f"run record: not written ({exc.strerror or exc})")
-        return
-    rep.out(f"run record: catalog/inbox/runs/{record['id']}.json")
+    except (OSError, ValueError) as exc:  # the webhook still reports what the run did
+        rep.warn(f"run record: not written ({_why(exc)})")
+        record = build(inbox_unattended.record_id(started))
+    else:
+        rep.out(f"run record: catalog/inbox/runs/{record['id']}.json")
+        try:
+            inbox_unattended_io.purge_records(opts.root)
+        except OSError as exc:
+            rep.warn(f"run record: old records not deleted ({_why(exc)})")
     if opts.notify_url and inbox_unattended.should_notify(record):
         try:
             notify(opts.notify_url, inbox_unattended.notify_payload(record))
         except NotifyError as exc:
             rep.warn(str(exc))
+
+
+def _why(exc: Exception) -> str:
+    return (getattr(exc, "strerror", None) or str(exc)).strip()
 
 
 def _update_catalog(opts: Options, rep: Reporter, results: Sequence[ItemResult]) -> None:

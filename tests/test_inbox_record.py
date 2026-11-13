@@ -107,8 +107,29 @@ class CleanTextTests(unittest.TestCase):
         )
 
     def test_relative_names_and_whitelist_lines_are_kept(self) -> None:
-        for text in ("roms/psx/a.chd", "!/roms/psx/a.chd", "Disc 1/2", "https://x/y", "a/b"):
+        names = (
+            "roms/psx/a.chd",
+            "!/roms/psx/a.chd",
+            "Disc 1/2",
+            "https://x/y",
+            "a/b",
+            "Foo (Disc 1)/bar.cue",
+            "Foo (Disc 1) (Europe)/Foo (Disc 2).cue",
+            "Game [!]/a.bin: no match",
+            "no DAT match: Foo (Disc 1)/track01.bin",
+        )
+        for text in names:
             self.assertEqual(clean_text(text, [ROOT]), text)
+
+    def test_a_path_after_a_space_a_quote_a_colon_or_an_equals_sign_is_replaced(self) -> None:
+        for text in ("at /mnt/x", "at '/mnt/x'", 'at "/mnt/x"', "path=/mnt/x", "in:/mnt/x/y"):
+            self.assertNotIn("/mnt", clean_text(text))
+            self.assertIn("<path>", clean_text(text))
+        self.assertEqual(clean_text("(/mnt/x)"), "(<path>)")
+
+    def test_a_home_path_is_replaced_too(self) -> None:
+        self.assertEqual(clean_text("keys in ~/keys/prod.keys now"), "keys in <path> now")
+        self.assertEqual(clean_text("a~/b"), "a~/b")
 
     def test_secrets_and_long_tokens_are_redacted(self) -> None:
         self.assertEqual(clean_text("key abc123 used", (), ["abc123"]), f"key {REDACTED} used")
@@ -412,6 +433,52 @@ class AttendedRunTests(Base):
         self.assertNotIn(ZRIF, text)
         self.assertNotIn(str(self.tmp), text)
         self.assertIn(REDACTED, text)
+
+    def test_a_name_with_undecodable_bytes_does_not_break_the_run(self) -> None:
+        self.drop("a.nes", NES_ROM)
+
+        def fake(ctx: object, item: Path, n: int, unverified: str | None = None) -> ItemResult:
+            result = done_item("Bad \udcffname.zip")
+            result.name = "Bad \udcffname.zip"
+            return result
+
+        with Receiver() as hook, mock.patch.object(inbox, "process_item", fake):
+            self.assertEqual(self.go(notify_url=hook.url), 0)
+            self.assertEqual(hook.bodies, [])
+        self.assertEqual(
+            self.lines.count("run record: catalog/inbox/runs/" + self.last()["id"] + ".json"), 1
+        )
+        self.assertEqual(self.last()["items"][0]["item"], "Bad \udcffname.zip")
+
+    def test_a_record_that_cannot_be_written_is_a_warning_and_the_webhook_still_goes(self) -> None:
+        self.drop("mystery.nes", b"?")
+        broken = mock.patch.object(
+            inbox_unattended_io.safefile, "atomic_write", side_effect=OSError(28, "No space left")
+        )
+        with Receiver() as hook, broken:
+            self.lines.clear()
+            rep = Reporter(self.lines.append)
+            code = inbox.run_inbox(self.options(notify_url=hook.url), rep)
+        self.assertEqual(code, 1)
+        self.assertEqual(rep.warnings, ["run record: not written (No space left)"])
+        self.assertEqual(self.review(), ["mystery.nes", "mystery.nes.reason.txt"])
+        self.assertEqual(len(hook.bodies), 1)
+        self.assertEqual(hook.bodies[0]["review_items"], ["mystery.nes"])
+        self.assertNotIn("run record: catalog", self.out)
+
+    def test_a_purge_that_fails_is_only_a_warning_and_the_record_stays_reported(self) -> None:
+        self.drop("mystery.nes", b"?")
+        broken = mock.patch.object(
+            inbox_unattended_io, "purge_records", side_effect=OSError(13, "Permission denied")
+        )
+        with Receiver() as hook, broken:
+            self.lines.clear()
+            rep = Reporter(self.lines.append)
+            self.assertEqual(inbox.run_inbox(self.options(notify_url=hook.url), rep), 1)
+        self.assertEqual(rep.warnings, ["run record: old records not deleted (Permission denied)"])
+        self.assertEqual(len(self.runs()), 1)
+        self.assertIn(f"run record: catalog/inbox/runs/{self.last()['id']}.json", self.out)
+        self.assertEqual(len(hook.bodies), 1)
 
     def test_the_scrape_note_is_in_the_record(self) -> None:
         self.drop("a.nes", NES_ROM)

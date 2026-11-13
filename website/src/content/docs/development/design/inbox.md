@@ -262,8 +262,11 @@ this is what an attended run decides:
   holds another absolute path, a secret (`RA_API_KEY`, the webhook URL) or a long base64 token
   (a zRIF) is redacted. The handlers redact what they print at the source; the record repeats it
   on every text as a second line.
-- Writing the record is not part of the placement: if it fails, the run says so as a warning
-  and goes on. The writer deletes the records older than the newest 50.
+- Writing the record is not part of the placement: if it fails, the run says so as a warning,
+  sends the webhook all the same (from the record it built in memory) and goes on. A name with
+  undecodable bytes is written as a JSON escape (`\udcff`), not as a failure. The writer then
+  deletes the records older than the newest 50; if that fails it is a second warning and the
+  record still counts as written.
 - The `scrape` note is what `inbox_scrape.after_apply` returns: `done`, `not-finished` (with the
   systems to give to `warpzone scrape --system`) or `skipped` (`--no-scrape`, no Skyscraper),
   and absent when nothing scrapable was placed.

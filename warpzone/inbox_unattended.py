@@ -599,8 +599,10 @@ def exit_code(found: News) -> int:
 _RECORD_NAME = re.compile(r"^(\d{8}T\d{6}Z)(?:-(\d+))?\.json$")
 # An absolute path (a POSIX one after a space, a quote or the start, or a drive letter): the
 # part of a message that says where a file is on this machine, which a record never holds.
+# A `/` starts a path only at the start of the text or after whitespace, a quote, `=`, `:`, `(`
+# or `[`, so `Foo (Disc 1)/bar.cue` and `!/roms/psx/a.chd` are names, not paths. `~/` is a home.
 _ABS_PATH = re.compile(
-    r"(?<![\w:/.~!@#$%^&*+=-])/(?=[\w.~@%+-])[^\s'\"`,;)\]]*|\b[A-Za-z]:\\[^\s'\"]*"
+    r"(?<![^\s'\"`=:(\[])(?:/(?=[\w.~@%+-])|~/)[^\s'\"`,;)\]]*|\b[A-Za-z]:\\[^\s'\"]*"
 )
 # A zRIF or any other long base64 token (a licence, a key), whether or not it is known.
 _LONG_TOKEN = re.compile(r"[A-Za-z0-9+/=_-]{128,}")
