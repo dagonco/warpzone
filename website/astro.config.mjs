@@ -84,6 +84,7 @@ export default defineConfig({
                 { label: 'Pruning', slug: 'development/design/prune' },
                 { label: 'BIOS check', slug: 'development/design/bios' },
                 { label: 'Inbox', slug: 'development/design/inbox' },
+                { label: 'Scraping', slug: 'development/design/scrape' },
                 { label: 'Library UI', slug: 'development/design/library-ui' },
                 { label: 'Play queue', slug: 'development/design/play-queue' },
                 { label: 'Emulator settings', slug: 'development/design/emulator-settings' },
