@@ -139,6 +139,8 @@ vita_zrif = "~/keys/PSV_GAMES.tsv"            # optional: zRIF keys for PS Vita 
    | `nes`, `snes`, `n64`, `gb`, `gbc`, `gba`, `nds`, `genesis`, `mastersystem`, `gamegear` | `<game>.zip` holding the ROM under its DAT name |
 
    A multi-disc game of a CHD system goes in `<game without disc tag>.m3u/` with every disc and a `<game>.m3u` playlist, and only when all its discs are in the item; otherwise it goes to review.
+
+   A PlayStation disc that comes with an `.sbi` (the LibCrypt protection data of some PAL games, named like its cue or data track) also goes in a `<game>.m3u/` folder, with the `.sbi` renamed after the disc, because a CHD does not keep that data and DuckStation and Beetle PSX read it from `<disc>.sbi` next to the disc. The report shows `note: LibCrypt: <game>.sbi goes with its disc`.
 4. **Checks RetroAchievements** (optional). With `rahasher` configured it hashes the source and the result and refuses to place a game whose hash changed. With `RA_API_KEY` in the environment it looks the hash up and reports `supported (<title>)` or `hash not linked`. The key is never printed.
 5. **Places** the result in `library/roms/<system>/` (copied to `<name>.part`, read back, then renamed). It never overwrites: the same content is reported as "already in the library", different content under the same name goes to review.
 6. **Files the original** in `inbox/_done/<date>/`, or in `inbox/_revisar/` with a `<item>.reason.txt` (no DAT match (unless you dropped the file in `_unverified/<system>/`), incomplete multi-disc, conversion or verify failed, RA hash changed, conflict, missing tool). On every `--apply`, `_done` folders named like a date and older than 7 days are deleted, nothing else.
