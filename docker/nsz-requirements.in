@@ -1,0 +1,4 @@
+# nsz and what it needs, for docker/Dockerfile. Move the pin here, then regenerate the lock:
+#   uv pip compile docker/nsz-requirements.in --universal --python-version 3.14 --generate-hashes \
+#       --no-header --annotation-style=line -o docker/nsz-requirements.txt
+nsz==5.0.0

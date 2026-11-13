@@ -233,8 +233,9 @@ jobs:
 
   # Builds the hub's container image and runs it far enough to see that it works, so that a
   # base image or apt change that breaks it shows up here and not on the first rebuild on the
-  # hub. Nothing is pushed and no registry login is made. The RAHasher stage compiles C++,
-  # hence the generous timeout.
+  # hub. Nothing is pushed and no registry login is made. The RAHasher and dolphin-tool stages
+  # compile C++ (dolphin-tool, Dolphin's emulation core included, is most of the time), hence the
+  # generous timeout.
   image:
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
@@ -246,6 +247,10 @@ jobs:
       - name: Build the image
         timeout-minutes: 35
         run: docker build -f docker/Dockerfile -t warpzone:ci .
+      - name: Show the size of the image
+        run: |
+          docker image inspect --format 'image size: {{.Size}} bytes' warpzone:ci
+          docker history --no-trunc --format '{{.Size}}\t{{.CreatedBy}}' warpzone:ci | cut -c1-160
       # The entrypoint is `warpzone` and the user is 65534, so the version check passes only
       # its argument; the tools are looked up with the entrypoint replaced by `sh`.
       - name: Check the version and the tools
@@ -262,9 +267,57 @@ jobs:
             command -v chdman
             command -v bsdtar
             command -v RAHasher
+            command -v dolphin-tool
+            command -v nsz
+            command -v orbis-pkg-util
             bsdtar --version
+            # Each tool starts. dolphin-tool prints its usage and exits 1 when given no command.
+            RAHasher 2>&1 | head -n 1
+            dolphin-tool convert -h | head -n 1
+            nsz --help | head -n 1
+            orbis-pkg-util --help | head -n 1
+            # nsz keeps its packages to itself: the Python of warpzone does not see them.
+            if python -c "import Crypto" 2>/dev/null || python -c "import zstandard" 2>/dev/null; then echo "nsz leaked into python"; exit 1; fi
             test "$(id -u)" != 0
           '
+      # dolphin-tool reads a disc image under the limits of the compose file (not root, a read-only
+      # root file system, memory for /tmp): a synthetic GameCube header, a megabyte long, is enough
+      # for its `header` command to print the game ID.
+      - name: Run dolphin-tool on a synthetic image
+        run: |
+          set -euo pipefail
+          mkdir "$RUNNER_TEMP/gc"
+          python3 - "$RUNNER_TEMP/gc/check.iso" <<'EOF'
+          import sys
+          data = bytearray(0x100000)
+          data[0:6] = b"GTSE01"
+          data[0x1C:0x20] = bytes.fromhex("C2339F3D")
+          data[0x20:0x2E] = b"Warpzone check"
+          open(sys.argv[1], "wb").write(data)
+          EOF
+          chmod 755 "$RUNNER_TEMP/gc"
+          chmod 644 "$RUNNER_TEMP/gc/check.iso"
+          docker run --rm --read-only --tmpfs /tmp --user 65534:65534 \
+            -v "$RUNNER_TEMP/gc:/data:ro" --entrypoint dolphin-tool warpzone:ci \
+            header -i /data/check.iso | tee "$RUNNER_TEMP/header.txt"
+          grep -q "GTSE01" "$RUNNER_TEMP/header.txt"
+      # `doctor` in the container must find every tool the image ships, on PATH or at the path it
+      # is told, from the config it would read in /config. Vita3K is not in the image, so its line
+      # is not checked. The output is shown whatever doctor's exit code is.
+      - name: Check that doctor finds the tools
+        run: |
+          set -euo pipefail
+          mkdir "$RUNNER_TEMP/doctor-config"
+          printf '[inbox]\nroot = "/srv/games"\nrahasher = "/usr/local/bin/RAHasher"\n' \
+            > "$RUNNER_TEMP/doctor-config/config.toml"
+          chmod 755 "$RUNNER_TEMP/doctor-config"
+          chmod 644 "$RUNNER_TEMP/doctor-config/config.toml"
+          docker run --rm -v "$RUNNER_TEMP/doctor-config:/config:ro" warpzone:ci doctor \
+            | tee "$RUNNER_TEMP/doctor.txt" || true
+          for tool in chdman bsdtar RAHasher dolphin-tool nsz orbis-pkg-util; do
+            grep -E "^ +\[ok\] $tool " "$RUNNER_TEMP/doctor.txt" \
+              || { echo "doctor does not find $tool"; exit 1; }
+          done
 
   # Unit tests under coverage with branch measurement, limited to the warpzone package, on the
   # Python the typecheck job uses. The number goes to the job summary; there is no threshold.
