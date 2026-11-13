@@ -171,6 +171,21 @@ for every problem, the exact fix for this platform.
   that does not parse is `[! ]` too, with the same fix, which rewrites it. The file and the
   rules that write and clear it are in [Unattended runs](/warpzone/development/design/prune/#unattended-runs).
   It is never `[!!]`: nothing is broken, a removal is waiting for a person.
+- **Unattended inbox.** Group `Inbox`, with an `[inbox]` table and a hub root that can be read
+  (`[inbox] root`, else `[hub] root`; without one `Hub folder` already says so), on a computer as
+  well as in the container, because the state is on the share. One line, `Unattended inbox`:
+  `judge_unattended_inbox` (pure, in `doctor_inbox.py` and re-exported by `doctor.py`) judges the
+  state file `catalog/inbox/state.json`, the newest run record under `catalog/inbox/runs/` and
+  the age of the lock `inbox/.warpzone.lock`, against the clock; the check only reads them through
+  the probes (`is_file`, `read_text`, `list_dir`, `mtime`, `now`). No state file is `[--]` (no
+  unattended run has recorded anything) with the fix that schedules the task, so a hub that does
+  not use the feature is not alarmed. Otherwise a run-level error is `[!!]` (its message, since
+  when, how many runs, and the fix its step implies); `[! ]` for a last check more than two hours
+  old, held items, an item waiting more than two hours since `first`, and a lock held more than
+  six hours; `[ok]` with the last check and the last run. Findings share the line, the worst
+  status first. The rules are in
+  [Unattended inbox](/warpzone/development/design/inbox-unattended/#doctor). `health` does not
+  read it.
 - **Exit codes.** `0` when no check is a problem, `1` otherwise.
 - **Install hints** live in one table in `warpzone/doctor_hints.py` (the `*_HINTS` dicts, with `TOOLS` in
   `warpzone/doctor_tools.py`), keyed by platform family: `macos`, `debian`, `fedora`, `arch`, `steamos`,

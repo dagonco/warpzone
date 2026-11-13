@@ -648,6 +648,17 @@ def select_records_purge(names: Iterable[str], keep: int = RECORDS_KEPT) -> list
     return [name for _, name in found[: max(len(found) - keep, 0)]]
 
 
+def newest_record(names: Iterable[str]) -> str | None:
+    """The file name of the newest record among the names of `runs/`, or None. Only names of the
+    form `<id>.json` count."""
+    found = []
+    for name in names:
+        match = _RECORD_NAME.match(name)
+        if match:
+            found.append(((match.group(1), int(match.group(2) or 1)), name))
+    return max(found)[1] if found else None
+
+
 def clean_text(text: str, roots: Sequence[str] = (), secrets: Sequence[str] = ()) -> str:
     """`text` as a record or a webhook may hold it: each secret redacted, the hub root cut off
     the paths under it (they become relative to it), any other absolute path replaced by

@@ -2,7 +2,7 @@
 title: "Unattended inbox"
 ---
 
-**Status: implemented, except doctor.** The command is in the code:
+**Status: implemented.** The command is in the code:
 `warpzone inbox --apply --unattended` (`inbox_unattended_run.py`, called by `cli.py`), with the
 pure decisions of `inbox_unattended.py` (the fingerprint, readiness, the state file and the
 changes made to it, space, news and the exit code), the disk side of `inbox_unattended_io.py` (the
@@ -12,8 +12,8 @@ the lock heartbeat and the per-item "still mine" checks ([Locking](#locking)), t
 `notify.py`), `[inbox] chdman_threads`, `os.nice` and the work folder's cleanup
 ([Resource limits](#resource-limits)), and the library UI's Inbox view with its two routes
 (`library_api.inbox_response`, `run_response` and `parse_record`, read by `serve`; see
-[The run record and the library UI](#the-run-record-and-the-library-ui)). What is design only is
-doctor's `Unattended inbox` line ([Doctor](#doctor)). This page is the contract for running
+[The run record and the library UI](#the-run-record-and-the-library-ui)), and doctor's
+`Unattended inbox` line ([Doctor](#doctor)). This page is the contract for running
 `warpzone inbox --apply` on the hub by itself, from a scheduled task, with nobody watching. The
 pages it touches when it is implemented ([Inbox](/warpzone/development/design/inbox/),
 [Configuration and command line](/warpzone/development/design/configuration/),
@@ -638,19 +638,33 @@ first. A run with news of several kinds exits `2` if one of them is a configurat
 
 With an `[inbox]` table and a readable hub root, `doctor` gets one line, `Unattended inbox`, in the
 inbox group, on a computer as well as in the container (the state is on the share).
-`judge_unattended_inbox` (pure, over the parsed state, the newest record, the lock and the clock):
+`doctor_inbox.judge_unattended_inbox` (pure, re-exported by `doctor`; over the parsed state, the
+newest record, when the lock was taken and the clock) returns one verdict. When several of the
+cases below hold, they share the line: the worst status, and the text and fix of each case that is
+not `[ok]`. Implemented.
 
-- `[--]` "no unattended run has recorded anything": no state file. A setup without the task.
+- `[--]` "no unattended run has recorded anything": no state file. A setup without the task. The
+  fix is to schedule `warpzone inbox --apply --unattended` every 15 minutes on the hub (see
+  [What the user sets up once](#what-the-user-sets-up-once)).
 - `[!!]` a run-level error in the state: its message, since when and how many runs met it, with
-  the fix that the message implies.
+  the fix that its kind implies: for a configuration error (`config`), to fix what the message
+  says; for a runtime one, to read the task's output on the hub; both say that the next run that
+  gets past its step clears it.
 - `[! ]` the last check is more than two hours old: "the unattended inbox last ran N h ago; is the
-  scheduled task enabled?" (the heartbeat writes at least hourly).
+  scheduled task enabled?" (the heartbeat writes at least hourly). A state with no `checked` at
+  all is the same warning, worded as "records no check".
 - `[! ]` held items: each with its reason, and the fix "look at it, run `warpzone inbox` to see the
   report, then `warpzone inbox --apply` by hand, or replace the item to retry".
-- `[! ]` an item waiting for more than two hours since it was first seen (`first`: a copy that
-  keeps writing, a file a program keeps open, or no space).
+- `[! ]` an item waiting for more than two hours since it was first seen (`first`, not `seen`,
+  which a copy that keeps writing resets: a copy that keeps writing, a file a program keeps open,
+  or no space). Held items are not counted here again.
 - `[! ]` a lock held for more than six hours.
-- `[ok]` otherwise: "last check N min ago; last run <date>: placed X, for review Y".
+- `[ok]` otherwise: "last check N min ago; last run <date>: placed X, for review Y" (from the
+  newest record; `review` there counts the items sent to review and the held ones). With no record
+  yet, "no run has been recorded yet". A state file that cannot be parsed reads as an empty one and
+  gets the "records no check" warning.
+
+A line names at most three items and counts the rest.
 
 `health` does not read it: it judges a console's version, not the hub.
 
@@ -711,8 +725,8 @@ pass it); nothing implies it.
 - `inbox_lock.py` (implemented): `beat` and `mode`, the `Heartbeat` thread, `judge` over two
   readings, `still_mine`, `look`; the per-item "still mine" checks are in the run.
 - `notify.py`: the webhook POST, moved from `prune.py` (implemented; `NotifyError`).
-- `library_api.inbox_response` (pure) and the two routes in `serve`; `doctor.judge_unattended_inbox`
-  (pure).
+- `library_api.inbox_response` (pure) and the two routes in `serve`; `doctor_inbox.judge_unattended_inbox`
+  (pure, re-exported by `doctor`, with `inbox_unattended.newest_record`).
 - `inbox.py`: `Options.unattended` (the 30-second settle rule is off for it), `chdman_threads`,
   the layout check shared by both runs; the run itself is in `inbox_unattended_run.py`, with the
   early exit, the readiness, the per-item checks, the record and the exit code from `news`; the scrape after
