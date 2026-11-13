@@ -217,12 +217,15 @@ one that stops the run (see [Failures](#failures)).
 
 ## Merge
 
-`scrape.plan_merge` is pure. It takes the hub gamelist's entries (parsed with
-`artwork.parse_gamelist`, so the size limit and the encoding rules of
-[Frontend artwork](/warpzone/development/design/frontend-artwork/) apply), Skyscraper's gamelist
-entries, the staged map, and two existence checks (does the hub have media of this kind for this
-stem; which files of the batch's output exist). It returns the entries to add and the files to
-copy. Its rules:
+`scrape.plan_merge` is pure. It takes the batch's staged map (staged name to game) and the staged
+folder, the hub gamelist's entries (parsed with `artwork.parse_gamelist`, so the size limit and
+the encoding rules of [Frontend artwork](/warpzone/development/design/frontend-artwork/) apply),
+Skyscraper's gamelist entries, the paths of the hub's media files (as `select` takes them), and
+the files of the two passes' media folders, each with its type (regular file, symbolic link or
+other). It returns a `MergePlan`: for each game a verdict (`added`, `filled`, `not found` or
+`unchanged`), the entry to add and the files to copy (pass, source, destination), plus what it
+dropped and why. The writer only executes it; `scrape.render_entries` gives the text of the new
+entries, escaped, for the indentation and newline style the writer copies from the file. Its rules:
 
 - **Matching Skyscraper's entries.** An entry's `<path>` is taken as relative to the staged
   folder: `./Game.zip`, `Game.zip` and an absolute path inside the staged folder all mean
@@ -378,8 +381,13 @@ scrape: snes: 1 added, 1 filled, 1 not found
 ```
 
 "not found" means the gather left no data for the game in the cache (ScreenScraper does not know
-it, or the match was below Skyscraper's threshold). A game with an entry and nothing new to fill
-is counted, not listed.
+it, or the match was below Skyscraper's threshold): in the merge, Skyscraper's output has no entry
+and no media for it, whether or not the hub has an entry. A game with an entry and nothing new to
+fill is counted as unchanged, not listed. The kinds are listed in the order of the
+[Media kinds](#media-kinds) table, a symbolic link or an entry that was dropped is a `warning`
+line, and the games skipped because they were not found recently are counted in the last line.
+`scrape.render_report` (pure, over a `Report` that holds the merged games) prints these lines, and
+`scrape.stop_message`, `failed_message` and `gamelist_message` print the rows of the table below.
 
 ### Failures
 
