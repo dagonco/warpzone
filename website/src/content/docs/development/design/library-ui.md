@@ -64,6 +64,7 @@ Syncthing folder, so no console receives it and the hub's filesystem snapshots c
 ├── ra/user/summary.json       the user's completion progress, cached
 ├── ra/user/games/<id>.json    when the user unlocked each achievement of one game, cached
 ├── ra/badges/<name>[_lock].png  badge images, cached
+├── inbox/runs/<id>.json       the run record of each `inbox --apply` (the newest 50; see Inbox)
 └── whitelists/<device>/       backups of the whitelists the UI, the migration and a restore replaced
 ```
 

@@ -27,6 +27,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path
+from typing import Any
 
 from warpzone import dat as datmod
 from warpzone import (
@@ -36,6 +37,8 @@ from warpzone import (
     inbox_mame,
     inbox_n3ds,
     inbox_switch,
+    inbox_unattended,
+    inbox_unattended_io,
     inbox_vita,
     ra,
 )
@@ -59,6 +62,7 @@ from warpzone.inbox_core import (
     ItemResult,
     KindHandler,
     Options,
+    ScrapeNote,
     Staged,
     Tools,
     ToolTimeout,
@@ -81,6 +85,7 @@ from warpzone.inbox_core import (
     unverified_reason,
     zip_members,
 )
+from warpzone.notify import NotifyError, notify
 from warpzone.report import Reporter
 
 DONE_DIR = "_done"
@@ -1032,6 +1037,7 @@ def run_inbox(opts: Options, rep: Reporter) -> int:
 
 def _run(opts: Options, rep: Reporter, inbox: Path, library: DatLibrary) -> int:
     items = [(p, None) for p in scan(inbox)] + [(p, s) for p, s in scan_unverified(inbox)]
+    started = datetime.fromtimestamp(opts.now(), UTC)
     mode = "apply" if opts.apply else "report only"
     rep.out(f"inbox: {inbox} ({mode}), {len(items)} item(s)")
     rep.out(f"tools: {_describe_tools(opts.tools)}; DATs: {', '.join(library.systems())}")
@@ -1056,7 +1062,8 @@ def _run(opts: Options, rep: Reporter, inbox: Path, library: DatLibrary) -> int:
                 try:
                     _file_away(inbox, item, result, today)
                 except OSError as exc:
-                    result.reasons.append(f"could not move the original: {exc.strerror or exc}")
+                    result.unmoved = exc.strerror or str(exc)
+                    result.reasons.append(f"could not move the original: {result.unmoved}")
             _print_item(rep, n, len(items), result, opts.apply, today)
     finally:
         shutil.rmtree(work, ignore_errors=True)
@@ -1077,12 +1084,70 @@ def _run(opts: Options, rep: Reporter, inbox: Path, library: DatLibrary) -> int:
         inbox_scrape,
     )  # late: it imports `scrape`, and `catalog` imports this module
 
+    note = None
     if opts.apply:
         _update_catalog(opts, rep, results)
-        inbox_scrape.after_apply(opts, rep, results)
+        note = inbox_scrape.after_apply(opts, rep, results)
     else:
         inbox_scrape.report_only(opts, rep, results)
-    return _summary(rep, results, opts.apply)
+    review = _summary(rep, results, opts.apply)
+    if opts.apply:
+        _record_run(opts, rep, results, started, review, note, purged)
+    return review
+
+
+def _record_run(
+    opts: Options,
+    rep: Reporter,
+    results: Sequence[ItemResult],
+    started: datetime,
+    review: int,
+    note: ScrapeNote | None,
+    purged: Sequence[str],
+) -> None:
+    """Write the run record of an `--apply` that processed an item, then send the webhook when
+    the run calls for it. A failure of either is a warning: the items are filed."""
+    if all(r.left for r in results):
+        return  # nothing was processed: no record, no message
+    roots = [str(opts.root), str(opts.root.resolve())]
+    secrets = [x for x in (opts.ra_key, opts.notify_url) if x]
+
+    def build(run_id: str) -> Mapping[str, Any]:
+        return inbox_unattended.build_record(
+            results,
+            run_id=run_id,
+            mode="attended",
+            started=started,
+            finished=datetime.fromtimestamp(opts.now(), UTC),
+            status=1 if review else 0,
+            roots=roots,
+            secrets=secrets,
+            waiting=sum(1 for r in results if r.left),
+            scrape=note,
+            purged=purged,
+            warnings=rep.warnings,
+        )
+
+    try:
+        record = inbox_unattended_io.write_record(opts.root, started, build)
+    except (OSError, ValueError) as exc:  # the webhook still reports what the run did
+        rep.warn(f"run record: not written ({_why(exc)})")
+        record = build(inbox_unattended.record_id(started))
+    else:
+        rep.out(f"run record: catalog/inbox/runs/{record['id']}.json")
+        try:
+            inbox_unattended_io.purge_records(opts.root)
+        except OSError as exc:
+            rep.warn(f"run record: old records not deleted ({_why(exc)})")
+    if opts.notify_url and inbox_unattended.should_notify(record):
+        try:
+            notify(opts.notify_url, inbox_unattended.notify_payload(record))
+        except NotifyError as exc:
+            rep.warn(str(exc))
+
+
+def _why(exc: Exception) -> str:
+    return (getattr(exc, "strerror", None) or str(exc)).strip()
 
 
 def _update_catalog(opts: Options, rep: Reporter, results: Sequence[ItemResult]) -> None:

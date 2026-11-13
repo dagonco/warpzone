@@ -2,6 +2,7 @@
 stand-in Skyscraper, a failure is a warning that changes nothing else, and without `--apply` or
 without Skyscraper the report says what would not happen. No network and no real Skyscraper."""
 
+import json
 import os
 import unittest
 from pathlib import Path
@@ -97,6 +98,12 @@ class ScrapeAfterInboxCase(Base):
         self.assertFalse(self.nes_gamelist.exists())
         self.assertFalse(scrape_io.media_path(self.hub, "nes").exists())
 
+    def scrape_note(self) -> dict | None:  # type: ignore[type-arg]
+        """The `scrape` note of the newest run record (None when it has none)."""
+        newest = sorted((self.hub / "catalog" / "inbox" / "runs").glob("*.json"))[-1]
+        note: dict | None = json.loads(newest.read_text()).get("scrape")  # type: ignore[type-arg]
+        return note
+
     def assert_placed(self) -> None:
         self.assertEqual(self.library(), [f"nes/{GAME}.zip"])
         self.assertEqual(self.done(), ["a.nes"])
@@ -120,6 +127,7 @@ class ApplyTests(ScrapeAfterInboxCase):
         self.assertNotIn(FAKE_CREDS, self.out + "".join(rep.warnings))
         # The scrape ran before the closing summary of inbox.
         self.assertLess(self.out.index("scrape: nes"), self.out.index("items: 1;"))
+        self.assertEqual(self.scrape_note(), {"state": "done", "systems": ["nes"]})
 
     def test_only_the_games_this_run_placed_are_scraped(self) -> None:
         older = self.roms / "nes" / "Older (USA).zip"
@@ -149,6 +157,8 @@ class ApplyTests(ScrapeAfterInboxCase):
         self.assertIn("scrape: not finished; run `warpzone scrape --system nes` later", self.out)
         self.assertFalse(self.nes_gamelist.exists())
         self.assertEqual(self.review(), [])
+        note = self.scrape_note()
+        self.assertEqual(note and (note["state"], note["systems"]), ("not-finished", ["nes"]))
 
     def test_a_failing_skyscraper_is_a_warning_and_changes_neither_exit_code_nor_review(
         self,
@@ -167,6 +177,10 @@ class ApplyTests(ScrapeAfterInboxCase):
         self.assertEqual(code, 0, self.out)
         self.assert_placed()
         self.assertEqual(rep.warnings, ["scrape: failed (RuntimeError: boom)"])
+        self.assertEqual(
+            self.scrape_note(),
+            {"state": "not-finished", "systems": ["nes"], "message": "failed (RuntimeError)"},
+        )
         self.assertIn("scrape: not finished; run `warpzone scrape --system nes` later", self.out)
 
     def test_a_game_for_review_still_returns_the_review_count_when_the_scrape_runs(self) -> None:

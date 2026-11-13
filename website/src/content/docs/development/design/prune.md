@@ -92,7 +92,9 @@ JSON object per folder that has leftovers: `{"device", "folder", "files", "bytes
 `files` and `bytes` are what was actually deleted. It is meant for a Home
 Assistant webhook. The URL may embed a secret, so it is never printed, and a
 failed notification is a warning, not a failure of the run. No API key or path
-appears in the payload.
+appears in the payload. The sender is `notify.py` (`notify`, which raises `NotifyError`), shared
+with `inbox --notify-url` (see [The run record](/warpzone/development/design/inbox/#the-run-record));
+`prune` catches the error and prints it as a warning.
 
 ## Files the console generates
 

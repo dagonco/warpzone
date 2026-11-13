@@ -66,7 +66,8 @@ warpzone/
   provision_scripts.py  the ES-DE startup scripts, turning ES-DE's event scripts on, the Options menu entries
   provision_timers.py  the artwork, play state and unattended prune systemd user timers
   provision_updater.py  the autonomous update: settings file, live updater script, its timer
-  prune.py           leftover detection (pure `classify`), the unattended guard (pure `guard`) and the state file of its refusal, delete, webhook
+  prune.py           leftover detection (pure `classify`), the unattended guard (pure `guard`) and the state file of its refusal, delete
+  notify.py          the webhook POST `prune` and `inbox` share: JSON body, the URL never echoed, `NotifyError`
   bios.py            BIOS manifest, local overrides, pure `judge_*`, disk checks
   whitelist.py       managed whitelists: escape, parse, render, normalize, changes, matcher,
                      effect, migration parsing and classification, unsupported systems (pure)
@@ -76,7 +77,8 @@ warpzone/
   dat.py             Redump / No-Intro DAT parsing, cache, matching, disc grouping (pure)
   inbox_core.py      what the inbox pipeline and its handlers share: errors, options, results, staging
   inbox_lock.py      the `inbox/.warpzone.lock` file that keeps two `--apply` runs apart
-  inbox_unattended.py  the pure decisions of the unattended inbox: fingerprint, readiness, the state file and its changes, space, news and exit code
+  inbox_unattended.py  the pure decisions of the unattended inbox: fingerprint, readiness, the state file and its changes, space, news and exit code; the run record, the records to purge and the webhook payload
+  inbox_unattended_io.py  the disk side of it: writing the run records under `catalog/inbox/runs/` and purging the old ones
   inbox_scrape.py    the scrape at the end of `inbox`: which placed games, the report lines, failures as warnings
   inbox.py           unpack, identify, convert, place, file the originals
   sfo.py             the key/value table of a PARAM.SFO (pure; PS3 discs and PS4 packages)
@@ -247,6 +249,10 @@ build the image; the `image` job of the weekly and manual runs does (see "CI" be
 - `prune` unit tests with the fake Syncthing: the pure decision (`classify`),
   every refusal (bootstrap ignores, wrong type, missing marker, size cap),
   protected names, nested folders, symlinks, re-check before delete, webhook.
+- The webhook sender (`test_notify.py`) with a stand-in HTTP server, and the run record of
+  `inbox` (`test_inbox_record.py`): `build_record` from `ItemResult` values (no absolute path, a
+  zRIF and secrets redacted, held, review, already), the id and the purge to 50, the record
+  files, an attended `--apply` end to end, and the webhook that fires on review only.
 - `bios` tests: the pure judgements, manifest and override validation, and tmpdir
   libraries with tiny fake files and a test-only manifest (no real BIOS hashes):
   hashing only files of the expected size, content matches, local acceptance,

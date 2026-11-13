@@ -2,7 +2,7 @@
 title: "Inbox"
 ---
 
-`warpzone inbox [--root PATH] [--dats PATH] [--work-dir PATH] [--apply]` files new
+`warpzone inbox [--root PATH] [--dats PATH] [--work-dir PATH] [--apply] [--notify-url URL]` files new
 games dropped in `inbox/` into `library/roms/<system>/`. It reads no Syncthing state. It
 runs in one of two places, with the same code and the same contract:
 
@@ -181,6 +181,10 @@ The contract:
   when it is configured or found; `--no-scrape` skips it. A failure is a warning, never a review
   and never an exit code. Without `--apply` the report says how many games would be scraped.
   See [Scraping](/warpzone/development/design/scrape/#in-inbox---apply).
+- **Run record and webhook.** Every `--apply` run that processed at least one item writes a
+  run record, `catalog/inbox/runs/<id>.json`, built from the same results the report is printed
+  from; `--notify-url URL` POSTs a JSON summary when some item went to review. Both are
+  described in [The run record](#the-run-record) below.
 - **Missing tools.** `chdman`, `bsdtar`, `RAHasher` and `dolphin-tool` are located with
   `[inbox]` config keys or PATH (RAHasher only when configured). A tool that an item
   needs and is missing sends that item to review with a clear reason; other items
@@ -236,6 +240,52 @@ The contract:
   single `.bin` for several tracks is not identified (the DATs list one file per track).
 - **Exit code.** `0` when every item is placed or already in the library; `1` when any
   item went to review; `2` for a usage or configuration error.
+
+## The run record
+
+`--apply` writes `catalog/inbox/runs/<id>.json` for every run that processed at least one item
+(an item left alone because it changed in the last 30 seconds does not count; a run with only
+those, an empty inbox and a report write nothing). The contract of the file, its id and the
+50 records kept is in
+[The run record and the library UI](/warpzone/development/design/inbox-unattended/#the-run-record-and-the-library-ui);
+this is what an attended run decides:
+
+- `mode` is `attended` and `exit` is `1` when any item needs attention, else `0`.
+- An item is `done` (filed in `_done/`), `review` (sent to `_revisar/`) or `held`: its original
+  could not be moved after the run was through with it (a read-only share, a permission), so it
+  is still in `inbox/` and `moved_to` is `null`. The attended run keeps sending such an item to
+  review as before (the report says `REVIEW`, the exit code is `1`, and the next `--apply`
+  tries it again); the record only says what happened to the original.
+- A game's `outcome` is the report's: `placed`, `already`, `exists` (a different file with that name is
+  there) or `review`. Items still being copied are counted in `counts.waiting`, not listed.
+- No absolute path, key or URL is written. Paths are relative to the hub root, and any text that
+  holds another absolute path, a secret (`RA_API_KEY`, the webhook URL) or a long base64 token
+  (a zRIF) is redacted. The handlers redact what they print at the source; the record repeats it
+  on every text as a second line.
+- Writing the record is not part of the placement: if it fails, the run says so as a warning,
+  sends the webhook all the same (from the record it built in memory) and goes on. A name with
+  undecodable bytes is written as a JSON escape (`\udcff`), not as a failure. The writer then
+  deletes the records older than the newest 50; if that fails it is a second warning and the
+  record still counts as written.
+- The `scrape` note is what `inbox_scrape.after_apply` returns: `done`, `not-finished` (with the
+  systems to give to `warpzone scrape --system`) or `skipped` (`--no-scrape`, no Skyscraper),
+  and absent when nothing scrapable was placed.
+
+`--notify-url URL` (http or https; it needs `--apply` to do anything) POSTs one JSON object when
+some item went to review (`_revisar/`) or stayed in the inbox as above. A run that places games
+without review sends nothing, and neither does a report, a run with nothing to process or an
+error that stops the run before it starts:
+
+```json
+{"source": "inbox", "mode": "attended", "run": "20261113T101500Z",
+ "placed": 1, "already": 0, "review": 1, "held": 0,
+ "games": ["psx/Example Game (Europe).chd"], "review_items": ["some dump.7z"], "error": null}
+```
+
+The lists hold at most 20 names. The sender is the one `prune` uses (`notify.py`): the URL is
+never printed (it may carry a token), a failure is a warning and never a failure of the run, and
+the payload holds no API key and no path. The decision to send (`should_notify`) and the payload
+(`notify_payload`) are pure.
 
 The decisions (`skip_name`, `unsafe_member`, `unsafe_entry`, `select_purge`, `plan_units`,
 `destination_verdict`, `whitelist_line`, `resolve_refs`, `unsupported_reason`,
