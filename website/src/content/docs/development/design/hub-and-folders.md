@@ -44,8 +44,8 @@ Every folder warpzone manages has a stable Syncthing folder ID prefixed `wz-`.
 | `wz-library` | `library` | sendonly | receiveonly | `library` | per-device whitelist |
 | `wz-songs` | `songs` | sendonly | receiveonly | `songs` | per-device whitelist |
 | `wz-tools` | `tools` | sendonly | receiveonly | `tools` | common only |
-| `wz-media` | `frontend/media` | sendreceive | sendreceive | `media` | common, and on a device `/*/videos` |
-| `wz-esde` | `frontend/es-de` | sendreceive | sendreceive | `esde` | fixed whitelist: `gamelists`, `collections` |
+| `wz-media` | `frontend/media` | sendreceive | sendreceive | `media` | common + fixed `*.wz-tmp`, and on a device `/*/videos` |
+| `wz-esde` | `frontend/es-de` | sendreceive | sendreceive | `esde` | fixed `*.wz-tmp`, then a whitelist: `gamelists`, `collections` |
 | `wz-play-state` | `frontend/play-state` | sendreceive | sendreceive | `play_state` | fixed `*.wz-tmp` |
 | `wz-save-<emu>-<kind>` | `saves/<emu>/<kind>` | sendreceive | sendreceive | from profile | common only |
 | `wz-bios-<emu>-<kind>` | `library/<hub path from profile>` | sendonly | receiveonly | from profile | fixed whitelist from the profile |

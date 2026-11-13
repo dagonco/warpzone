@@ -155,6 +155,11 @@ dats_dir = "~/dats/libretro-database/metadat"
 # titledb_dir = "~/dats/titledb"
 # switch_keys = "~/.switch/prod.keys"
 
+# Optional scraping (`warpzone scrape`). Skyscraper (Gemba's fork) fetches descriptions and
+# media from ScreenScraper; its credentials, language and region live in its own config.ini,
+# never here. Default: Skyscraper on PATH.
+# skyscraper = "/usr/local/bin/Skyscraper"
+
 # Optional PS Vita .pkg support. A file you keep with the zRIF (the licence key) of each
 # game: CONTENT_ID<TAB>zRIF lines, or a TSV with a header row such as NoPayStation's
 # PSV_GAMES.tsv (only its "Content ID" and "zRIF" columns are read). warpzone never prints a

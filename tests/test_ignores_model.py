@@ -120,13 +120,27 @@ class ModelTests(unittest.TestCase):
     def test_videos_stay_on_the_hub(self) -> None:
         # A device that receives the whole media folder ignores each system's `videos`...
         device = self.by_id(device_specs(self.cfg, "deck", self.profile))["wz-media"]
-        self.assertEqual(device.ignores, ignores.inline(("/*/videos",)))
+        self.assertEqual(device.ignores, ignores.inline(("*.wz-tmp", "/*/videos")))
         # ...and the hub folder, shared with the other devices, does not.
         hub = self.by_id(hub_specs(self.cfg, self.profiles))["wz-media"]
-        self.assertEqual(hub.ignores, ignores.inline())
+        self.assertEqual(hub.ignores, ignores.inline(("*.wz-tmp",)))
         # The ES-DE folder next to it is not touched.
         esde = self.by_id(device_specs(self.cfg, "deck", self.profile))["wz-esde"]
         self.assertNotIn("/*/videos", esde.ignores)
+
+    def test_the_temporary_file_of_an_atomic_write_never_syncs(self) -> None:
+        # `scrape` writes media and gamelists through `.<name>.wz-tmp`, on the hub and on devices.
+        for specs in (
+            device_specs(self.cfg, "deck", self.profile),
+            hub_specs(self.cfg, self.profiles),
+        ):
+            by_id = self.by_id(specs)
+            for folder in ("wz-media", "wz-esde"):
+                ignores_of = by_id[folder].ignores
+                self.assertEqual(ignores_of[ignores_of.index("*.wz-tmp")], "*.wz-tmp", folder)
+                # Before the whitelist, so the first matching line is the one that ignores it.
+                if folder == "wz-esde":
+                    self.assertLess(ignores_of.index("*.wz-tmp"), ignores_of.index("!/gamelists"))
 
     def test_hub_folders(self) -> None:
         specs = self.by_id(hub_specs(self.cfg, self.profiles))

@@ -107,12 +107,13 @@ Optional. Only `warpzone inbox` and `warpzone doctor` read it. `inbox` works wit
 | `vita_zrif` | none | A file you keep with the zRIF of each PS Vita `.pkg`: `CONTENT_ID<TAB>zRIF` lines, or a TSV with a header row such as NoPayStation's `PSV_GAMES.tsv`, of which only the `Content ID` and `zRIF` columns are read. warpzone never prints a zRIF and never downloads keys. |
 | `titledb_dir` | none | A local clone of `blawar/titledb`, which names Switch games. |
 | `switch_keys` | `~/.switch/prod.keys` | Your console's keys file. warpzone only passes the path to `nsz`; it never reads or prints the file. |
+| `skyscraper` | `Skyscraper` on `PATH` | The Skyscraper program `warpzone scrape` runs (Gemba's fork, tested with 3.21.1). A path that does not exist is a configuration error. |
 | `mame_dat` | none | MAME's `listxml`, or an official `mameXXXXlx.zip` as it is. |
 | `fbneo_dat` | none | FinalBurn Neo "ClrMame Pro XML, Arcade only". |
 | `mame2003plus_dat` | none | `metadata/mame2003-plus.xml` of MAME 2003-Plus. |
 | `gamelist_mame` | `<root>/frontend/es-de/gamelists/mame/gamelist.xml` | The ES-DE gamelist that holds per-game emulator overrides for arcade sets. |
 | `gamelist_ps3` | `<root>/frontend/es-de/gamelists/ps3/gamelist.xml` | The ES-DE gamelist that records the alternative emulator for PS3 games. |
-| `tool_timeout_minutes` | `240` | How long one call of any external tool (`chdman`, `bsdtar`, `RAHasher`, `dolphin-tool`, `nsz`, `orbis-pkg-util`) may run, as a whole number of minutes, at least 1. A tool that runs longer is killed and only its item goes to review ("chdman did not finish within 240 minutes"); the run goes on with the next item and the inbox lock is released. The default is generous for converting several GB. Vita3K keeps its own limits. |
+| `tool_timeout_minutes` | `240` | How long one call of any external tool (`chdman`, `bsdtar`, `RAHasher`, `dolphin-tool`, `nsz`, `orbis-pkg-util`, `Skyscraper`) may run, as a whole number of minutes, at least 1. A tool that runs longer is killed and only its item goes to review ("chdman did not finish within 240 minutes"); the run goes on with the next item and the inbox lock is released. The default is generous for converting several GB. Vita3K keeps its own limits. |
 
 The environment variable `RA_API_KEY`, when set, is used for RetroAchievements lookups; it is not a config key. See [Adding games](/warpzone/setup/inbox/) for how each tool is used.
 

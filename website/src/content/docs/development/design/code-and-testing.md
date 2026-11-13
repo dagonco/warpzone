@@ -110,7 +110,10 @@ warpzone/
   artwork.py         frontend artwork: ES-DE gamelist -> the frontend's gamelist, scope ignores,
                      system names (pure; the reads are passed in)
   scrape.py          scraping with Skyscraper: platform table, which games to scrape, command lines,
-                     what its output says (pure)
+                     what its output says, the merge plan, the not-found memory, the account
+                     presence check, the report (pure)
+  scrape_io.py       `warpzone scrape`: stages the games, runs Skyscraper through `run_tool`, reads its
+                     output, writes media and gamelist entries to the hub (never over a file)
   playstate.py       play state: ledgers, merge rules, times, its tags in a gamelist (pure)
   playstate_device.py  play state on a device: files, ES-DE gamelists, generated gamelists
   diskstatus.py      the disk a console reports to the hub: when to write, format, staleness (pure)
@@ -129,6 +132,7 @@ warpzone/
   doctor_frontend.py  frontend: system list, RetroArch, shadPS4, Cemu, title links, artwork, save conversion
   doctor_updates.py  update timer, updater, the prune guard's refusal
   doctor_tools.py    the external tools `inbox` runs: `ToolSpec`, `TOOLS`, `check_tool`
+  doctor_scrape.py   Skyscraper and the ScreenScraper account (the presence check of `userCreds`)
   doctor_inbox.py    checks for the machine that runs `inbox`: DATs, Switch, hub folder, where inbox runs, RA key
   health.py          `warpzone health`: the dry runs and file checks that say a version works (decisions pure)
   ra.py              RetroAchievements: RAHasher wrapper, game list lookup and parsing (ids, points)
@@ -158,6 +162,8 @@ warpzone/
   data/ui/style.css
   data/ui/placeholder.svg  the cover of a game with no scrape
   data/ui/favicon.svg
+  data/skyscraper/artwork-esde.xml  Skyscraper's artwork for the main pass: cover, marquee, miximage
+  data/skyscraper/artwork-3dbox.xml  Skyscraper's artwork for the 3D box pass
   data/updater.sh    the updater (POSIX sh): choose a release, verify it, roll it back
   data/bios.toml     BIOS manifest (names, sizes, hashes, signatures only)
   data/allowed_signers  the keys that sign releases, in the format of `ssh-keygen -Y` (see "Autonomous updates")

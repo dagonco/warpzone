@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Skyscraper artwork for warpzone's main pass (see development/design/scrape.md). It is
+     data, not the user's artwork.xml: warpzone always passes this file with -a.
+     cover:      the box art as it is
+     marquee:    the wheel (the logo), which is what ES-DE's marquees are
+     screenshot: the miximage. With the miximages flag Skyscraper saves this output in
+                 miximages/ and the plain screenshot in screenshots/. -->
+<artwork>
+  <output type="cover" resource="cover"/>
+  <output type="marquee" resource="wheel"/>
+  <output type="screenshot" width="1280" height="960">
+    <layer resource="screenshot" x="0" y="0" width="1280" height="960" align="center" valign="middle"/>
+    <layer resource="cover" x="30" y="-30" height="520" valign="bottom">
+      <shadow distance="10" softness="10" opacity="70"/>
+    </layer>
+    <layer resource="wheel" y="20" width="560" align="center" valign="top">
+      <shadow distance="8" softness="8" opacity="70"/>
+    </layer>
+  </output>
+</artwork>

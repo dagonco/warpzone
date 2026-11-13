@@ -544,6 +544,7 @@ class ExitCodeTests(unittest.TestCase):
             "InboxError",
             "ModelError",
             "ProfileError",
+            "ScrapeError",
             "ServeError",
         }
         seen = set()

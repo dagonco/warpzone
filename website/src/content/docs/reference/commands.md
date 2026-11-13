@@ -13,7 +13,7 @@ warpzone --version                # prints "warpzone X.Y.Z" and exits 0
 
 ## Reading this page
 
-**Where a command runs.** `catalog`, `serve`, `whitelist migrate` and `whitelist restore` run where the hub root is mounted. `check`, `provision hub`, `status`, `render-ignores`, `bios` and `inbox` run on any machine that can reach what they need (the hub's Syncthing API, or the library on a disk). `provision device`, `prune`, `frontend refresh`, `play-state sync`, `links sync`, `saves convert`, `settings`, `self-update` and `health` run on a console, because they read its local Syncthing and write its files. `doctor` runs anywhere and only queries the local Syncthing on `127.0.0.1`.
+**Where a command runs.** `catalog`, `serve`, `whitelist migrate` and `whitelist restore` run where the hub root is mounted. `check`, `provision hub`, `status`, `render-ignores`, `bios`, `inbox` and `scrape` run on any machine that can reach what they need (the hub's Syncthing API, or the library on a disk). `provision device`, `prune`, `frontend refresh`, `play-state sync`, `links sync`, `saves convert`, `settings`, `self-update` and `health` run on a console, because they read its local Syncthing and write its files. `doctor` runs anywhere and only queries the local Syncthing on `127.0.0.1`.
 
 **What changes files.** Commands report first and act only when you ask:
 
@@ -21,6 +21,7 @@ warpzone --version                # prints "warpzone X.Y.Z" and exits 0
 |---|---|
 | `check`, `status`, `render-ignores`, `bios`, `doctor`, `health`, `settings audit` | No. Read only. |
 | `prune`, `inbox` | Report only. They delete or move files only with `--apply`. |
+| `scrape` | Yes, by default: it only adds gamelist entries and media to the hub, and accepts `--dry-run` to list what it would scrape and change nothing. |
 | `provision hub`, `provision device`, `frontend refresh`, `play-state sync`, `links sync`, `saves convert`, `settings apply`, `settings capture`, `catalog`, `whitelist migrate`, `whitelist restore` | Yes, and each accepts `--dry-run` to show what it would do and change nothing. |
 | `serve` | Only on request: it rewrites a device's `patterns-<device>.stignore` (with a backup of the old file), and writes `catalog/` when it runs `catalog`. It has no `--dry-run`; every change request can set `dry_run` instead. |
 | `self-update` | Yes: it runs one tick of the updater, which can switch the checkout to a newer release. It has no `--dry-run`. |
@@ -37,7 +38,7 @@ warpzone --version                # prints "warpzone X.Y.Z" and exits 0
 |---|---|
 | `0` | Success. For a report command, nothing needs attention. |
 | `1` | A runtime error, or a report found something to fix (see each command). `health` uses it for any failed check, a config error included. |
-| `2` | Usage or configuration error: a bad option (argparse), an unreadable or invalid config, an unknown device name, or, for `bios` and `inbox`, a library, hub root or DAT folder that cannot be used. Printed as `warpzone: config error: ...` or `warpzone: error: ...`. |
+| `2` | Usage or configuration error: a bad option (argparse), an unreadable or invalid config, an unknown device name, or, for `bios`, `inbox` and `scrape`, a library, hub root or DAT folder that cannot be used. Printed as `warpzone: config error: ...` or `warpzone: error: ...`. |
 | `3` | Deferred. Only `provision device --unattended`: a write waits for the menu or an emulator to close; run it again later. |
 | `130` | Interrupted with Ctrl-C. |
 
@@ -57,6 +58,7 @@ Every error warpzone raises on purpose derives from one base class and carries i
 | [`whitelist restore`](#warpzone-whitelist-restore) | List the backups of a device's whitelist, or write one back. |
 | [`bios`](#warpzone-bios) | Which BIOS and firmware files a library has, lacks or has wrong. |
 | [`inbox`](#warpzone-inbox) | Identify, convert and file new games. |
+| [`scrape`](#warpzone-scrape) | Fill the hub's gamelists and media for games that lack them, with Skyscraper. |
 | [`catalog`](#warpzone-catalog) | Build and update the catalog index of the library on the hub. |
 | [`serve`](#warpzone-serve) | Serve the library UI and its JSON API from the hub. |
 | [`frontend refresh`](#warpzone-frontend-refresh) | Update artwork scope and rewrite a frontend's gamelists. |
@@ -305,6 +307,32 @@ It runs on a computer that mounts the hub's share or in the hub container ([the 
 ```bash
 warpzone inbox
 warpzone inbox --apply
+```
+
+## `warpzone scrape`
+
+```
+warpzone scrape [--config PATH] [--root PATH] [--system NAME ...] [--retry-not-found] [--dry-run] [--force-lock]
+```
+
+Fills in the hub's ES-DE gamelists and media (`frontend/es-de/gamelists/<system>/gamelist.xml`, `frontend/media/<system>/<kind>/`) for the games already in the library that have no entry or lack media, using [Skyscraper](https://github.com/Gemba/skyscraper) with ScreenScraper as the source. It reads the [catalog index](#warpzone-catalog) (a system without one is skipped with the hint to run `warpzone catalog`), runs Skyscraper on a staged copy of the games outside the share, and writes to the hub only what is new: a game without an entry gets one, a game with an entry only gets the media files it lacks. An existing entry is never changed, an entry marked `<nomultiscrape>` gets nothing, and no media file is ever overwritten. It prints its own report, never Skyscraper's output, which goes to a log in the work folder. See the design in [Scraping](/warpzone/development/design/scrape/).
+
+| Option | Default | Meaning |
+|---|---|---|
+| `--config PATH` | see above | The private config file; only its `[inbox]` table is read. |
+| `--root PATH` | `[inbox] root` | The hub root as mounted on this machine, holding `inbox/` and `library/`. |
+| `--system NAME ...` | every scraped system | Scrape only these systems. A system `inbox` places that is not scraped yet (`ps4`, `psvita`, `xbox360`, `wiiu`) or an unknown name is a usage error that says why. |
+| `--retry-not-found` | off | Also try the games ScreenScraper did not know in the last 30 days. They are remembered in `$XDG_CACHE_HOME/warpzone/scrape-not-found.json` on this machine, with the file's size, and tried again after 30 days or when the file changes size. |
+| `--dry-run` | off | Run no Skyscraper and write nothing: list, per system, the games it would scrape ("no entry" and "missing media" with the kinds) and the totals. |
+| `--force-lock` | off | Take over a stale `inbox/.warpzone.lock` (older than 12 hours, or held by a process that is gone from this machine). A live lock is never taken. |
+
+Skyscraper comes from `[inbox] skyscraper`, else `Skyscraper` on `PATH`; `[inbox] work_dir` holds the staged and temporary folders and `[inbox] tool_timeout_minutes` limits each Skyscraper call. ScreenScraper credentials, language and region stay in Skyscraper's own `config.ini`: warpzone never reads their value, prints it or passes it on a command line; `warpzone doctor` only checks that `userCreds` is there. It takes the inbox lock (`inbox/.warpzone.lock`) while it writes, so it never runs while `inbox --apply` does; `--dry-run` takes none. Everything it writes is a rename of a finished file, so an interrupted run leaves nothing half-written, and a second run with nothing new changes nothing.
+
+Exit `0` when every selected game was handled (scraped, filled or not found: a game ScreenScraper does not know stays unknown and is not a failure); `1` when the run could not finish (ScreenScraper's daily limit reached, closed, too busy or unreachable, Skyscraper failed or hit the time limit, or a gamelist could not be read or written); `2` for no Skyscraper, a configured path that does not exist, an unknown system, a folder that is not a hub root, or a held lock; `130` on Ctrl-C, after Skyscraper is stopped and the staged and temporary folders are removed.
+
+```bash
+warpzone scrape --dry-run
+warpzone scrape --system snes gba
 ```
 
 ## `warpzone catalog`

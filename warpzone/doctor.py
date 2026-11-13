@@ -99,6 +99,7 @@ from warpzone.doctor_saves import (
     judge_vita3k_user,
     vita3k_user_id,
 )
+from warpzone.doctor_scrape import check_skyscraper
 from warpzone.doctor_settings import (
     check_play_state,
     check_settings,
@@ -186,6 +187,7 @@ __all__ = [
     "check_prune_guard",
     "check_ra",
     "check_settings",
+    "check_skyscraper",
     "check_switch",
     "check_syncthing",
     "check_syncthing_unit",
@@ -258,6 +260,7 @@ CHECKS: tuple[Callable[[Context], list[Result]], ...] = (
     check_prune_guard,
     check_inbox_way,
     check_tools,
+    check_skyscraper,
     check_switch,
     check_dats,
     check_arcade_dats,
