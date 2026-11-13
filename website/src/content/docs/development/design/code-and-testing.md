@@ -78,7 +78,8 @@ warpzone/
   inbox_core.py      what the inbox pipeline and its handlers share: errors, options, results, staging
   inbox_lock.py      the `inbox/.warpzone.lock` file that keeps two `--apply` runs apart
   inbox_unattended.py  the pure decisions of the unattended inbox: fingerprint, readiness, the state file and its changes, space, news and exit code; the run record, the records to purge and the webhook payload
-  inbox_unattended_io.py  the disk side of it: writing the run records under `catalog/inbox/runs/` and purging the old ones
+  inbox_unattended_io.py  the disk side of it: the walk of an item, the state file (read-modify-write), the work folder, the free space, and the run records under `catalog/inbox/runs/`
+  inbox_unattended_run.py  `inbox --apply --unattended`: one tick of the scheduled run, step by step (above `inbox.py`; only `cli.py` calls it)
   inbox_scrape.py    the scrape at the end of `inbox`: which placed games, the report lines, failures as warnings
   inbox.py           unpack, identify, convert, place, file the originals
   sfo.py             the key/value table of a PARAM.SFO (pure; PS3 discs and PS4 packages)

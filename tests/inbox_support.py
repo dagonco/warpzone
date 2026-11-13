@@ -35,6 +35,7 @@ def write_dat(directory: Path, name: str, games: Sequence[Game]) -> Path:
 
 def make_hub(root: Path, systems: Sequence[str] = ("nes", "psx", "psp", "gc")) -> Path:
     (root / "inbox").mkdir(parents=True, exist_ok=True)
+    (root / "library" / ".stfolder").mkdir(parents=True, exist_ok=True)
     for system in systems:
         (root / "library" / "roms" / system).mkdir(parents=True, exist_ok=True)
     return root

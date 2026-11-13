@@ -286,7 +286,7 @@ warpzone bios --root /path/to/library --system saturn nds
 ## `warpzone inbox`
 
 ```
-warpzone inbox [--config PATH] [--root PATH] [--dats PATH] [--apply] [--notify-url URL] [--no-scrape] [--force-lock] [--work-dir PATH]
+warpzone inbox [--config PATH] [--root PATH] [--dats PATH] [--apply] [--unattended] [--notify-url URL] [--no-scrape] [--force-lock] [--work-dir PATH]
 ```
 
 Identifies the new games dropped in `inbox/` against the Redump and No-Intro DATs, converts them where needed, and files them in `library/roms/`. Without `--apply` it only reports what it would do. With `--apply` it converts, places the files and moves the originals out of the inbox. See [Adding games](/warpzone/setup/inbox/).
@@ -298,17 +298,21 @@ Identifies the new games dropped in `inbox/` against the Redump and No-Intro DAT
 | `--dats PATH` | `[inbox] dats_dir` | Folder with the Redump and No-Intro DATs. |
 | `--apply` | off | Convert, place and move the originals. |
 | `--notify-url URL` | none | With `--apply`, `POST` a JSON summary (`source`, `mode`, `run`, `placed`, `already`, `review`, `held`, `games`, `review_items`, `error`) to this `http://` or `https://` URL when some item went to review. The URL is never printed, because it can hold a secret; a failed `POST` is a warning. |
+| `--unattended` | off | With `--apply`, run as the scheduled task does (see below). A usage error without `--apply` or with `--force-lock`. |
 | `--no-scrape` | off | Do not scrape the games `--apply` placed (see below). |
 | `--force-lock` | off | With `--apply`, take over a stale `inbox/.warpzone.lock` (older than 12 hours, or held by a process that is gone from this machine). A live lock is never taken. |
 | `--work-dir PATH` | `[inbox] work_dir`, else the system temp folder | Local folder for unpacked archives and conversions. |
 
 With `--apply`, every run that processed at least one item also writes a record of what it did to `catalog/inbox/runs/<id>.json` on the hub (the newest 50 are kept; no absolute path, key or zRIF is written; see [The run record](/warpzone/development/design/inbox/#the-run-record)). Once the games are filed, it updates the [catalog index](#warpzone-catalog) for the systems it placed games in; if that fails it prints a warning and the files stay filed (run `warpzone catalog` later). Then, when Skyscraper is configured (`[inbox] skyscraper`) or on `PATH`, it scrapes the games it placed in this run, inside the same lock, with the code of [`warpzone scrape`](#warpzone-scrape) (descriptions and media from ScreenScraper; see [Scraping](/warpzone/setup/scrape/)). A scrape that fails is a warning: the games stay placed, no item goes to review and the exit code does not change. Without Skyscraper the report says the games were not scraped; without `--apply` it says how many would be, and runs no Skyscraper. The hub image ships Skyscraper, so this runs in the container too.
 
-It runs on a computer that mounts the hub's share or in the hub container ([the two ways](/warpzone/setup/inbox/#where-inbox-runs)). The external tools (`chdman`, `bsdtar`, `rahasher`, ...) come from the `[inbox]` table or `PATH`; in the container that means the tools of the image, and the paths in `[inbox]` are paths inside the container. The environment variable `RA_API_KEY`, when set, is used for RetroAchievements lookups. Without a `--root` or `--dats` (and no value in the config) it stops with exit `2`, and so does a hub root without `inbox/` and `library/roms/`. With `--apply` only one run works on a hub's inbox at a time, through the lock file `inbox/.warpzone.lock`; a second run exits `2` naming the host, process and start time that hold it. Exit `0` when every item was placed (or would be); `1` when some items need attention.
+It runs on a computer that mounts the hub's share or in the hub container ([the two ways](/warpzone/setup/inbox/#where-inbox-runs)). The external tools (`chdman`, `bsdtar`, `rahasher`, ...) come from the `[inbox]` table or `PATH`; in the container that means the tools of the image, and the paths in `[inbox]` are paths inside the container. The environment variable `RA_API_KEY`, when set, is used for RetroAchievements lookups. Without a `--root` or `--dats` (and no value in the config) it stops with exit `2`, and so does a hub root without `inbox/`, `library/.stfolder` and `library/roms/`. With `--apply` only one run works on a hub's inbox at a time, through the lock file `inbox/.warpzone.lock`; a second run exits `2` naming the host, process and start time that hold it. Exit `0` when every item was placed (or would be); `1` when some items need attention.
+
+**`--unattended`** is what a scheduled task runs every 15 minutes (see [Adding games without being there](/warpzone/setup/inbox/#adding-games-without-being-there)). It processes only the items whose files have held still for 5 minutes across two or more runs, remembering what it saw in `catalog/inbox/state.json` on the hub, and it exits at once, printing nothing, when the inbox is empty (no DAT is read and no lock taken). If another run holds the lock it prints one line and exits `0`. An item that two runs died on, a disc dropped as loose `.cue` and `.bin` files, and an original that could not be moved after its games were placed are held, not retried, until the item is replaced or touched. It lowers its own CPU priority, needs `[inbox] work_dir` on a mounted volume (not memory), waits when the hub lacks twice the item's size plus 20 GiB, and writes a run record like an attended run. It exits non-zero only for news, so a scheduler's "abnormal end" mail arrives once per problem: `0` when there is none (nothing to do, busy, only waiting items, or a problem already reported), `1` for an item newly sent to review, newly held, or a runtime failure, `2` for a new configuration error (or a usage error). With `--notify-url` it sends the webhook when it placed a game or has news. `--no-scrape` is allowed. See [Unattended inbox](/warpzone/development/design/inbox-unattended/).
 
 ```bash
 warpzone inbox
 warpzone inbox --apply
+warpzone inbox --apply --unattended
 ```
 
 ## `warpzone scrape`

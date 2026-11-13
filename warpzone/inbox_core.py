@@ -274,6 +274,7 @@ class Options:
     tools: Tools
     apply: bool = False
     force_lock: bool = False  # take over a stale inbox lock (see inbox_lock)
+    unattended: bool = False  # `--unattended`: a scheduled run (see inbox_unattended_run)
     work_dir: Path | None = None
     cache_dir: Path | None = None
     ra_key: str | None = None

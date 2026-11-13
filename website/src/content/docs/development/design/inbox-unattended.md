@@ -2,15 +2,16 @@
 title: "Unattended inbox"
 ---
 
-**Status: partly implemented.** The pure decisions are in the code (`inbox_unattended.py`: the
-fingerprint, readiness, the state file and the changes made to it, space, news and the exit code),
-and so are `[inbox] chdman_threads` (see [Resource limits](#resource-limits)), the lock heartbeat
-(see [Locking](#locking): `inbox_lock.py` with `beat`, `mode`, `Heartbeat`, `judge` and
-`still_mine`, used today by an attended run and by `warpzone scrape`), the run records (written by
-every attended `--apply`, with their purge to 50) and the webhook (`inbox --notify-url`, sent by an
-attended run when some item went to review, with `notify.py` shared with `prune`). The rest
-(`--unattended` in `inbox` with its per-item "still mine" checks, the state file I/O and the walk,
-the UI and doctor) is design, not implemented. This page is the contract for running
+**Status: implemented, except the library UI and doctor.** The command is in the code:
+`warpzone inbox --apply --unattended` (`inbox_unattended_run.py`, called by `cli.py`), with the
+pure decisions of `inbox_unattended.py` (the fingerprint, readiness, the state file and the
+changes made to it, space, news and the exit code), the disk side of `inbox_unattended_io.py` (the
+walk, the state file's read-modify-write, the work folder, the free space and the run records),
+the lock heartbeat and the per-item "still mine" checks ([Locking](#locking)), the run records and
+the webhook, and `[inbox] chdman_threads`, `os.nice` and the work folder's cleanup
+([Resource limits](#resource-limits)). What is design only is `serve`'s inbox routes with the
+library UI's Inbox view ([The run record and the library UI](#the-run-record-and-the-library-ui))
+and doctor's `Unattended inbox` line ([Doctor](#doctor)). This page is the contract for running
 `warpzone inbox --apply` on the hub by itself, from a scheduled task, with nobody watching. The
 pages it touches when it is implemented ([Inbox](/warpzone/development/design/inbox/),
 [Configuration and command line](/warpzone/development/design/configuration/),
@@ -173,15 +174,22 @@ first that says so:
 1. **Load the config** and find the hub root (`[inbox] root` or `--root`). `inbox/`,
    `library/.stfolder` and `library/roms` must all exist (as for `serve`, an unmounted share never
    looks like an empty library, and a share that is mounted but is not the hub root does not
-   pass); otherwise it is a run-level error (see [The memory](#the-memory)).
+   pass; an attended run checks the same); otherwise it is a run-level error (see
+   [The memory](#the-memory)). The error is kept in the state only when the hub root already has
+   a `catalog/` folder; without one the share is not the hub (or is not mounted) and nothing is
+   written there: the run exits `2` with the message every time.
 2. **List the items** (`scan` and `scan_unverified`: directory listings only) and read the state
    file. With no item and no state entry to drop, the run writes the heartbeat if it is due
    (`checked` older than one hour) and exits `0`, printing nothing. No DAT, tool, lock or work
-   folder is touched.
+   folder is touched. The state is written only when it has something to say (a heartbeat that
+   is due, an entry to drop, an error of step 1 to clear).
 3. **Busy.** If `inbox/.warpzone.lock` exists and is not stale by the rules of
    [Locking](#locking), the run prints one line naming the holder (`busy: the unattended inbox on
    the hub has been working since 10:15`, or `a run from <host>`), records what it saw of the lock
-   in `lock_seen` and exits `0`.
+   in `lock_seen` and exits `0`. A lock that is stale by silence is not busy: the run goes on and
+   the note stays in the state until the run holds the lock, so a tick with no ready item does not
+   lose it. A lock of an older warpzone is a run-level error of this step (its message has no
+   time in it, so it is the same message on every tick).
 4. **Judge readiness** of each item (`inbox_unattended.decide`, pure; see [Readiness](#readiness)
    and [The memory](#the-memory)): waiting, ready or held. With no ready item the run writes the
    state if it changed and exits (`1` when an item was held for the first time in this run,
@@ -368,8 +376,14 @@ raises `LockBusy`, which carries the `LockReading` (the lock, its modification t
 looked at) for `lock_seen`, so the unattended run can exit `0` for it; a stale lock the run may not
 take (no `--force-lock`, or a legacy one unattended) raises `LockStale`. Both are `InboxError`s, so
 an attended run still exits `2`. An unattended `hold` cannot be given `force`. The "Still mine" check
-before each item and each move is not wired yet: `Held.still_mine()` exists, and the calls in
-`inbox` come with `--unattended`, as the rest of the run.
+runs in `inbox_unattended_run`: `Held.still_mine()` before each item and before each move of an
+original. A run that finds the lock gone or another's stops at once, records the run-level error
+"the inbox lock is no longer this run's" (exit `1`), skips the purge and the scrape, still writes
+the record of what it placed, and never removes the other run's lock. An item already processed
+whose move was skipped stays in the inbox with its state entry (not held), so the next run finds
+its games "already in the library" and files it. The look at the lock before the items
+(`inbox_lock.look`) takes nothing; the earlier look is rebuilt from `lock_seen` as a reading of the
+same lock, which is safe because a lock that changed has another modification time.
 
 Two ticks of the scheduler never overlap as two workers: the second container finds the first's
 lock and exits as busy, costing one container start.
@@ -401,8 +415,10 @@ lock and exits as busy, costing one container start.
 - **Space on the hub.** Before each item the run compares the free space of the filesystem that
   holds `library/` with twice the item's bytes plus 20 GiB (the doctor's threshold for the hub,
   `MIN_FREE_GIB`, which lives in `inbox_core.py` and is imported from there by doctor and by the
-  unattended run). Exactly enough fits; the shortfall is rounded up to whole GiB. An item that does not fit waits, it does not go to review, and its state says
-  "waiting for space: N GiB more needed"; doctor shows it (`space_verdict`, pure).
+  unattended run). Exactly enough fits; the shortfall is rounded up to whole GiB. An item that does not fit waits, it does not go to review: the run prints
+  "waiting for space: N GiB more needed" (`space_verdict`, pure) and leaves its entry as it is,
+  so the next tick tries again. The state has no field for the reason, so doctor and the UI can
+  only show how long the item has been waiting.
 
 ## Safety rules that still hold
 
@@ -524,7 +540,9 @@ held). It is the prune webhook's code (`prune.notify`, moved to `notify.py` and 
 a Home Assistant webhook, the URL never printed, a failure a warning and never a failure of the
 run, no API key or path outside the hub in the payload. The payload is built by `notify_payload`
 from the record and the decision to send by `should_notify` (placed games or `news` for an
-unattended run), both pure. An empty, busy or waiting-only run sends nothing.
+unattended run), both pure. An empty, busy or waiting-only run sends nothing. A newly held item that has no item in the
+run's record (a loose disc file, a run that died twice on an item) is added to `held` and
+`review_items` of the payload, so a run that only held something still says what.
 
 Decided by the maintainer on 2026-11-13: an attended `--apply` sends the webhook **only when some
 item went to review** (an item in `_revisar/`, or one whose original stayed in the inbox, which an
@@ -658,16 +676,23 @@ pass it); nothing implies it.
   functions), `heartbeat_due`, `space_verdict`, `memory_fs`, `stale_work_dirs`, `news` and
   `exit_code`, and for the record and the webhook `record_id`, `clean_text`, `build_record`,
   `render_record`, `select_records_purge`, `notify_payload` and `should_notify`.
-- `inbox_unattended_io.py`: the record writes (`write_record`, `purge_records`; implemented,
-  through `safefile.atomic_write` so a name is never replaced). Still to come: the walk with
-  `stat`, the state write, the work folder cleanup, `os.nice`, the free space.
+- `inbox_unattended_io.py` (implemented): the record writes (`write_record`, `purge_records`,
+  through `safefile.atomic_write` so a name is never replaced), the walk with `lstat` (`walk`),
+  the state file (`read_state`, and `update_state`, the read-modify-write with its three tries),
+  the work folder cleanup (`clean_work_dir`), `on_memory`, `lower_priority` (`os.nice(10)`) and
+  `free_bytes`. The state file's name is `STATE_FILE` in `inbox_unattended.py`.
+- `inbox_unattended_run.py` (implemented): the run, step by step. It sits above `inbox.py`
+  (`cli.py` calls `run_unattended`; `inbox.py` does not import it), so `inbox.run_inbox` is the
+  attended run only. `inbox.py` gives it `check_layout`, `open_library`, `announce`,
+  `process_item` and the rest of the pipeline.
 - `inbox_lock.py` (implemented): `beat` and `mode`, the `Heartbeat` thread, `judge` over two
-  readings, `still_mine`; the per-item "still mine" checks come with `--unattended`.
+  readings, `still_mine`, `look`; the per-item "still mine" checks are in the run.
 - `notify.py`: the webhook POST, moved from `prune.py` (implemented; `NotifyError`).
 - `library_api.inbox_response` (pure) and the two routes in `serve`; `doctor.judge_unattended_inbox`
   (pure).
-- `inbox.py`: `--unattended` in `run_inbox` (the early exit, the readiness, the per-item checks,
-  the record, the exit code from `news`), `Options.unattended`, `chdman_threads`; the scrape after
+- `inbox.py`: `Options.unattended` (the 30-second settle rule is off for it), `chdman_threads`,
+  the layout check shared by both runs; the run itself is in `inbox_unattended_run.py`, with the
+  early exit, the readiness, the per-item checks, the record and the exit code from `news`; the scrape after
   the catalog update is `inbox_scrape.after_apply` as in an attended run, and its result (a
   `ScrapeNote`, implemented) is the record's `scrape` note, an input of `build_record` and not of
   `news`. Implemented: the attended run's record and webhook (`_record_run`, `Options.notify_url`,
@@ -713,7 +738,8 @@ Unit tests, pure parts first, with no Docker, no scheduler and no real tools:
   prints nothing, exits 0, creates no lock, reads no DAT (a `dats_dir` that does not exist does not
   matter) and writes only a due heartbeat.
 
-Flow tests with a temporary hub and stand-in tools, the clock injected (`Options.now`):
+Flow tests with a temporary hub and stand-in tools, the clock injected (`Options.now`; all in
+`tests/test_inbox_unattended_run.py`):
 
 - Two ticks: the first records a cartridge zip and a CHD system folder item, the second (five
   minutes later) places them, writes the record, updates the catalog and empties the state; the
