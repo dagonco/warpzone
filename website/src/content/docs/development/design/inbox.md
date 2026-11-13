@@ -301,8 +301,15 @@ blawar/titledb and filed under the library's existing conventions. The code is i
   itself.
 - **Compressed files.** `.nsz` is decompressed with `nsz -D --keys <keys> -o <work>` only
   with `--apply`; the report only reads it with `-i`. Before `-D` the work folder must have
-  free space of at least the size of the `.nsz` plus 5%, a lower bound (the `.nsp` is never
-  smaller; the exact size would need the NCZ section tables); a smaller folder is a review. `nsz` exits 0 on some damaged
+  free space of the exact size of the `.nsp` plus 5%; a smaller folder is a review. The
+  size is computed from the headers alone (`inbox_switch.nsp_size`, never the whole file),
+  the way `nsz -D` builds it without `-F`: the new header takes the room the old one took
+  (the names keep their length, `.ncz` becomes `.nca`), the members follow with no gap, the
+  other members as they are and each `.ncz` as the NCA it holds. That NCA is the first
+  0x4000 bytes (stored plain) plus the sizes of the sections in the `NCZSECTN` table that
+  follows them. A `.nsz` whose headers cannot be read this way (or whose first section does
+  not start right after the NCA header) falls back to the size of the `.nsz`, a lower bound
+  (the `.nsp` is never smaller), and the review says so. `nsz` exits 0 on some damaged
   inputs, so the output is accepted only if `nsz` exited 0 and printed `[DONE]`, its PFS0
   header parses (magic, entry table, member bounds), and `nsz -V` exits 0 and prints
   `[VERIFIED]`. Anything else is a review and the partial output is deleted with the work
