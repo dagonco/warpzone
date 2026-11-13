@@ -87,7 +87,7 @@ class ClientTests(unittest.TestCase):
         for exc in broken:
             with self.subTest(exc=type(exc).__name__):
                 with (
-                    mock.patch("urllib.request.urlopen", side_effect=exc),
+                    mock.patch.object(client._opener, "open", side_effect=exc),
                     self.assertRaises(SyncthingError) as ctx,
                 ):
                     client.my_id()
@@ -101,7 +101,7 @@ class ClientTests(unittest.TestCase):
         resp.__enter__.return_value = resp
         resp.read.side_effect = http.client.IncompleteRead(b"abc", 10)
         with (
-            mock.patch("urllib.request.urlopen", return_value=resp),
+            mock.patch.object(client._opener, "open", return_value=resp),
             self.assertRaises(SyncthingError) as ctx,
         ):
             client.my_id()
@@ -293,9 +293,15 @@ class CertificatePinTests(unittest.TestCase):
             self.assertNotIsInstance(handler, forbidden, type(handler).__name__)
         self.assertTrue(any(isinstance(h, urllib.request.HTTPSHandler) for h in opener.handlers))
 
-    def test_without_a_pin_there_is_no_pinned_opener(self) -> None:
-        self.assertIsNone(Client("https://hub.example.lan:8384", API_KEY)._opener)
-        self.assertIsNone(Client("http://hub.example.lan:8384", API_KEY)._opener)
+    def test_without_a_pin_the_opener_has_no_redirect_or_proxy_handler(self) -> None:
+        for url in ("https://hub.example.lan:8384", "http://hub.example.lan:8384"):
+            opener = Client(url, API_KEY)._opener
+            forbidden = (urllib.request.ProxyHandler, urllib.request.HTTPRedirectHandler)
+            for handler in opener.handlers:
+                if isinstance(handler, urllib.request.ProxyHandler):
+                    self.assertEqual(handler.proxies, {}, url)  # connects directly
+                    continue
+                self.assertNotIsInstance(handler, forbidden, type(handler).__name__)
 
 
 if __name__ == "__main__":

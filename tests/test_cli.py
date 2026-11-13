@@ -176,20 +176,20 @@ class HubClientPinTests(unittest.TestCase):
 
     def test_the_hub_client_is_pinned_when_the_config_has_a_pin(self) -> None:
         client = _hub_client(self.config("https://hub.example.lan:8384", "ab" * 32))
-        self.assertIsNotNone(client._opener)
+        self.assertEqual(client._pin, "ab" * 32)
         self.assertEqual(client.label, "hub")
 
     def test_the_hub_client_is_not_pinned_without_a_pin(self) -> None:
-        self.assertIsNone(_hub_client(self.config("https://hub.example.lan:8384"))._opener)
-        self.assertIsNone(_hub_client(self.config("http://hub.example.lan:8384"))._opener)
+        self.assertIsNone(_hub_client(self.config("https://hub.example.lan:8384"))._pin)
+        self.assertIsNone(_hub_client(self.config("http://hub.example.lan:8384"))._pin)
 
     def test_the_dry_run_hub_client_is_pinned_too(self) -> None:
         client = _hub_client(self.config("https://hub.example.lan:8384", "ab" * 32), dry_run=True)
-        self.assertIsNotNone(client._opener)
+        self.assertEqual(client._pin, "ab" * 32)
         self.assertTrue(client.dry_run)
 
     def test_a_client_for_the_local_syncthing_is_never_pinned(self) -> None:
-        self.assertIsNone(_client("https://127.0.0.1:8384", "k", label="local")._opener)
+        self.assertIsNone(_client("https://127.0.0.1:8384", "k", label="local")._pin)
 
 
 class ApplyPathImportTests(unittest.TestCase):

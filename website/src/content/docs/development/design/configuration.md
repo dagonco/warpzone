@@ -86,6 +86,12 @@ in the clear. The optional `[hub] api_cert_sha256` removes that choice:
   follows no redirect (a 3xx is an error, so the key cannot be copied to another host), uses no proxy
   from the environment (it always connects directly) and cannot speak plain HTTP. TLS 1.2 is the
   minimum.
+- Without a pin the client follows the same two rules (`syncthing._direct_opener`): no
+  redirect is followed, so a 3xx is an error that names its `Location` and the key is never sent
+  there (set `api_url` to that address instead), and no proxy from the environment is used
+  (`HTTP_PROXY` and the like are ignored; it connects directly). Only the TLS check differs: an
+  `https://` loopback URL trusts Syncthing's self-signed certificate, any other `https://` URL
+  needs one the system trusts.
 - `http://` with a pin is a config error (exit 2), and `Client` refuses it too: the pin says that only
   a verified TLS peer gets the key. An `https://` loopback URL with a pin is checked like any other
   (without a pin, loopback keeps skipping verification, as before).

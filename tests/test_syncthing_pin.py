@@ -233,6 +233,43 @@ class PinnedClientTests(unittest.TestCase):
             self.assertEqual(proxy.handled, [])
 
 
+class UnpinnedClientTests(unittest.TestCase):
+    """Without a pin the client keeps the same two rules: no redirect, no proxy."""
+
+    def test_a_redirect_to_another_host_is_not_followed_and_names_the_target(self) -> None:
+        with Recorder() as target:
+            location = f"http://localhost:{target.port}/rest/system/status"
+            reply = (
+                b"HTTP/1.1 302 Found\r\nLocation: %s\r\n"
+                b"Content-Length: 0\r\nConnection: close\r\n\r\n" % location.encode()
+            )
+            with Recorder(reply=reply) as hub:
+                client = Client(hub.url, API_KEY, label="hub")
+                with self.assertRaises(SyncthingError) as ctx:
+                    client.my_id()
+                hub.wait_for(1)
+            time.sleep(0.3)  # long enough for the target's accept loop to see a connection
+            self.assertEqual(target.handled, [])
+        self.assertEqual(ctx.exception.status, 302)
+        self.assertIn(location, str(ctx.exception))
+        self.assertNotIn(API_KEY, str(ctx.exception))
+
+    def test_a_proxy_in_the_environment_is_not_used(self) -> None:
+        with Recorder() as proxy, FakeSyncthing(HUB_ID) as fake:
+            env = {
+                "HTTPS_PROXY": proxy.url,
+                "https_proxy": proxy.url,
+                "HTTP_PROXY": proxy.url,
+                "http_proxy": proxy.url,
+                "NO_PROXY": "",
+                "no_proxy": "",
+            }
+            with mock.patch.dict(os.environ, env):
+                self.assertEqual(Client(fake.url, API_KEY).my_id(), HUB_ID)
+            time.sleep(0.3)
+            self.assertEqual(proxy.handled, [])
+
+
 class FingerprintCommandTests(unittest.TestCase):
     def test_the_openssl_command_in_the_docs_gives_a_value_the_config_accepts(self) -> None:
         out = subprocess.run(
