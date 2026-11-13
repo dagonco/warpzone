@@ -137,7 +137,7 @@ warpzone/
   doctor_updates.py  update timer, updater, the prune guard's refusal
   doctor_tools.py    the external tools `inbox` runs: `ToolSpec`, `TOOLS`, `check_tool`
   doctor_scrape.py   Skyscraper and the ScreenScraper account (the presence check of `userCreds`)
-  doctor_inbox.py    checks for the machine that runs `inbox`: DATs, Switch, hub folder, where inbox runs, RA key
+  doctor_inbox.py    checks for the machine that runs `inbox`: DATs, Switch, hub folder, where inbox runs, RA key, the unattended inbox line
   health.py          `warpzone health`: the dry runs and file checks that say a version works (decisions pure)
   ra.py              RetroAchievements: RAHasher wrapper, game list lookup and parsing (ids, points)
   catalog.py         catalog index: derivation of games and parts, system roots, title keys,

@@ -1,14 +1,18 @@
 """The doctor checks that only matter to the machine that runs `warpzone inbox`.
 
 DATs, arcade DATs, Switch titledb and keys, the hub folder, where inbox runs, the
-RetroAchievements key, and `collapse_inbox` (pure), which folds the optional ones into one line
-without an `[inbox]` table. See development/design/doctor.md.
+RetroAchievements key, the unattended inbox line (`check_unattended_inbox`, with its pure judge
+`judge_unattended_inbox`), and `collapse_inbox` (pure), which folds the optional ones into one
+line without an `[inbox]` table. See development/design/doctor.md.
 """
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+import json
+from collections.abc import Mapping, Sequence
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 from warpzone import inbox_switch as switch
 from warpzone import ra
@@ -27,6 +31,7 @@ from warpzone.doctor_core import (
     WARN,
     Context,
     Result,
+    merge_verdicts,
 )
 from warpzone.doctor_hints import (
     DAT_CLONE_HINT,
@@ -36,11 +41,27 @@ from warpzone.doctor_hints import (
     TITLEDB_REPO,
 )
 from warpzone.inbox_core import MIN_FREE_GIB
+from warpzone.inbox_lock import LOCK_NAME
+from warpzone.inbox_lock import parse as parse_lock
+from warpzone.inbox_unattended import State, newest_record, parse_state
+from warpzone.inbox_unattended_io import inbox_dir, runs_dir
 
 DAT_MAX_AGE_DAYS = 180
 
 GIB = 1024**3
 DAY_SECONDS = 86400
+
+UNATTENDED_NAME = "Unattended inbox"
+STATE_FILE = "state.json"  # in catalog/inbox/ of the hub
+STALE_CHECK = timedelta(hours=2)  # the heartbeat writes `checked` at least hourly
+LONG_WAIT = timedelta(hours=2)  # an item waiting this long since `first` is worth a look
+LONG_LOCK = timedelta(hours=6)  # a lock held this long is stuck, not working
+LISTED_MAX = 3  # items named in a line; the rest are counted
+NO_STATE_FIX = (
+    "schedule `warpzone inbox --apply --unattended` every 15 minutes on the hub "
+    "(see https://dagonco.github.io/warpzone/development/design/inbox-unattended/"
+    "#what-the-user-sets-up-once)"
+)
 
 
 def _dat_files(library: DatLibrary) -> list[Path]:
@@ -380,6 +401,156 @@ def check_ra(ctx: Context) -> list[Result]:
             "shell or service that runs warpzone; keep it out of the config and the repository",
         )
     ]
+
+
+def _ago(delta: timedelta) -> str:
+    minutes = max(int(delta.total_seconds() // 60), 0)
+    return f"{minutes} min" if minutes < 120 else f"{minutes // 60} h"
+
+
+def _named(names: Sequence[str]) -> str:
+    shown = ", ".join(names[:LISTED_MAX])
+    return shown + (f" and {len(names) - LISTED_MAX} more" if len(names) > LISTED_MAX else "")
+
+
+def _last_run(record: Mapping[str, Any] | None) -> str:
+    """ "last run <date>: placed X, for review Y" from a run record."""
+    counts = record.get("counts") if record else None
+    started = record.get("started") if record else None
+    if not isinstance(started, str) or not isinstance(counts, dict):
+        return "no run has been recorded yet"
+    when = started[:16].replace("T", " ") + " UTC"
+    placed = counts.get("placed", 0)
+    review = counts.get("review", 0) + counts.get("held", 0)
+    return f"last run {when}: placed {placed}, for review {review}"
+
+
+def judge_unattended_inbox(
+    state: State | None,
+    record: Mapping[str, Any] | None,
+    lock_since: datetime | None,
+    now: datetime,
+) -> tuple[str, str, str]:
+    """(status, detail, fix) of the unattended inbox, from its state (None when the file does not
+    exist), the newest run record (None when there is none), when the lock was taken (None when
+    there is no lock) and the time. Several findings share the one line, the worst status
+    first. Pure."""
+    if state is None:
+        return OPTIONAL, "no unattended run has recorded anything", NO_STATE_FIX
+    parts: list[tuple[str, str, str]] = []
+    err = state.error
+    if err is not None:
+        since = err.first.astimezone(UTC).strftime("%Y-%m-%d %H:%M")
+        if err.config:
+            fix = (
+                "fix what the message says (the config, the mounts; `warpzone doctor` on the "
+                f"hub lists them); the next run that gets past step {err.step} clears it"
+            )
+        else:
+            fix = (
+                "read the scheduled task's output on the hub for the cause; the next run that "
+                f"gets past step {err.step} clears it"
+            )
+        parts.append((FAIL, f"{err.message} (since {since} UTC, {err.count} run(s))", fix))
+    if state.checked is None:
+        parts.append(
+            (
+                WARN,
+                "the state file records no check; the unattended inbox may never have run",
+                "is the scheduled task enabled? Run it once by hand to see its output",
+            )
+        )
+    elif now - state.checked > STALE_CHECK:
+        parts.append(
+            (
+                WARN,
+                f"the unattended inbox last ran {_ago(now - state.checked)} ago; is the "
+                "scheduled task enabled?",
+                "enable the scheduled task on the hub, or run it once by hand to see why it stops",
+            )
+        )
+    held = [f"{name} ({e.held.reason})" for name, e in state.items.items() if e.held]
+    if held:
+        parts.append(
+            (
+                WARN,
+                f"held: {_named(held)}",
+                "look at it, run `warpzone inbox` to see the report, then `warpzone inbox "
+                "--apply` by hand, or replace the item to retry",
+            )
+        )
+    waiting = [
+        name for name, e in state.items.items() if e.held is None and now - e.first > LONG_WAIT
+    ]
+    if waiting:
+        parts.append(
+            (
+                WARN,
+                f"waiting for more than 2 h since first seen: {_named(waiting)}",
+                "a copy that keeps writing, a file a program keeps open, or no space: finish "
+                "or stop what writes it, and free space on the hub's volume if it is low",
+            )
+        )
+    if lock_since is not None and now - lock_since > LONG_LOCK:
+        parts.append(
+            (
+                WARN,
+                f"the inbox lock has been held for {_ago(now - lock_since)}",
+                "a run that never ends: stop it (or `warpzone inbox --force-lock` if its "
+                "holder is gone), then look at its output",
+            )
+        )
+    if parts:
+        return merge_verdicts(parts)
+    assert state.checked is not None
+    return OK, f"last check {_ago(now - state.checked)} ago; {_last_run(record)}", ""
+
+
+def _read_record(ctx: Context, root: Path) -> Mapping[str, Any] | None:
+    p = ctx.probes
+    folder = runs_dir(root)
+    name = newest_record(p.list_dir(folder))
+    if name is None:
+        return None
+    try:
+        doc = json.loads(p.read_text(folder / name))
+    except ValueError:
+        return None
+    return doc if isinstance(doc, dict) else None
+
+
+def _lock_since(ctx: Context, root: Path) -> datetime | None:
+    p = ctx.probes
+    path = root / "inbox" / LOCK_NAME
+    try:
+        if not p.is_file(path):
+            return None
+        info = parse_lock(p.read_text(path))
+        started = info.started if info else p.mtime(path)
+    except OSError:
+        return None
+    return datetime.fromtimestamp(started, UTC)
+
+
+def check_unattended_inbox(ctx: Context) -> list[Result]:
+    """The `Unattended inbox` line: with an [inbox] table and a readable hub root (the state is on
+    the share, so a computer sees it as the container does)."""
+    if not ctx.inbox_configured:
+        return []
+    p = ctx.probes
+    root_text = ctx.config.settings.root or ctx.config.hub_root
+    if not root_text or not p.is_dir(Path(root_text)):
+        return []  # `Hub folder` says so
+    root = Path(root_text)
+    state_path = inbox_dir(root) / STATE_FILE
+    state = parse_state(p.read_text(state_path))[0] if p.is_file(state_path) else None
+    status, detail, fix = judge_unattended_inbox(
+        state,
+        _read_record(ctx, root),
+        _lock_since(ctx, root),
+        datetime.fromtimestamp(p.now(), UTC),
+    )
+    return [Result(UNATTENDED_NAME, G_INBOX, status, detail, fix)]
 
 
 def collapse_inbox(results: Sequence[Result]) -> list[Result]:
