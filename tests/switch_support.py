@@ -49,6 +49,36 @@ def make_nsp_multi(ids: Sequence[tuple[str, int]]) -> bytes:
     return pfs0(members)
 
 
+def ncz_sections(sizes: Sequence[int], first_at: int = 0x4000) -> bytes:
+    """What follows the first 0x4000 bytes of a `.ncz`: `NCZSECTN`, the count and one
+    64-byte record per section (offset, size, crypto type, padding, key, counter)."""
+    out = b"NCZSECTN" + struct.pack("<Q", len(sizes))
+    at = first_at
+    for size in sizes:
+        out += struct.pack("<QQQQ", at, size, 3, 0) + bytes(32)
+        at += size
+    return out
+
+
+def make_ncz(sizes: Sequence[int], first_at: int = 0x4000) -> bytes:
+    """A fake `.ncz`: the plain NCA header, the section table, then some compressed bytes."""
+    return bytes(0x4000) + ncz_sections(sizes, first_at) + b"zstd" * 10
+
+
+def make_real_nsz(sections: Sequence[Sequence[int]], pad: int = 0, first_at: int = 0x4000) -> bytes:
+    """A `.nsz` shaped like the real ones: a `.cnmt.nca` and a `.tik` as they are, one `.ncz` per
+    entry of `sections`. `pad` bytes of padding follow the string table."""
+    members: dict[str, bytes] = {"a.cnmt.nca": b"c" * 700, "b.tik": b"t" * 33}
+    for i, sizes in enumerate(sections):
+        members[f"n{i}.ncz"] = make_ncz(sizes, first_at)
+    raw = pfs0(members)
+    if not pad:
+        return raw
+    count, strings = struct.unpack("<II", raw[4:12])
+    cut = 16 + 24 * count + strings
+    return raw[:8] + struct.pack("<I", strings + pad) + raw[12:cut] + bytes(pad) + raw[cut:]
+
+
 def make_nsz(nsp: bytes) -> bytes:
     return NSZ_MAGIC + nsp
 
