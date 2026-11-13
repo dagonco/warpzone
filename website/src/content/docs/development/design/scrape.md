@@ -316,7 +316,8 @@ the user's artwork file; it passes its own, shipped in `warpzone/data/skyscraper
   `screenshot` output that is the miximage: ES-DE's miximage layout, 1280x960, with the screenshot
   as the background, the box at the bottom left and the logo at the top. With `--flags miximages`
   this output goes to `miximages/` and the plain screenshot to `screenshots/`.
-- `artwork-3dbox.xml`: one `cover` output with the `gamebox` effect (`side="wheel"`).
+- `artwork-3dbox.xml`: one `cover` output with the `gamebox` effect (`side="wheel"`), on a fixed
+  600 by 600 transparent canvas (without a width the box comes out off centre and cropped).
 
 They are data: a test parses them and checks the outputs above, and the look is a manual check
 against a miximage and a 3D box made by ES-DE.
