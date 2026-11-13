@@ -356,11 +356,21 @@ def identify(
 # ------------------------------------------------------------------ conversion
 
 
-def make_chd(chdman: str, kind: str, source: Path, out: Path, timeout: float) -> None:
-    code, text = run(
-        [chdman, "createdvd" if kind == "dvd" else "createcd", "-i", str(source), "-o", str(out)],
-        timeout,
-    )
+def make_chd(
+    chdman: str,
+    kind: str,
+    source: Path,
+    out: Path,
+    timeout: float,
+    threads: int | None = None,
+) -> None:
+    """Convert a disc image to a CHD and verify it. `threads` is chdman's `--numprocessors`
+    (None leaves chdman to count the cores)."""
+    command = [chdman, "createdvd" if kind == "dvd" else "createcd", "-i", str(source)]
+    command += ["-o", str(out)]
+    if threads is not None:
+        command += ["--numprocessors", str(threads)]
+    code, text = run(command, timeout)
     if code != 0:
         raise ItemFailure(f"chdman could not convert {source.name} ({tail(text)})")
     code, text = run([chdman, "verify", "-i", str(out)], timeout)
@@ -684,7 +694,14 @@ def _produce(ctx: Context, p: Prepared, m: GameMatch, out_dir: Path) -> Path:
     if p.kind in ("cd", "dvd"):
         assert ctx.tools.chdman and p.chd_input
         out = out_dir / p.out_name
-        make_chd(ctx.tools.chdman, p.kind, p.chd_input, out, ctx.tools.timeout)
+        make_chd(
+            ctx.tools.chdman,
+            p.kind,
+            p.chd_input,
+            out,
+            ctx.tools.timeout,
+            ctx.tools.chdman_threads,
+        )
         return out
     if p.kind == "zip":
         out = out_dir / p.out_name

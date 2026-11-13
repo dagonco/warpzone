@@ -119,7 +119,7 @@ class Base(unittest.TestCase):
         env = mock.patch.dict(os.environ)
         env.start()
         self.addCleanup(env.stop)
-        for key in ("STUB_CHDMAN_FAIL", "STUB_RA_MODE", ra.KEY_ENV):
+        for key in ("STUB_CHDMAN_FAIL", "STUB_CHDMAN_LOG", "STUB_RA_MODE", ra.KEY_ENV):
             os.environ.pop(key, None)
         # A Skyscraper on this machine's PATH must never be run (or reach the network) by a test.
         no_skyscraper = mock.patch.object(inbox_core, "SKYSCRAPER_COMMAND", "no-such-skyscraper")
@@ -569,6 +569,9 @@ class ToolTimeoutTests(Base):
         self.assertEqual(Tools().timeout, 240 * 60)
         found = find_tools(InboxSettings(tool_timeout_minutes=2), which=lambda name: None)
         self.assertEqual(found.timeout, 120.0)
+        self.assertIsNone(found.chdman_threads)
+        threaded = find_tools(InboxSettings(chdman_threads=4), which=lambda name: None)
+        self.assertEqual(threaded.chdman_threads, 4)
 
     def test_run_kills_a_tool_that_hangs(self) -> None:
         with self.assertRaises(inbox_core.ToolTimeout) as ctx:
@@ -1453,6 +1456,26 @@ class DiscTests(Base):
         self.go(tools=Tools(chdman=self.chdman))
         self.assertIn("RA: not checked", self.out)
         self.assertNotIn("RA: hash", self.out)
+
+    def chdman_calls(self, **tool_kw) -> list[str]:  # type: ignore[no-untyped-def]
+        """The command lines the stand-in chdman got while converting one dump."""
+        log = self.tmp / "chdman.log"
+        os.environ["STUB_CHDMAN_LOG"] = str(log)
+        self.crash_dump()
+        self.assertEqual(self.go(tools=Tools(chdman=self.chdman, **tool_kw)), 0, self.out)
+        return log.read_text().splitlines()
+
+    def test_chdman_threads_are_passed_as_numprocessors_to_the_conversion(self) -> None:
+        calls = self.chdman_calls(chdman_threads=3)
+        create = [c for c in calls if c.startswith("createcd ")]
+        self.assertEqual(len(create), 1, calls)
+        self.assertIn("--numprocessors 3", create[0])
+        self.assertTrue(all("--numprocessors" not in c for c in calls if c.startswith("verify")))
+
+    def test_without_chdman_threads_chdman_gets_no_numprocessors(self) -> None:
+        calls = self.chdman_calls()
+        self.assertTrue(any(c.startswith("createcd ") for c in calls), calls)
+        self.assertFalse(any("--numprocessors" in c for c in calls), calls)
 
     def test_verify_failure_places_nothing_and_leaves_no_part_file(self) -> None:
         self.crash_dump()

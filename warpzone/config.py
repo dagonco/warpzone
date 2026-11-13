@@ -108,6 +108,8 @@ INBOX_KEYS = (
 )
 # The one number of the table: the minutes any external tool of `inbox` may run (see below).
 TOOL_TIMEOUT_KEY = "tool_timeout_minutes"
+# The threads chdman may use (`--numprocessors`); unset leaves it to chdman.
+CHDMAN_THREADS_KEY = "chdman_threads"
 DEFAULT_TOOL_TIMEOUT_MINUTES = 240
 
 
@@ -120,7 +122,8 @@ class InboxSettings:
     unpacks PS4 packages. `vita3k` (Vita3K.app or its binary) installs PS Vita packages with the
     zRIF keys of `vita_zrif`, a file the user keeps. `skyscraper` is the Skyscraper program that
     `warpzone scrape` runs (`Skyscraper` on PATH when unset). `tool_timeout_minutes` is how long any
-    one call of an external tool may run before it is killed and its item goes to review."""
+    one call of an external tool may run before it is killed and its item goes to review.
+    `chdman_threads` caps the threads of each chdman conversion (chdman's own count when unset)."""
 
     root: str | None = None
     dats_dir: str | None = None
@@ -142,6 +145,7 @@ class InboxSettings:
     switch_keys: str | None = None
     skyscraper: str | None = None
     tool_timeout_minutes: int = DEFAULT_TOOL_TIMEOUT_MINUTES
+    chdman_threads: int | None = None
 
 
 SERVE_KEYS = ("listen", "token_file")
@@ -313,7 +317,7 @@ def parse_inbox(raw: object, errors: list[str]) -> InboxSettings:
     if not isinstance(raw, dict):
         errors.append("[inbox]: must be a table")
         return InboxSettings()
-    _check_keys(raw, {*INBOX_KEYS, TOOL_TIMEOUT_KEY}, "inbox", errors)
+    _check_keys(raw, {*INBOX_KEYS, TOOL_TIMEOUT_KEY, CHDMAN_THREADS_KEY}, "inbox", errors)
     minutes = DEFAULT_TOOL_TIMEOUT_MINUTES
     if TOOL_TIMEOUT_KEY in raw:
         given = raw[TOOL_TIMEOUT_KEY]
@@ -324,6 +328,14 @@ def parse_inbox(raw: object, errors: list[str]) -> InboxSettings:
         else:
             minutes = given
     values: dict[str, Any] = {TOOL_TIMEOUT_KEY: minutes}
+    if CHDMAN_THREADS_KEY in raw:
+        threads = raw[CHDMAN_THREADS_KEY]
+        if not isinstance(threads, int) or isinstance(threads, bool) or threads < 1:
+            errors.append(
+                f"inbox.{CHDMAN_THREADS_KEY}: must be a whole number of threads, at least 1"
+            )
+        else:
+            values[CHDMAN_THREADS_KEY] = threads
     for key in INBOX_KEYS:
         if key not in raw:
             continue
