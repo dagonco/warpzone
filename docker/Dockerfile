@@ -1,5 +1,6 @@
 # The hub's container: `warpzone serve` (the library UI) and `warpzone catalog`, with the tools of
-# `warpzone inbox`: RAHasher, dolphin-tool, nsz, orbis-pkg-util, chdman and bsdtar.
+# `warpzone inbox` and `warpzone scrape`: RAHasher, dolphin-tool, nsz, orbis-pkg-util, chdman, bsdtar
+# and Skyscraper.
 # See website/src/content/docs/development/design/library-ui.md ("The container") and
 # website/src/content/docs/setup/hub-container.md.
 #
@@ -20,6 +21,9 @@
 #   orbis-pkg-util 0.1.0        crate SHA-256 940db8e0511cd2aa7e0199786fca75c34947e1fa0c92571c5b7881b175a597a8
 #       (https://crates.io/crates/orbis-pkg-util; its crates are pinned with their checksums by the
 #       Cargo.lock inside the crate, and the build refuses to change it)
+#   Skyscraper 3.21.1           commit ccd49ae99a13ce037476f1d3cc3b646afca2059e
+#       (https://github.com/Gemba/skyscraper, tag 3.21.1, a lightweight tag; it builds against the Qt 6
+#       that Debian trixie packages, whose version the Debian release fixes)
 #   rust:1.99.1-slim-trixie     sha256:f6c4a35d21dbb3c89d7a8d056c193e94fc09037f2b58dd858b09c39a47dd02d7
 #       (the digest of the multi-platform index; only the orbis-pkg-util build uses it)
 # Every stage but the Rust one uses the same Debian release, so what is built links against the glibc
@@ -143,7 +147,37 @@ RUN curl -fsSL -o orbis.crate \
  && /out/orbis-pkg-util --help | head -n 3
 
 
-# Stage 5: warpzone from this checkout, as a wheel. It has no dependencies of its own.
+# Stage 5: Skyscraper (the Gemba fork), which `warpzone scrape` and `inbox` run to scrape game
+# metadata and media. Qt 6 comes from Debian; the build links Qt's core, network, sql, xml and gui
+# modules (the last one is QImage, for the artwork: no window is ever opened). BUNDLE_QRC=1 puts
+# Skyscraper's own configuration files (peas.json, platforms_idmap.csv, the default artwork, the
+# box and scanline images) inside the binary, so it is one file that needs nothing under
+# /usr/local/etc and writes nothing but under its home folder. Only the binary leaves this stage.
+FROM python:3.14.10-slim-trixie@sha256:af8a5aa14780025dbfbcfbc81bd8a91ebd87711dd5b0f48ed71090949dd7cb1d AS skyscraper
+
+ARG SKYSCRAPER_TAG=3.21.1
+ARG SKYSCRAPER_COMMIT=ccd49ae99a13ce037476f1d3cc3b646afca2059e
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends build-essential git ca-certificates qt6-base-dev qmake6 \
+ && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src
+# The tag is only a name: the build stops unless it is the pinned commit.
+RUN git clone --branch "${SKYSCRAPER_TAG}" --depth 1 https://github.com/Gemba/skyscraper.git skyscraper \
+ && cd skyscraper \
+ && test "$(git rev-parse HEAD)" = "${SKYSCRAPER_COMMIT}" \
+ && BUNDLE_QRC=1 qmake6 \
+ && make -j"$(nproc)" \
+ && install -D -m 0755 Skyscraper /out/Skyscraper \
+ && strip /out/Skyscraper \
+ && ldd /out/Skyscraper \
+ && ! ldd /out/Skyscraper | grep "not found" \
+ && mkdir /tmp/sky-home \
+ && HOME=/tmp/sky-home /out/Skyscraper --version
+
+
+# Stage 6: warpzone from this checkout, as a wheel. It has no dependencies of its own.
 FROM python:3.14.10-slim-trixie@sha256:af8a5aa14780025dbfbcfbc81bd8a91ebd87711dd5b0f48ed71090949dd7cb1d AS wheel
 
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1
@@ -153,13 +187,13 @@ COPY warpzone ./warpzone
 RUN pip wheel --no-cache-dir --no-deps --wheel-dir /wheels .
 
 
-# Stage 6: what runs. No compiler and no git; one process. The only packages it installs are the
+# Stage 7: what runs. No compiler and no git; one process. The only packages it installs are the
 # tools `warpzone inbox` needs that Debian packages, with the apt lists removed in the same layer;
 # the others come from the stages above.
 FROM python:3.14.10-slim-trixie@sha256:af8a5aa14780025dbfbcfbc81bd8a91ebd87711dd5b0f48ed71090949dd7cb1d
 
 LABEL org.opencontainers.image.title="warpzone hub" \
-      org.opencontainers.image.description="warpzone serve and warpzone catalog, with the tools of warpzone inbox (RAHasher, chdman, bsdtar, dolphin-tool, nsz, orbis-pkg-util)" \
+      org.opencontainers.image.description="warpzone serve and warpzone catalog, with the tools of warpzone inbox (RAHasher, chdman, bsdtar, dolphin-tool, nsz, orbis-pkg-util) and warpzone scrape (Skyscraper)" \
       org.opencontainers.image.source="https://github.com/dagonco/warpzone" \
       org.opencontainers.image.licenses="MIT"
 
@@ -171,10 +205,13 @@ RUN pip install --no-cache-dir --no-index --no-deps /wheels/warpzone-*.whl \
 # The tools `warpzone inbox` runs in the container, as Debian packages (they land in /usr/bin, on
 # PATH): chdman, from mame-tools, converts discs to CHD; bsdtar, from libarchive-tools, unpacks
 # .7z and .rar. The others are built or installed in the stages above (dolphin-tool, nsz,
-# orbis-pkg-util, RAHasher). Vita3K is not in the image; see
+# orbis-pkg-util, RAHasher, Skyscraper). Vita3K is not in the image; see
 # website/src/content/docs/setup/inbox.md ("Where inbox runs").
+# Skyscraper links Qt 6: its Core, Gui (images only), Network, Xml and Sql modules are the
+# libqt6* packages, and libqt6sql6-sqlite is the SQL driver it loads at run time.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends mame-tools libarchive-tools \
+        libqt6gui6 libqt6network6 libqt6xml6 libqt6sql6 libqt6sql6-sqlite \
  && rm -rf /var/lib/apt/lists/* \
  && command -v chdman && command -v bsdtar
 
@@ -186,6 +223,20 @@ COPY --from=dolphin /out/dolphin-tool /usr/local/bin/dolphin-tool
 # orbis-pkg-util (MIT or Apache-2.0) is one file too.
 COPY --from=orbis /out/orbis-pkg-util /usr/local/bin/orbis-pkg-util
 
+# Skyscraper (GPL-3.0) is one file, and it keeps its config.ini and its cache in `~/.skyscraper`,
+# which must be a volume: the root is read-only and /tmp is memory. HOME is /tmp for everything
+# else (see below), so `Skyscraper` on PATH is a two-line script that runs the program with its own
+# HOME, /opt/skyscraper-home, whose `.skyscraper` is a link to the volume mounted at /skyscraper.
+# With nothing mounted the link dangles and Skyscraper stops at once (`warpzone doctor` says so).
+# WARPZONE_SKYSCRAPER_DIR tells warpzone where config.ini is (the presence check of the account).
+COPY --from=skyscraper /out/Skyscraper /opt/skyscraper/Skyscraper
+RUN printf '%s\n' '#!/bin/sh' 'HOME=/opt/skyscraper-home; export HOME' 'exec /opt/skyscraper/Skyscraper "$@"' \
+        > /usr/local/bin/Skyscraper \
+ && chmod 0755 /usr/local/bin/Skyscraper \
+ && mkdir /opt/skyscraper-home \
+ && ln -s /skyscraper /opt/skyscraper-home/.skyscraper \
+ && ! ldd /opt/skyscraper/Skyscraper | grep "not found"
+
 # nsz (MIT) lives in its own virtual environment, /opt/nsz, which has its own copy of its
 # packages; only its command is linked on PATH, so `python` and `pip` stay warpzone's.
 COPY --from=nsz /opt/nsz /opt/nsz
@@ -194,6 +245,7 @@ RUN ln -s /opt/nsz/bin/nsz /usr/local/bin/nsz
 # The config folder is mounted at /config; `[inbox] rahasher = "/usr/local/bin/RAHasher"` there.
 # HOME is a place any uid can write to (the compose file mounts a tmpfs on it).
 ENV WARPZONE_CONFIG=/config/config.toml \
+    WARPZONE_SKYSCRAPER_DIR=/skyscraper \
     HOME=/tmp \
     PYTHONUNBUFFERED=1
 

@@ -21,9 +21,9 @@
 # if nobody else uses the NAS).
 #
 # The second service, `warpzone-inbox`, at the end of the file, runs `warpzone inbox` with the tools
-# in the image. It also needs dats/ (the DATs), keys/ (your Switch keys and PS Vita zRIF file) and
-# work/ (room for conversions) next to this file; the keys and the big data are read from them and
-# are never part of the image.
+# in the image. It also needs dats/ (the DATs), keys/ (your Switch keys and PS Vita zRIF file),
+# work/ (room for conversions) and skyscraper/ (Skyscraper's config.ini and cache) next to this
+# file; the keys and the big data are read from them and are never part of the image.
 
 name: warpzone
 
@@ -85,11 +85,12 @@ services:
     # network_mode: host
 
   # `warpzone inbox` in the same image: it files the games dropped in <hub root>/inbox/ with the
-  # tools the image ships (chdman, bsdtar, RAHasher, dolphin-tool, nsz, orbis-pkg-util), so nothing
-  # has to be installed on the NAS. A profile keeps `docker compose up -d` from starting it; run it
-  # with `docker compose run --rm warpzone-inbox inbox` (a report) and `... inbox --apply`.
-  # It repeats the mounts and limits above and adds three folders the image does not hold, because
-  # they are keys or big data: they come from the NAS, read-only, and never go into the image.
+  # tools the image ships (chdman, bsdtar, RAHasher, dolphin-tool, nsz, orbis-pkg-util, and
+  # Skyscraper, which scrapes what it places), so nothing has to be installed on the NAS. A profile
+  # keeps `docker compose up -d` from starting it; run it with
+  # `docker compose run --rm warpzone-inbox inbox` (a report) and `... inbox --apply`.
+  # It repeats the mounts and limits above and adds folders the image does not hold: three of keys
+  # and big data, which come from the NAS read-only and never go into the image, and Skyscraper's.
   warpzone-inbox:
     image: warpzone:local
     container_name: warpzone-inbox
@@ -117,6 +118,14 @@ services:
       - ./keys:/keys:ro
       # Unpacked archives and conversions: room for a few GiB. The container's /tmp is memory.
       - ./work:/work
+      # Skyscraper's home folder (its `~/.skyscraper`): config.ini and the cache, read-write and
+      # owned by the uid above. Create skyscraper/config.ini by hand if you want a ScreenScraper
+      # account (the same keys as in https://dagonco.github.io/warpzone/setup/scrape/, such as
+      # userCreds under [screenscraper]); it holds that password, so chmod 600 it. warpzone never
+      # reads, prints or passes it. The cache grows by about 2.6 MB per game scraped and is what
+      # lets a run stopped by ScreenScraper's daily limit go on the next day: keep it on disk,
+      # never in the tmpfs. Without this mount Skyscraper cannot run and `inbox` does not scrape.
+      - ./skyscraper:/skyscraper
     env_file:
       - ./warpzone.env
     environment:
@@ -133,4 +142,5 @@ services:
     #   mame_dat = "/dats/mame0282lx.zip"                    # optional: arcade
     #   fbneo_dat = "/dats/fbneo-arcade.dat"
     #   mame2003plus_dat = "/dats/mame2003-plus.xml"
-    # dolphin-tool, nsz and orbis-pkg-util are on PATH in the image, so they need no setting.
+    # dolphin-tool, nsz, orbis-pkg-util and Skyscraper are on PATH in the image, so they need no
+    # setting.

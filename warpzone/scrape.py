@@ -848,10 +848,25 @@ def tested_version() -> tuple[int, int, int]:
     return major, minor, patch
 
 
+# The hub image sets this to the folder it keeps Skyscraper's `config.ini` and cache in (the
+# volume mounted at /skyscraper, which the image's `Skyscraper` script links as `~/.skyscraper`).
+SKYSCRAPER_DIR_ENV = "WARPZONE_SKYSCRAPER_DIR"
+
+
+def skyscraper_dir(env: Mapping[str, str]) -> Path | None:
+    """The folder `WARPZONE_SKYSCRAPER_DIR` names (the hub image sets it), else None."""
+    value = env.get(SKYSCRAPER_DIR_ENV)
+    return Path(value) if value else None
+
+
 def config_ini_path(env: Mapping[str, str], home: Path, exists: Callable[[Path], bool]) -> Path:
-    """Where Skyscraper keeps `config.ini`: `~/.skyscraper/` when that folder exists, else
+    """Where Skyscraper keeps `config.ini`: the `WARPZONE_SKYSCRAPER_DIR` folder when the
+    variable is set (the hub image), else `~/.skyscraper/` when that folder exists, else
     `$XDG_CONFIG_HOME/skyscraper/` (`~/.config/skyscraper/` when the variable is unset) in a
     build with XDG paths. Only the place is decided here; nothing is read."""
+    image = skyscraper_dir(env)
+    if image is not None:
+        return image / "config.ini"
     legacy = home / ".skyscraper"
     if exists(legacy):
         return legacy / "config.ini"

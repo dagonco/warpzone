@@ -32,9 +32,10 @@ Decided by the maintainer before the design, not reopened here:
    the items for review are visible there.
 5. **An exception to the rule for destructive commands**, documented like the unattended prune
    (see [The exception](#the-exception)).
-6. **No scraping.** Skyscraper in the hub image is deferred (see
-   [Scraping: Deferred](/warpzone/development/design/scrape/#deferred)), so the unattended run
-   does not scrape (see [Scraping](#scraping)).
+6. **Scraping** (changed on 2026-11-13, when Skyscraper entered the hub image: see
+   [Scraping: In the hub image](/warpzone/development/design/scrape/#in-the-hub-image)). The
+   unattended run scrapes the games it placed, as an attended `--apply` does; a scrape that fails
+   is a warning and never changes a placement or the exit code (see [Scraping](#scraping)).
 
 Decided by the maintainer on 2026-11-13, on the first draft of this page:
 
@@ -167,8 +168,9 @@ first that says so:
    outcome. A run started by an earlier tick takes only the items that were ready at its step 4;
    items that become ready meanwhile wait for the next tick.
 8. **Finish** as an attended run does (purge `_done` folders older than 7 days, update the
-   catalog for the systems it placed something in), then write the run record and the state,
-   send the webhook, release the lock and exit.
+   catalog for the systems it placed something in, scrape the games it placed: see
+   [Scraping](#scraping)), then write the run record and the state, send the webhook, release the
+   lock and exit.
 
 An attended `--apply` (from a computer or in the container) is unchanged except for three things:
 it writes a run record too, so the UI shows its result; its lock has the heartbeat; and it reads
@@ -374,11 +376,14 @@ path, host name, key or URL is written.
     "reasons": ["no DAT match: track01.bin"], "notes": []}],
  "counts": {"placed": 1, "already": 0, "review": 1, "held": 0, "waiting": 2},
  "whitelist": ["!/roms/psx/Example Game (Europe).chd"],
+ "scrape": {"state": "done", "systems": ["psx"]},
  "purged": ["2026-11-05"], "warnings": []}
 ```
 
 `outcome` of an item is `done`, `review` or `held`; of a game, the report's `placed`, `already`
-or `review`. `reasons` and `notes` are the report's text, with what the report already redacts (a
+or `review`. `scrape.state` is `done`, `not-finished` (with the systems to give to `warpzone scrape
+--system`), `skipped` (`--no-scrape`, or no Skyscraper found) or absent when nothing scrapable was
+placed. `reasons` and `notes` are the report's text, with what the report already redacts (a
 zRIF, nsz's key lines) redacted the same way. `render_record` is pure and is built from the same
 `ItemResult` values the printed report comes from, so the two never disagree.
 
@@ -454,6 +459,10 @@ or `news`), both pure. An empty, busy or waiting-only run sends nothing.
   `mame2003plus_dat`). The parsed caches go to `XDG_CACHE_HOME`, set to a folder of the work
   volume. warpzone never downloads them; updating them is a `git pull` by the user.
 - **The webhook URL** is on the task's command line, which only the NAS's administrators see.
+- **Skyscraper's folder.** The `skyscraper` folder next to `compose.yaml`, read-write at
+  `/skyscraper` (see [Scraping in the container](/warpzone/setup/hub-container/#scraping-in-the-container)):
+  its `config.ini` may hold the ScreenScraper password, which warpzone never reads, prints or
+  passes, and its `cache/` is on disk. Not in the record, not in the webhook.
 
 ## Logging and exit codes
 
@@ -516,12 +525,39 @@ inbox group, on a computer as well as in the container (the state is on the shar
 
 ## Scraping
 
-The unattended run does not scrape. Skyscraper is not in the hub image (deferred, see
-[Scraping: Deferred](/warpzone/development/design/scrape/#deferred)), so in the container it is
-never found, and `--unattended` implies `--no-scrape` even if it were. The record lists the games
-placed, so a person can run `warpzone scrape --system <system>` from a computer later. Scraping in
-unattended runs is a decision for when Skyscraper enters the image: it talks to a service with a
-daily quota, and its failures need a person.
+Skyscraper is in the hub image since 2026-11-13, so the unattended run scrapes what it places,
+with the code of an attended `--apply` (`inbox_scrape.after_apply`, step 8 of
+[The command](#the-command)): after the catalog update, for exactly the games this run placed
+(`scrape.is_placed`), system by system, inside the lock it already holds. The lock's heartbeat
+runs meanwhile, so a scrape of minutes (a game takes about 10 seconds) is a live lock to the ticks
+that find it, which exit `0` as busy. `--no-scrape` is accepted with `--unattended` (the task can
+pass it); nothing implies it.
+
+- **Empty stays cheap.** A run with no ready item, and a run that placed nothing scrapable (a
+  Switch update, a system in `UNSCRAPED`, only `already` games), starts no Skyscraper.
+- **A failure is a warning, never news.** The daily limit, a closed, busy or unreachable
+  ScreenScraper, a Skyscraper that fails or hits the time limit, a missing `/skyscraper` volume,
+  or a catalog that lacks the placed games: each is a warning line in the task's output, as in an
+  attended run, and `scrape.state` of the record becomes `not-finished` with the systems to rerun.
+  It never changes an item's outcome, never sends an item to review, never goes into the state's
+  `error` and never counts in `news`, so the exit code is what [Logging and exit
+  codes](#logging-and-exit-codes) says without it. This is the rule for every scrape failure, so
+  none of them is "news once": a quota or a closed ScreenScraper would otherwise be news on the
+  first tick of every day or hour it lasts, and DSM's mail on abnormal termination must not repeat
+  for something a person cannot fix by looking at one run. The webhook is unchanged for the same
+  reason (it reports the placed games; the record holds the scrape note).
+- **Where it shows.** The run record's `scrape` note, which the UI's run list prints on the run
+  ("scrape not finished: psx"), and the task's output. A standing cause (no volume, no Skyscraper,
+  a configuration that does not load) is what `doctor` already reports on the `Skyscraper` line.
+- **What a person does.** `warpzone scrape` (or `docker compose run --rm warpzone-inbox scrape`)
+  scrapes everything in the library that lacks an entry or media, so the games a limited or failed
+  run left are picked up by it, and by nothing else: the next ticks scrape only the games they
+  place themselves, and never retry an earlier run's. A second scheduled task that runs `scrape`
+  once a day, for the day's quota, is possible with the same container service (it takes the same
+  lock) and is not part of this design.
+- **Resources.** Skyscraper runs under the run's `os.nice(10)` like the other tools, one call at
+  a time, within `mem_limit` (a gather holds little) and the `tool_timeout_minutes` of `[inbox]`.
+  Its staged folders and logs go to `work_dir` and are removed with the run's other leftovers.
 
 ## Code and testing
 
@@ -536,7 +572,9 @@ daily quota, and its failures need a person.
 - `library_api.inbox_response` (pure) and the two routes in `serve`; `doctor.judge_unattended_inbox`
   (pure).
 - `inbox.py`: `--unattended` in `run_inbox` (the early exit, the readiness, the per-item checks,
-  the record, the exit code from `news`), `Options.unattended`, `chdman_threads`.
+  the record, the exit code from `news`), `Options.unattended`, `chdman_threads`; the scrape after
+  the catalog update is `inbox_scrape.after_apply` as in an attended run, and its result is the
+  record's `scrape` note, an input of `render_record` and not of `news`.
 
 The modules are added to the [code layout](/warpzone/development/design/code-and-testing/#code-layout).
 
@@ -562,6 +600,11 @@ Unit tests, pure parts first, with no Docker, no scheduler and no real tools:
   fingerprint (no news), held before with another fingerprint (news); an error new, the same
   (`count` up, no news), changed (news), cleared and back (news); the exit code for each, `2`
   winning over `1`.
+- The scrape of an unattended run: with a stand-in Skyscraper, a run that places a cartridge zip
+  scrapes it and the record says `scrape.state` `done`; one that places nothing, or only `already`
+  games, starts no Skyscraper; a stand-in that prints the quota line, one that fails and a missing
+  `/skyscraper` leave the placement, the state and the exit code as they would be without
+  Skyscraper, with `not-finished` in the record and no entry in `news`; `--no-scrape` skips it.
 - `notify_payload` caps the lists at 20 and holds no path outside the hub; `should_notify` sends
   for placed games and for news, once per error, and nothing for an empty or waiting run.
 - `judge_unattended_inbox` for each line above; `inbox_response` with missing, damaged and

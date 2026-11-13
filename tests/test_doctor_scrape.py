@@ -7,7 +7,7 @@ from pathlib import Path
 
 from scrape_support import BANNER, FAKE_CONFIG, FAKE_CREDS
 from test_doctor import TmpCase, by_name, context
-from warpzone import doctor, doctor_scrape
+from warpzone import doctor, doctor_scrape, scrape
 from warpzone.doctor import FAIL, OK, OPTIONAL, WARN, RunOutput, check_skyscraper, render
 
 TOOL = "/opt/sky/Skyscraper"
@@ -110,11 +110,59 @@ class SkyscraperCheckTests(TmpCase):
         self.assertEqual(sky.status, WARN)
         self.assertIn("3.19.0 is older than 3.21.1", sky.detail)
 
-    def test_in_the_hub_container_it_says_to_scrape_elsewhere(self) -> None:
-        _, results = self.check("[inbox]\n", in_container=lambda: True)
+    def image_context(self, volume: Path, **kw):
+        """The hub image: Skyscraper on PATH, the volume named by WARPZONE_SKYSCRAPER_DIR."""
+        kw.setdefault("tools", {"Skyscraper": "/usr/local/bin/Skyscraper"})
+        kw.setdefault("run", version_run())
+        return context(
+            self.tmp,
+            "[inbox]\n",
+            in_container=lambda: True,
+            env={scrape.SKYSCRAPER_DIR_ENV: str(volume)},
+            **kw,
+        )
+
+    def test_in_the_hub_image_it_is_checked_like_anywhere_else(self) -> None:
+        volume = self.tmp / "skyscraper"
+        volume.mkdir()
+        ctx = self.image_context(volume)
+        ctx.probes.is_dir = lambda path: path == volume
+        sky = by_name(check_skyscraper(ctx), "Skyscraper")
+        self.assertEqual((sky.status, sky.detail), (OK, "3.21.1 (/usr/local/bin/Skyscraper)"))
+
+    def test_in_the_hub_image_the_account_is_read_from_the_volume(self) -> None:
+        volume = self.tmp / "skyscraper"
+        volume.mkdir()
+        ini = volume / "config.ini"
+        ini.write_text(FAKE_CONFIG)
+        ctx = self.image_context(volume)
+        ctx.probes.is_dir = lambda path: path == volume
+        ctx.probes.read_text = lambda path: ini.read_text() if path == ini else ""
+        results = check_skyscraper(ctx)
+        account = by_name(results, "ScreenScraper account")
+        self.assertEqual((account.status, account.detail), (OK, "userCreds set in [screenscraper]"))
+        self.assertNotIn(FAKE_CREDS, repr([dataclasses.asdict(r) for r in results]))
+
+    def test_in_the_hub_image_without_the_volume_it_says_to_mount_it(self) -> None:
+        ran: list[object] = []
+
+        def run(command):
+            ran.append(command)
+            return RunOutput(1, "")
+
+        ctx = self.image_context(self.tmp / "skyscraper", run=run)
+        results = check_skyscraper(ctx)
         self.assertEqual([r.name for r in results], ["Skyscraper"])
         self.assertEqual(results[0].status, OPTIONAL)
-        self.assertEqual(results[0].fix, "run scrape on a computer that mounts the share")
+        self.assertIn("nothing is mounted at", results[0].detail)
+        self.assertIn("inbox will not scrape", results[0].detail)
+        self.assertIn("./skyscraper:", results[0].fix)
+        self.assertEqual(ran, [], "Skyscraper must not run without its volume")
+
+    def test_the_volume_is_not_looked_for_outside_the_image(self) -> None:
+        # No WARPZONE_SKYSCRAPER_DIR: a computer's Skyscraper keeps its files under the home folder.
+        _, results = self.check("[inbox]\n", tools={"Skyscraper": TOOL})
+        self.assertEqual(by_name(results, "Skyscraper").status, OK)
 
     def test_the_account_line_appears_only_when_skyscraper_is_found(self) -> None:
         _, results = self.check("[inbox]\n")

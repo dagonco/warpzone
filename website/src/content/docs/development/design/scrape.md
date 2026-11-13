@@ -66,7 +66,8 @@ Not in scope:
 - Title screens and physical media scans (`titlescreens`, `physicalmedia`). Skyscraper's
   ScreenScraper module does not fetch them, so scraped games go without; the library UI and ES-DE
   fall back to the other kinds.
-- Running Skyscraper on a console or inside the hub container (see [Deferred](#deferred)).
+- Running Skyscraper on a console. It runs where `inbox` runs: on a computer that mounts the share or in the
+  hub container (see [In the hub image](#in-the-hub-image)).
 - Downloading anything but metadata and media. warpzone never downloads games or BIOS files.
 
 ## Configuration
@@ -77,7 +78,7 @@ skyscraper = "/usr/local/bin/Skyscraper"   # optional; PATH is searched for Skys
 ```
 
 Skyscraper is located like the other inbox tools: the `[inbox] skyscraper` path, else
-`Skyscraper` on `PATH`. A configured path that does not exist is a configuration error (exit 2).
+`Skyscraper` on `PATH` (in the hub image it is on `PATH`, so the container needs no setting). A configured path that does not exist is a configuration error (exit 2).
 When neither finds it, `inbox` does not scrape and says so once in its report; `warpzone scrape`
 exits 2. The other `[inbox]` keys it uses are `root`, `work_dir` (the staged and temporary
 folders and the logs live in `<work_dir>/scrape/`; without it, in `$XDG_CACHE_HOME/warpzone/scrape/`,
@@ -103,7 +104,8 @@ userCreds="user:pass"
 ```
 
 warpzone never passes `-c` (so Skyscraper reads its default `~/.skyscraper/config.ini`, or
-`$XDG_CONFIG_HOME/skyscraper/config.ini` in a build with XDG paths) and never `-u`, which would
+`$XDG_CONFIG_HOME/skyscraper/config.ini` in a build with XDG paths; in the hub image it is the
+volume at `/skyscraper`, see [In the hub image](#in-the-hub-image)) and never `-u`, which would
 show the credentials in the process list. It does not read their value: the only code that opens
 `config.ini` is the presence check of `doctor` and of the scrape report, which goes through the
 file line by line, tracks the `[section]` it is in, splits each line at the first `=` and keeps
@@ -355,6 +357,46 @@ of 1,000 games is about three hours and 2.6 GB on the hub, plus about as much in
 machine that scrapes. The videos stay on the hub: devices ignore `/*/videos` (see
 [Hub, folders and ignores](/warpzone/development/design/hub-and-folders/)).
 
+## In the hub image
+
+Decided by the maintainer on 2026-11-13, replacing the deferral recorded here before: the hub's
+container image ships Skyscraper, so the hub scrapes without a computer that mounts the share.
+`scrape_io` runs it as a subprocess, as before; the image only has to put it on `PATH`. The
+container paths of the [hub container guide](/warpzone/setup/hub-container/#scraping-in-the-container)
+are these:
+
+- **Built from source, pinned.** A stage of `docker/Dockerfile` builds Gemba's Skyscraper at the
+  commit of tag 3.21.1 (the build stops if the tag points elsewhere, as for RALibretro and
+  Dolphin) with Debian's Qt 6 and `qmake6`. `BUNDLE_QRC=1` puts the files Skyscraper otherwise
+  installs under `/usr/local/etc/skyscraper` (`peas.json`, `platforms_idmap.csv`, the default
+  artwork, the box and scanline images, `hints.xml`) inside the binary, which falls back to them
+  when its home folder has none: one file, nothing to install, and nothing in the image that the
+  user's volume could shadow. The Qt modules it links are Core, Gui (its images; no window is ever
+  opened), Network, Xml and Sql, from the `libqt6*` runtime packages of Debian plus the SQLite
+  driver; GPL-3.0, so it joins the licences paragraph of the guide, and the image is built by the
+  user and not redistributed.
+- **Its home is a volume.** Skyscraper (without XDG paths) keeps `config.ini`, the resource
+  cache, imports and reports under `~/.skyscraper`, and creates what is missing at every start.
+  The image's root is read-only and `/tmp` is memory, and the cache must survive (about 2.6 MB a
+  game, and what makes a run stopped by the daily limit resumable), so the compose service mounts
+  `./skyscraper` at `/skyscraper`, read-write and owned by the service's uid. `HOME` stays `/tmp`
+  for everything else in the image (warpzone and the other tools), so
+  `Skyscraper` on `PATH` is a two-line script that runs the real program (`/opt/skyscraper/Skyscraper`)
+  with `HOME=/opt/skyscraper-home`, whose `.skyscraper` is a link to `/skyscraper`. The script is
+  an `exec`, so the process group `runners.run_tool` kills at the time limit is still the
+  program's. With nothing mounted the link dangles and Skyscraper stops at start.
+- **warpzone is told where `config.ini` is.** The image sets `WARPZONE_SKYSCRAPER_DIR=/skyscraper`.
+  `scrape.config_ini_path` returns `<that folder>/config.ini` when the variable is set, which is
+  the only place warpzone looks (the presence check of `userCreds`, in `doctor` and in the scrape
+  report). The credentials rule is unchanged: warpzone never reads the value, never prints it and
+  never puts it on a command line; the file is created by the user on the NAS and is never in the
+  image.
+- **Doctor** checks Skyscraper in the container like anywhere else (see [Doctor](#doctor)).
+- **The scrape of `inbox --apply` is the same code** in the container. Its staged folders and logs
+  go to `[inbox] work_dir` (a mounted folder) and the not-found memory to `XDG_CACHE_HOME`
+  (`/work/cache` in the compose example), as for any machine. The [unattended
+  inbox](/warpzone/development/design/inbox-unattended/#scraping) scrapes what it places.
+
 ## In `inbox --apply`
 
 After the catalog update, when Skyscraper is configured or found, `inbox --apply` scrapes the
@@ -470,8 +512,13 @@ With an `[inbox]` table, `doctor` reports Skyscraper like the other optional inb
   [screenscraper]" when the presence check finds the key; `[--]` "anonymous: 1 thread, 10,000
   requests a day; a free account doubles the requests" otherwise. The value is never read.
 
-In the hub container Skyscraper is not in the image, so the line is `[--]` with the fix "run
-scrape on a computer that mounts the share".
+In the hub container (`WARPZONE_SKYSCRAPER_DIR` set) Skyscraper is checked like anywhere else, and
+its `config.ini` is read from that folder. When the folder is not a directory (the volume is not
+mounted) the `Skyscraper` line is `[--]`: "`/usr/local/bin/Skyscraper` is in the image, but nothing
+is mounted at /skyscraper, where it keeps its config.ini and cache: inbox will not scrape", with
+the fix `./skyscraper:/skyscraper` for the compose service, and Skyscraper is not run (it would
+stop at start), so there is no account line. It is optional, `[--]` and not a problem, because the
+`warpzone` service of the same image does not scrape and has no such volume.
 
 ## Code and testing
 
@@ -505,6 +552,12 @@ Unit tests, with no network and no Skyscraper:
   canned gamelist (with absolute paths) and media into the `-g` and `-o` it is given, and one that
   prints the quota line, and checks the hub's gamelist, media, report and exit code.
 
+The image is checked by the `image` job of CI, on its manual and weekly runs: `Skyscraper
+--version` as uid 65534 with `--read-only --tmpfs /tmp --cap-drop ALL` and a folder mounted at
+`/skyscraper` (and a failure without it), and `warpzone doctor` in the container with `[ok]` for
+`Skyscraper` and for the account of a fake `config.ini` on the volume, and the "nothing is mounted"
+line without it. Unit tests cover the doctor's three cases and `config_ini_path` with the variable.
+
 Manual checks, recorded in the pull request: a real Skyscraper run against ScreenScraper,
 anonymous and with an account, on a few games of different systems (a cartridge `.zip`, a CHD, a
 multi-disc `.m3u` folder, a NES or Atari 7800 dump with a header); the miximage and the 3D box
@@ -518,6 +571,3 @@ Decided by the maintainer to leave for later (2026-11-13):
 1. **`xbox360`, `wiiu`, `ps4` and `psvita`.** Scraping them needs the frontend-base shift and, for
    the launchers, a name to search by (the shortcut's or launcher's title). They stay in
    `UNSCRAPED` until then.
-2. **Skyscraper in the hub image.** Shipping it would let `inbox` in the container scrape too, at
-   the cost of Qt in the image. It belongs with the work on the inbox tools in the hub image;
-   until then scraping runs only on a computer that mounts the share.

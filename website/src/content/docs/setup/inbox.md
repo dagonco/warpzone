@@ -52,9 +52,10 @@ Which tools exist in each place:
 | `dolphin-tool` | `.gcz` GameCube images | install Dolphin | `/usr/local/bin/dolphin-tool` (on `PATH`), built from Dolphin's source |
 | `nsz` | Switch metadata, `.nsz` decompression | `uv tool install nsz` | `/usr/local/bin/nsz` (on `PATH`), in its own virtual environment |
 | `orbis-pkg-util` | PS4 `.pkg` games | `cargo install orbis-pkg-util` | `/usr/local/bin/orbis-pkg-util` (on `PATH`), built from its crate |
+| `Skyscraper` | scraping what `inbox --apply` places and `warpzone scrape` | see [Scraping](/warpzone/setup/scrape/#install-skyscraper) | `/usr/local/bin/Skyscraper` (on `PATH`), built from the Gemba fork; its `config.ini` and cache live on the volume mounted at `/skyscraper` |
 | `vita3k` | PS Vita `.pkg` games | install it | not in the image |
 
-An item that needs a tool the place lacks goes to `inbox/_revisar/` with the reason "missing tool"; the other items are filed. In the container that is a PS Vita `.pkg`: Vita3K is not in the image (see [PS Vita packages](/warpzone/development/design/inbox/#ps-vita-packages-in-the-container)), so run those on a computer. `chdman`, `bsdtar`, `dolphin-tool`, `nsz` and `orbis-pkg-util` need no `[inbox]` setting in the container: inbox finds them on `PATH`. When the image gains a tool it is on the image's `PATH`, and this table is the place that says so.
+An item that needs a tool the place lacks goes to `inbox/_revisar/` with the reason "missing tool"; the other items are filed. In the container that is a PS Vita `.pkg`: Vita3K is not in the image (see [PS Vita packages](/warpzone/development/design/inbox/#ps-vita-packages-in-the-container)), so run those on a computer. `chdman`, `bsdtar`, `dolphin-tool`, `nsz`, `orbis-pkg-util` and `Skyscraper` need no `[inbox]` setting in the container: inbox finds them on `PATH`. When the image gains a tool it is on the image's `PATH`, and this table is the place that says so.
 
 What a tool needs besides itself never goes into the image. The Switch keys file (`switch_keys`), the PS Vita zRIF file (`vita_zrif`), `titledb_dir` and the arcade DATs are folders or files you mount from the NAS, read-only, and name in `[inbox]`.
 
@@ -83,6 +84,7 @@ Add a service for it to `compose.yaml`, next to `warpzone`. It repeats the mount
       - ./dats:/dats:ro                   # libretro-database, and titledb and the arcade DATs if you use them (see below)
       - ./keys:/keys:ro                   # your Switch keys and PS Vita zRIF file; not on the share, not in the image
       - ./work:/work                      # unpacked archives and conversions: room for a few GiB
+      - ./skyscraper:/skyscraper          # Skyscraper's config.ini and cache (see Scraping), read-write
     env_file:
       - ./warpzone.env                    # RA_API_KEY, to look RA hashes up
     environment:
@@ -103,7 +105,7 @@ vita_zrif = "/keys/PSV_GAMES.tsv"             # PS Vita .pkg: needs Vita3K, whic
 mame_dat = "/dats/mame0282lx.zip"             # optional: arcade (see "Arcade sets")
 ```
 
-[`examples/compose.example.yaml`](https://github.com/dagonco/warpzone/blob/main/examples/compose.example.yaml) has the same service, with the `[inbox]` keys as comments. Make the `dats`, `keys` and `work` folders next to `compose.yaml` (`work` writable by the service's uid; `keys` readable by it and by nobody else if the NAS has other users), put your keys file in `keys/`, and clone the DATs into `dats/`: `git clone --depth 1 --filter=blob:none --sparse https://github.com/libretro/libretro-database dats/libretro-database && git -C dats/libretro-database sparse-checkout set metadat/redump metadat/no-intro`. warpzone never downloads them. Then, from the folder with `compose.yaml`:
+[`examples/compose.example.yaml`](https://github.com/dagonco/warpzone/blob/main/examples/compose.example.yaml) has the same service, with the `[inbox]` keys as comments. Make the `dats`, `keys`, `work` and `skyscraper` folders next to `compose.yaml` (`work` and `skyscraper` writable by the service's uid; `keys` readable by it and by nobody else if the NAS has other users), put your keys file in `keys/`, and clone the DATs into `dats/`: `git clone --depth 1 --filter=blob:none --sparse https://github.com/libretro/libretro-database dats/libretro-database && git -C dats/libretro-database sparse-checkout set metadat/redump metadat/no-intro`. warpzone never downloads them. Then, from the folder with `compose.yaml`:
 
 ```bash
 docker compose run --rm warpzone-inbox inbox            # report only
@@ -163,7 +165,7 @@ A PS Vita dump kept as a game folder is filed (see [PS Vita games](#ps-vita-game
 
 ## Descriptions and media
 
-With Skyscraper installed (on `PATH`, or `skyscraper` in the `[inbox]` table), `warpzone inbox --apply` also scrapes the games it has just placed: it adds their gamelist entry, covers, screenshots and videos to the hub, after the files are placed and the catalog is updated. A failure there is only a warning, and `--no-scrape` skips it for one run. Without `--apply` the report says how many games would be scraped. Set-up, ScreenScraper accounts, language and region, and `warpzone scrape` for the games already in the library are in [Scraping](/warpzone/setup/scrape/). The hub container does not have Skyscraper, so there `inbox` places the games and says it did not scrape them.
+With Skyscraper installed (on `PATH`, or `skyscraper` in the `[inbox]` table), `warpzone inbox --apply` also scrapes the games it has just placed: it adds their gamelist entry, covers, screenshots and videos to the hub, after the files are placed and the catalog is updated. A failure there is only a warning, and `--no-scrape` skips it for one run. Without `--apply` the report says how many games would be scraped. Set-up, ScreenScraper accounts, language and region, and `warpzone scrape` for the games already in the library are in [Scraping](/warpzone/setup/scrape/). The hub container ships Skyscraper, so `inbox` there scrapes too; it needs the `./skyscraper` folder mounted at `/skyscraper` (see [Scraping in the container](/warpzone/setup/hub-container/#scraping-in-the-container)).
 
 ## Homebrew and other roms no DAT knows
 

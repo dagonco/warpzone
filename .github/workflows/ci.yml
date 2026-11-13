@@ -233,9 +233,9 @@ jobs:
 
   # Builds the hub's container image and runs it far enough to see that it works, so that a
   # base image or apt change that breaks it shows up here and not on the first rebuild on the
-  # hub. Nothing is pushed and no registry login is made. The RAHasher and dolphin-tool stages
-  # compile C++ (dolphin-tool, Dolphin's emulation core included, is most of the time), hence the
-  # generous timeout.
+  # hub. Nothing is pushed and no registry login is made. The RAHasher, dolphin-tool and Skyscraper
+  # stages compile C++ (dolphin-tool, Dolphin's emulation core included, is most of the time; the
+  # stages build side by side), hence the generous timeout.
   image:
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
@@ -247,9 +247,12 @@ jobs:
       - name: Build the image
         timeout-minutes: 35
         run: docker build -f docker/Dockerfile -t warpzone:ci .
+      # Before Skyscraper (main after the dolphin-tool, nsz and orbis-pkg-util stages): `image size`
+      # 157230087 bytes (the compressed size) and about 472 MB of layers.
       - name: Show the size of the image
         run: |
           docker image inspect --format 'image size: {{.Size}} bytes' warpzone:ci
+          echo "layers, uncompressed: $(docker history --human=false --format '{{.Size}}' warpzone:ci | awk '{ s += $1 } END { print s }') bytes"
           docker history --no-trunc --format '{{.Size}}\t{{.CreatedBy}}' warpzone:ci | cut -c1-160
       # The entrypoint is `warpzone` and the user is 65534, so the version check passes only
       # its argument; the tools are looked up with the entrypoint replaced by `sh`.
@@ -270,6 +273,7 @@ jobs:
             command -v dolphin-tool
             command -v nsz
             command -v orbis-pkg-util
+            command -v Skyscraper
             bsdtar --version
             # Each tool starts. dolphin-tool prints its usage and exits 1 when given no command.
             RAHasher 2>&1 | head -n 1
@@ -301,9 +305,28 @@ jobs:
             -v "$RUNNER_TEMP/gc:/data:ro" --entrypoint dolphin-tool warpzone:ci \
             header -i /data/check.iso | tee "$RUNNER_TEMP/header.txt"
           grep -q "GTSE01" "$RUNNER_TEMP/header.txt"
+      # Skyscraper runs under the limits of the compose file (not root, a read-only root file
+      # system, memory for /tmp, no capabilities) with a folder mounted at /skyscraper, where it
+      # makes its cache and import folders. Without the folder it stops, which is what doctor then
+      # says in the next step.
+      - name: Run Skyscraper with its volume
+        run: |
+          set -euo pipefail
+          mkdir "$RUNNER_TEMP/skyscraper"
+          chmod 777 "$RUNNER_TEMP/skyscraper"
+          docker run --rm --read-only --tmpfs /tmp --user 65534:65534 --cap-drop ALL \
+            -v "$RUNNER_TEMP/skyscraper:/skyscraper" --entrypoint Skyscraper warpzone:ci \
+            --version | tee "$RUNNER_TEMP/skyscraper.txt"
+          grep -q "3\.21\.1" "$RUNNER_TEMP/skyscraper.txt"
+          test -d "$RUNNER_TEMP/skyscraper/cache"
+          if docker run --rm --read-only --tmpfs /tmp --user 65534:65534 --cap-drop ALL \
+              --entrypoint Skyscraper warpzone:ci --version >/dev/null 2>&1; then
+            echo "Skyscraper ran with no volume at /skyscraper"; exit 1
+          fi
       # `doctor` in the container must find every tool the image ships, on PATH or at the path it
-      # is told, from the config it would read in /config. Vita3K is not in the image, so its line
-      # is not checked. The output is shown whatever doctor's exit code is.
+      # is told, from the config it would read in /config, and Skyscraper with its volume (and the
+      # account in the config.ini there, a fake one). Vita3K is not in the image, so its line is
+      # not checked. The output is shown whatever doctor's exit code is.
       - name: Check that doctor finds the tools
         run: |
           set -euo pipefail
@@ -312,12 +335,22 @@ jobs:
             > "$RUNNER_TEMP/doctor-config/config.toml"
           chmod 755 "$RUNNER_TEMP/doctor-config"
           chmod 644 "$RUNNER_TEMP/doctor-config/config.toml"
-          docker run --rm -v "$RUNNER_TEMP/doctor-config:/config:ro" warpzone:ci doctor \
+          printf '[screenscraper]\nuserCreds="example:example"\n' \
+            > "$RUNNER_TEMP/skyscraper/config.ini" # gitleaks:allow
+          docker run --rm -v "$RUNNER_TEMP/doctor-config:/config:ro" \
+            -v "$RUNNER_TEMP/skyscraper:/skyscraper" warpzone:ci doctor \
             | tee "$RUNNER_TEMP/doctor.txt" || true
-          for tool in chdman bsdtar RAHasher dolphin-tool nsz orbis-pkg-util; do
+          for tool in chdman bsdtar RAHasher dolphin-tool nsz orbis-pkg-util Skyscraper; do
             grep -E "^ +\[ok\] $tool " "$RUNNER_TEMP/doctor.txt" \
               || { echo "doctor does not find $tool"; exit 1; }
           done
+          grep -E "^ +\[ok\] ScreenScraper account " "$RUNNER_TEMP/doctor.txt" \
+            || { echo "doctor does not see the account in /skyscraper/config.ini"; exit 1; }
+          # With no volume the line says what to mount, and does not run Skyscraper.
+          docker run --rm -v "$RUNNER_TEMP/doctor-config:/config:ro" warpzone:ci doctor \
+            | tee "$RUNNER_TEMP/doctor-novolume.txt" || true
+          grep -E "nothing is mounted" "$RUNNER_TEMP/doctor-novolume.txt" \
+            || { echo "doctor does not say that the Skyscraper volume is missing"; exit 1; }
 
   # Unit tests under coverage with branch measurement, limited to the warpzone package, on the
   # Python the typecheck job uses. The number goes to the job summary; there is no threshold.
