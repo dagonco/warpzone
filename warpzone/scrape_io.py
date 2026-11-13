@@ -561,6 +561,22 @@ def _merge_batch(
 def _scrape_batch(
     run: Run, sr: SystemRun, number: int, names: Sequence[str], later: int
 ) -> tuple[tuple[scrape.GameMerge, ...], tuple[scrape.Dropped, ...]]:
+    """Gather one batch, then merge it, and delete the batch's output and list afterwards (a
+    system's output would otherwise pile up on a small disk). A disk that fills up or any other
+    `OSError` is a failed batch: reported, exit 1, and the next batch is tried."""
+    try:
+        return _run_batch(run, sr, number, names, later)
+    except OSError as exc:
+        run.fail(scrape.failed_message(sr.system, str(sr.log)) + f": {exc.strerror or exc}")
+        return (), ()
+    finally:
+        shutil.rmtree(sr.folder / f"out-{number}", ignore_errors=True)
+        (sr.folder / f"batch-{number}.txt").unlink(missing_ok=True)
+
+
+def _run_batch(
+    run: Run, sr: SystemRun, number: int, names: Sequence[str], later: int
+) -> tuple[tuple[scrape.GameMerge, ...], tuple[scrape.Dropped, ...]]:
     """Gather one batch, then merge it. `later` is how many games wait in the batches after it."""
     batch_file = sr.folder / f"batch-{number}.txt"
     batch_file.write_text("".join(f"{sr.input / n}\n" for n in names), encoding="utf-8")

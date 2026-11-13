@@ -301,6 +301,39 @@ class FailureTest(HubCase):
         self.assertFalse((self.hub.root / "inbox" / ".warpzone.lock").exists())
 
 
+class BatchTest(HubCase):
+    """Each batch cleans up after itself and a disk error fails the batch, not the run."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        library(self.hub, KIRBY, CHRONO, HOMEBREW)
+        self.hub.canned({"known": ["Kirby Super Star (USA)", "Chrono Trigger (USA)"]})
+        patch = mock.patch.object(scrape, "BATCH_SIZE", 2)
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def test_a_batchs_output_is_gone_before_the_next_batch_starts(self):
+        code, _, _ = self.hub.run()
+        self.assertEqual(code, 0)
+        first, second = self.hub.gathers()
+        self.assertEqual(first["siblings"], ["batch-1.txt", "input"])
+        self.assertEqual(second["siblings"], ["batch-2.txt", "input"])  # no out-1, no batch-1.txt
+        self.assertTrue(self.hub.media("covers", "Kirby Super Star (USA)").is_file())
+
+    def test_an_os_error_in_a_batch_is_a_reported_failure_and_the_next_batch_is_tried(self):
+        full = OSError(28, "No space left on device")
+        with mock.patch.object(scrape_io, "list_output", side_effect=full):
+            code, out, _ = self.hub.run()
+        self.assertEqual(code, 1)
+        log = self.hub.work / "scrape" / "snes.log"
+        self.assertEqual(
+            [line for line in out if line.startswith("Skyscraper failed")],
+            [f"Skyscraper failed on snes (see {log}): No space left on device"] * 2,
+        )
+        self.assertEqual(len(self.hub.gathers()), 2)
+        self.assertEqual([p.name for p in (self.hub.work / "scrape").iterdir()], ["snes.log"])
+
+
 class WriterTest(HubCase):
     """The hub gamelist is replaced only if it is what was read; media are never overwritten."""
 

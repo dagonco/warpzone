@@ -62,8 +62,10 @@ if canned.get("hang"):
     time.sleep(120)
 if "-s" in args:  # the gather
     targets = {{os.path.basename(p): os.path.realpath(p) for p in staged}}
+    siblings = sorted(os.listdir(os.path.dirname(opt("-i"))))
     with open(here / "gather.jsonl", "a") as log:
-        log.write(json.dumps({{"input": opt("-i"), "targets": targets}}) + "\n")
+        entry = {{"input": opt("-i"), "targets": targets, "siblings": siblings}}
+        log.write(json.dumps(entry) + "\n")
     known = set(canned.get("known", []))
     for n, path in enumerate(staged):
         if canned.get("quota_after") is not None and n >= canned["quota_after"]:
