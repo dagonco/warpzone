@@ -32,6 +32,7 @@ from warpzone.inbox_unattended import (
     Observed,
     State,
     Verdict,
+    clean_text,
     decide,
     exit_code,
     heartbeat_due,
@@ -123,7 +124,8 @@ class _Run:
         self.started = self.clock()
         self.before = State()  # the state as this run read it at its start
         self.state = State()  # the state as this run last wrote it
-        self.total = 0  # items in the inbox
+        self.keys: frozenset[str] = frozenset()  # the items in the inbox, by key
+        self.processed: set[str] = set()  # the keys this run processed (not left untouched)
         self.present: frozenset[str] = frozenset()  # the names the state keeps entries for
         self.wrote = True  # whether the last `commit` reached the file
 
@@ -161,7 +163,7 @@ class _Run:
             purged,
             mode="unattended",
             status=code,
-            waiting=max(self.total - len(results), 0),
+            waiting=self.waiting(update(self.state, *changes)),
             news_found=bool(found),
             error=None if found.error is None else found.error.message,
             held=found.held,
@@ -171,6 +173,15 @@ class _Run:
         except InboxError as exc:
             self.rep.warn(str(exc))
         return code
+
+    def waiting(self, after: State) -> int:
+        """The items of the listing this run neither processed nor holds: the ones that wait to
+        be stable, for space or for the next run. A held item is in the state, not waiting."""
+        return sum(
+            1
+            for key in self.keys - self.processed
+            if (entry := after.items.get(key)) is None or entry.held is None
+        )
 
     def fail(self, message: str, step: int, *, config: bool = True) -> int:
         """A run-level error: kept in the state with its step. Meeting the same message again
@@ -194,7 +205,7 @@ class _Run:
         items = self.list_items()
         if not items:
             return self.empty()
-        self.total = len(items)
+        self.keys = frozenset(item.key for item in items)
         return self.tick(items)
 
     def list_items(self) -> list[Item]:
@@ -241,7 +252,10 @@ class _Run:
         return self.conclude(*changes)
 
     def tick(self, items: list[Item]) -> int:
-        reading = inbox_lock.look(self.inbox, self.opts.now())
+        try:
+            reading = inbox_lock.look(self.inbox, self.opts.now())
+        except InboxError as exc:  # a lock that cannot be read: news once, like the others
+            return self.fail(str(exc), STEP_BUSY)
         previous = None
         if reading is not None:
             previous = self.previous(reading)
@@ -384,14 +398,19 @@ class _Run:
         results: list[ItemResult] = []
         reviewed: list[str] = []
         failed: tuple[str, bool] | None = None  # message, whether it is a configuration error
-        work = Path(tempfile.mkdtemp(prefix=WORK_PREFIX, dir=opts.work_dir))
+        try:
+            work = Path(tempfile.mkdtemp(prefix=WORK_PREFIX, dir=opts.work_dir))
+        except OSError as exc:  # the folder exists but is not writable: a configuration error
+            message = f"cannot create a folder in the work folder: {_why(exc)}"
+            rep.warn(f"inbox: {message}")
+            return self.finish(results, reviewed, (message, True))
         ctx = Context(opts, rep, library, work)
         try:
             for n, (item, entry) in enumerate(ready, 1):
                 try:
                     stop = self.one(held, ctx, n, len(ready), item, entry, results, reviewed)
                 except Exception as exc:  # a failure of the run, not of the item
-                    failed = (f"unexpected failure: {type(exc).__name__}: {_why(exc)}", False)
+                    failed = (self.unexpected(exc), False)
                     break
                 if stop:
                     failed = (LOST_MESSAGE, False)
@@ -401,6 +420,14 @@ class _Run:
         if failed is not None:
             rep.warn(f"inbox: {failed[0]}")
         return self.finish(results, reviewed, failed)
+
+    def unexpected(self, exc: Exception) -> str:
+        """The message of a failure of the run. It is the same text on every tick for the same
+        failure (paths and keys cut out, as in the record), so it is news once."""
+        roots = [str(self.root), str(self.root.resolve())]
+        secrets = [x for x in (self.opts.ra_key, self.opts.notify_url) if x]
+        text = f"unexpected failure: {type(exc).__name__}: {_why(exc)}"
+        return clean_text(text, roots, secrets)
 
     def one(
         self,
@@ -440,16 +467,22 @@ class _Run:
             return False
         result = inbox.process_item(ctx, item.path, n, item.unverified)
         results.append(result)
+        if not result.left:
+            self.processed.add(item.key)
         lost = not held.still_mine()
         if lost:  # the item stays where it is; a rerun finds its games "already in the library"
             result.unmoved = LOST_REASON
+            result.waits = True
             result.reasons.append(MOVE_REASON.format(LOST_REASON))
         elif self.changed(item, entry):
             # it was copied over (or is still being written) while the tools worked: the games
             # it held when judged are placed, but this content was never processed
             result.unmoved = CHANGED_REASON
+            result.waits = True
             result.reasons.append(MOVE_REASON.format(CHANGED_REASON))
             rep.warn(f"{item.key}: {CHANGED_REASON}; it stays in the inbox and waits again")
+        elif not os.path.lexists(item.path):
+            self.gone(item, result)
         else:
             try:
                 inbox._file_away(self.inbox, item.path, result, opts.today())
@@ -478,6 +511,14 @@ class _Run:
         _, again = decide(entry, observed, self.clock())
         self.commit(with_judged({item.key: again}, self.present))
         return True
+
+    def gone(self, item: Item, result: ItemResult) -> None:
+        """The original was deleted or moved by somebody while it was processed: there is
+        nothing to file away, to review or to wait for. It is recorded as gone, with a warning,
+        and its entry is dropped."""
+        result.gone = True
+        self.rep.warn(f"{item.key}: it is gone from the inbox (somebody moved or deleted it)")
+        self.commit(with_item_filed(item.key))
 
     def filing_failed(
         self, item: Item, result: ItemResult, exc: OSError, reviewed: list[str]

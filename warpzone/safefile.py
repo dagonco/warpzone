@@ -11,6 +11,7 @@ import enum
 import hashlib
 import json
 import os
+import secrets
 import stat as stat_mod
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -18,6 +19,13 @@ from pathlib import Path
 from typing import Any
 
 TMP_SUFFIX = ".wz-tmp"
+
+
+def tmp_path(target: Path) -> Path:
+    """The temporary file of one write of `target`, beside it: `.<name>.<pid>-<random>.wz-tmp`.
+    Each write has a name of its own, so concurrent writers never delete or move each other's
+    half-written file; the suffix keeps Syncthing's `*.wz-tmp` ignore matching it."""
+    return target.with_name(f".{target.name}.{os.getpid()}-{secrets.token_hex(4)}{TMP_SUFFIX}")
 
 
 def fsync_dir(path: Path) -> None:
@@ -31,12 +39,11 @@ def fsync_dir(path: Path) -> None:
 def write_file(path: Path, data: bytes, mode: int = 0o600) -> None:
     """Replace `path` atomically with `data` and `mode`, creating its directories.
 
-    The data goes to a temporary `.<name>.wz-tmp` beside the file, is synced, and is moved
-    over the target, so a reader sees the old file or the new one and never half of it.
+    The data goes to a temporary `.<name>.<pid>-<random>.wz-tmp` beside the file, is synced,
+    and is moved over the target, so a reader sees the old file or the new one and never half of it.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(f".{path.name}{TMP_SUFFIX}")
-    tmp.unlink(missing_ok=True)
+    tmp = tmp_path(path)
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode)
     try:
         with os.fdopen(fd, "wb") as fh:
@@ -81,7 +88,7 @@ def atomic_write(
     `expect=None` means the file must not exist (it is created, with its directories).
     Returns False, leaving everything as it was, when the file changed, vanished or
     appeared. A symlink is written through to its target and stays a link. The
-    replacement keeps the original mode; a temporary `.<name>.wz-tmp` beside it is
+    replacement keeps the original mode; a temporary `.<name>.<pid>-<random>.wz-tmp` beside it is
     synced, compared against `expect` one last time, then moved over the target.
     With `mtime_ns` the new file carries that modification time instead of now.
     """
@@ -96,8 +103,7 @@ def atomic_write(
             mode = stat_mod.S_IMODE(target.stat().st_mode)
         except FileNotFoundError:
             return False
-    tmp = target.with_name(f".{target.name}{TMP_SUFFIX}")
-    tmp.unlink(missing_ok=True)
+    tmp = tmp_path(target)
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
     try:
         with os.fdopen(fd, "wb") as fh:

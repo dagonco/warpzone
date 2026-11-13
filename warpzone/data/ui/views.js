@@ -637,7 +637,7 @@
 
   const WHY = {
     settling: 'still being copied or changed',
-    space: 'waiting for free space on the work volume',
+    space: "waiting for free space on the library's disk",
   };
 
   const runCounts = (c) => [
@@ -676,6 +676,8 @@
     const already = games(['already', 'exists']);
     const review = items.filter((i) => i.outcome === 'review');
     const held = items.filter((i) => i.outcome === 'held');
+    const again = items.filter((i) => i.outcome === 'waiting');
+    const gone = items.filter((i) => i.outcome === 'gone');
     const n = (list) => list.length.toLocaleString('en-US');
     const part = (title, ...body) => h('section', { class: 'ix-part' }, h('h3', null, title), ...body);
     const wl = rec.whitelist || [];
@@ -689,6 +691,10 @@
         h('ul', { class: 'ix-list' }, review.map((i) => ixItem(i, i.moved_to ? `The original is in ${i.moved_to}.` : null)))) : null,
       held.length ? part(`Held (${n(held)})`,
         h('ul', { class: 'ix-list' }, held.map((i) => ixItem(i, 'The original is still in the inbox.')))) : null,
+      again.length ? part(`Waiting again (${n(again)})`,
+        h('ul', { class: 'ix-list' }, again.map((i) => ixItem(i, 'The original is still in the inbox and is looked at again.')))) : null,
+      gone.length ? part(`Gone (${n(gone)})`,
+        h('ul', { class: 'ix-list' }, gone.map((i) => ixItem(i, 'The original was no longer in the inbox when it was filed away.')))) : null,
       scrape ? part('Scraping', h('p', { class: 'mute small' },
         scrape.state === 'done' ? `Scraped: ${(scrape.systems || []).map(systemName).join(', ') || 'nothing to do'}.`
           : scrape.state === 'skipped' ? 'Skipped.' : 'Not finished.',

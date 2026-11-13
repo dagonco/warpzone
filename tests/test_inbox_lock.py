@@ -448,9 +448,55 @@ class LockTests(Base):
             self.put_lock(host="desktop-b", pid=77)
             return real(ctx, item, number, unverified)
 
-        with mock.patch.object(inbox, "process_item", steal):
+        with mock.patch.object(inbox, "process_item", steal), self.assertRaises(InboxError):
             self.go()
         self.assertIn("desktop-b", self.lock.read_text())
+
+    def test_an_attended_run_whose_lock_was_taken_over_stops_before_the_move(self) -> None:
+        self.drop("a.nes", NES_ROM)
+        self.drop("b.nes", NES_ROM + b"\0")
+        real = inbox.process_item
+        names: list[str] = []
+
+        def sleep_through(ctx, item, number, unverified=None):  # type: ignore[no-untyped-def]
+            names.append(item.name)
+            result = real(ctx, item, number, unverified)
+            self.put_lock(host="desktop-b", pid=77)  # an unattended run took the lock over
+            return result
+
+        with (
+            mock.patch.object(inbox, "process_item", sleep_through),
+            self.assertRaises(InboxError) as caught,
+        ):
+            self.go()
+        self.assertIn("took the inbox lock over", str(caught.exception))
+        self.assertEqual(names, ["a.nes"])  # b.nes was not started
+        self.assertTrue((self.inbox / "a.nes").exists())  # the current original stays
+        self.assertTrue((self.inbox / "b.nes").exists())
+        self.assertEqual(self.done(), [])
+        self.assertIn("desktop-b", self.lock.read_text())  # and the other run's lock is left
+
+    def test_an_attended_run_whose_lock_was_taken_over_between_items_does_not_start_the_next(
+        self,
+    ) -> None:
+        self.drop("a.nes", NES_ROM)
+        self.drop("b.nes", NES_ROM + b"\0")
+        real = inbox._file_away
+        calls: list[str] = []
+
+        def move_then_lose(inbox_dir, item, result, today):  # type: ignore[no-untyped-def]
+            calls.append(item.name)
+            real(inbox_dir, item, result, today)
+            self.put_lock(host="desktop-b", pid=77)
+
+        with (
+            mock.patch.object(inbox, "_file_away", move_then_lose),
+            self.assertRaises(InboxError),
+        ):
+            self.go()
+        self.assertEqual(calls, ["a.nes"])
+        self.assertEqual(self.done(), ["a.nes"])  # filed before the lock went
+        self.assertTrue((self.inbox / "b.nes").exists())
 
     def test_a_validation_error_leaves_no_lock(self) -> None:
         with self.assertRaises(InboxError):

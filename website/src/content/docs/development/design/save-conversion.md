@@ -96,7 +96,7 @@ All three call the same function, so they agree.
   before anything is read for writing, and again right before each write (`safefile.guarded_edit`).
   If it starts in between, nothing more is written. If the process table cannot be read, nothing
   is written either.
-- **Atomic writes.** Each file is written to a temporary `.<name>.wz-tmp` beside it, synced,
+- **Atomic writes.** Each file is written to a temporary `.<name>.<pid>-<random>.wz-tmp` beside it (a name of its own for each write, so two writers never touch each other's file), synced,
   checked against the stamp (size, date, sha256) taken when the file was read, and renamed. A
   file that changed after it was read is left alone. The new file gets the modification time of
   the side it was copied from, not the time of the copy: Syncthing settles a conflict between

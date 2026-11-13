@@ -1059,8 +1059,8 @@ def run_inbox(opts: Options, rep: Reporter) -> int:
         return _run(opts, rep, inbox, library)
     with inbox_lock.hold(
         inbox, force=opts.force_lock, now=opts.now, out=rep.out, mode=inbox_lock.ATTENDED
-    ):
-        return _run(opts, rep, inbox, library)
+    ) as held:
+        return _run(opts, rep, inbox, library, held)
 
 
 def announce(
@@ -1077,7 +1077,24 @@ def announce(
         rep.out(f"RA: hashes only (set {ra.KEY_ENV} to look them up)")
 
 
-def _run(opts: Options, rep: Reporter, inbox: Path, library: DatLibrary) -> int:
+LOCK_LOST_REASON = "the inbox lock is no longer this run's"
+LOCK_TAKEN_OVER = (
+    "another run took the inbox lock over (this run was silent for more than 10 minutes, for "
+    "example because the computer slept); it stopped and left the current item in the inbox. "
+    "Run it again once no other run is working on the inbox"
+)
+
+
+def _run(
+    opts: Options,
+    rep: Reporter,
+    inbox: Path,
+    library: DatLibrary,
+    held: inbox_lock.Held | None = None,
+) -> int:
+    """The items of the inbox. With `held` (an `--apply`), the run asks before each item and
+    before each move whether the lock is still its own, and stops with an `InboxError` when
+    another run took it over, after the record of what it already did."""
     items = [(p, None) for p in scan(inbox)] + [(p, s) for p, s in scan_unverified(inbox)]
     started = datetime.fromtimestamp(opts.now(), UTC)
     mode = "apply" if opts.apply else "report only"
@@ -1089,23 +1106,40 @@ def _run(opts: Options, rep: Reporter, inbox: Path, library: DatLibrary) -> int:
     ctx = Context(opts, rep, library, work)
     today = opts.today()
     results: list[ItemResult] = []
+    lost = False
+
+    def mine() -> bool:
+        return held is None or held.still_mine()
+
     try:
         for n, (item, unverified) in enumerate(items, 1):
+            if opts.apply and not mine():
+                lost = True
+                break
             result = process_item(ctx, item, n, unverified)
             results.append(result)
             if opts.apply and not result.left:
-                try:
-                    _file_away(inbox, item, result, today)
-                except OSError as exc:
-                    result.unmoved = exc.strerror or str(exc)
-                    result.reasons.append(f"could not move the original: {result.unmoved}")
+                if not mine():  # the original stays; a rerun finds its games already placed
+                    lost = True
+                    result.unmoved = LOCK_LOST_REASON
+                    result.waits = True
+                    result.reasons.append(f"could not move the original: {LOCK_LOST_REASON}")
+                else:
+                    try:
+                        _file_away(inbox, item, result, today)
+                    except OSError as exc:
+                        result.unmoved = exc.strerror or str(exc)
+                        result.reasons.append(f"could not move the original: {result.unmoved}")
             _print_item(rep, n, len(items), result, opts.apply, today)
+            if lost:
+                break
     finally:
         shutil.rmtree(work, ignore_errors=True)
 
     purged = []
     if opts.apply:
-        purged = purge_done(inbox, today)
+        if not lost:
+            purged = purge_done(inbox, today)
     else:
         done = inbox / DONE_DIR
         stale = select_purge(sorted(os.listdir(done)), today) if done.is_dir() else []
@@ -1122,12 +1156,14 @@ def _run(opts: Options, rep: Reporter, inbox: Path, library: DatLibrary) -> int:
     note = None
     if opts.apply:
         _update_catalog(opts, rep, results)
-        note = inbox_scrape.after_apply(opts, rep, results)
+        note = None if lost else inbox_scrape.after_apply(opts, rep, results)
     else:
         inbox_scrape.report_only(opts, rep, results)
     review = _summary(rep, results, opts.apply)
     if opts.apply:
         _record_run(opts, rep, results, started, review, note, purged)
+    if lost:
+        raise InboxError(LOCK_TAKEN_OVER)
     return review
 
 
@@ -1289,7 +1325,9 @@ def _print_item(
         rep.out(f"  note: {note}")
     for reason in result.reasons:
         rep.out(f"  review: {reason}")
-    if apply and not result.moved_to:
+    if result.gone:
+        rep.out("  original is gone from the inbox")
+    elif apply and not result.moved_to:
         rep.out("  original left in the inbox")
     elif apply:
         rep.out(f"  original -> inbox/{result.moved_to}")

@@ -119,6 +119,12 @@ class JudgeTests(unittest.TestCase):
             (OK, "last check 7 min ago; last run 2026-11-13 11:00 UTC: placed 3, for review 2", ""),
         )
 
+    def test_a_record_with_a_count_that_is_not_a_number_does_not_break_the_line(self) -> None:
+        damaged = {**RECORD, "counts": {"placed": 3, "review": "one", "held": None}}
+        status, detail, _ = judge(State(checked=ago(minutes=7)), record=damaged)
+        self.assertEqual(status, OK)
+        self.assertIn("placed 3, for review 0", detail)
+
     def test_ok_without_a_record(self) -> None:
         _, detail, _ = judge(State(checked=ago(minutes=7)), record=None)
         self.assertEqual(detail, "last check 7 min ago; no run has been recorded yet")

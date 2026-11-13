@@ -74,10 +74,11 @@ class AtomicWriteTests(TmpCase):
         self.assertEqual(target.read_bytes(), b"new\n")
         self.assertEqual(sorted(p.name for p in target_dir.iterdir()), ["real.cfg"])
 
-    def test_stale_temp_file_is_replaced(self) -> None:
+    def test_a_stale_temp_file_does_not_get_in_the_way(self) -> None:
         (self.tmp / ".a.cfg.wz-tmp").write_bytes(b"junk")
         self.assertTrue(sf.atomic_write(self.path, b"new\n", expect=sf.stamp(self.path)))
-        self.assertEqual([p.name for p in self.tmp.iterdir()], ["a.cfg"])
+        self.assertEqual(self.path.read_bytes(), b"new\n")
+        self.assertEqual(sorted(p.name for p in self.tmp.iterdir()), [".a.cfg.wz-tmp", "a.cfg"])
 
     def test_create_new_file_with_missing_directories(self) -> None:
         new = self.tmp / "deep" / "er" / "n.cfg"
@@ -135,6 +136,37 @@ class AtomicWriteRaceTests(TmpCase):
         self.assertEqual(new.read_bytes(), b"someone else\n")
         self.assertEqual(sorted(p.name for p in self.tmp.iterdir()), ["a.cfg", "new.cfg"])
 
+    def test_two_writers_do_not_share_a_temporary_file(self) -> None:
+        # B runs completely between A's last check and A's move; with one shared temporary name
+        # B would delete A's file and A's move would fail.
+        real = os.replace
+        state = {"inner": False}
+
+        def replace_after_another_writer(src: Path, dst: Path) -> None:
+            if not state["inner"]:
+                state["inner"] = True
+                self.assertTrue(sf.atomic_write(self.path, b"B\n", expect=sf.stamp(self.path)))
+            real(src, dst)
+
+        with mock.patch.object(sf.os, "replace", replace_after_another_writer):
+            self.assertTrue(sf.atomic_write(self.path, b"A\n", expect=sf.stamp(self.path)))
+        self.assertEqual([p.name for p in self.tmp.iterdir()], ["a.cfg"])
+
+    def test_the_temporary_name_is_unique_and_still_ends_with_the_ignored_suffix(self) -> None:
+        names: set[str] = set()
+        real = os.open
+
+        def spy(path: Path, *args: int) -> int:
+            names.add(Path(path).name)
+            return real(path, *args)
+
+        with mock.patch.object(sf.os, "open", spy):
+            for _ in range(3):
+                self.assertTrue(sf.atomic_write(self.path, b"x\n", expect=sf.stamp(self.path)))
+        tmps = {n for n in names if n.endswith(sf.TMP_SUFFIX)}
+        self.assertEqual(len(tmps), 3)
+        self.assertTrue(all(n.startswith(".a.cfg.") for n in tmps), tmps)
+
     def test_a_failed_write_leaves_no_temporary_file(self) -> None:
         with (
             mock.patch.object(sf.os, "replace", side_effect=OSError("disk")),
@@ -156,13 +188,15 @@ class WriteFileTests(TmpCase):
         self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o644)
         self.assertEqual([p.name for p in path.parent.iterdir()], ["x.sh"])
 
-    def test_private_by_default_and_a_stale_temporary_file_is_replaced(self) -> None:
+    def test_private_by_default_and_a_stale_temporary_file_does_not_get_in_the_way(self) -> None:
         path = self.tmp / "state.json"
         (self.tmp / ".state.json.wz-tmp").write_bytes(b"junk")
         sf.write_file(path, b"{}")
         self.assertEqual(path.read_bytes(), b"{}")
         self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
-        self.assertEqual([p.name for p in self.tmp.iterdir()], ["state.json"])
+        self.assertEqual(
+            sorted(p.name for p in self.tmp.iterdir()), [".state.json.wz-tmp", "state.json"]
+        )
 
     def test_a_failed_write_keeps_the_old_file_and_leaves_no_temporary_file(self) -> None:
         path = self.tmp / "x.sh"

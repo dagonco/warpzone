@@ -412,6 +412,12 @@ def _named(names: Sequence[str]) -> str:
     return shown + (f" and {len(names) - LISTED_MAX} more" if len(names) > LISTED_MAX else "")
 
 
+def _count(counts: Mapping[str, Any], key: str) -> int:
+    """A count of a run record; a missing or damaged one (not a whole number) is 0."""
+    value = counts.get(key)
+    return value if isinstance(value, int) and not isinstance(value, bool) else 0
+
+
 def _last_run(record: Mapping[str, Any] | None) -> str:
     """ "last run <date>: placed X, for review Y" from a run record."""
     counts = record.get("counts") if record else None
@@ -419,8 +425,8 @@ def _last_run(record: Mapping[str, Any] | None) -> str:
     if not isinstance(started, str) or not isinstance(counts, dict):
         return "no run has been recorded yet"
     when = started[:16].replace("T", " ") + " UTC"
-    placed = counts.get("placed", 0)
-    review = counts.get("review", 0) + counts.get("held", 0)
+    placed = _count(counts, "placed")
+    review = _count(counts, "review") + _count(counts, "held")
     return f"last run {when}: placed {placed}, for review {review}"
 
 
