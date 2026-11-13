@@ -83,6 +83,18 @@ class PureTests(unittest.TestCase):
         self.assertEqual(plan(info("cd", 1, ()), "g")[1], ["-o", "g.cue", "-sb"])
         self.assertEqual(plan(info("gd", 1, ("MODE1_RAW",) * 3), "g")[1], ["-o", "g.gdi"])
 
+    def test_what_a_chd_is_is_said_in_a_few_words(self) -> None:
+        mod = chd_module()
+        info = mod.ChdInfo
+        self.assertEqual(mod.describe(info("cd", 1, ("MODE1", "AUDIO"))), "CD, 2 tracks")
+        self.assertEqual(mod.describe(info("cd", 1, ("MODE2_RAW",))), "CD, 1 track")
+        self.assertEqual(mod.describe(info("cd", 1, ())), "CD")
+        self.assertEqual(mod.describe(info("gd", 1, ("MODE1_RAW",) * 3)), "GD-ROM, 3 tracks")
+        self.assertEqual(mod.describe(info("dvd", 1, ())), "DVD")
+
+    def test_chdman_expands_percent_t_in_output_names_so_the_stem_has_no_percent(self) -> None:
+        self.assertEqual(chd_module().file_stem("100%t pure.chd"), "100_t pure")
+
     def test_the_stem_is_cut_to_fit_a_file_name(self) -> None:
         stem = chd_module().file_stem("é" * 200 + ".chd")
         self.assertLessEqual(len(stem.encode()), 120)
@@ -224,6 +236,13 @@ class ExtractionTests(ChdCase):
             ],
         )
 
+    def test_a_percent_in_the_chd_name_never_reaches_a_chdman_output_name(self) -> None:
+        self.chd("100%t pure.chd", "CHT2", [("MODE2_RAW", PSX_BIN)])
+        self.assertEqual(self.go(), 0, self.out)
+        self.assertEqual(self.library(), ["psx/Single Track (USA).chd"])
+        self.assertIn("100_t pure.cue", self.calls()[1])
+        self.assertNotIn("%t pure.cue", self.calls()[1])
+
     def test_the_original_chd_is_never_changed(self) -> None:
         item = self.chd("keep.chd", "CHT2", [("MODE2_RAW", PSX_BIN)])
         before = item.read_bytes()
@@ -237,9 +256,12 @@ class RefusalTests(ChdCase):
         self.assertEqual(self.go(), 1)
         self.assertEqual(self.library(), [])
         reason = self.reason("Rip of Something.chd")
-        self.assertIn("Rip of Something.chd", reason)
-        self.assertIn("extracted", reason)
-        self.assertIn("matches no Redump entry", reason)
+        self.assertIn(
+            "Rip of Something.chd: extracted with chdman (CD, 1 track), but its content matches "
+            "no Redump entry (a CHD made from a changed, trimmed or re-ripped image cannot be "
+            "matched; drop the original cue/bin, gdi or iso instead)",
+            reason,
+        )
         self.assertNotIn("no DAT match:", reason)
         self.assertNotIn("createdvd", self.commands())
         self.assertIn("Rip of Something.chd", self.review())

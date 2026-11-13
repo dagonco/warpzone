@@ -71,7 +71,15 @@ def file_stem(name: str) -> str:
     """The base name of the files extracted from a CHD: its file name without `.chd`, cut so
     that the names chdman derives from it still fit in a file name."""
     stem = name[:-4] if name.lower().endswith(".chd") else name
+    stem = stem.replace("%", "_")  # chdman expands `%t` and the like in `-sb` and `.gdi` names
     return stem.encode()[:STEM_BYTES].decode(errors="ignore")
+
+
+def describe(info: ChdInfo) -> str:
+    """What a CHD is, in a few words: `CD, 2 tracks`, `GD-ROM, 3 tracks`, `DVD`."""
+    kind = {"cd": "CD", "gd": "GD-ROM", "dvd": "DVD"}[info.kind]
+    n = len(info.tracks)
+    return f"{kind}, {n} track{'s' if n != 1 else ''}" if n else kind
 
 
 def plan_extraction(info: ChdInfo, stem: str) -> tuple[str, list[str]]:
@@ -92,11 +100,11 @@ def plan_extraction(info: ChdInfo, stem: str) -> tuple[str, list[str]]:
     return "extractcd", ["-o", f"{stem}.cue", "-sb"]
 
 
-def unmatched_reason(chd: str) -> str:
+def unmatched_reason(chd: str, what: str) -> str:
     return (
-        f"{chd}: extracted with chdman, but its content matches no Redump entry (a CHD made from "
-        "a changed, trimmed or re-ripped image cannot be matched; drop the original cue/bin, "
-        "gdi or iso instead)"
+        f"{chd}: extracted with chdman ({what}), but its content matches no Redump entry "
+        "(a CHD made from a changed, trimmed or re-ripped image cannot be matched; "
+        "drop the original cue/bin, gdi or iso instead)"
     )
 
 
@@ -112,7 +120,7 @@ def split_unmatched(
         if chd is None:
             rest.append(f)
         else:
-            reasons.setdefault(chd, unmatched_reason(chd))
+            reasons.setdefault(chd, unmatched_reason(chd, staged[f.path].chd_what))
     return rest, list(reasons.values())
 
 
@@ -196,7 +204,13 @@ def _extract(
             raise ItemFailure(f"chdman could not extract it ({tail(text)})")
         base = posixpath.dirname(chd.rel)
         found = [
-            Staged(p, posixpath.join(base, p.name) if base else p.name, chd=chd.rel) for p in files
+            Staged(
+                p,
+                posixpath.join(base, p.name) if base else p.name,
+                chd=chd.rel,
+                chd_what=describe(info),
+            )
+            for p in files
         ]
         clash = next((f.rel for f in found if f.rel in taken), None)
         if clash:

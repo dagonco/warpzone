@@ -530,9 +530,10 @@ library's CHD is made from them as for any other disc. The code is in
   (Dreamcast), `CHT2`, `CHTR` or `CHCD` a CD, a `DVD ` tag a DVD. A CHD with none (a hard
   disk, a laserdisc, an arcade disk) is refused with a reason that names it; it is not
   hashed.
-- **How it is extracted.** `plan_extraction` is pure and returns the chdman arguments and
-  the files it will write, named after the CHD's stem (cut to 120 bytes) so that a LibCrypt
-  `.sbi` named like the CHD is found next to them (see `find_sbi`).
+- **How it is extracted.** `plan_extraction` is pure and returns the chdman command and the
+  names of the files it writes, which are named after the CHD's stem (cut to 120 bytes, and
+  with `%` written as `_` because chdman expands `%t` and the like in the names of `-sb` and
+  `.gdi` output) so that a LibCrypt `.sbi` named like the CHD is found next to them (see `find_sbi`).
 
   | CHD | Command | Result |
   |---|---|---|
@@ -548,13 +549,16 @@ library's CHD is made from them as for any other disc. The code is in
   (chdman fails), which is why the one-track and many-track cases differ. The default of
   `extractcd` for a many-track CD, one bin with every track, would not match Redump, which
   lists each track.
-- **Split bins.** `--splitbin` (`-sb`) and the `.gdi` output exist in the chdman versions in use
-  (MAME 0.276 in the hub image's Debian `mame-tools`, from its source; 0.289 from Homebrew,
-  where a round trip of a two-track CD and of a three-track GD-ROM gave back each track byte
-  for byte). Nothing falls back to a single bin: a chdman
-  that rejects the option fails the item with chdman's own message. What can still differ from
-  Redump is the disc itself (a re-ripped or trimmed image, pregap data kept in a track by one
-  tool and not by another): such a CHD is reviewed, never placed.
+- **Split bins.** `--splitbin` (`-sb`), `-ob`, the `.gdi` output, `extractdvd` and the lines of
+  `chdman info` that `parse_info` reads exist in both chdman versions in use. For MAME 0.276
+  (Debian's `mame-tools` in the hub image) that was checked against the source, not run:
+  `do_extract_cd` and `do_extract_dvd` are identical in `mame0276` and `mame0289`. With 0.289
+  (Homebrew) it was checked by hand, once, outside the test suite (nothing in the repository
+  runs a real chdman for this): a round trip of a two-track CD and of a three-track GD-ROM gave
+  back each track byte for byte. Nothing falls back to a single bin: a chdman that rejects the
+  option fails the item with chdman's own message. What can still differ from Redump is the
+  disc itself (a re-ripped or trimmed image, pregap data kept in a track by one tool and not
+  by another): such a CHD is reviewed, never placed.
 - **Identification and output.** The extracted files are staged with the name of the CHD they
   came from (`Staged.chd`) and go through `identify`, `group_discs`, `plan_units`, the
   `.sbi` rule and `process_unit` unchanged: the output is the library's standard form
@@ -564,9 +568,9 @@ library's CHD is made from them as for any other disc. The code is in
   all discs are present. The original `.chd` is only read: it goes to `_done/` as any
   original.
 - **A CHD that matches nothing.** The item goes to review with the reason
-  `<name>.chd: extracted with chdman but it matches no Redump entry (...)`, which says what the
-  extracted image was (disc type and track count) and that a CHD made from a changed image
-  cannot be matched; the original dump (cue/bin, gdi or iso) is what to drop instead.
+  `<name>.chd: extracted with chdman (<what it is>), but its content matches no Redump entry (a CHD made from a changed, trimmed or re-ripped image cannot be matched; drop the original cue/bin, gdi or iso instead)`,
+  where `<what it is>` is the disc type and track count from `describe` (`CD, 2 tracks`,
+  `CD, 1 track`, `GD-ROM, 3 tracks`, `DVD`).
 - **Space.** Before anything is extracted, every CHD of the item is read and the room is
   checked once: the sum of the logical sizes, plus the sizes of the CHD files themselves when
   `--apply` will build the new ones (the same work folder holds both), plus the 5% margin of

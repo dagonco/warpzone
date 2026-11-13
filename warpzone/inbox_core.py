@@ -316,6 +316,7 @@ class Staged:
     rel: str  # name within the item, "/" separated
     origin: Path | None = None  # the .gcz image this was expanded from
     chd: str | None = None  # the item path of the .chd this was extracted from
+    chd_what: str = ""  # what that CHD is ("CD, 2 tracks"), for a review reason
 
 
 def free_space_check(dest: Path, needed: int) -> None:
