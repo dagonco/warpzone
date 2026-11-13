@@ -65,7 +65,7 @@ Not in scope:
 - Title screens and physical media scans (`titlescreens`, `physicalmedia`). Skyscraper's
   ScreenScraper module does not fetch them, so scraped games go without; the library UI and ES-DE
   fall back to the other kinds.
-- Running Skyscraper on a console or inside the hub container (see [Open questions](#open-questions)).
+- Running Skyscraper on a console or inside the hub container (see [Deferred](#deferred)).
 - Downloading anything but metadata and media. warpzone never downloads games or BIOS files.
 
 ## Configuration
@@ -323,6 +323,15 @@ console dropped is merged again with no request. The cost is that a game is neve
 once cached; to get media ScreenScraper added later, the user purges the game from the cache
 (`Skyscraper -p <platform> --cache purge:...`) and runs `warpzone scrape`.
 
+**Games ScreenScraper does not know.** They leave no data in Skyscraper's cache, so without help
+every run would ask for them again. warpzone remembers them in its own small file on the machine
+that scrapes, `$XDG_CACHE_HOME/warpzone/scrape-not-found.json` (next to the DAT cache, never on the
+hub): one record per system and gamelist path, with the file's size and the date it was last
+tried. `select` leaves out a game tried less than 30 days ago with the same size, and the report
+counts them (`skipped 4 not found in the last 30 days`). `warpzone scrape --retry-not-found` tries
+them all now. A game that is found later, or whose file changes size (a new dump under the same
+name), drops its record. A file that cannot be read or parsed counts as empty and is rewritten.
+
 In the test, a game took about 10 seconds and 2.6 MB of media, most of it the video, so a library
 of 1,000 games is about three hours and 2.6 GB on the hub, plus about as much in the cache on the
 machine that scrapes. The videos stay on the hub: devices ignore `/*/videos` (see
@@ -341,7 +350,7 @@ changes the exit code and never undoes a placement. The report ends with the lin
 
 ## `warpzone scrape`
 
-`warpzone scrape [--root PATH] [--system NAME ...] [--dry-run]` scrapes the games of the library
+`warpzone scrape [--root PATH] [--system NAME ...] [--retry-not-found] [--dry-run]` scrapes the games of the library
 that have no gamelist entry or lack media, for every system in the platform table, or only the
 ones named with `--system` (a name not in the table is a usage error, exit 2, which says why a
 system is left out when it is in `UNSCRAPED`). It reads `[inbox]` only, like `inbox`, and needs
@@ -427,7 +436,8 @@ Unit tests, with no network and no Skyscraper:
 - The presence check finds `userCreds` only in `[screenscraper]`, handles comments, quotes and
   other sections, and its result and the doctor's output never hold the fake value.
 - `select`: no entry, entry with missing kinds, entry complete, `<nomultiscrape>`, a media file in
-  another extension counts as present, an `.m3u` folder's stem.
+  another extension counts as present, an `.m3u` folder's stem; a game not found 29 and 31 days
+  ago, with the same and with another size, and with `--retry-not-found`.
 - `plan_merge`: existing entries left as they are byte for byte, new entries with only the listed
   fields and escaped text, absolute and `./` paths rewritten, paths outside the staged folder or
   unknown dropped, `.m3u` media renamed, symbolic links skipped, nothing planned over an existing
@@ -447,14 +457,13 @@ multi-disc `.m3u` folder, a NES or Atari 7800 dump with a header); the miximage 
 next to ES-DE's own; ES-DE on a console and the library UI showing the merged entries and media;
 a run stopped half-way and resumed.
 
-## Open questions
+## Deferred
 
-1. **Games ScreenScraper does not know.** They have no cache data, so every `warpzone scrape`
-   asks for them again (a few requests each). Remembering them for a while (a small list beside the
-   log, retried after some days) would save requests; it is left out until a real library shows
-   whether the waste matters.
-2. **`xbox360`, `wiiu`, `ps4` and `psvita`.** Scraping them needs the frontend-base shift and, for
-   the launchers, a name to search by (the shortcut's or launcher's title). Left for a later
-   version.
-3. **Skyscraper in the hub image.** Shipping it would let `inbox` in the container scrape too, at
-   the cost of Qt in the image. Not decided; until then scraping runs only on a computer.
+Decided by the maintainer to leave for later (2026-11-13):
+
+1. **`xbox360`, `wiiu`, `ps4` and `psvita`.** Scraping them needs the frontend-base shift and, for
+   the launchers, a name to search by (the shortcut's or launcher's title). They stay in
+   `UNSCRAPED` until then.
+2. **Skyscraper in the hub image.** Shipping it would let `inbox` in the container scrape too, at
+   the cost of Qt in the image. It belongs with the work on the inbox tools in the hub image;
+   until then scraping runs only on a computer that mounts the share.
