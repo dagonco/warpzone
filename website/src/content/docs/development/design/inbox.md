@@ -69,7 +69,7 @@ The contract:
   Boy Advance `gba`, Nintendo DS `nds`, Mega Drive / Genesis `genesis`, Master System `mastersystem`, Game
   Gear `gamegear`, Atari 2600 `atari2600`, Atari 7800 `atari7800`, Atari Lynx
   `atarilynx`, Atari Jaguar `atarijaguar`, WonderSwan `wonderswan`, WonderSwan Color
-  `wonderswancolor`); a trailing No-Intro date stamp is ignored. DATs are parsed only when
+  `wonderswancolor`, 32X `sega32x`); a trailing No-Intro date stamp is ignored. DATs are parsed only when
   a lookup needs them (the system the file extensions and sizes point at first, and the
   search stops once every file is explained) and each parsed DAT is cached as JSON in
   `$XDG_CACHE_HOME/warpzone/dats`, keyed by the DAT's size and modification time.
