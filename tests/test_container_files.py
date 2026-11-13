@@ -10,6 +10,7 @@ ROOT = Path(__file__).resolve().parent.parent
 DOCKERFILE = ROOT / "docker" / "Dockerfile"
 DOCKERIGNORE = ROOT / ".dockerignore"
 COMPOSE = ROOT / "examples" / "compose.example.yaml"
+NSZ_REQUIREMENTS = ROOT / "docker" / "nsz-requirements.txt"
 
 DIGEST = re.compile(r"@sha256:[0-9a-f]{64}$")
 
@@ -65,6 +66,36 @@ class DockerfileTest(unittest.TestCase):
         self.assertIn("HAVE_CHD=1", self.text)
         self.assertIn("-f Makefile.RAHasher", self.text)
 
+    def test_dolphin_is_pinned_by_commit_and_verified_and_only_dolphin_tool_is_built(self):
+        match = re.search(r"^ARG DOLPHIN_COMMIT=([0-9a-f]{40})$", self.text, re.MULTILINE)
+        self.assertIsNotNone(match, "Dolphin must be pinned by a 40-character commit")
+        self.assertRegex(self.text, r"(?m)^ARG DOLPHIN_TAG=\S+$")
+        self.assertIn('test "$(git rev-parse HEAD)" = "${DOLPHIN_COMMIT}"', self.text)
+        self.assertIn("--target dolphin-tool", self.text)
+        self.assertIn("-DUSE_SYSTEM_LIBS=OFF", self.text)
+        self.assertIn("-DENABLE_QT=OFF", self.text)
+
+    def test_orbis_pkg_util_is_pinned_by_checksum_and_built_from_its_lock_file(self):
+        self.assertRegex(self.text, r"(?m)^ARG ORBIS_PKG_UTIL_SHA256=[0-9a-f]{64}$")
+        self.assertIn('echo "${ORBIS_PKG_UTIL_SHA256}  orbis.crate" | sha256sum -c -', self.text)
+        self.assertIn("cargo build --release --locked", self.text)
+
+    def test_nsz_is_installed_from_hashed_wheels_in_its_own_environment(self):
+        installs = [line for line in self.lines if "/opt/nsz/bin/python install" in line]
+        self.assertEqual(len(installs), 1, installs)
+        for flag in ("--require-hashes", "--no-deps", "--only-binary=:all:"):
+            self.assertIn(flag, installs[0])
+        self.assertIn("python -m venv --without-pip /opt/nsz", self.text)
+        # Every package of the requirements file is pinned to a version and has hashes.
+        requirements = NSZ_REQUIREMENTS.read_text(encoding="utf-8")
+        entries = re.findall(
+            r"(?m)^([A-Za-z0-9_.-]+)==(\S+)(?: ;[^\\]*)? \\\n((?:\s+--hash=\S+.*\n)+)", requirements
+        )
+        self.assertIn("nsz", [name for name, _, _ in entries])
+        self.assertEqual(len(entries), len(re.findall(r"(?m)^\S+==", requirements)))
+        for name, _, hashes in entries:
+            self.assertRegex(hashes, r"--hash=sha256:[0-9a-f]{64}", name)
+
     def test_has_a_healthcheck_on_healthz_without_curl(self):
         checks = [line for line in self.lines if line.startswith("HEALTHCHECK ")]
         self.assertEqual(len(checks), 1)
@@ -82,6 +113,13 @@ class DockerfileTest(unittest.TestCase):
                 if rest[0] == "wheel":
                     self.assertEqual(rest[-1], ".", f"pip wheel of something else: {command}")
                     self.assertIn("--no-deps", rest)
+                elif rest[0] == "--python" and rest[2] == "install":
+                    # nsz, in a virtual environment of its own: hashed wheels only.
+                    self.assertEqual(rest[1], "/opt/nsz/bin/python", command)
+                    self.assertIn("--require-hashes", rest)
+                    self.assertIn("--no-deps", rest)
+                    self.assertIn("--only-binary=:all:", rest)
+                    self.assertEqual(rest[rest.index("-r") + 1], "/tmp/nsz-requirements.txt")
                 elif rest[0] == "install":
                     self.assertIn("--no-index", rest, f"pip install may reach an index: {command}")
                     self.assertIn("--no-deps", rest)
@@ -99,6 +137,10 @@ class DockerfileTest(unittest.TestCase):
         self.assertEqual(len(users), 1)
         self.assertNotIn(users[0].split(":")[0], ("0", "root"))
         self.assertIn("COPY --from=rahasher /out/RAHasher /usr/local/bin/RAHasher", joined)
+        self.assertIn("COPY --from=dolphin /out/dolphin-tool /usr/local/bin/dolphin-tool", joined)
+        self.assertIn("COPY --from=orbis /out/orbis-pkg-util /usr/local/bin/orbis-pkg-util", joined)
+        self.assertIn("COPY --from=nsz /opt/nsz /opt/nsz", joined)
+        self.assertIn("ln -s /opt/nsz/bin/nsz /usr/local/bin/nsz", joined)
         self.assertEqual(final[-1], 'CMD ["serve"]')
         self.assertIn('ENTRYPOINT ["warpzone"]', final)
 
@@ -130,7 +172,10 @@ class DockerignoreTest(unittest.TestCase):
         ]
         self.assertEqual(lines[0], "*")
         included = {line[1:] for line in lines if line.startswith("!")}
-        self.assertEqual(included, {"pyproject.toml", "README.md", "LICENSE", "warpzone"})
+        self.assertEqual(
+            included,
+            {"pyproject.toml", "README.md", "LICENSE", "warpzone", "docker/nsz-requirements.txt"},
+        )
         for name in ("website", "tests", "node_modules", ".git"):
             self.assertNotIn(name, included)
 
@@ -158,15 +203,28 @@ class ComposeExampleTest(unittest.TestCase):
         self.assertEqual(mount.group(1), mount.group(2))
         self.assertNotRegex(mount.group(0), r":ro")
 
+    def test_inbox_service_mounts_keys_and_data_read_only_and_never_the_share_for_them(self):
+        inbox = self.code.split("warpzone-inbox:", 1)[1]
+        self.assertRegex(inbox, r"- \./dats:/dats:ro")
+        self.assertRegex(inbox, r"- \./keys:/keys:ro")
+        self.assertRegex(inbox, r"- \./work:/work\n")
+        self.assertIn('profiles: ["inbox"]', inbox)
+        self.assertRegex(inbox, r'user: "\d+:\d+"')
+        # The keys and data the tools read are named in the comments, with the paths mounted.
+        for key in ("switch_keys", "vita_zrif", "titledb_dir", "dats_dir", "work_dir"):
+            self.assertRegex(self.text, rf"#\s+{key} = \"/(keys|dats|work)/", key)
+
     def test_has_no_secret_looking_value(self):
         # No assignment of a key, token or password to a value, in the code or in a comment.
         for line in self.text.splitlines():
+            if re.match(r"\s*-\s+\S+:/\S+", line):  # a volume: `./keys:/keys:ro` names a folder
+                continue
             match = re.search(r"(KEY|TOKEN|SECRET|PASSWORD)\w*\s*[=:]\s*(\S+)", line, re.IGNORECASE)
             if match:
                 value = match.group(2).strip("\"'")
                 self.assertRegex(
                     value,
-                    r"^(<.*|/config/[\w.]+|[A-Z_]+)$|^$",
+                    r"^(<.*|/(config|keys)/[\w.]+|[A-Z_]+)$|^$",
                     f"looks like a secret: {line.strip()}",
                 )
         # No long random-looking string at all (a key, a token, a Syncthing device ID).
