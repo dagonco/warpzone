@@ -179,6 +179,11 @@ The contract:
   `[inbox]` config keys or PATH (RAHasher only when configured). A tool that an item
   needs and is missing sends that item to review with a clear reason; other items
   continue. A configured path that does not exist is a configuration error.
+- **chdman's threads.** `[inbox] chdman_threads` (a whole number, at least 1, optional) is carried
+  in `Tools.chdman_threads` and `make_chd` adds `--numprocessors N` to `createcd` and
+  `createdvd`; without it chdman counts the cores of the host, which in a container is more than
+  its CPU limit. `verify` and `info` run as before. See
+  [Resource limits](/warpzone/development/design/inbox-unattended/#resource-limits).
 - **Time limit of the tools.** Every call of an external tool (`chdman`, `bsdtar`, `RAHasher`,
   `dolphin-tool`, `nsz`, `orbis-pkg-util`, the listing and info calls as much as the
   conversions) may run for `[inbox] tool_timeout_minutes` (a whole number, at least 1,

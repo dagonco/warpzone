@@ -387,6 +387,23 @@ class InboxSettingsTests(unittest.TestCase):
                 str(ctx.exception),
             )
 
+    def test_chdman_threads_is_optional_and_must_be_a_whole_number_of_at_least_1(self) -> None:
+        self.assertIsNone(parse_config(config_data()).inbox.chdman_threads)
+        data = config_data()
+        data["inbox"] = {"root": "/hub"}
+        self.assertIsNone(parse_config(data).inbox.chdman_threads)
+        for value in (1, 2, 16):
+            data["inbox"] = {"chdman_threads": value}
+            self.assertEqual(parse_config(data).inbox.chdman_threads, value)
+        for bad in (0, -2, 1.5, 2.0, "2", True, False, None):
+            data["inbox"] = {"chdman_threads": bad}
+            with self.assertRaises(ConfigError, msg=repr(bad)) as ctx:
+                parse_config(data)
+            self.assertIn(
+                "inbox.chdman_threads: must be a whole number of threads, at least 1",
+                str(ctx.exception),
+            )
+
     def test_only_the_inbox_table_is_needed_to_run_inbox(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "config.toml"

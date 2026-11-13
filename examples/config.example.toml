@@ -148,6 +148,11 @@ dats_dir = "~/dats/libretro-database/metadat"
 # goes to review (a whole number, at least 1). Default: 240.
 # tool_timeout_minutes = 240
 
+# Optional. Threads each chdman conversion may use (chdman's --numprocessors; a whole number,
+# at least 1). Default: chdman counts the cores of the machine, which in a container ignores
+# its CPU limit. Each thread holds its own compressor, so it also bounds memory.
+# chdman_threads = 2
+
 # Optional Switch support. A local clone of blawar/titledb names the games
 # (git clone --depth 1 https://github.com/blawar/titledb; git pull updates it). nsz needs
 # your console's keys file to read the CNMT inside a Switch file; warpzone only passes the
