@@ -60,6 +60,7 @@ AUDIO1 = b"audio track " * 100
 FF_D1 = b"ff7 disc one " * 100
 FF_D2 = b"ff7 disc two " * 100
 LONE = b"lone disc " * 100
+SBI = b"\x53\x42\x49\x00" + b"\x01" * 14  # a LibCrypt subchannel file, fake
 ISO = b"psp iso " * 500
 GC_ISO = b"gamecube iso " * 500
 HUB_ISO_NAME = "Some Portable Game (Europe).iso"
@@ -1473,6 +1474,79 @@ class DiscTests(Base):
             self.out.count("!/roms/psx/Final Fantasy VII (Europe).m3u"), 2
         )  # item and summary
         self.assertEqual(self.done(), ["ff7"])
+
+    def crash_dump_with_sbi(self, name: str = "crash") -> Path:
+        return self.drop(
+            name,
+            {
+                "Crash Test.cue": cue("Crash Test (Track 1).bin", "Crash Test (Track 2).bin"),
+                "Crash Test (Track 1).bin": DATA1,
+                "Crash Test (Track 2).bin": AUDIO1,
+                "Crash Test.sbi": SBI,
+            },
+        )
+
+    def test_libcrypt_sbi_goes_next_to_the_chd_in_an_m3u_folder(self) -> None:
+        self.crash_dump_with_sbi()
+        self.assertEqual(self.go(), 0)
+        folder = self.roms / "psx" / "Crash Test (Europe).m3u"
+        self.assertEqual(
+            self.library(),
+            [
+                "psx/Crash Test (Europe).m3u/Crash Test (Europe).chd",
+                "psx/Crash Test (Europe).m3u/Crash Test (Europe).m3u",
+                "psx/Crash Test (Europe).m3u/Crash Test (Europe).sbi",
+            ],
+        )
+        self.assertEqual((folder / "Crash Test (Europe).sbi").read_bytes(), SBI)
+        self.assertEqual(
+            (folder / "Crash Test (Europe).m3u").read_text().splitlines(),
+            ["Crash Test (Europe).chd"],
+        )
+        self.assertIn("!/roms/psx/Crash Test (Europe).m3u", self.out)
+        self.assertNotIn("files not in any DAT", self.out)
+        self.assertEqual(self.done(), ["crash"])
+
+    def test_report_names_the_libcrypt_file_and_places_nothing(self) -> None:
+        self.crash_dump_with_sbi()
+        self.assertEqual(self.go(apply=False), 0)
+        self.assertIn("psx: Crash Test (Europe).m3u: would place", self.out)
+        self.assertIn("LibCrypt: Crash Test (Europe).sbi", self.out)
+        self.assertEqual(self.library(), [])
+
+    def test_libcrypt_game_dropped_again_is_already_in_the_library(self) -> None:
+        self.crash_dump_with_sbi()
+        self.go()
+        self.crash_dump_with_sbi("crash again")
+        self.assertEqual(self.go(), 0)
+        self.assertIn("already in the library", self.out)
+
+    def test_each_disc_of_a_multi_disc_game_keeps_its_own_sbi(self) -> None:
+        self.drop("ff7", {"d1.bin": FF_D1, "d1.sbi": SBI, "d2.bin": FF_D2})
+        self.assertEqual(self.go(), 0)
+        self.assertEqual(
+            self.library(),
+            [
+                "psx/Final Fantasy VII (Europe).m3u/Final Fantasy VII (Europe) (Disc 1).chd",
+                "psx/Final Fantasy VII (Europe).m3u/Final Fantasy VII (Europe) (Disc 1).sbi",
+                "psx/Final Fantasy VII (Europe).m3u/Final Fantasy VII (Europe) (Disc 2).chd",
+                "psx/Final Fantasy VII (Europe).m3u/Final Fantasy VII (Europe).m3u",
+            ],
+        )
+
+    def test_an_sbi_that_names_no_disc_goes_to_review(self) -> None:
+        self.drop(
+            "crash",
+            {
+                "Crash Test.cue": cue("Crash Test (Track 1).bin", "Crash Test (Track 2).bin"),
+                "Crash Test (Track 1).bin": DATA1,
+                "Crash Test (Track 2).bin": AUDIO1,
+                "Other Game.sbi": SBI,
+            },
+        )
+        self.assertEqual(self.go(), 1)
+        self.assertEqual(self.library(), ["psx/Crash Test (Europe).chd"])
+        self.assertIn("files not in any DAT (the rest was placed): Other Game.sbi", self.out)
 
     def test_multi_disc_with_a_disc_missing_goes_to_review_and_places_nothing(self) -> None:
         self.drop("ff7", {"d1.bin": FF_D1})

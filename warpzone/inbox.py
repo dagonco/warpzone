@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import posixpath
 import re
 import shutil
 import tempfile
@@ -155,6 +156,7 @@ class Unit:
     entry: str  # name inside roms/<system>/
     matches: tuple[GameMatch, ...]  # one, or all the discs of an m3u folder
     unverified: bool = False  # filed from `_unverified/`: the "match" describes the file itself
+    sbis: tuple[str | None, ...] = ()  # item path of each disc's LibCrypt .sbi, or None
 
     @property
     def is_m3u(self) -> bool:
@@ -428,6 +430,48 @@ def find_sidecar(
     return best
 
 
+def find_sbi(match: GameMatch, staged: Mapping[str, Staged]) -> str | None:
+    """The LibCrypt subchannel file of a PlayStation disc: an `.sbi` in the folder of the
+    disc's cue (or of its data track when there is no cue) named like that cue, that track
+    or the DAT game. Redump ships one for each protected PAL disc; a CHD does not keep the
+    subchannel, and the emulators read `<disc>.sbi` next to the disc instead."""
+    if match.system != "psx":
+        return None
+    found = find_sidecar(match, staged)
+    anchor = found[0] if found else match.files[0].path
+    folder = posixpath.dirname(anchor)
+    stems = {
+        posixpath.splitext(posixpath.basename(anchor))[0].lower(),
+        posixpath.splitext(posixpath.basename(match.files[0].path))[0].lower(),
+        match.game.name.lower(),
+    }
+    for rel in sorted(staged):
+        stem, ext = posixpath.splitext(rel)
+        if (
+            ext.lower() == ".sbi"
+            and posixpath.dirname(rel) == folder
+            and posixpath.basename(stem).lower() in stems
+        ):
+            return rel
+    return None
+
+
+def with_sbis(unit: Unit, staged: Mapping[str, Staged]) -> Unit:
+    """The unit with the `.sbi` of each disc. A PlayStation game with one goes in a
+    `<game>.m3u/` folder, so the subchannel file travels with its disc as one library entry."""
+    if unit.system != "psx" or unit.unverified:
+        return unit
+    sbis = tuple(find_sbi(m, staged) for m in unit.matches)
+    if not any(sbis):
+        return unit
+    entry = unit.entry if unit.is_m3u else unit.matches[0].game.name + ".m3u"
+    return Unit(unit.system, entry, unit.matches, unit.unverified, sbis)
+
+
+def sbi_name(out_name: str) -> str:
+    return posixpath.splitext(out_name)[0] + ".sbi"
+
+
 def find_cd_input(
     match: GameMatch, staged: Mapping[str, Staged], scratch: Path
 ) -> tuple[Path, Path]:
@@ -582,6 +626,13 @@ def process_unit(
         ]
         if unit.system == "gc" and prepared[0].kind == "iso":
             res.notes.append(f"could be converted: {DOLPHIN_HINT} -i <iso> -o <rvz>")
+        sbis = {
+            sbi_name(p.out_name): staged[rel].path
+            for p, rel in zip(prepared, unit.sbis, strict=False)
+            if rel
+        }
+        for name in sbis:
+            res.notes.append(f"LibCrypt: {name} goes with its disc")
         out_dir = scratch / "out"
         out_dir.mkdir(parents=True, exist_ok=True)
         produced: list[Path] = []
@@ -605,7 +656,7 @@ def process_unit(
             if res.outcome == "exists":
                 res.notes.append("already in the library (content is compared with --apply)")
             return res
-        _place(ctx, unit, prepared, produced, dest, res)
+        _place(ctx, unit, prepared, produced, dest, res, sbis)
     except ItemFailure as exc:
         res.outcome = "review"
         res.reason = str(exc)
@@ -640,7 +691,11 @@ def _place(
     produced: Sequence[Path],
     dest: Path,
     res: UnitResult,
+    sbis: Mapping[str, Path] | None = None,
 ) -> None:
+    """Copy a unit into the library. `sbis` are the LibCrypt files of an m3u folder's discs,
+    by the name they get in it."""
+    sbis = sbis or {}
     chdman = ctx.tools.chdman
     timeout = ctx.tools.timeout
     if not unit.is_m3u:
@@ -671,8 +726,9 @@ def _place(
     if dest.exists():
         same = (
             dest.is_dir()
-            and sorted(os.listdir(dest)) == sorted([*names, inner])
+            and sorted(os.listdir(dest)) == sorted([*names, *sbis, inner])
             and (dest / inner).read_text(encoding="utf-8", errors="replace") == playlist
+            and all((dest / n).read_bytes() == src.read_bytes() for n, src in sbis.items())
             and all(
                 same_content(_kind_of(p), dest / p.out_name, out, chdman, timeout)
                 for p, out in zip(prepared, produced, strict=True)
@@ -691,6 +747,8 @@ def _place(
     try:
         for p, out in zip(prepared, produced, strict=True):
             copy_verified(out, part / p.out_name)
+        for name, src in sbis.items():
+            copy_verified(src, part / name)
         (part / inner).write_text(playlist, encoding="utf-8")
         if dest.exists():
             raise ItemFailure(f"{unit.entry}: appeared in the library while copying")
@@ -762,6 +820,7 @@ def _identify_and_place(
         if m.system in DISC_SYSTEMS and (found := find_sidecar(m, by_rel))
         for track in found[1]
     }
+    owned |= {sbi for m in matches if (sbi := find_sbi(m, by_rel))}
     unmatched = [f for f in unmatched if f.path not in owned]
     for second in unmatched_handlers():
         taken = second.adopt(ctx, by_rel, unmatched, result)
@@ -780,6 +839,7 @@ def _identify_and_place(
         dats = {s: ctx.library.load(s) for s in {m.system for m in matches}}
         groups = datmod.group_discs(matches, dats)
         units, problems = plan_units(groups, lambda m: by_rel[m.files[0].path].origin is not None)
+        units = [with_sbis(u, by_rel) for u in units]
         result.reasons.extend(problems)
     units.extend(extra)
     for i, unit in enumerate(units):

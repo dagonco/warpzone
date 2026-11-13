@@ -103,6 +103,15 @@ The contract:
   `<game>.m3u` playlist; GameCube discs stay loose files, as in the library. A game is
   placed only when every disc the DAT lists is in the item (`incomplete multi-disc`
   otherwise); a disc that is the only one its DAT lists is a plain game.
+- **LibCrypt subchannel files.** Redump ships an `.sbi` with each LibCrypt-protected PAL
+  PlayStation disc. A CHD does not keep the subchannel, and DuckStation and Beetle PSX read
+  `<disc>.sbi` next to the disc instead. `find_sbi` (pure) takes the `.sbi` in the folder
+  of the disc's cue (or of its data track when there is no cue) whose name is the cue's,
+  the track's or the DAT game's. A game with one goes in a `<game>.m3u/` folder like a
+  multi-disc game, with each disc's `.sbi` named after the disc (`<game>.sbi`), so the
+  catalog, the whitelist line and the library UI see one entry. An `.sbi` that names no
+  disc of the item goes to review as a file not in any DAT. An identical folder,
+  `.sbi` included, is "already in the library"; one without the `.sbi` is a conflict.
 - **Names are untrusted too.** A DAT is a file from outside, like an archive, and its
   names become paths: the game name is the entry in `library/roms/<system>/` and each rom
   name a member of the zip. Before anything is prepared, `unsafe_names` checks the entry

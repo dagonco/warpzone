@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ### Added
 
+- `warpzone inbox` keeps the LibCrypt `.sbi` of a PAL PlayStation disc: the game goes in a `<game>.m3u/` folder with the CHD and `<game>.sbi`, which DuckStation and Beetle PSX need to pass the protection. Until now the CHD was placed alone and the `.sbi` went to review.
 - `warpzone inbox` places Nintendo DS games: a `.nds` rom (loose or in an archive) that matches the No-Intro `Nintendo - Nintendo DS` DAT is filed as `roms/nds/<game>.zip`. Until now it went to review as "no DAT match".
 
 ## [0.4.0rc3] - 2026-11-11
