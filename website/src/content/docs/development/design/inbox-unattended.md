@@ -416,8 +416,11 @@ lock and exits as busy, costing one container start.
 - **One item at a time**, as today; each tool call within the item runs alone.
 - **CPU.** The compose service sets `cpus: "2"` (or fewer than the NAS's cores), so SMB and
   Syncthing keep the rest. Some Synology kernels have no CFS quota and Docker refuses the limit
-  ("NanoCPUs can not be set"); the fallback is to remove `cpus:` and rely on `chdman_threads`
-  and the `os.nice` below (or `cpuset: "0"`, which pins the container to one core). The run lowers its own priority with `os.nice(10)` and every tool
+  ("NanoCPUs can not be set"). The fallback tested on a Synology is to replace `cpus:` with
+  `cpu_shares: 512`, a relative weight (when the CPU is busy SMB and Syncthing win; there is no
+  hard cap), and to rely on `chdman_threads` (`1` is sensible on a 2-core NAS) and the `os.nice`
+  below; `cpuset: "0"`, which pins the container to one core, is an alternative that was not
+  tested. The run lowers its own priority with `os.nice(10)` and every tool
   inherits it. The standard library has no call for the I/O priority, and the I/O schedulers of
   NAS kernels vary, so none is set; if the share is slow while a conversion runs, a later change
   can start the tools under `ionice -c 3`.
