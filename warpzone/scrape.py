@@ -147,6 +147,13 @@ class Selection:
     skipped_not_found: int = 0
 
 
+def is_placed(game: Game, placed: Collection[str]) -> bool:
+    """Whether a catalog game is one of the entries `inbox` placed, given as library paths
+    (`roms/<system>/<name>`): the game's primary file is the entry, or lies inside it (the
+    primary of an `.m3u` folder is the playlist in it)."""
+    return any(game.primary == p or game.primary.startswith(p + "/") for p in placed)
+
+
 def media_stem(game: Game) -> str:
     """The name the hub's media files of a game have, without kind folder and extension.
 

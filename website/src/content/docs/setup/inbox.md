@@ -161,6 +161,10 @@ Items modified in the last 30 seconds are left alone (they may still be copying)
 
 A PS Vita dump kept as a game folder is filed (see [PS Vita games](#ps-vita-games)), and a Vita `.pkg` is installed with Vita3K first (see [PS Vita packages](#ps-vita-packages)). `.vpk` files, PS3 or Xbox games kept as extracted folders and PS3 `.pkg` files are not supported yet and go to review ("not supported by inbox yet").
 
+## Descriptions and media
+
+With Skyscraper installed (on `PATH`, or `skyscraper` in the `[inbox]` table), `warpzone inbox --apply` also scrapes the games it has just placed: it adds their gamelist entry, covers, screenshots and videos to the hub, after the files are placed and the catalog is updated. A failure there is only a warning, and `--no-scrape` skips it for one run. Without `--apply` the report says how many games would be scraped. Set-up, ScreenScraper accounts, language and region, and `warpzone scrape` for the games already in the library are in [Scraping](/warpzone/setup/scrape/). The hub container does not have Skyscraper, so there `inbox` places the games and says it did not scrape them.
+
 ## Homebrew and other roms no DAT knows
 
 Homebrew, translations and aftermarket releases are in no Redump or No-Intro DAT, so `inbox` sends them to review as "no DAT match". When you know a file is one of those, say so by dropping it (or the archive that holds it) in `inbox/_unverified/<system>/`, with `<system>` the library folder name: `nes`, `snes`, `n64`, `gb`, `gbc`, `gba`, `genesis`, `mastersystem` or `gamegear`. For example `inbox/_unverified/nes/My Homebrew.nes`. Create the folder yourself; `inbox` never does.

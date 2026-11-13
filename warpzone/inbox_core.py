@@ -200,8 +200,11 @@ class Tools:
     nsz: str | None = None
     orbis_pkg_util: str | None = None
     vita3k: str | None = None  # Vita3K.app (a folder) or the Vita3K binary
+    skyscraper: str | None = None  # scrapes what `--apply` placed (see inbox_scrape)
     timeout: float = DEFAULT_TOOL_TIMEOUT  # seconds one call of any tool may run
 
+
+SKYSCRAPER_COMMAND = "Skyscraper"  # searched on PATH when `[inbox] skyscraper` is unset
 
 # Where Vita3K's macOS release is installed; `inbox` uses it when `[inbox] vita3k` is unset.
 VITA3K_APP = "/Applications/Vita3K.app"
@@ -256,6 +259,7 @@ def find_tools(
         nsz=pick("nsz", settings.nsz, "nsz"),
         orbis_pkg_util=pick("orbis_pkg_util", settings.orbis_pkg_util, "orbis-pkg-util"),
         vita3k=pick_vita3k(),
+        skyscraper=pick("skyscraper", settings.skyscraper, SKYSCRAPER_COMMAND),
         timeout=settings.tool_timeout_minutes * 60.0,
     )
 
@@ -271,6 +275,9 @@ class Options:
     cache_dir: Path | None = None
     ra_key: str | None = None
     ra_fetch: ra.Fetch | None = None
+    no_scrape: bool = False  # `--no-scrape`: do not scrape what `--apply` placed
+    scrape_cache_dir: Path | None = None  # the scrape's not-found memory; the default when None
+    skyscraper_config: Path | None = None  # Skyscraper's config.ini (a presence check only)
     settings: InboxSettings = field(default_factory=InboxSettings)  # read by kind handlers
     now: Callable[[], float] = time.time
     today: Callable[[], date] = date.today
