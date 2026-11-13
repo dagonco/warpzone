@@ -633,6 +633,184 @@
     return Object.assign(view, { refresh: paint, listsChanged: paint });
   }
 
+  // ===== the unattended inbox ==============================================================
+
+  const WHY = {
+    settling: 'still being copied or changed',
+    space: 'waiting for free space on the work volume',
+  };
+
+  const runCounts = (c) => [
+    c.placed ? plural(c.placed, 'game') + ' placed' : null,
+    c.already ? `${c.already.toLocaleString('en-US')} already in the library` : null,
+    c.review ? `${c.review.toLocaleString('en-US')} for review` : null,
+    c.held ? `${c.held.toLocaleString('en-US')} held` : null,
+  ].filter(Boolean).join(', ') || 'nothing placed';
+
+  function ixGame(g) {
+    const name = g.id
+      ? h('a', { class: 'ix-name', href: ui.gameHref(g.system, g.id), dataset: { fk: 'ig:' + g.id }, title: 'Open the game, where the console switches are' }, g.entry)
+      : h('span', { class: 'ix-name' }, g.entry);
+    const extra = [...(g.ra || []), ...(g.notes || [])];
+    return h('li', { class: 'ix-game', vars: ui.systemTint(g.system) },
+      h('span', { class: 'sysb', title: systemName(g.system) }, systemCode(g.system)),
+      name,
+      g.id ? null : h('span', { class: 'mute small' }, 'not in the catalog yet'),
+      extra.length ? h('small', { class: 'ix-extra mute' }, extra.join(' / ')) : null);
+  }
+
+  function ixItem(item, note) {
+    return h('li', { class: 'ix-item' },
+      h('b', { class: 'ix-name' }, item.item),
+      (item.reasons || []).map((r) => h('p', { class: 'ix-reason' }, r)),
+      (item.notes || []).map((r) => h('p', { class: 'mute small' }, r)),
+      note ? h('p', { class: 'mute small' }, note) : null);
+  }
+
+  // One run record: what it placed (linked to the game pages), the whitelist lines, what went to
+  // review or stayed held, and the notes. Used for the newest run and for each older one opened.
+  function runBody(rec) {
+    const items = rec.items || [];
+    const games = (outcomes) => items.flatMap((i) => (i.games || []).filter((g) => outcomes.includes(g.outcome)));
+    const placed = games(['placed', 'planned']);
+    const already = games(['already', 'exists']);
+    const review = items.filter((i) => i.outcome === 'review');
+    const held = items.filter((i) => i.outcome === 'held');
+    const n = (list) => list.length.toLocaleString('en-US');
+    const part = (title, ...body) => h('section', { class: 'ix-part' }, h('h3', null, title), ...body);
+    const wl = rec.whitelist || [];
+    const scrape = rec.scrape;
+    return h('div', { class: 'ix-run' },
+      placed.length ? part(`Placed (${n(placed)})`, h('ul', { class: 'ix-list' }, placed.map(ixGame))) : null,
+      already.length ? part(`Already in the library (${n(already)})`,
+        h('p', { class: 'mute small' }, already.map((g) => g.entry).join(', '))) : null,
+      wl.length ? part('Whitelist lines', h('pre', { class: 'diff ix-pre', tabindex: '0', 'aria-label': 'Whitelist lines of this run' }, wl.join('\n'))) : null,
+      review.length ? part(`For review (${n(review)})`,
+        h('ul', { class: 'ix-list' }, review.map((i) => ixItem(i, i.moved_to ? `The original is in ${i.moved_to}.` : null)))) : null,
+      held.length ? part(`Held (${n(held)})`,
+        h('ul', { class: 'ix-list' }, held.map((i) => ixItem(i, 'The original is still in the inbox.')))) : null,
+      scrape ? part('Scraping', h('p', { class: 'mute small' },
+        scrape.state === 'done' ? `Scraped: ${(scrape.systems || []).map(systemName).join(', ') || 'nothing to do'}.`
+          : scrape.state === 'skipped' ? 'Skipped.' : 'Not finished.',
+        scrape.message ? ' ' + scrape.message : '',
+        scrape.state === 'not-finished' && (scrape.systems || []).length ? ` Run "warpzone scrape --system" for: ${scrape.systems.join(', ')}.` : '')) : null,
+      (rec.warnings || []).length ? part('Warnings', h('ul', { class: 'ix-list' }, rec.warnings.map((w) => h('li', { class: 'ix-item mute small' }, w)))) : null,
+      !items.length ? h('p', { class: 'mute small' }, 'This run processed nothing.') : null);
+  }
+
+  function viewInbox() {
+    const view = { kind: 'inbox', dead: false };
+    const host = h('div', { class: 'ix' });
+    const root = h('div', { class: 'page' },
+      h('div', { class: 'pagehead' }, h('h1', null, 'Inbox'), h('span', { class: 'sub' }, 'Games the hub filed by itself')), host);
+    const details = new Map(); // run id -> {state: 'loading' | 'ok' | 'gone' | 'error', data}
+    const opened = new Set();
+
+    function statusPanel(d) {
+      const err = d.error;
+      return h('section', { class: 'panel ix-status', 'aria-label': 'State of the inbox' },
+        h('h2', null, h('i'), 'State'),
+        h('div', { class: 'ix-body' },
+          h('p', null, d.checked
+            ? ['Last check ', h('b', { title: formatMoment(d.checked) }, timeAgo(d.checked)), '.']
+            : 'No unattended run has recorded a check yet.'),
+          d.busy ? h('p', null, `A run (${d.busy.mode}) has been working since `,
+            h('b', { title: formatMoment(d.busy.since) }, timeAgo(d.busy.since)), '.') : null,
+          err ? h('div', { class: 'note warn', role: 'alert' },
+            h('b', null, err.message),
+            h('p', { class: 'mute small' }, `Since ${formatMoment(err.since)}; ${plural(err.count, 'run')} met it.` +
+              (err.config ? ' It needs a change to the configuration.' : ''))) : null));
+    }
+
+    function waitingPanel(d) {
+      const held = d.held || [];
+      const waiting = d.waiting || [];
+      if (!held.length && !waiting.length) return null;
+      return h('section', { class: 'panel ix-wait', 'aria-label': 'Held and waiting items' },
+        h('h2', null, h('i'), 'In the inbox', h('span', null, `${held.length} held, ${waiting.length} waiting`)),
+        h('ul', { class: 'ix-list ix-body' },
+          held.map((x) => h('li', { class: 'ix-item' },
+            h('b', { class: 'ix-name' }, x.item), h('span', { class: 'ix-tag held' }, 'held'),
+            h('p', { class: 'ix-reason' }, x.reason),
+            h('p', { class: 'mute small', title: formatMoment(x.since) }, `Held ${timeAgo(x.since)}. Look at it, then run "warpzone inbox --apply" by hand, or replace the item to try again.`))),
+          waiting.map((x) => h('li', { class: 'ix-item' },
+            h('b', { class: 'ix-name' }, x.item), h('span', { class: 'ix-tag' }, 'waiting'),
+            h('p', { class: 'mute small', title: formatMoment(x.since) },
+              `${formatBytes(x.bytes) || '0 B'}, here since ${timeAgo(x.since)}: ${WHY[x.why] || x.why}.`)))));
+    }
+
+    function newestPanel(rec) {
+      return h('section', { class: 'panel ix-last', 'aria-label': 'The newest run' },
+        h('h2', null, h('i'), 'Newest run', h('span', { title: formatMoment(rec.finished) }, `${timeAgo(rec.finished)} / ${rec.mode}`)),
+        h('div', { class: 'ix-body' }, h('p', { class: 'ix-counts' }, runCounts(rec.counts || {})), runBody(rec)));
+    }
+
+    function olderPanel(rows) {
+      if (!rows.length) return null;
+      return h('section', { class: 'panel ix-older', 'aria-label': 'Older runs' },
+        h('h2', null, h('i'), 'Older runs'),
+        h('ul', { class: 'ix-runs ix-body' }, rows.map((r) => {
+          const on = opened.has(r.id);
+          const d = details.get(r.id);
+          return h('li', { class: 'ix-runrow' },
+            h('button', {
+              type: 'button', class: 'hist-row' + (on ? ' on' : ''), 'aria-expanded': String(on), dataset: { fk: 'run:' + r.id },
+              onclick: () => toggle(r.id),
+            }, h('b', { title: formatMoment(r.finished) }, formatMoment(r.finished) || r.id), h('small', null, `${timeAgo(r.finished)} / ${r.mode}`),
+            h('span', null, runCounts(r))),
+            on ? (d && d.state === 'ok' ? runBody(d.data)
+              : d && d.state === 'gone' ? h('p', { class: 'mute small' }, 'This record is gone: the hub keeps the newest 50.')
+                : d && d.state === 'error' ? h('p', { class: 'error-text', role: 'alert' }, 'It could not be loaded.')
+                  : h('p', { class: 'mute small' }, 'Loading...')) : null);
+        })));
+    }
+
+    async function toggle(id) {
+      if (opened.has(id)) { opened.delete(id); paint(); return; }
+      opened.add(id);
+      const held = details.get(id);
+      if (held && held.state === 'ok') { paint(); return; }
+      details.set(id, { state: 'loading' });
+      paint();
+      try {
+        details.set(id, { state: 'ok', data: await api.inboxRun(id) });
+      } catch (err) {
+        if (view.dead) return;
+        details.set(id, { state: err.code === 'not-found' ? 'gone' : 'error' });
+      }
+      if (!view.dead) paint();
+    }
+
+    function paint() {
+      const fk = captureFocus();
+      const d = S.inbox;
+      if (!d) {
+        host.replaceChildren(S.inboxError
+          ? emptyPanel('The inbox is not available', 'The server could not read it.',
+            h('button', { class: 'btn', type: 'button', onclick: () => store.loadInbox() }, 'Try again'))
+          : h('p', { class: 'loading-note' }, 'Loading...'));
+        return;
+      }
+      const runs = d.runs || [];
+      host.replaceChildren(...[
+        statusPanel(d),
+        waitingPanel(d),
+        d.last ? newestPanel(d.last) : emptyPanel('No run has filed anything yet', 'Each run of "warpzone inbox --apply" that processed an item leaves a record here.'),
+        olderPanel(runs.slice(1)),
+      ].filter(Boolean));
+      restoreFocus(fk);
+    }
+
+    setMain(root, 'Inbox');
+    paint();
+    settled();
+    store.loadInbox();
+    return Object.assign(view, {
+      refresh() {},
+      inboxChanged() { paint(); if (store.inboxNews()) store.markInboxSeen(); },
+    });
+  }
+
   // ===== search ============================================================================
 
   function localSearch(q) {
@@ -1212,5 +1390,5 @@
 
   const resetFeatured = () => { featured = null; featuredData.clear(); featuredToken++; };
 
-  W.views = { resetFeatured, viewHome, viewSystems, viewSystem, viewConsoles, viewSearch, viewGame, setPendingScroll, scrollMemory, setMain, localSearch, filterMemory };
+  W.views = { resetFeatured, viewHome, viewSystems, viewSystem, viewConsoles, viewInbox, viewSearch, viewGame, setPendingScroll, scrollMemory, setMain, localSearch, filterMemory };
 })();

@@ -2,16 +2,18 @@
 title: "Unattended inbox"
 ---
 
-**Status: implemented, except the library UI and doctor.** The command is in the code:
+**Status: implemented, except doctor.** The command is in the code:
 `warpzone inbox --apply --unattended` (`inbox_unattended_run.py`, called by `cli.py`), with the
 pure decisions of `inbox_unattended.py` (the fingerprint, readiness, the state file and the
 changes made to it, space, news and the exit code), the disk side of `inbox_unattended_io.py` (the
 walk, the state file's read-modify-write, the work folder, the free space and the run records),
-the lock heartbeat and the per-item "still mine" checks ([Locking](#locking)), the run records and
-the webhook, and `[inbox] chdman_threads`, `os.nice` and the work folder's cleanup
-([Resource limits](#resource-limits)). What is design only is `serve`'s inbox routes with the
-library UI's Inbox view ([The run record and the library UI](#the-run-record-and-the-library-ui))
-and doctor's `Unattended inbox` line ([Doctor](#doctor)). This page is the contract for running
+the lock heartbeat and the per-item "still mine" checks ([Locking](#locking)), the run records
+(with their purge to 50) and the webhook (`inbox --notify-url`, shared with `prune` through
+`notify.py`), `[inbox] chdman_threads`, `os.nice` and the work folder's cleanup
+([Resource limits](#resource-limits)), and the library UI's Inbox view with its two routes
+(`library_api.inbox_response`, `run_response` and `parse_record`, read by `serve`; see
+[The run record and the library UI](#the-run-record-and-the-library-ui)). What is design only is
+doctor's `Unattended inbox` line ([Doctor](#doctor)). This page is the contract for running
 `warpzone inbox --apply` on the hub by itself, from a scheduled task, with nobody watching. The
 pages it touches when it is implemented ([Inbox](/warpzone/development/design/inbox/),
 [Configuration and command line](/warpzone/development/design/configuration/),
@@ -502,16 +504,27 @@ join the [endpoints](/warpzone/development/design/library-ui/#endpoints):
  "held": [{"item": "Game.cue", "since": "2026-11-13T09:45:00Z",
            "reason": "a disc dropped as loose files: put the sheet and its tracks in one folder"}],
  "runs": [{"id": "20261113T101500Z", "mode": "unattended", "finished": "2026-11-13T10:21:40Z",
-           "placed": 1, "already": 0, "review": 1, "exit": 1}],
+           "placed": 1, "already": 0, "review": 1, "held": 0, "exit": 1}],
  "last": {"...": "the newest record in full, each placed game with its catalog id"}}
 ```
 
-`busy` is `{"since", "mode"}` while `inbox/.warpzone.lock` exists, else `null`. `why` is
-`settling` or `space`. `runs` lists the newest 10 records, newest first. In `last` (and in a record
+`busy` is `{"since", "mode"}` while `inbox/.warpzone.lock` exists, else `null` (`since` is the
+lock's own start, `mode` is `attended`, `unattended`, or `unknown` for a lock that cannot be
+read). `error` is `{"message", "since", "count", "config"}` from the state's error, else `null`.
+`held` lists the held entries of the state (`since` is when it was held) and `waiting` the others
+(`since` is `first`). `why` is `settling` or `space`; the state does not record which, so it is
+`space` when no run is working and the last check (`checked`) found the item's fingerprint
+already stable for the five minutes it needs (a ready item is processed unless there is no
+room), and `settling` otherwise. `runs` lists the newest 10 records, newest first. In `last` (and in a record
 from the second route) each game gets `id`, the catalog game whose primary part is at `path`
 (`null` when the catalog has none yet, for example before its update finished). A missing or
-damaged state or record is the same as none (`checked` `null`, empty lists), never an error.
-`library_api.inbox_response` is pure over the parsed files and the catalog.
+damaged state or record is the same as none (`checked` `null`, empty lists), never an error: a
+record that is not JSON, of another `v`, or whose `id` is not its file's name is left out of
+`runs` and is a `404` by its id, and a damaged part of one (an item, a game, a count, the scrape
+note) is dropped or zeroed while the rest is served (`library_api.parse_record`). A game is
+linked by its `path` without the `library/` prefix: the catalog game whose primary part is
+there, else the game that has a part there. `library_api.inbox_response` is pure over the parsed
+files and the catalog; an `{id}` that is not of the form of a record id is `404 not-found`.
 
 ### Page
 

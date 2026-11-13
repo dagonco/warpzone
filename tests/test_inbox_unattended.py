@@ -25,8 +25,10 @@ from warpzone.inbox_unattended import (
     exit_code,
     fingerprint,
     heartbeat_due,
+    is_record_id,
     loose_sheets,
     memory_fs,
+    newest_record_ids,
     news,
     observe,
     parse_state,
@@ -254,7 +256,8 @@ class StateFileTests(unittest.TestCase):
         self.assertEqual(parse_state(None), (State(), None))
 
     def test_a_damaged_state_is_empty_with_a_warning(self) -> None:
-        for text in ("", "{", "[]", "null", '{"v": 2}', '{"items": {}}', "\x00\x01"):
+        deep = "[" * 100_000 + "]" * 100_000
+        for text in ("", "{", "[]", "null", '{"v": 2}', '{"items": {}}', "\x00\x01", deep):
             with self.subTest(text=text):
                 state, warning = parse_state(text)
                 self.assertEqual(state, State())
@@ -549,6 +552,54 @@ class NewsTests(unittest.TestCase):
             lock_seen=LockSeen(1, at(1)),
         )
         self.assertFalse(news(State(), after))
+
+
+class RecordIdTests(unittest.TestCase):
+    def test_the_ids_a_writer_makes_are_valid(self) -> None:
+        for text in ("20261113T101500Z", "20261113T101500Z-2", "20261113T101500Z-10"):
+            self.assertTrue(is_record_id(text), text)
+
+    def test_anything_else_is_not_an_id(self) -> None:
+        for text in (
+            "",
+            "..",
+            "state",
+            "20261113T101500Z.json",
+            "20261113T101500Z-",
+            "20261113T101500Z\n",
+            "x20261113T101500Z",
+            "../20261113T101500Z",
+            "20261113T101500Z/",
+            "\u0662\u0660\u0662\u0666\u0661\u0661\u0661\u0663T101500Z",
+        ):
+            self.assertFalse(is_record_id(text), repr(text))
+        self.assertFalse(is_record_id(None))
+        self.assertFalse(is_record_id(5))
+
+    def test_newest_first_with_the_same_second_numbered(self) -> None:
+        ids = [
+            "20261113T101500Z",
+            "20261113T101500Z-10",
+            "20261112T230000Z",
+            "20261113T101500Z-2",
+            "junk",
+            "20261113T101500Z-9",
+        ]
+        self.assertEqual(
+            newest_record_ids(ids),
+            [
+                "20261113T101500Z-10",
+                "20261113T101500Z-9",
+                "20261113T101500Z-2",
+                "20261113T101500Z",
+                "20261112T230000Z",
+            ],
+        )
+
+    def test_the_limit_keeps_the_newest(self) -> None:
+        ids = ["20261111T000000Z", "20261113T000000Z", "20261112T000000Z"]
+        self.assertEqual(newest_record_ids(ids, 2), ["20261113T000000Z", "20261112T000000Z"])
+        self.assertEqual(newest_record_ids([]), [])
 
 
 if __name__ == "__main__":
