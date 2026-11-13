@@ -31,6 +31,7 @@ from typing import Any
 
 from warpzone import dat as datmod
 from warpzone import (
+    inbox_chd,
     inbox_console_iso,
     inbox_dolphin,
     inbox_lock,
@@ -846,6 +847,8 @@ def _identify_and_place(
         return
     staged, unreadable = expand_compressed(staged, work, ctx.tools)
     result.reasons.extend(unreadable)
+    staged, chd_failures = inbox_chd.expand_chds(staged, work, ctx.tools, apply=ctx.opts.apply)
+    result.reasons.extend(chd_failures)
     infos: list[FileInfo] = []
     by_rel: dict[str, Staged] = {}
     for s in staged:
@@ -864,6 +867,8 @@ def _identify_and_place(
     for second in unmatched_handlers():
         taken = second.adopt(ctx, by_rel, unmatched, result)
         unmatched = [f for f in unmatched if f.path not in taken]
+    unmatched, from_chd = inbox_chd.split_unmatched(unmatched, by_rel)
+    result.reasons.extend(from_chd)
     for names in ambiguous:
         result.reasons.append("ambiguous DAT match, cannot tell apart: " + " | ".join(names))
     extra: list[Unit] = []

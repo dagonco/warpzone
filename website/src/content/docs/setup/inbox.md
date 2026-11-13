@@ -46,7 +46,7 @@ Which tools exist in each place:
 
 | Tool | Needed for | On a computer | In the hub image |
 |---|---|---|---|
-| `chdman` | CHD conversions (`psx`, `ps2`, `saturn`, `dreamcast`) | install `mame-tools` or `rom-tools` | `/usr/bin/chdman` (on `PATH`), from Debian's `mame-tools` |
+| `chdman` | CHD conversions and reading dropped `.chd` files (`psx`, `ps2`, `saturn`, `dreamcast`) | install `mame-tools` or `rom-tools` | `/usr/bin/chdman` (on `PATH`), from Debian's `mame-tools` |
 | `bsdtar` | `.7z` and `.rar` archives | install `libarchive-tools` (ships with macOS) | `/usr/bin/bsdtar` (on `PATH`), from Debian's `libarchive-tools` |
 | `RAHasher` | the RetroAchievements hash check | build it, set `rahasher` | `/usr/local/bin/RAHasher` |
 | `dolphin-tool` | `.gcz` GameCube images | install Dolphin | `/usr/local/bin/dolphin-tool` (on `PATH`), built from Dolphin's source |
@@ -180,11 +180,13 @@ vita_zrif = "~/keys/PSV_GAMES.tsv"            # optional: zRIF keys for PS Vita 
 
    | System | Result |
    |---|---|
-   | `psx`, `saturn`, `dreamcast` | `<game>.chd` (`chdman createcd` from cue/bin or gdi), then `chdman verify` |
-   | `ps2` | `<game>.chd` (`createdvd` for an `.iso`, `createcd` for cue/bin), then `verify` |
+   | `psx`, `saturn`, `dreamcast` | `<game>.chd` (`chdman createcd` from cue/bin, gdi or an existing `.chd` extracted first), then `chdman verify` |
+   | `ps2` | `<game>.chd` (`createdvd` for an `.iso`, `createcd` for cue/bin; an existing `.chd` is extracted first), then `verify` |
    | `psp` | the plain `.iso`, its CRC32 checked against the DAT |
    | `gc` | `.iso` stays `.iso` (the report shows the `dolphin-tool convert -f rvz ...` command); a `.gcz` is identified with `dolphin-tool` and kept as it is. An `.rvz` or `.wia` is read by its header instead, see [Wii and GameCube compressed images](#wii-and-gamecube-compressed-images) |
    | `nes`, `snes`, `n64`, `gb`, `gbc`, `gba`, `nds`, `genesis`, `mastersystem`, `gamegear`, `atari2600`, `atari7800`, `atarilynx`, `atarijaguar`, `wonderswan`, `wonderswancolor`, `sega32x` | `<game>.zip` holding the ROM under its DAT name |
+
+   A `.chd` already made for one of those systems is accepted too: `inbox` extracts it into the work folder with `chdman extractcd` (a CD or GD-ROM CHD) or `extractdvd` (a DVD one), identifies the extracted image by content like a dropped one, and makes the library's CHD from it. A PS2 disc that was converted to a CD-mode CHD from its `.iso` matches the DAT's `.iso` and is rebuilt as a DVD CHD. The work folder needs room for the image plus the new CHD, and the preview (`inbox` without `--apply`) extracts as well, so it shows the real outcome. A CHD made from a changed image (a re-ripped or trimmed disc, or a different track layout) matches no Redump entry and goes to `inbox/_revisar/` with a reason that names it; drop the original cue/bin, gdi or iso instead. The original `.chd` is only read and goes to `_done/` like any other.
 
    A multi-disc game of a CHD system goes in `<game without disc tag>.m3u/` with every disc and a `<game>.m3u` playlist, and only when all its discs are in the item; otherwise it goes to review.
 
