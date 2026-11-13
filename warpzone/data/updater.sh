@@ -614,9 +614,22 @@ release_lock() {
 # proc_has NAME...: 0 when a process is one of the names, judged by `comm` (the kernel keeps
 # 15 characters) and the basename of argv[0] the way procs.running does; never by
 # the rest of a command line. 1 when none is, 2 when /proc cannot be read.
+#
+# A fork per process made a call take over a second on a console with hundreds of them, so
+# nothing forks for a process that cannot match: `comm` is read with `read` and compared with
+# the names cut to 15 characters (cut once, up front); the cmdline is read the same way (`read`
+# drops the NULs, so what it gets is argv[0] followed by the other arguments run together, and
+# the basename of argv[0] is a piece of it) and only a process whose cmdline contains one of
+# the names pays for the fork that cuts argv[0] out.
 
 proc_has() {
 	[ -d "$PROC" ] && [ -r "$PROC" ] || return 2
+	_nl='
+'
+	_shorts=$_nl
+	for _n in "$@"; do
+		_shorts=$_shorts$(printf '%.15s' "$_n")$_nl
+	done
 	for _d in "$PROC"/[0-9]*; do
 		[ -d "$_d" ] || continue
 		_pid=${_d##*/}
@@ -624,19 +637,30 @@ proc_has() {
 		[ "$_pid" = "$PPID" ] && continue
 		_comm=
 		[ -r "$_d/comm" ] && IFS= read -r _comm <"$_d/comm" 2>/dev/null
-		_argv0=
-		if [ -r "$_d/cmdline" ]; then
-			_argv0=$(tr '\0' '\n' <"$_d/cmdline" 2>/dev/null | head -n 1)
+		if [ -n "$_comm" ]; then
+			case $_shorts in
+			*"$_nl$_comm$_nl"*) return 0 ;;
+			esac
 		fi
-		_base=${_argv0##*/}
+		[ -r "$_d/cmdline" ] || continue
+		_line=
+		IFS= read -r _line <"$_d/cmdline" 2>/dev/null
+		_maybe=
 		for _n in "$@"; do
-			_short=$(printf '%.15s' "$_n")
-			if [ -n "$_comm" ] && [ "$_comm" = "$_short" ]; then
-				return 0
-			fi
-			if [ -n "$_base" ] && [ "$_base" = "$_n" ]; then
-				return 0
-			fi
+			[ -n "$_n" ] || continue
+			case $_line in
+			*"$_n"*)
+				_maybe=1
+				break
+				;;
+			esac
+		done
+		[ -n "$_maybe" ] || continue
+		_argv0=$(tr '\0' '\n' <"$_d/cmdline" 2>/dev/null | head -n 1)
+		_base=${_argv0##*/}
+		[ -n "$_base" ] || continue
+		for _n in "$@"; do
+			[ "$_base" = "$_n" ] && return 0
 		done
 	done
 	return 1
