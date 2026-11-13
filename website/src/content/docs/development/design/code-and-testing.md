@@ -109,6 +109,8 @@ warpzone/
   gamelist.py        ES-DE gamelist text edits: the per-game emulator and the helpers `playstate` shares (pure)
   artwork.py         frontend artwork: ES-DE gamelist -> the frontend's gamelist, scope ignores,
                      system names (pure; the reads are passed in)
+  scrape.py          scraping with Skyscraper: platform table, which games to scrape, command lines,
+                     what its output says (pure)
   playstate.py       play state: ledgers, merge rules, times, its tags in a gamelist (pure)
   playstate_device.py  play state on a device: files, ES-DE gamelists, generated gamelists
   diskstatus.py      the disk a console reports to the hub: when to write, format, staleness (pure)
