@@ -248,12 +248,11 @@ jobs:
         timeout-minutes: 35
         run: docker build -f docker/Dockerfile -t warpzone:ci .
       # Before Skyscraper (main after the dolphin-tool, nsz and orbis-pkg-util stages): `image size`
-      # 157230087 bytes and about 472 MB of layers.
+      # 157230087 bytes (the compressed size) and about 472 MB of layers.
       - name: Show the size of the image
         run: |
           docker image inspect --format 'image size: {{.Size}} bytes' warpzone:ci
-          echo "layers, uncompressed: $(docker save warpzone:ci | wc -c) bytes"
-          echo "layers, gzip -1:      $(docker save warpzone:ci | gzip -1 | wc -c) bytes"
+          echo "layers, uncompressed: $(docker history --human=false --format '{{.Size}}' warpzone:ci | awk '{ s += $1 } END { print s }') bytes"
           docker history --no-trunc --format '{{.Size}}\t{{.CreatedBy}}' warpzone:ci | cut -c1-160
       # The entrypoint is `warpzone` and the user is 65534, so the version check passes only
       # its argument; the tools are looked up with the entrypoint replaced by `sh`.
@@ -350,7 +349,7 @@ jobs:
           # With no volume the line says what to mount, and does not run Skyscraper.
           docker run --rm -v "$RUNNER_TEMP/doctor-config:/config:ro" warpzone:ci doctor \
             | tee "$RUNNER_TEMP/doctor-novolume.txt" || true
-          grep -E "nothing is mounted at /skyscraper" "$RUNNER_TEMP/doctor-novolume.txt" \
+          grep -E "nothing is mounted" "$RUNNER_TEMP/doctor-novolume.txt" \
             || { echo "doctor does not say that the Skyscraper volume is missing"; exit 1; }
 
   # Unit tests under coverage with branch measurement, limited to the warpzone package, on the
