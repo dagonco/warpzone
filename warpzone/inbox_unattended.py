@@ -671,10 +671,14 @@ def clean_text(text: str, roots: Sequence[str] = (), secrets: Sequence[str] = ()
 
 
 def item_outcome(result: ItemResult) -> str:
-    """`held` (the original could not be filed away and is still in the inbox), `review`
-    (sent to `_revisar/`) or `done` (filed in `_done/`)."""
+    """`gone` (the original was deleted or moved by somebody while it was processed),
+    `waiting` (the original stays in the inbox and is looked at again: it changed while it was
+    processed, or the lock was taken over), `held` (it could not be filed away and is still in
+    the inbox), `review` (sent to `_revisar/`) or `done` (filed in `_done/`)."""
+    if result.gone:
+        return "gone"
     if result.unmoved:
-        return "held"
+        return "waiting" if result.waits else "held"
     return "review" if result.review else "done"
 
 
@@ -719,8 +723,8 @@ def build_record(
 ) -> dict[str, Any]:
     """The run record, from the same `ItemResult` values the printed report comes from. Pure.
     Items left in the inbox untouched (still being copied) are not in `items`: they are
-    counted in `waiting`. Every text goes through `clean_text`, so the record holds no absolute
-    path, no secret and no zRIF."""
+    counted in `waiting`, with the items whose outcome is `waiting`. Every text goes through
+    `clean_text`, so the record holds no absolute path, no secret and no zRIF."""
 
     def clean(text: str) -> str:
         return clean_text(text, roots, secrets)
@@ -743,7 +747,7 @@ def build_record(
             "already": sum(u.outcome in ("already", "exists") for u in units),
             "review": outcomes.count("review"),
             "held": outcomes.count("held"),
-            "waiting": waiting,
+            "waiting": waiting + outcomes.count("waiting"),
         },
         "whitelist": sorted({clean(line) for u in listed for line in u.whitelist_lines}),
     }

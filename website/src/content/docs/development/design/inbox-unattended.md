@@ -191,8 +191,8 @@ first that says so:
    since ...`), records what it saw of the lock
    in `lock_seen` and exits `0`. A lock that is stale by silence is not busy: the run goes on and
    the note stays in the state until the run holds the lock, so a tick with no ready item does not
-   lose it. A lock of an older warpzone is a run-level error of this step (its message has no
-   time in it, so it is the same message on every tick).
+   lose it. A lock of an older warpzone, or one that cannot be read, is a run-level error of
+   this step (its message has no time in it, so it is the same message on every tick).
 4. **Judge readiness** of each item (`inbox_unattended.decide`, pure; see [Readiness](#readiness)
    and [The memory](#the-memory)): waiting, ready or held. With no ready item the run writes the
    state if it changed and exits (`1` when an item was held for the first time in this run,
@@ -209,10 +209,15 @@ first that says so:
    this tick and stays waiting), `process_item`, check again that the lock is still this run's and
    that the item still has the fingerprint it was judged ready with (a conversion can take
    minutes: an item copied over meanwhile is not filed away, its entry is reset through `decide`
-   so it waits again, and the record gets a warning; it is not news), file the original away,
-   record the outcome. An original that reached `_revisar/` but whose reason file could not be
-   written is reviewed, with a warning, not held. A run started by an earlier tick takes only the items that were ready at its step 4;
-   items that become ready meanwhile wait for the next tick.
+   so it waits again, and the record gets a warning and the outcome `waiting`; it is not news and
+   not held), file the original away, record the outcome. An original that reached `_revisar/`
+   but whose reason file could not be written is reviewed, with a warning, not held. An original
+   that is no longer in the inbox when it is to be filed away (somebody moved or deleted it) has
+   the outcome `gone`, with a warning: no `moved_to`, not review, not news, and its entry is
+   dropped. A run started by an earlier tick takes only the items that were ready at its step 4;
+   items that become ready meanwhile wait for the next tick. The work folder for the run is made
+   here, inside `work_dir`; when that cannot be written (the folder exists but is not writable)
+   the run ends with a configuration error of this step.
 8. **Finish** as an attended run does (purge `_done` folders older than 7 days, update the
    catalog for the systems it placed something in, scrape the games it placed: see
    [Scraping](#scraping)), then write the run record and the state, send the webhook, release the
@@ -318,7 +323,8 @@ A held item is `"held": {"reason": "...", "at": "..."}`; an error is `{"message"
 - **Items for review are not held:** they are moved to `_revisar/` with their reason file, as
   today, so they leave the inbox and are never retried.
 - **Run-level errors** (the config, the DATs, a missing `library/.stfolder`, a work folder on
-  memory, a stale lock of an older warpzone) are kept in `error`: the message, the `step` of
+  memory or not writable, a lock that cannot be read, a stale lock of an older warpzone, an
+  unexpected failure) are kept in `error`: the message, the `step` of
   [The command](#the-command) where it failed, whether it is a configuration error (`config`,
   which decides exit `2` or `1`), when it first happened and how many runs met it since. The error
   stays until a run gets past its step: a run reaches a step when it starts it, and clears the
@@ -327,7 +333,9 @@ A held item is `"held": {"reason": "...", "at": "..."}`; an error is `{"message"
   step 5 or 6 where it is. Meeting the same message again keeps the step and raises the count.
   The first run that meets an error exits `2` (`1` for an unexpected failure outside an item) and
   sends the webhook; the runs after it that meet the same message exit `0` and only raise the
-  count (see [Logging and exit codes](#logging-and-exit-codes)).
+  count (see [Logging and exit codes](#logging-and-exit-codes)). The message of an unexpected
+  failure goes through `clean_text` like the record's texts, so the temporary paths of a run
+  (the work folder has a random name) do not make the same failure a new message on every tick.
 - **Writes: read, modify, write.** A change to the state is a pure function from a state to a
   state (`inbox_unattended.Change`; `update(state, *changes)` applies them in order). The writer
   reads the file, applies the changes, and writes with `safefile.atomic_write` against the stamp of
@@ -373,8 +381,13 @@ killed for memory would block every tick for 12 hours.
   `--force-lock` takes it over; a person sees the time and decides, so the clock of one machine is
   enough there. The message says who holds it (`the unattended inbox on the hub`, from `mode`).
 - **Still mine.** Before each item and before each move of an original, the run reads the lock;
-  if it no longer holds this run's identity it stops at once (runtime error, exit 1) and leaves the
-  item where it is. A rerun reports what it had placed as "already in the library".
+  if it no longer holds this run's identity it stops at once and leaves the item where it is
+  (an unattended run: runtime error, exit 1). An attended run does the same: a computer that
+  slept for more than 10 minutes in the middle of a run may find its lock taken over by an
+  unattended run, and must not go on beside it. It stops with an error that says another run took
+  the lock over (exit `2`), skips the purge and the scrape and still writes the record of what it
+  placed; the current original stays in the inbox. A rerun reports what it had placed as
+  "already in the library".
 - `warpzone scrape`, which takes the same lock, gets the heartbeat with it.
 
 Implemented in `inbox_lock.py`: `hold(inbox, force=, now=, out=, mode="attended" | "unattended",
@@ -386,12 +399,12 @@ raises `LockBusy`, which carries the `LockReading` (the lock, its modification t
 looked at) for `lock_seen`, so the unattended run can exit `0` for it; a stale lock the run may not
 take (no `--force-lock`, or a legacy one unattended) raises `LockStale`. Both are `InboxError`s, so
 an attended run still exits `2`. An unattended `hold` cannot be given `force`. The "Still mine" check
-runs in `inbox_unattended_run`: `Held.still_mine()` before each item and before each move of an
-original. A run that finds the lock gone or another's stops at once, records the run-level error
+runs in `inbox_unattended_run` and in the attended `inbox._run`: `Held.still_mine()` before each
+item and before each move of an original. A run that finds the lock gone or another's stops at once, records the run-level error
 "the inbox lock is no longer this run's" (exit `1`), skips the purge and the scrape, still writes
 the record of what it placed, and never removes the other run's lock. An item already processed
-whose move was skipped stays in the inbox with its state entry (not held), so the next run finds
-its games "already in the library" and files it. The look at the lock before the items
+whose move was skipped stays in the inbox with its state entry (not held; the record says
+`waiting`), so the next run finds its games "already in the library" and files it. The look at the lock before the items
 (`inbox_lock.look`) takes nothing; the earlier look is rebuilt from `lock_seen` as a reading of the
 same lock, which is safe because a lock that changed has another modification time.
 
@@ -402,7 +415,9 @@ lock and exits as busy, costing one container start.
 
 - **One item at a time**, as today; each tool call within the item runs alone.
 - **CPU.** The compose service sets `cpus: "2"` (or fewer than the NAS's cores), so SMB and
-  Syncthing keep the rest. The run lowers its own priority with `os.nice(10)` and every tool
+  Syncthing keep the rest. Some Synology kernels have no CFS quota and Docker refuses the limit
+  ("NanoCPUs can not be set"); the fallback is to remove `cpus:` and rely on `chdman_threads`
+  and the `os.nice` below (or `cpuset: "0"`, which pins the container to one core). The run lowers its own priority with `os.nice(10)` and every tool
   inherits it. The standard library has no call for the I/O priority, and the I/O schedulers of
   NAS kernels vary, so none is set; if the share is slow while a conversion runs, a later change
   can start the tools under `ionice -c 3`.
@@ -474,14 +489,18 @@ path, host name, key or URL is written.
  "purged": ["2026-11-05"], "warnings": []}
 ```
 
-`outcome` of an item is `done`, `review` or `held`; of a game, the report's `placed`, `already`,
+`outcome` of an item is `done`, `review`, `held`, `waiting` or `gone`; of a game, the report's `placed`, `already`,
 `exists` (a different file with that name is in the library; counted in `already`) or `review`
 (its `path` is `null`). `held` is an item whose original could not be moved after its games were
 placed: `moved_to` is `null`, its games are `placed`, and its `reasons` say "could not move the
 original: ...". An attended run records it the same way and keeps sending it to review as today
-(the report says `REVIEW`, the exit code counts it). `counts.waiting` is the items left in the inbox
-untouched (an attended run's items still being copied; an unattended run's waiting ones), and
-those are not in `items`. `scrape.state` is `done`, `not-finished` (with the systems to give to `warpzone scrape
+(the report says `REVIEW`, the exit code counts it). `waiting` is an item whose original stays in
+the inbox without being a failure: it changed while it was processed (the state does not hold it
+and the next tick files it) or the lock was taken over. `gone` is an item whose original was no
+longer in the inbox when it was to be filed away: `moved_to` is `null`. Neither counts in
+`counts.review` or `counts.held`, and neither is news. `counts.waiting` is the items left in the
+inbox untouched (an attended run's items still being copied; an unattended run's waiting ones,
+without the held ones), and those are not in `items`, plus the items with the outcome `waiting`. `scrape.state` is `done`, `not-finished` (with the systems to give to `warpzone scrape
 --system`), `skipped` (`--no-scrape`, or no Skyscraper found) or absent when nothing scrapable was
 placed; a `scrape` that is not `done` also has a short `message`. `reasons` and `notes` are the
 report's text, with what the report already redacts (a zRIF, nsz's key lines) redacted the same
@@ -540,8 +559,8 @@ An "Inbox" view on the page, reached from the header, where a dot shows when the
 newer than the last one this browser opened (kept in `localStorage`). It shows the time of the last
 check and any error; the newest run's placed games, each linking to its game page, where the usual
 controls turn it on for a console; the whitelist lines as text; the items for review with their
-reasons and the place of the original (`inbox/_revisar/...`); the held and waiting items; and the
-older runs, opened one at a time through the second route. The view only reads.
+reasons and the place of the original (`inbox/_revisar/...`); the held and waiting items (the outcomes `waiting` and `gone` of the newest run are listed apart
+from the held ones); and the older runs, opened one at a time through the second route. The view only reads.
 
 ## Notifications
 
@@ -626,7 +645,8 @@ The codes:
   the library, and runs that meet only held items or an error already in the state.
 - `1`: news of the first two kinds, or a new error that is not about the configuration (the lock
   taken away, a failure outside an item).
-- `2`: a new configuration or run-level error (steps 1, 5 and 6, the lock of an older warpzone),
+- `2`: a new configuration or run-level error (steps 1, 5 and 6, the lock of an older warpzone or
+  one that cannot be read, a work folder that cannot be written),
   and every usage error of the command line (`--unattended` without `--apply`), which is checked
   before anything is read.
 
@@ -660,7 +680,8 @@ not `[ok]`. Implemented.
   or no space). Held items are not counted here again.
 - `[! ]` a lock held for more than six hours.
 - `[ok]` otherwise: "last check N min ago; last run <date>: placed X, for review Y" (from the
-  newest record; `review` there counts the items sent to review and the held ones). With no record
+  newest record; `review` there counts the items sent to review and the held ones; a count
+  that is not a whole number in a damaged record reads as 0). With no record
   yet, "no run has been recorded yet". A state file that cannot be parsed reads as an empty one and
   gets the "records no check" warning.
 
@@ -754,7 +775,7 @@ Unit tests, pure parts first, with no Docker, no scheduler and no real tools:
 - `render_state`/`parse_state` round trip; a damaged state is empty, a damaged entry is dropped;
   the changes apply in order, never mutate their input and give the same result when applied to
   another state; an error keeps its step and is cleared only by a run that got past it; `render_record` from
-  `ItemResult` values (placed, already, review, held), with no absolute path and the zRIF redacted;
+  `ItemResult` values (placed, already, review, held, waiting, gone), with no absolute path and the zRIF redacted;
   `select_records_purge` keeps 50.
 - `space_verdict` at the edges (and `MIN_FREE_GIB` is one value for doctor and the run); `memory_fs` on `mountinfo` samples (a volume, `tmpfs`, a nested
   mount); `stale_work_dirs` by age, never a link.
@@ -788,6 +809,13 @@ Flow tests with a temporary hub and stand-in tools, the clock injected (`Options
   10 minutes later. A lock without `beat`: a run-level error; over three ticks the exit codes are
   `2`, `0`, `0` and the webhook (a stand-in HTTP server) is sent once.
 - A held item over three ticks: `1`, `0`, `0`; touched and held again: `1`.
+- An item that changes while it is processed is recorded as `waiting` (not held, not review, not
+  news); one deleted while it is processed is `gone` with no news; an unexpected failure with a
+  temporary path in its message, a work folder that cannot be written and a lock that cannot be
+  read are each news once (`1` or `2`, then `0`), with the step in the state; `counts.waiting`
+  leaves out the held items.
+- An attended `--apply` whose lock is replaced by another run's, before an item and before a move:
+  it stops with an error, leaves the current original and starts no other.
 - A PS4 update newer than the library's is replaced in an unattended run as in an attended one,
   with the old package still in `_done` and the replaced version in the record.
 

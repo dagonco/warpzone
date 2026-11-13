@@ -577,6 +577,8 @@ class ItemResult:
     left: str = ""  # set when the item stays in the inbox untouched
     moved_to: str = ""
     unmoved: str = ""  # why the original could not be filed away (it is still in the inbox)
+    waits: bool = False  # `unmoved` is no failure: the original stays and is looked at again
+    gone: bool = False  # the original was no longer in the inbox when it was filed away
 
     @property
     def review(self) -> bool:

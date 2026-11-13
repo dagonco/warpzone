@@ -228,10 +228,51 @@ class TickTests(Ticks, Base):
         entry = self.state()["items"]["adventure.nes"]
         self.assertEqual(entry["attempts"], 0)  # it waits again
         self.assertTrue(any("changed while" in w for w in self.rep.warnings), self.rep.warnings)
+        (record,) = self.records()  # its games are placed; the item itself is not held
+        self.assertEqual(record["items"][0]["outcome"], "waiting")
+        self.assertEqual(record["counts"]["held"], 0)
+        self.assertEqual(record["counts"]["review"], 0)
+        self.assertEqual(record["counts"]["waiting"], 1)
+        self.assertIsNone(self.state()["items"]["adventure.nes"]["held"])
         self.assertEqual(self.tick(6), 0)  # not five minutes since it changed
         self.assertEqual(self.done(), [])
         self.tick(11)
         self.assertEqual(self.done(), ["adventure.nes"])
+
+    def test_an_item_that_is_gone_when_it_is_filed_away_is_gone_not_reviewed(self) -> None:
+        self.drop("mystery.nes", b"?")  # it would go to review
+        self.tick(0)
+        real = inbox.process_item
+
+        def process(*args: Any, **kw: Any) -> Any:
+            result = real(*args, **kw)
+            (self.inbox / "mystery.nes").unlink()  # the user deleted it meanwhile
+            return result
+
+        with mock.patch.object(inbox, "process_item", process):
+            self.assertEqual(self.tick(5), 0, self.out)  # not news
+        self.assertEqual(self.review(), [])
+        self.assertTrue(any("gone" in w for w in self.rep.warnings), self.rep.warnings)
+        self.assertEqual(self.state()["items"], {})
+        (record,) = self.records()
+        item = record["items"][0]
+        self.assertEqual((item["outcome"], item["moved_to"]), ("gone", None))
+        self.assertEqual((record["counts"]["review"], record["counts"]["held"]), (0, 0))
+
+    def test_unexpected_failures_with_a_temporary_path_are_news_once(self) -> None:
+        self.drop("adventure.nes", NES_ROM)
+        self.tick(0)
+        ticks = iter(range(100))
+
+        def process(ctx: Any, *args: Any, **kw: Any) -> Any:
+            raise RuntimeError(f"boom in {ctx.work}/part{next(ticks)}")
+
+        with mock.patch.object(inbox, "process_item", process):
+            self.assertEqual(self.tick(5), 1, self.out)
+            self.assertEqual(self.tick(6), 0, self.out)  # the same failure: not news again
+        error = self.state()["error"]
+        self.assertEqual((error["step"], error["count"]), (7, 2))
+        self.assertNotIn(str(self.tmp), error["message"])
 
     def test_a_run_that_dies_twice_on_an_item_holds_it_and_touching_it_clears_the_hold(
         self,
@@ -324,6 +365,15 @@ class TickTests(Ticks, Base):
             self.assertEqual(self.tick(20), 0)
             with broken:
                 self.assertEqual(self.tick(25), 1, self.out)
+
+    def test_held_items_are_not_counted_as_waiting_in_the_record(self) -> None:
+        self.drop("Game.cue", cue("Game.bin"))
+        self.drop("Game.bin", DATA1)
+        self.drop("adventure.nes", NES_ROM)
+        self.tick(0)
+        self.assertEqual(self.tick(5), 1, self.out)
+        (record,) = self.records()
+        self.assertEqual(record["counts"]["waiting"], 0)  # the two held ones are not waiting
 
     def test_loose_disc_files_are_held_and_named_in_the_webhook(self) -> None:
         self.drop("Game.cue", cue("Game.bin"))
@@ -475,6 +525,35 @@ class EmptyAndLayoutTests(Ticks, Base):
             self.assertEqual(self.tick(6), 2)  # another message: news again
             self.assertEqual(self.tick(7), 0)
         self.assertEqual(self.tick(8), 0, self.out)  # fine again: placed, error cleared
+        self.assertIsNone(self.state()["error"])
+        self.assertEqual(self.library(), ["nes/Adventure (USA).zip"])
+
+    def test_a_work_folder_that_cannot_be_written_is_an_error_kept_once(self) -> None:
+        self.drop("adventure.nes", NES_ROM)
+        self.tick(0)
+        denied = PermissionError(13, "Permission denied")
+        with mock.patch("warpzone.inbox_unattended_run.tempfile.mkdtemp", side_effect=denied):
+            self.assertEqual(self.tick(5), 2, self.out)
+            self.assertEqual(self.tick(6), 0, self.out)  # the same problem again: not news
+        error = self.state()["error"]
+        self.assertEqual((error["step"], error["count"]), (7, 2))
+        self.assertIn("Permission denied", error["message"])
+        self.assertFalse(self.lock_path().exists())
+        self.assertEqual(self.tick(7), 0, self.out)  # writable again: placed, error cleared
+        self.assertIsNone(self.state()["error"])
+        self.assertEqual(self.library(), ["nes/Adventure (USA).zip"])
+
+    def test_a_lock_that_cannot_be_read_is_an_error_kept_once(self) -> None:
+        self.drop("adventure.nes", NES_ROM)
+        self.tick(0)
+        self.lock_path().mkdir()  # something that cannot be read as a lock file
+        self.assertEqual(self.tick(5), 2, self.out)
+        self.assertEqual(self.tick(6), 0, self.out)  # the same problem again: not news
+        error = self.state()["error"]
+        self.assertEqual((error["step"], error["count"]), (3, 2))
+        self.assertIn("cannot read", error["message"])
+        self.lock_path().rmdir()
+        self.assertEqual(self.tick(7), 0, self.out)  # readable again: placed, error cleared
         self.assertIsNone(self.state()["error"])
         self.assertEqual(self.library(), ["nes/Adventure (USA).zip"])
 

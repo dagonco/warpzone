@@ -78,6 +78,7 @@ Add a service for it to `compose.yaml`, next to `warpzone`. It repeats the mount
     security_opt:
       - no-new-privileges:true
     mem_limit: 2g                   # more than the server: conversions and archives
+    cpus: "2"                       # leave the NAS's other cores to SMB and Syncthing; chdman_threads below matches it
     volumes:
       - /srv/games:/srv/games             # the hub root (an example path), read-write, same path as [hub] root
       - ./config:/config:ro
@@ -98,6 +99,7 @@ In the same `config.toml` the container reads (`/config/config.toml`):
 root = "/srv/games"                          # the hub root as mounted in the container (example path)
 dats_dir = "/dats/libretro-database/metadat"  # redump/ and no-intro/ inside
 work_dir = "/work/tmp"
+chdman_threads = 2                            # the service's cpus: chdman counts the host's cores, not the limit
 rahasher = "/usr/local/bin/RAHasher"          # optional
 titledb_dir = "/dats/titledb"                 # optional: Switch names (a clone of blawar/titledb)
 switch_keys = "/keys/prod.keys"               # Switch .nsp and .nsz: nsz reads it, warpzone only passes the path
@@ -113,7 +115,9 @@ docker compose run --rm warpzone-inbox inbox --apply
 docker compose run --rm warpzone-inbox doctor           # checks the image's tools and the mounts
 ```
 
-`docker compose run` starts a second container from the service for one command, so the server can keep running; the lock described below keeps two `--apply` runs from working on the inbox at once. To use the running server's container instead, mount the same `dats` and `work` folders in the `warpzone` service, raise its `mem_limit`, and run `docker compose exec warpzone warpzone inbox`.
+`docker compose run` starts a second container from the service for one command, so the server can keep running; the lock described below keeps two `--apply` runs from working on the inbox at once. The service has no `container_name` on purpose: with one, a second `docker compose run` while another is working would fail with "name already in use" instead of reaching the lock and exiting as busy.
+
+**If Docker refuses `cpus`.** Some Synology kernels have no CFS quota, and the container then does not start ("NanoCPUs can not be set"). Remove the `cpus:` line and rely on `chdman_threads` (which bounds chdman's threads and its memory) and on the lower CPU priority the unattended run sets for itself (`os.nice`), or pin the container to one core with `cpuset: "0"`. To use the running server's container instead, mount the same `dats` and `work` folders in the `warpzone` service, raise its `mem_limit`, and run `docker compose exec warpzone warpzone inbox`.
 
 `warpzone doctor` tells which way it is running by itself (inside a container it checks the image's tools and the mounted folders; elsewhere the tools on `PATH` or at the configured paths), so the same command is right in both places. See [the doctor guide](/warpzone/operation/doctor/).
 
@@ -141,7 +145,7 @@ Things to know:
 
 - **`work_dir` must be a folder on a mounted volume**, such as `/work/tmp` in the example, never the container's `/tmp`, which is memory; the run refuses a work folder on `tmpfs` and says so.
 - **It exits non-zero only for news**: an item sent to `_revisar/`, an item it holds, or a new problem. The task's email "when the script terminates abnormally" therefore arrives once per problem, not every 15 minutes. A problem that is still there is reported again only when it changes; fix it and the next run that gets past it clears it.
-- **A held item stays in `inbox/` and is not retried**: a run that died twice on it (the container was killed for memory: raise `mem_limit` or run `inbox` on a computer), an original that could not be moved after its games were placed, or a disc dropped as loose `.cue` and `.bin` files at the top of `inbox/` (put the sheet and its tracks in one folder; that is a new item). Changing, replacing or touching the item lifts the hold, and a manual `warpzone inbox --apply` processes it whatever the state says.
+- **A held item stays in `inbox/` and is not retried**: a run that died twice on it (the container was killed for memory: raise `mem_limit` or run `inbox` on a computer), an original that could not be moved after its games were placed, or a disc dropped as loose `.cue` and `.bin` files at the top of `inbox/` (put the sheet and its tracks in one folder; that is a new item). Changing, replacing or touching the item lifts the hold, and a manual `warpzone inbox --apply` processes it whatever the state says. An item that changes while it is being processed is not held: its games are placed, the original stays and waits again, and the run record says `waiting`. One you delete or move meanwhile is recorded as `gone`.
 - **Copying a large game over an unreliable link**: copy it into a folder whose name starts with `_` and move it into `inbox/` when the copy is done; a move within the share is instant.
 - **Not enough room**: an item waits when the hub's free space is below twice its size plus 20 GiB.
 - **A run by hand and the task never overlap**: the second finds the first's lock. A lock whose holder has been silent for 10 minutes is taken over by the task itself; one left by an older warpzone needs `--force-lock` by hand.
@@ -189,7 +193,7 @@ vita_zrif = "~/keys/PSV_GAMES.tsv"            # optional: zRIF keys for PS Vita 
 5. **Places** the result in `library/roms/<system>/` (copied to `<name>.part`, read back, then renamed). It never overwrites: the same content is reported as "already in the library", different content under the same name goes to review.
 6. **Files the original** in `inbox/_done/<date>/`, or in `inbox/_revisar/` with a `<item>.reason.txt` (no DAT match (unless you dropped the file in `_unverified/<system>/`), incomplete multi-disc, conversion or verify failed, RA hash changed, conflict, missing tool). On every `--apply`, `_done` folders named like a date and older than 7 days are deleted, nothing else.
 
-**One `--apply` at a time.** While it works, `--apply` holds a lock file, `inbox/.warpzone.lock`, with the host name, the process id and the start time of the run, and removes it when it ends (also after an error or Ctrl-C). A second `--apply` on the same hub, from this machine or another desktop that mounts the share, stops with exit code 2 and says who holds the lock and since when; a report without `--apply` never needs the lock. If a run was killed and left its lock behind, the lock counts as stale once it is older than 12 hours or when its process is gone from the machine that took it (a lock from another machine cannot be checked, so it only goes stale by age). A stale lock is never taken silently: the refusal says so, and `warpzone inbox --apply --force-lock` takes it over. A lock that is still live is never taken, with or without `--force-lock`.
+**One `--apply` at a time.** While it works, `--apply` holds a lock file, `inbox/.warpzone.lock`, with the host name, the process id and the start time of the run, and removes it when it ends (also after an error or Ctrl-C). A second `--apply` on the same hub, from this machine or another desktop that mounts the share, stops with exit code 2 and says who holds the lock and since when; a report without `--apply` never needs the lock. The lock carries a heartbeat: the run that holds it touches the file every minute, so a lock whose file has not been touched for 10 minutes belongs to a run that died or whose computer slept, and counts as stale ("no heartbeat since 10:15"); a lock whose process is gone from the machine that took it is stale too (a lock from another machine cannot be checked by process, only by the heartbeat). A lock of an older warpzone has no heartbeat and keeps the old rules: stale once it is older than 12 hours or when its process is gone. A stale lock is never taken silently by an attended run: the refusal says so, and `warpzone inbox --apply --force-lock` takes it over (the unattended task takes over a lock that has been silent for 10 minutes by itself, but never a lock of an older warpzone). A lock that is still live is never taken, with or without `--force-lock`. If another run takes your lock over while your run is working (the computer slept for more than 10 minutes), your run notices before the next item or the next move, stops with an error saying so, and leaves the current original in `inbox/`; run it again later.
 
 Items modified in the last 30 seconds are left alone (they may still be copying), and `_*` folders (except the `<system>` folders inside `_unverified`, see [Homebrew and other roms no DAT knows](#homebrew-and-other-roms-no-dat-knows)), hidden files, `@eaDir` and `.DS_Store` are never items. warpzone does not edit whitelists: add the printed lines to the device whitelists yourself ([Whitelists and pruning](/warpzone/setup/whitelists/)). Exit code 1 when any item needs review.
 

@@ -316,7 +316,7 @@ matches the local Syncthing, as for `prune`; the startup script always passes it
    Otherwise copy the file to the backups; then, right before writing, check again that the
    emulator is not running and that the file's size, modification time and sha256 are still
    those read in step 2 (if not, the file is skipped this run, logged); write
-   `.<name>.wz-tmp` in the same directory with the file's mode, `fsync` it, `os.replace` it
+   `.<name>.<pid>-<random>.wz-tmp` in the same directory (a name of its own for each write) with the file's mode, `fsync` it, `os.replace` it
    over the file and `fsync` the directory. A config file that is a symlink is written
    through to its target, and the link stays.
 4. System data files follow the same rules on the whole file, with hashes for values and

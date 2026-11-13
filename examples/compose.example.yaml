@@ -93,7 +93,9 @@ services:
   # and big data, which come from the NAS read-only and never go into the image, and Skyscraper's.
   warpzone-inbox:
     image: warpzone:local
-    container_name: warpzone-inbox
+    # No `container_name`: `docker compose run` would use it, and a second run while one is
+    # working (a long unattended tick, a run by hand) would fail with "name already in use"
+    # instead of reaching the lock and exiting as busy.
     profiles: ["inbox"]
     user: "1000:1000"                    # CHANGE: the same uid and gid as above
     # group_add:
