@@ -103,6 +103,12 @@ class ParseTests(unittest.TestCase):
         self.assertEqual(dat_system("Nintendo - Game Boy (20240101-123456).dat"), "gb")
         self.assertEqual(dat_system("Sega - Mega Drive - Genesis.dat"), "genesis")
         self.assertEqual(dat_system("Nintendo - Nintendo DS.dat"), "nds")
+        self.assertEqual(dat_system("Atari - 2600.dat"), "atari2600")
+        self.assertEqual(dat_system("Atari - 7800.dat"), "atari7800")
+        self.assertEqual(dat_system("Atari - Lynx.dat"), "atarilynx")
+        self.assertEqual(dat_system("Atari - Jaguar.dat"), "atarijaguar")
+        self.assertEqual(dat_system("Bandai - WonderSwan.dat"), "wonderswan")
+        self.assertEqual(dat_system("Bandai - WonderSwan Color.dat"), "wonderswancolor")
         self.assertIsNone(dat_system("Microsoft - Xbox.dat"))
         self.assertEqual(len(set(dat.SYSTEMS.values())), len(dat.SYSTEMS))
 

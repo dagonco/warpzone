@@ -67,21 +67,25 @@ The contract:
   PlayStation Portable `psp`, Saturn `saturn`, Dreamcast `dreamcast`, GameCube `gc`,
   NES `nes`, SNES `snes`, Nintendo 64 `n64`, Game Boy `gb`, Game Boy Color `gbc`, Game
   Boy Advance `gba`, Nintendo DS `nds`, Mega Drive / Genesis `genesis`, Master System `mastersystem`, Game
-  Gear `gamegear`); a trailing No-Intro date stamp is ignored. DATs are parsed only when
+  Gear `gamegear`, Atari 2600 `atari2600`, Atari 7800 `atari7800`, Atari Lynx
+  `atarilynx`, Atari Jaguar `atarijaguar`, WonderSwan `wonderswan`, WonderSwan Color
+  `wonderswancolor`); a trailing No-Intro date stamp is ignored. DATs are parsed only when
   a lookup needs them (the system the file extensions and sizes point at first, and the
   search stops once every file is explained) and each parsed DAT is cached as JSON in
   `$XDG_CACHE_HOME/warpzone/dats`, keyed by the DAT's size and modification time.
-- **NES dumps with another header.** A file that starts with the iNES magic `NES\x1a`
-  is also hashed without its first 16 bytes (`FileInfo.without_header`). In a NES DAT,
-  when the whole file matches nothing, `match_dat` looks that data up among the DAT's
-  headerless entries (No-Intro lists them as `.unh`, 16 bytes smaller than the headered
-  dump), and only a SHA1 equal to the DAT's counts. The same verified dump circulates with
+- **NES and Atari 7800 dumps with a header.** A file that starts with the iNES magic
+  `NES\x1a` is also hashed without its first 16 bytes, and one with `ATARI7800` at offset 1
+  (an A78 header) without its first 128 (`FileInfo.without_header`). In a NES or Atari
+  7800 DAT, when the whole file matches nothing, `match_dat` looks that data up among the
+  DAT's headerless entries (No-Intro lists NES ones as `.unh`, 16 bytes smaller than the
+  headered dump, and 7800 ones as `.bin`; `HEADERED_EXTENSIONS` in `warpzone/dat.py`), and
+  only a SHA1 equal to the DAT's counts. The same verified dump circulates with
   different headers (iNES against NES 2.0 fields, junk in the reserved bytes) and the
   data is what is verified. The game is filed under the DAT's game name as usual, and the
   file is kept as it is, header included: the match carries roms that describe the file
-  (its size, hashes and a `.nes` name), so the zip holds the original bytes and the
+  (its size, hashes and a `.nes` or `.a78` name), so the zip holds the original bytes and the
   size/CRC32 check after the copy compares those. A whole-file match always wins, two names
-  with the same data are ambiguous as before, and a file with no iNES magic or no
+  with the same data are ambiguous as before, and a file with no header or no
   headerless match goes to review as "no DAT match".
 - **Roms no DAT knows.** See [Roms no DAT knows](#roms-no-dat-knows) below; a file the user
   drops in `inbox/_unverified/<system>/` and no DAT identifies is filed as it is.

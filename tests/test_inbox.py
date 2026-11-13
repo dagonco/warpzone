@@ -864,6 +864,47 @@ class HeaderlessNesTests(Base):
         self.assertIn("no DAT match", self.out)
 
 
+class HeaderlessAtari7800Tests(Base):
+    BODY = b"maze runner data " * 400
+    HEADER = b"\x01" + b"ATARI7800".ljust(16) + b"Maze".ljust(32) + b"\x00" * 79  # fake
+
+    def setUp(self) -> None:
+        super().setUp()
+        write_dat(
+            self.dats / "no-intro",
+            "Atari - 7800",
+            [("Maze Runner (USA)", [rom("Maze Runner (USA).bin", self.BODY)])],
+        )
+        (self.hub / "library" / "roms" / "atari7800").mkdir()
+
+    def test_fingerprint_hashes_the_data_after_an_a78_header(self) -> None:
+        self.assertEqual(len(self.HEADER), 128)
+        path = self.tmp / "m.a78"
+        path.write_bytes(self.HEADER + self.BODY)
+        info = inbox.fingerprint(path, "m.a78")
+        want = (
+            len(self.BODY),
+            f"{zlib.crc32(self.BODY):08x}",
+            hashlib.sha1(self.BODY).hexdigest(),
+        )
+        self.assertEqual(info.without_header, want)
+
+    def test_an_a78_dump_is_filed_with_its_header(self) -> None:
+        mine = self.HEADER + self.BODY
+        self.drop("m.a78", mine)
+        self.assertEqual(self.go(tools=Tools()), 0)
+        self.assertEqual(self.library(), ["atari7800/Maze Runner (USA).zip"])
+        with zipfile.ZipFile(self.roms / "atari7800" / "Maze Runner (USA).zip") as z:
+            self.assertEqual(z.namelist(), ["Maze Runner (USA).a78"])
+            self.assertEqual(z.read("Maze Runner (USA).a78"), mine)
+
+    def test_other_data_behind_an_a78_header_goes_to_review(self) -> None:
+        self.drop("m.a78", self.HEADER + b"not the game " * 300)
+        self.go(tools=Tools())
+        self.assertEqual(self.library(), [])
+        self.assertIn("no DAT match", self.out)
+
+
 class CartridgeTests(Base):
     def test_zip_with_a_wrong_name_end_to_end_with_no_external_tools(self) -> None:
         self.zip_of(
@@ -967,6 +1008,33 @@ class CartridgeTests(Base):
         self.assertEqual(self.go(tools=Tools()), 0)
         self.assertEqual(self.library(), ["nds/Puzzle (Europe).zip"])
         self.assertIn("!/roms/nds/Puzzle (Europe).zip", self.out)
+
+    def test_atari_and_wonderswan_roms_are_placed_from_their_dats(self) -> None:
+        roms = {
+            "Atari - 2600": ("atari2600", "Paddle (Europe)", ".a26"),
+            "Atari - 7800": ("atari7800", "Maze (USA)", ".a78"),
+            "Atari - Lynx": ("atarilynx", "Handheld (World)", ".lnx"),
+            "Atari - Jaguar": ("atarijaguar", "Cube (World)", ".j64"),
+            "Bandai - WonderSwan": ("wonderswan", "Mono (Japan)", ".ws"),
+            "Bandai - WonderSwan Color": ("wonderswancolor", "Color (Japan)", ".wsc"),
+        }
+        for dat_name, (system, game, ext) in roms.items():
+            data = f"{system} rom".encode()
+            write_dat(self.dats / "no-intro", dat_name, [(game, [rom(game + ext, data)])])
+            (self.hub / "library" / "roms" / system).mkdir()
+            self.drop(f"dump{ext}", data)
+        self.assertEqual(self.go(tools=Tools()), 0)
+        self.assertEqual(
+            self.library(),
+            [
+                "atari2600/Paddle (Europe).zip",
+                "atari7800/Maze (USA).zip",
+                "atarijaguar/Cube (World).zip",
+                "atarilynx/Handheld (World).zip",
+                "wonderswan/Mono (Japan).zip",
+                "wonderswancolor/Color (Japan).zip",
+            ],
+        )
 
     def test_ambiguous_dat_match_is_reviewed(self) -> None:
         write_dat(

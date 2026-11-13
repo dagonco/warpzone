@@ -38,6 +38,12 @@ SYSTEMS: dict[str, str] = {
     "Sega - Mega Drive - Genesis": "genesis",
     "Sega - Master System - Mark III": "mastersystem",
     "Sega - Game Gear": "gamegear",
+    "Atari - 2600": "atari2600",
+    "Atari - 7800": "atari7800",
+    "Atari - Lynx": "atarilynx",
+    "Atari - Jaguar": "atarijaguar",
+    "Bandai - WonderSwan": "wonderswan",
+    "Bandai - WonderSwan Color": "wonderswancolor",
 }
 DISC_SYSTEMS = ("psx", "ps2", "saturn", "dreamcast")  # CHD, from cue/bin, gdi or iso
 FILE_SYSTEMS = ("psp", "gc")  # one image file, kept as it is
@@ -60,6 +66,20 @@ EXTENSION_HINTS: dict[str, str] = {
     ".smd": "genesis",
     ".sms": "mastersystem",
     ".gg": "gamegear",
+    ".a26": "atari2600",
+    ".a78": "atari7800",
+    ".lnx": "atarilynx",
+    ".j64": "atarijaguar",
+    ".jag": "atarijaguar",
+    ".ws": "wonderswan",
+    ".wsc": "wonderswancolor",
+}
+
+# Systems whose dumps carry a dumper's header the DAT leaves out: the extension of the DAT's
+# headerless entries and the one the headered file keeps in the library.
+HEADERED_EXTENSIONS: dict[str, tuple[str, str]] = {
+    "nes": (".unh", ".nes"),
+    "atari7800": (".bin", ".a78"),
 }
 
 CACHE_VERSION = 2
@@ -380,10 +400,10 @@ def match_dat(dat: Dat, files: Sequence[FileInfo]) -> Identified:
     wins; two different names with exactly the same files cannot be told apart, so
     they are returned as `ambiguous` and nothing is chosen for those files.
 
-    In a NES DAT, an iNES file nothing matched whole is tried again without its 16-byte
-    header (see `_match_headerless`)."""
+    In a NES or Atari 7800 DAT, a file with a dumper's header (iNES, A78) that nothing
+    matched whole is tried again without it (see `_match_headerless`)."""
     found, blocked = _resolve(dat, files)
-    if dat.system != "nes":
+    if dat.system not in HEADERED_EXTENSIONS:
         return found
     used = {f.path for m in found.matches for f in m.files} | blocked
     left = [f for f in files if f.without_header is not None and f.path not in used]
@@ -394,15 +414,16 @@ def match_dat(dat: Dat, files: Sequence[FileInfo]) -> Identified:
 
 
 def _match_headerless(dat: Dat, files: Sequence[FileInfo]) -> Identified:
-    """Match iNES files by the data after the header against the DAT's headerless entries
-    (No-Intro lists them as `.unh`, 16 bytes smaller than the headered dump). The headers of
+    """Match headered files by the data after the header against the DAT's headerless
+    entries (No-Intro lists NES ones as `.unh`, 16 bytes smaller than the iNES dump, and
+    Atari 7800 ones as `.bin`, 128 bytes smaller than the A78 dump). The headers of
     the same verified dump differ between dumpers (iNES against NES 2.0 fields, junk in the
     reserved bytes), the data does not. Only a SHA-1 equal to the DAT's counts, so a CRC32
     collision cannot place a wrong game.
 
     The match describes the file as it is: the DAT roms are replaced by roms with the size,
-    hashes and `.nes` name of the file, so the library keeps the file with its own header and
-    everything downstream checks the bytes that are placed."""
+    hashes and `.nes` or `.a78` name of the file, so the library keeps the file with its own
+    header and everything downstream checks the bytes that are placed."""
     real = {f.path: f for f in files}
     views = [FileInfo(f.path, *f.without_header) for f in files if f.without_header is not None]
     found, _ = _resolve(dat, views)
@@ -412,17 +433,18 @@ def _match_headerless(dat: Dat, files: Sequence[FileInfo]) -> Identified:
             continue
         whole = tuple(real[v.path] for v in m.files)
         roms = tuple(
-            Rom(_headered_name(r.name), f.size, f.crc, f.sha1)
+            Rom(_headered_name(r.name, dat.system), f.size, f.crc, f.sha1)
             for r, f in zip(m.game.roms, whole, strict=True)
         )
         chosen.append(GameMatch(m.system, replace(m.game, roms=roms), whole))
     return Identified(tuple(chosen), found.ambiguous)
 
 
-def _headered_name(name: str) -> str:
+def _headered_name(name: str, system: str) -> str:
     """The name of a headerless rom with the extension of a headered one."""
     stem, ext = os.path.splitext(name)
-    return stem + ".nes" if ext.lower() == ".unh" else name
+    headerless, headered = HEADERED_EXTENSIONS[system]
+    return stem + headered if ext.lower() == headerless else name
 
 
 # ------------------------------------------------------------------ naming and discs
