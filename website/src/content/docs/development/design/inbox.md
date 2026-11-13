@@ -11,10 +11,14 @@ runs in one of two places, with the same code and the same contract:
   paths; `--root` is the mount point on that computer.
 - **In the hub container** (`docker/Dockerfile`, see
   [the container](/warpzone/development/design/library-ui/#the-container)). The tools are the
-  image's: RAHasher at `/usr/local/bin/RAHasher` (used only when `[inbox] rahasher` is set,
-  as everywhere) and, when the image gains them, others on its `PATH`. The hub root is
-  mounted at the same path as `[hub] root`, so `--root` is that path; the DATs and a work
-  folder are volumes (the container's `/tmp` is memory, and `HOME`, so the DAT cache, is
+  image's: `chdman`, `bsdtar`, `dolphin-tool`, `nsz` and `orbis-pkg-util` on its `PATH`, and
+  RAHasher at `/usr/local/bin/RAHasher` (used only when `[inbox] rahasher` is set, as
+  everywhere). Vita3K is the one tool the image lacks (see
+  [PS Vita packages in the container](#ps-vita-packages-in-the-container)). The hub root is
+  mounted at the same path as `[hub] root`, so `--root` is that path. The DATs, the keys
+  (`switch_keys`, `vita_zrif`), `titledb_dir`, the arcade DATs and a work folder are
+  volumes: keys and big data are never part of the image, and `inbox` reads them where
+  `[inbox]` says (the container's `/tmp` is memory, and `HOME`, so the DAT cache, is
   there too unless `XDG_CACHE_HOME` is moved). Nothing in `inbox` tells the two apart; only
   `warpzone doctor` does, to check the right things (see
   [Doctor](/warpzone/development/design/doctor/)).
@@ -311,9 +315,16 @@ blawar/titledb and filed under the library's existing conventions. The code is i
   not start right after the NCA header) falls back to the size of the `.nsz`, a lower bound
   (the `.nsp` is never smaller), and the review says so. `nsz` exits 0 on some damaged
   inputs, so the output is accepted only if `nsz` exited 0 and printed `[DONE]`, its PFS0
-  header parses (magic, entry table, member bounds), and `nsz -V` exits 0 and prints
-  `[VERIFIED]`. Anything else is a review and the partial output is deleted with the work
-  folder. Only the `.nsp` reaches the library. `.xci` and `.xcz` are reviewed with the
+  header parses (magic, entry table, member bounds), and `nsz -V` passes
+  `inbox_switch.judge_nsz_verify(exit code, output)`, a pure function that returns
+  (accepted, note). It accepts when `nsz` exits 0, prints no `CORRUPTED`, `MISMATCH`,
+  `Traceback` or error line, and reports at least one NCA, each of them `[VERIFIED]` or
+  `[TICKETLESS]`. `nsz` does not hash-check the NCAs of a ticketless dump and prints
+  `[TICKETLESS]` for them (`[NSP SHA256]` lines only appear when it compares against an
+  original file, so they count for nothing). All `[VERIFIED]` is accepted with no note; any
+  `[TICKETLESS]` (alone or mixed with `[VERIFIED]`) is accepted with the note
+  `not hash-checked by nsz: ticketless dump` in the item's report. Anything else is a review
+  and the partial output is deleted with the work folder. Only the `.nsp` reaches the library. `.xci` and `.xcz` are reviewed with the
   reason that no tool converts them cleanly.
 - **Never overwrites.** The library is indexed once per run by `[TitleID][vN]` in file
   names (`roms/switch`, `extras/switch/updates`, `extras/switch/dlc`). The same TitleID and
@@ -553,6 +564,14 @@ lists only the `.desktop` files of `roms/ps4/shortcuts`, whose command on the co
   and [the EmuDeck guide](/warpzone/guides/emudeck/#shadps4-install-directory).
 - **Catalog.** `games/<CUSAxxxxx>-UPDATE/` and `dlc/<CUSAxxxxx>/` are parts of the game
   `<CUSAxxxxx>`, not games of their own (see [the library UI](/warpzone/development/design/library-ui/)).
+- **In the container.** `orbis-pkg-util` is in the hub image, at `/usr/local/bin/orbis-pkg-util`.
+  It is a Rust program, MIT or Apache-2.0, published on crates.io (the project is
+  `videobitva/orbis`; it has no release binaries and no versioned tag, only the crate). The
+  image builds the published crate in its own stage: the download must have the SHA-256 the
+  Dockerfile pins, and `cargo build --release --locked` uses the `Cargo.lock` packaged in the
+  crate, which pins every dependency with its checksum. Only the binary reaches the last stage.
+  The program has no `--version` option, so `doctor` only looks for it (as on a computer) and
+  the image check runs `--help`.
 
 ## PS Vita games
 
@@ -739,6 +758,32 @@ packages or keys.
 - **Report mode.** Nothing runs. Everything the report needs is known from the header, the
   `param.sfo` and the zRIF, so it prints the three whitelist lines and the command it would
   run (`would install it with Vita3K: Vita3K --pkg <file> --zrif ***`).
+
+### PS Vita packages in the container
+
+Vita3K is not in the hub image, so in the container a PS Vita `.pkg` goes to review with the
+reason "missing tool" and `doctor` lists Vita3K as optional and not found. This is a known gap,
+and `inbox` for those packages runs on a computer with Vita3K. What was looked at, on
+2026-11-13:
+
+- **Vita3K itself.** GPL-2.0. It has one release, the rolling `continuous` one, whose files are
+  named `*-latest` and replaced on every build, so no download can be pinned by hash for long, and
+  there is no versioned tag to build from. Its `--pkg` mode opens no window, but the program is
+  one executable whose source includes the Qt 6 main window and initialises SDL 3 (`vita3k/main.cpp`),
+  so a binary needs those libraries in the image, and a build from a pinned commit needs them
+  and about 28 submodules. Neither is a sound, pinned and small option, so neither is in the
+  image.
+- **`pkg2zip`** (mmozeiko/pkg2zip). Unlicense, a small C program with no dependencies, tagged
+  (v1.8, commit 086284d), and it takes a zRIF on the command line (`pkg2zip -x <pkg> <zRIF>`). But
+  the repository is archived (last change in 2024), and its output is made for a real Vita
+  (VitaShell and NoNpDrm: a `work.bin` licence in the game folder), not the layout Vita3K's own
+  installer writes and `judge_installed` checks (`ux0/license/<TITLEID>/<CONTENT_ID>.rif`). Using
+  it needs a second install path in `inbox_vita_pkg` (what it writes, where the licence goes, how
+  the result is judged) that can only be checked against real packages, which is work of its
+  own and not part of the image. If it is done, the Dockerfile gains one small build stage like
+  the `orbis-pkg-util` one.
+- **Anything else.** No other command line tool that installs a package in Vita3K's layout was
+  found.
 
 ## Arcade sets
 

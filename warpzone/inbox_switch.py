@@ -620,10 +620,30 @@ def decompressed_size(source: Path) -> tuple[int, str | None]:
         return size, f"the headers could not be read to get the exact size: {exc}"
 
 
-def decompress(env: SwitchEnv, source: Path, scratch: Path) -> Path:
+TICKETLESS_NOTE = "not hash-checked by nsz: ticketless dump"
+_NSZ_NCA_RESULT = re.compile(r"^\[(VERIFIED|TICKETLESS)\]", re.MULTILINE)
+_NSZ_BAD = re.compile(r"CORRUPTED|MISMATCH|Traceback|^\[?error\b", re.IGNORECASE | re.MULTILINE)
+
+
+def judge_nsz_verify(code: int, text: str) -> tuple[bool, str | None]:
+    """(accepted, note) for the exit code and output of `nsz -V` on a decompressed NSP.
+    Accepted when nsz exited 0, printed no `CORRUPTED`, `MISMATCH` or error line, and reported
+    at least one NCA, every one of them `[VERIFIED]` or `[TICKETLESS]`. nsz skips the hash of
+    an NCA of a ticketless dump and prints `[TICKETLESS]` for it; any such NCA gives the note
+    that the file was not hash-checked. All `[VERIFIED]` is accepted with no note."""
+    if code != 0 or _NSZ_BAD.search(text):
+        return False, None
+    results = _NSZ_NCA_RESULT.findall(text)
+    if not results:
+        return False, None
+    return True, (TICKETLESS_NOTE if "TICKETLESS" in results else None)
+
+
+def decompress(env: SwitchEnv, source: Path, scratch: Path, notes: list[str]) -> Path:
     """`nsz -D` into `scratch`, then proof that the result is sound: nsz exited cleanly and
-    reported DONE, the PFS0 header parses, and `nsz -V` verifies every NCA hash. (nsz exits 0
-    on some corrupted inputs, which is why it is checked a second time.)"""
+    reported DONE, the PFS0 header parses, and `nsz -V` verifies every NCA hash
+    (`judge_nsz_verify`; a ticketless dump is accepted with a note appended to `notes`). (nsz
+    exits 0 on some corrupted inputs, which is why it is checked a second time.)"""
     assert env.nsz and env.keys
     out = scratch / "dec"
     out.mkdir(parents=True, exist_ok=True)
@@ -643,8 +663,11 @@ def decompress(env: SwitchEnv, source: Path, scratch: Path) -> Path:
     except SwitchError as exc:
         raise SwitchError(f"decompressed {source.name} is not a valid NSP ({exc})") from exc
     code, text = run_nsz([env.nsz, "-V", "--keys", str(env.keys), str(nsp)], env.timeout)
-    if code != 0 or "[VERIFIED]" not in text:
+    accepted, note = judge_nsz_verify(code, text)
+    if not accepted:
         raise SwitchError(f"decompressed {source.name} failed nsz verification ({_tail(text)})")
+    if note:
+        notes.append(note)
     return nsp
 
 
@@ -788,7 +811,7 @@ def _process(
         if out.outcome == "exists":
             out.notes.append("already in the library (content is compared with --apply)")
         return
-    source = decompress(env, path, scratch) if ext == ".nsz" else path
+    source = decompress(env, path, scratch, out.notes) if ext == ".nsz" else path
     if ext == ".nsp":
         check_pfs0_file(source)
     existing = dest if dest.exists() else known[0] if known else None

@@ -16,10 +16,16 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 - `warpzone inbox` keeps the LibCrypt `.sbi` of a PAL PlayStation disc: the game goes in a `<game>.m3u/` folder with the CHD and `<game>.sbi`, which DuckStation and Beetle PSX need to pass the protection. Until now the CHD was placed alone and the `.sbi` went to review.
 - `warpzone inbox` places Nintendo DS games: a `.nds` rom (loose or in an archive) that matches the No-Intro `Nintendo - Nintendo DS` DAT is filed as `roms/nds/<game>.zip`. Until now it went to review as "no DAT match".
 
+- The hub image ships `dolphin-tool`, `nsz` and `orbis-pkg-util`, so `warpzone inbox` can read `.gcz` GameCube images, take in Switch `.nsp` and `.nsz` games and unpack PS4 `.pkg` games in the container with nothing installed on the NAS. `dolphin-tool` (GPL-2.0-or-later) is compiled from Dolphin's source at a pinned commit, `nsz` is installed with every package pinned by SHA-256 in a virtual environment of its own, and `orbis-pkg-util` is built from its pinned crate; keys, titledb and the DATs stay on the NAS and are mounted read-only (`examples/compose.example.yaml` has a `warpzone-inbox` service that shows the mounts and the `[inbox]` keys). Only Vita3K is still missing, so PS Vita `.pkg` games need `inbox` on a computer. The image build takes much longer because it compiles Dolphin's core; rebuild the image to get the tools. See [The hub container](https://dagonco.github.io/warpzone/setup/hub-container/) and [Where inbox runs](https://dagonco.github.io/warpzone/setup/inbox/#where-inbox-runs).
+
 ### Changed
 
 - `warpzone inbox` checks the free space for a `.nsz` against the exact size of the `.nsp` that decompressing it produces, read from the file's headers, instead of the size of the `.nsz` plus 5%. The `.nsp` of a compressed game is usually much bigger than the `.nsz`, so a work folder too small for it is now caught before `nsz` starts, not when the disk fills up.
 - The updater's idle tick is faster on a console with many processes: looking for the menu no longer starts a program per process, which took about 1.4 s on a Steam Deck with ~430 processes and now takes about 40 ms.
+
+### Fixed
+
+- `warpzone inbox` places a `.nsz` of a ticketless dump: `nsz -V` skips the hash check of such a file and prints `[TICKETLESS]` where it prints `[VERIFIED]`, which sent a valid game to review as "failed nsz verification". It is now placed, and the report says it was not hash-checked by nsz.
 
 ### Security
 
