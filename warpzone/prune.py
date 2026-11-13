@@ -16,9 +16,6 @@ import json
 import os
 import re
 import time
-import urllib.error
-import urllib.parse
-import urllib.request
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -28,13 +25,14 @@ from typing import Any
 from warpzone.config import DEFAULT_MAX_GIB, DEFAULT_RESCAN_TIMEOUT, Config
 from warpzone.errors import UsageError, WarpzoneError
 from warpzone.model import FolderSpec, device_specs
+from warpzone.notify import NotifyError, notify
 from warpzone.paths import expand_home
 from warpzone.probes import REAL_PROBES, DeviceProbes
 from warpzone.profiles import Profile
 from warpzone.provision_folders import in_sync
 from warpzone.report import Reporter
 from warpzone.safefile import write_file
-from warpzone.syncthing import Client, SyncthingError, scrub
+from warpzone.syncthing import Client, SyncthingError
 
 GIB = 1024**3
 # The hub's modification time is restored on the device when a file is pulled; FAT
@@ -504,25 +502,6 @@ def print_report(
         )
 
 
-def notify(url: str, payload: dict[str, Any], *, timeout: float = 10.0) -> None:
-    """POST a JSON summary. The URL may embed a secret (webhook id): it is never echoed."""
-    req = urllib.request.Request(
-        url,
-        data=json.dumps(payload).encode(),
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            resp.read()
-    except urllib.error.HTTPError as exc:
-        exc.close()
-        raise PruneError(f"notification rejected: HTTP {exc.code}") from None
-    except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
-        reason = scrub(str(getattr(exc, "reason", exc)), (url, urllib.parse.urlsplit(url).path))
-        raise PruneError(f"notification failed: {reason}") from None
-
-
 def record_guard_refusal(
     state_base: Path, refused: Mapping[str, tuple[int, int]], when: float
 ) -> None:
@@ -713,6 +692,6 @@ def prune_device(
             }
             try:
                 notify(notify_url, payload)
-            except PruneError as exc:
+            except NotifyError as exc:
                 rep.warn(str(exc))
     return problems

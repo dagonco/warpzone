@@ -4,9 +4,11 @@ title: "Unattended inbox"
 
 **Status: partly implemented.** The pure decisions are in the code (`inbox_unattended.py`: the
 fingerprint, readiness, the state file and the changes made to it, space, news and the exit code),
-and so is `[inbox] chdman_threads` (see [Resource limits](#resource-limits)); the rest (the I/O
-layer, the lock heartbeat, the run records, the webhook, `--unattended` in `inbox`, the UI and
-doctor) is design, not implemented. This page is the contract for running
+and so is `[inbox] chdman_threads` (see [Resource limits](#resource-limits)). The run records
+(written by every attended `--apply`, with their purge to 50) and the webhook (`inbox --notify-url`,
+sent by an attended run when some item went to review, and `notify.py` shared with `prune`) are
+implemented too; the rest (the state file and walk I/O, the lock heartbeat, `--unattended` in
+`inbox`, the UI and doctor) is design, not implemented. This page is the contract for running
 `warpzone inbox --apply` on the hub by itself, from a scheduled task, with nobody watching. The
 pages it touches when it is implemented ([Inbox](/warpzone/development/design/inbox/),
 [Configuration and command line](/warpzone/development/design/configuration/),
@@ -432,12 +434,25 @@ path, host name, key or URL is written.
  "purged": ["2026-11-05"], "warnings": []}
 ```
 
-`outcome` of an item is `done`, `review` or `held`; of a game, the report's `placed`, `already`
-or `review`. `scrape.state` is `done`, `not-finished` (with the systems to give to `warpzone scrape
+`outcome` of an item is `done`, `review` or `held`; of a game, the report's `placed`, `already`,
+`exists` (a different file with that name is in the library; counted in `already`) or `review`
+(its `path` is `null`). `held` is an item whose original could not be moved after its games were
+placed: `moved_to` is `null`, its games are `placed`, and its `reasons` say "could not move the
+original: ...". An attended run records it the same way and keeps sending it to review as today
+(the report says `REVIEW`, the exit code counts it). `counts.waiting` is the items left in the inbox
+untouched (an attended run's items still being copied; an unattended run's waiting ones), and
+those are not in `items`. `scrape.state` is `done`, `not-finished` (with the systems to give to `warpzone scrape
 --system`), `skipped` (`--no-scrape`, or no Skyscraper found) or absent when nothing scrapable was
-placed. `reasons` and `notes` are the report's text, with what the report already redacts (a
-zRIF, nsz's key lines) redacted the same way. `render_record` is pure and is built from the same
-`ItemResult` values the printed report comes from, so the two never disagree.
+placed; a `scrape` that is not `done` also has a short `message`. `reasons` and `notes` are the
+report's text, with what the report already redacts (a zRIF, nsz's key lines) redacted the same
+way, and every text of the record goes once more through `clean_text` (pure): each known secret
+(`RA_API_KEY`, the webhook URL) and any base64 token of 128 characters or more is replaced by
+`***`, the hub root is cut off the paths under it, and any other absolute path becomes `<path>`.
+`build_record` is pure and is built from the same `ItemResult` values the printed report comes
+from, so the two never disagree; `render_record` writes its JSON. The id is chosen where the file
+is written (`inbox_unattended_io.write_record`), which tries `-2`, `-3` when a record of that
+second exists, and then the older records are deleted. A record that cannot be written is a warning
+and never changes the run.
 
 ### API
 
@@ -490,11 +505,18 @@ state is not sent again, so a broken config does not post every 15 minutes):
  "games": ["psx/Example Game (Europe).chd"], "review_items": ["some dump.7z"], "error": null}
 ```
 
-The lists hold at most 20 names. It is the prune webhook's code (`prune.notify`, moved to
-`notify.py` and shared): meant for a Home Assistant webhook, the URL never printed, a failure a
-warning and never a failure of the run, no API key or path outside the hub in the payload. The
-payload is built by `notify_payload` and the decision to send by `should_notify` (placed games
-or `news`), both pure. An empty, busy or waiting-only run sends nothing.
+The lists hold at most 20 names (`games` the placed games, `review_items` the items for review or
+held). It is the prune webhook's code (`prune.notify`, moved to `notify.py` and shared): meant for
+a Home Assistant webhook, the URL never printed, a failure a warning and never a failure of the
+run, no API key or path outside the hub in the payload. The payload is built by `notify_payload`
+from the record and the decision to send by `should_notify` (placed games or `news` for an
+unattended run), both pure. An empty, busy or waiting-only run sends nothing.
+
+Decided by the maintainer on 2026-11-13: an attended `--apply` sends the webhook **only when some
+item went to review** (an item in `_revisar/`, or one whose original stayed in the inbox, which an
+attended run still calls review), not for placed games alone; and an error raised before the run
+starts (the config, the layout, the DATs) sends nothing, since no record exists for it. The
+unattended rule above is unchanged.
 
 ## Secrets and data
 
@@ -510,7 +532,10 @@ or `news`), both pure. An empty, busy or waiting-only run sends nothing.
   a clone of titledb (`titledb_dir`) and the arcade databases (`mame_dat`, `fbneo_dat`,
   `mame2003plus_dat`). The parsed caches go to `XDG_CACHE_HOME`, set to a folder of the work
   volume. warpzone never downloads them; updating them is a `git pull` by the user.
-- **The webhook URL** is on the task's command line, which only the NAS's administrators see.
+- **The webhook URL** is on the task's command line, which only the NAS's administrators see. It
+  is never printed, logged or written to a record or a payload (`Options.notify_url` is kept out
+  of the options' `repr`, and `clean_text` redacts it from every text of a record), and an error of
+  the send names the status, not the address.
 - **Skyscraper's folder.** The `skyscraper` folder next to `compose.yaml`, read-write at
   `/skyscraper` (see [Scraping in the container](/warpzone/setup/hub-container/#scraping-in-the-container)):
   its `config.ini` may hold the ScreenScraper password, which warpzone never reads, prints or
@@ -617,19 +642,22 @@ pass it); nothing implies it.
 - `inbox_unattended.py` (pure). Implemented: `fingerprint` and `observe`, `decide`,
   `loose_sheets`, `render_state` and `parse_state`, the state changes (`update` and the `with_*`
   functions), `heartbeat_due`, `space_verdict`, `memory_fs`, `stale_work_dirs`, `news` and
-  `exit_code`. Still to come: `render_record`, `select_records_purge`, `notify_payload`,
-  `should_notify`.
-- `inbox_unattended_io.py`: the walk with `stat`, the state and record writes through `safefile`,
-  the work folder cleanup, `os.nice`, the free space.
+  `exit_code`, and for the record and the webhook `record_id`, `clean_text`, `build_record`,
+  `render_record`, `select_records_purge`, `notify_payload` and `should_notify`.
+- `inbox_unattended_io.py`: the record writes (`write_record`, `purge_records`; implemented,
+  through `safefile.atomic_write` so a name is never replaced). Still to come: the walk with
+  `stat`, the state write, the work folder cleanup, `os.nice`, the free space.
 - `inbox_lock.py`: `beat` and `mode`, the `Heartbeat` thread, `judge` over two readings,
   `still_mine`.
-- `notify.py`: the webhook POST, moved from `prune.py`.
+- `notify.py`: the webhook POST, moved from `prune.py` (implemented; `NotifyError`).
 - `library_api.inbox_response` (pure) and the two routes in `serve`; `doctor.judge_unattended_inbox`
   (pure).
 - `inbox.py`: `--unattended` in `run_inbox` (the early exit, the readiness, the per-item checks,
   the record, the exit code from `news`), `Options.unattended`, `chdman_threads`; the scrape after
-  the catalog update is `inbox_scrape.after_apply` as in an attended run, and its result is the
-  record's `scrape` note, an input of `render_record` and not of `news`.
+  the catalog update is `inbox_scrape.after_apply` as in an attended run, and its result (a
+  `ScrapeNote`, implemented) is the record's `scrape` note, an input of `build_record` and not of
+  `news`. Implemented: the attended run's record and webhook (`_record_run`, `Options.notify_url`,
+  `ItemResult.unmoved`).
 
 The modules are added to the [code layout](/warpzone/development/design/code-and-testing/#code-layout).
 

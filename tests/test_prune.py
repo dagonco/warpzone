@@ -1,13 +1,12 @@
 import json
 import os
 import tempfile
-import threading
 import unittest
-from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from typing import Any
 from unittest import mock
 
+from notify_support import Receiver
 from support import (
     API_KEY,
     DECK_ID,
@@ -19,6 +18,7 @@ from support import (
 from test_cli import run, write_config
 from warpzone.config import parse_config
 from warpzone.errors import UsageError
+from warpzone.notify import NotifyError, notify
 from warpzone.probes import DeviceProbes
 from warpzone.profiles import load_profile
 from warpzone.prune import (
@@ -31,7 +31,6 @@ from warpzone.prune import (
     guard,
     guard_state_path,
     is_generated,
-    notify,
     parse_guard_state,
     parse_time,
     prune_device,
@@ -866,39 +865,6 @@ class RescanTests(unittest.TestCase):
             )
 
 
-class Receiver:
-    """A one-shot webhook receiver."""
-
-    def __init__(self, status: int = 200) -> None:
-        self.bodies: list[Any] = []
-        outer = self
-
-        class Handler(BaseHTTPRequestHandler):
-            def log_message(self, *args: object) -> None:
-                pass
-
-            def do_POST(self) -> None:
-                length = int(self.headers.get("Content-Length") or 0)
-                outer.bodies.append(json.loads(self.rfile.read(length)))
-                self.send_response(status)
-                self.send_header("Content-Length", "0")
-                self.end_headers()
-
-        self.server = HTTPServer(("127.0.0.1", 0), Handler)
-        self.url = f"http://127.0.0.1:{self.server.server_address[1]}/api/webhook/secret-id"
-        self.thread = threading.Thread(
-            target=self.server.serve_forever, kwargs={"poll_interval": 0.02}, daemon=True
-        )
-
-    def __enter__(self) -> "Receiver":
-        self.thread.start()
-        return self
-
-    def __exit__(self, *exc: object) -> None:
-        self.server.shutdown()
-        self.server.server_close()
-
-
 class NotifyTests(unittest.TestCase):
     def test_posts_the_summary_for_the_report_and_for_the_apply(self) -> None:
         d = Device(self)
@@ -940,7 +906,7 @@ class NotifyTests(unittest.TestCase):
             self.assertEqual(d.prune(notify_url=hook.url, apply=True), 0)
         self.assertIn("HTTP 500", d.warnings[0])
         self.assertNotIn("secret-id", " ".join(d.warnings + d.lines))
-        with self.assertRaises(PruneError) as ctx:
+        with self.assertRaises(NotifyError) as ctx:
             notify("http://127.0.0.1:1/api/webhook/secret-id", {})
         self.assertNotIn("secret-id", str(ctx.exception))
 

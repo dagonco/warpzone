@@ -274,6 +274,12 @@ def _build_parser() -> argparse.ArgumentParser:
         "process that is gone from this machine); a live lock is never taken",
     )
     inb.add_argument(
+        "--notify-url",
+        type=_webhook_url,
+        help="with --apply, POST a JSON summary (the counts, the games placed and the items "
+        "for review) to this URL when some item went to review",
+    )
+    inb.add_argument(
         "--no-scrape",
         action="store_true",
         help="with --apply, do not scrape the games it placed (default: scrape them when "
@@ -773,6 +779,7 @@ def _inbox(args: argparse.Namespace, rep: Reporter) -> int:
         apply=args.apply,
         force_lock=args.force_lock,
         no_scrape=args.no_scrape,
+        notify_url=args.notify_url,
         work_dir=work,
         cache_dir=inbox.default_cache_dir(),
         ra_key=os.environ.get(ra.KEY_ENV) or None,

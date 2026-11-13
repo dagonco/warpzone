@@ -280,6 +280,7 @@ class Options:
     ra_fetch: ra.Fetch | None = None
     no_scrape: bool = False  # `--no-scrape`: do not scrape what `--apply` placed
     scrape_cache_dir: Path | None = None  # the scrape's not-found memory; the default when None
+    notify_url: str | None = field(default=None, repr=False)  # webhook; may hold a secret
     skyscraper_config: Path | None = None  # Skyscraper's config.ini (a presence check only)
     settings: InboxSettings = field(default_factory=InboxSettings)  # read by kind handlers
     now: Callable[[], float] = time.time
@@ -552,6 +553,17 @@ class UnitResult:
         return self.lines or ([self.whitelist] if self.whitelist else [])
 
 
+@dataclass(frozen=True)
+class ScrapeNote:
+    """How the scrape at the end of an `--apply` went, for the run record: `state` is `done`,
+    `not-finished` (the `systems` to give to `warpzone scrape --system`) or `skipped`
+    (`--no-scrape`, or no Skyscraper found); `message` is one short line."""
+
+    state: str
+    systems: tuple[str, ...] = ()
+    message: str = ""
+
+
 @dataclass
 class ItemResult:
     name: str
@@ -560,6 +572,7 @@ class ItemResult:
     notes: list[str] = field(default_factory=list)
     left: str = ""  # set when the item stays in the inbox untouched
     moved_to: str = ""
+    unmoved: str = ""  # why the original could not be filed away (it is still in the inbox)
 
     @property
     def review(self) -> bool:

@@ -3,10 +3,11 @@
 What a scheduled run decides without touching anything: the fingerprint of an item and whether
 it is ready, waiting or held; which loose disc files to hold; the state file (render, parse, and
 the changes made to it); the free space an item needs; whether a work folder is on memory; which
-leftover work folders are stale; what counts as news and the exit code. Everything arrives as an
-argument (a listing, the text of a file, the time now): no filesystem, network, thread or clock
-is read here. The thin layer that walks the inbox, reads and writes the state and takes the lock
-comes in a later module. See development/design/inbox-unattended.md.
+leftover work folders are stale; what counts as news and the exit code; the record of a run
+and its webhook payload. Everything arrives as an argument (a listing, the text of a file, the
+time now): no filesystem, network, thread or clock is read here. The thin layer that touches the
+disk is `inbox_unattended_io.py` (so far the record writes; the walk and the state file come with
+the unattended run). See development/design/inbox-unattended.md.
 
 A change to the state is a function `State -> State` (`Change`). The writer reads the file,
 applies the changes, writes against the stamp it read, and when the file changed in between it
@@ -23,9 +24,10 @@ from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from enum import Enum
-from typing import NamedTuple
+from typing import Any, NamedTuple
 
-from warpzone.inbox_core import MIN_FREE_GIB
+from warpzone.inbox_core import MIN_FREE_GIB, ItemResult, ScrapeNote, UnitResult
+from warpzone.syncthing import REDACTED, scrub
 
 STABLE_SECONDS = 300  # an item is ready once its fingerprint has held this long
 HEARTBEAT_SECONDS = 3600  # an empty run writes `checked` at most this often
@@ -43,6 +45,11 @@ DIED_REASON = (
     "container's limit (`mem_limit`), or run inbox on a computer"
 )
 MOVE_REASON = "could not move the original: {}"
+
+RECORD_VERSION = 1
+RECORDS_KEPT = 50  # run records the writer keeps; the older ones are deleted
+NOTIFY_LIST_MAX = 20  # names in each list of the webhook payload
+WARNINGS_MAX = 20  # warnings kept in a run record
 
 _TIME_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
 
@@ -585,3 +592,176 @@ def exit_code(found: News) -> int:
     if found.error is not None and found.error.config:
         return 2
     return 1 if found else 0
+
+
+# ------------------------------------------------------------------ run records and the webhook
+
+_RECORD_NAME = re.compile(r"^(\d{8}T\d{6}Z)(?:-(\d+))?\.json$")
+# An absolute path (a POSIX one after a space, a quote or the start, or a drive letter): the
+# part of a message that says where a file is on this machine, which a record never holds.
+_ABS_PATH = re.compile(
+    r"(?<![\w:/.~!@#$%^&*+=-])/(?=[\w.~@%+-])[^\s'\"`,;)\]]*|\b[A-Za-z]:\\[^\s'\"]*"
+)
+# A zRIF or any other long base64 token (a licence, a key), whether or not it is known.
+_LONG_TOKEN = re.compile(r"[A-Za-z0-9+/=_-]{128,}")
+
+
+def record_id(started: datetime, n: int = 1) -> str:
+    """The id of a run record: the start in UTC (`20261113T101500Z`), with `-2`, `-3` for the
+    runs that started in the same second."""
+    base = started.astimezone(UTC).strftime("%Y%m%dT%H%M%SZ")
+    return base if n <= 1 else f"{base}-{n}"
+
+
+def select_records_purge(names: Iterable[str], keep: int = RECORDS_KEPT) -> list[str]:
+    """The file names of `runs/` to delete so the newest `keep` records remain, oldest first.
+    Only names of the form `<id>.json` count; anything else is left alone."""
+    found = []
+    for name in names:
+        match = _RECORD_NAME.match(name)
+        if match:
+            found.append(((match.group(1), int(match.group(2) or 1)), name))
+    found.sort()
+    return [name for _, name in found[: max(len(found) - keep, 0)]]
+
+
+def clean_text(text: str, roots: Sequence[str] = (), secrets: Sequence[str] = ()) -> str:
+    """`text` as a record or a webhook may hold it: each secret redacted, the hub root cut off
+    the paths under it (they become relative to it), any other absolute path replaced by
+    `<path>`, and any long base64 token (a zRIF the handler did not know) redacted."""
+    text = scrub(text, tuple(secrets))
+    for root in sorted({r.rstrip("/") for r in roots if r}, key=len, reverse=True):
+        text = text.replace(root + "/", "").replace(root, ".")
+    text = _ABS_PATH.sub("<path>", text)
+    return _LONG_TOKEN.sub(REDACTED, text)
+
+
+def item_outcome(result: ItemResult) -> str:
+    """`held` (the original could not be filed away and is still in the inbox), `review`
+    (sent to `_revisar/`) or `done` (filed in `_done/`)."""
+    if result.unmoved:
+        return "held"
+    return "review" if result.review else "done"
+
+
+def _game(unit: UnitResult, clean: Callable[[str], str]) -> dict[str, Any]:
+    listed = unit.outcome in ("placed", "already", "planned", "exists")
+    return {
+        "system": clean(unit.system),
+        "entry": clean(unit.entry),
+        "outcome": unit.outcome,
+        "path": unit.path if unit.outcome != "review" else None,
+        "whitelist": [clean(x) for x in unit.whitelist_lines] if listed else [],
+        "ra": [clean(x) for x in unit.ra],
+        "notes": [clean(x) for x in unit.notes],
+    }
+
+
+def _item(result: ItemResult, clean: Callable[[str], str]) -> dict[str, Any]:
+    return {
+        "item": clean(result.name),
+        "outcome": item_outcome(result),
+        "moved_to": f"inbox/{result.moved_to}" if result.moved_to else None,
+        "games": [_game(u, clean) for u in result.units],
+        "reasons": [clean(x) for x in result.reasons],
+        "notes": [clean(x) for x in result.notes],
+    }
+
+
+def build_record(
+    results: Sequence[ItemResult],
+    *,
+    run_id: str,
+    mode: str,
+    started: datetime,
+    finished: datetime,
+    status: int,
+    roots: Sequence[str] = (),
+    secrets: Sequence[str] = (),
+    waiting: int = 0,
+    scrape: ScrapeNote | None = None,
+    purged: Sequence[str] = (),
+    warnings: Sequence[str] = (),
+) -> dict[str, Any]:
+    """The run record, from the same `ItemResult` values the printed report comes from. Pure.
+    Items left in the inbox untouched (still being copied) are not in `items`: they are
+    counted in `waiting`. Every text goes through `clean_text`, so the record holds no absolute
+    path, no secret and no zRIF."""
+
+    def clean(text: str) -> str:
+        return clean_text(text, roots, secrets)
+
+    processed = [r for r in results if not r.left]
+    items = [_item(r, clean) for r in processed]
+    units = [u for r in processed for u in r.units]
+    listed = [u for u in units if u.outcome in ("placed", "already", "planned", "exists")]
+    outcomes = [i["outcome"] for i in items]
+    record: dict[str, Any] = {
+        "v": RECORD_VERSION,
+        "id": run_id,
+        "mode": mode,
+        "started": _stamp(started),
+        "finished": _stamp(finished),
+        "exit": status,
+        "items": items,
+        "counts": {
+            "placed": sum(u.outcome in ("placed", "planned") for u in units),
+            "already": sum(u.outcome in ("already", "exists") for u in units),
+            "review": outcomes.count("review"),
+            "held": outcomes.count("held"),
+            "waiting": waiting,
+        },
+        "whitelist": sorted({clean(line) for u in listed for line in u.whitelist_lines}),
+    }
+    if scrape is not None:
+        note: dict[str, Any] = {"state": scrape.state, "systems": list(scrape.systems)}
+        if scrape.state != "done" and scrape.message:
+            note["message"] = clean(scrape.message)
+        record["scrape"] = note
+    record["purged"] = list(purged)
+    record["warnings"] = [clean(w) for w in warnings][:WARNINGS_MAX]
+    return record
+
+
+def render_record(record: Mapping[str, Any]) -> str:
+    """The text of a record file."""
+    return json.dumps(record, indent=2, ensure_ascii=False) + "\n"
+
+
+def should_notify(record: Mapping[str, Any], news_found: bool = False) -> bool:
+    """Whether a run sends the webhook. An attended run sends it only when some item needs a
+    person: one sent to `_revisar/`, or one whose original stayed in the inbox (the report
+    calls both review). An unattended run sends it for placed games or news (`news_found`).
+    An empty, busy or waiting-only run has no record and sends nothing."""
+    counts = record["counts"]
+    if record["mode"] == "attended":
+        return bool(counts["review"] or counts["held"])
+    return bool(counts["placed"] or news_found)
+
+
+def notify_payload(record: Mapping[str, Any], error: str | None = None) -> dict[str, Any]:
+    """The JSON the webhook gets: the counts, up to `NOTIFY_LIST_MAX` placed games
+    (`<system>/<entry>`) and items that need a person, and the run-level `error` message (the
+    caller passes it through `clean_text`). It is built from the record, so it holds no
+    absolute path, key or URL."""
+    items = record["items"]
+    games = [
+        f"{g['system']}/{g['entry']}"
+        for item in items
+        for g in item["games"]
+        if g["outcome"] in ("placed", "planned")
+    ]
+    attention = [item["item"] for item in items if item["outcome"] in ("review", "held")]
+    counts = record["counts"]
+    return {
+        "source": "inbox",
+        "mode": record["mode"],
+        "run": record["id"],
+        "placed": counts["placed"],
+        "already": counts["already"],
+        "review": counts["review"],
+        "held": counts["held"],
+        "games": games[:NOTIFY_LIST_MAX],
+        "review_items": attention[:NOTIFY_LIST_MAX],
+        "error": error,
+    }

@@ -14,7 +14,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from warpzone import scrape, scrape_io
-from warpzone.inbox_core import ItemResult, Options, UnitResult
+from warpzone.inbox_core import ItemResult, Options, ScrapeNote, UnitResult
 from warpzone.report import Reporter
 
 SKIPPED = "scrape: skipped (--no-scrape)"
@@ -62,24 +62,26 @@ _HINT = (
 )
 
 
-def after_apply(opts: Options, rep: Reporter, results: Sequence[ItemResult]) -> None:
+def after_apply(opts: Options, rep: Reporter, results: Sequence[ItemResult]) -> ScrapeNote | None:
     """After the catalog update: scrape the games this run placed. Never raises (except for
-    Ctrl-C) and never changes inbox's own result."""
+    Ctrl-C) and never changes inbox's own result. Returns the note for the run record, or None
+    when nothing scrapable was placed."""
     placed = candidates(results, "placed")
     if not placed:
-        return
+        return None
+    systems = tuple(placed)
     if opts.no_scrape:
         rep.out(SKIPPED)
-        return
+        return ScrapeNote("skipped", systems, "--no-scrape")
     program = opts.tools.skyscraper
     if program is None:
         total = sum(len(paths) for paths in placed.values())
         rep.out(f"scrape: Skyscraper not found; {_games(total)} placed, not scraped. {_HINT}")
-        return
+        return ScrapeNote("skipped", systems, "Skyscraper not found")
     options = scrape_io.Options(
         root=opts.root,
         skyscraper=program,
-        systems=tuple(placed),
+        systems=systems,
         explicit=False,
         timeout=opts.tools.timeout,
         work_dir=opts.work_dir,
@@ -91,11 +93,14 @@ def after_apply(opts: Options, rep: Reporter, results: Sequence[ItemResult]) -> 
         now=opts.now,
         today=opts.today,
     )
+    failure = ""
     try:
         code = scrape_io.run_placed(options, rep)
     except Exception as exc:  # the games are placed; a scrape can be run again
+        failure = f"failed ({type(exc).__name__})"
         rep.warn(f"scrape: failed ({type(exc).__name__}: {exc})")
         code = 1
     if code:
-        systems = " ".join(placed)
-        rep.out(f"scrape: not finished; run `warpzone scrape --system {systems}` later")
+        rep.out(f"scrape: not finished; run `warpzone scrape --system {' '.join(systems)}` later")
+        return ScrapeNote("not-finished", systems, failure or "see the warnings of the run")
+    return ScrapeNote("done", systems)

@@ -163,6 +163,16 @@ Items modified in the last 30 seconds are left alone (they may still be copying)
 
 A PS Vita dump kept as a game folder is filed (see [PS Vita games](#ps-vita-games)), and a Vita `.pkg` is installed with Vita3K first (see [PS Vita packages](#ps-vita-packages)). `.vpk` files, PS3 or Xbox games kept as extracted folders and PS3 `.pkg` files are not supported yet and go to review ("not supported by inbox yet").
 
+## What each run leaves behind
+
+Every `--apply` that processed at least one item writes a record of the run to `catalog/inbox/runs/` on the hub: what was placed (with the whitelist line of each game), what went to `_revisar` and why, and where each original went. The newest 50 are kept. The record holds no absolute path, key or zRIF.
+
+To be told when something needs you, add `--notify-url URL` (an `http://` or `https://` address, for example a Home Assistant webhook). It sends one JSON summary when some item went to review, and nothing otherwise. The address is never printed, and a failed send is only a warning.
+
+```bash
+warpzone inbox --apply --notify-url http://homeassistant.local:8123/api/webhook/your-id
+```
+
 ## Descriptions and media
 
 With Skyscraper installed (on `PATH`, or `skyscraper` in the `[inbox]` table), `warpzone inbox --apply` also scrapes the games it has just placed: it adds their gamelist entry, covers, screenshots and videos to the hub, after the files are placed and the catalog is updated. A failure there is only a warning, and `--no-scrape` skips it for one run. Without `--apply` the report says how many games would be scraped. Set-up, ScreenScraper accounts, language and region, and `warpzone scrape` for the games already in the library are in [Scraping](/warpzone/setup/scrape/). The hub container ships Skyscraper, so `inbox` there scrapes too; it needs the `./skyscraper` folder mounted at `/skyscraper` (see [Scraping in the container](/warpzone/setup/hub-container/#scraping-in-the-container)).
