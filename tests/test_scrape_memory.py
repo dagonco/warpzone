@@ -171,6 +171,14 @@ class CredentialsPresenceTest(unittest.TestCase):
             scrape.config_ini_path({"XDG_CONFIG_HOME": "/x"}, home, lambda p: False),
             Path("/x/skyscraper/config.ini"),
         )
+        # The hub image names the folder of its volume, whatever the home folder holds.
+        in_image = {scrape.SKYSCRAPER_DIR_ENV: "/skyscraper"}
+        self.assertEqual(
+            scrape.config_ini_path(in_image, home, lambda p: True), Path("/skyscraper/config.ini")
+        )
+        self.assertEqual(scrape.skyscraper_dir(in_image), Path("/skyscraper"))
+        self.assertIsNone(scrape.skyscraper_dir({}))
+        self.assertIsNone(scrape.skyscraper_dir({scrape.SKYSCRAPER_DIR_ENV: ""}))
 
     def test_version_from_the_banner(self):
         banner = "Skyscraper \r _______ __\n|:  1   |   |__|       3.21.1   |\n`---' by Lars\n"

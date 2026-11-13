@@ -157,7 +157,7 @@ dats_dir = "~/dats/libretro-database/metadat"
 
 # Optional scraping (`warpzone scrape`). Skyscraper (Gemba's fork) fetches descriptions and
 # media from ScreenScraper; its credentials, language and region live in its own config.ini,
-# never here. Default: Skyscraper on PATH.
+# never here. Default: Skyscraper on PATH (the hub container has it there; no setting needed).
 # skyscraper = "/usr/local/bin/Skyscraper"
 
 # Optional PS Vita .pkg support. A file you keep with the zRIF (the licence key) of each

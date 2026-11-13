@@ -176,7 +176,8 @@ templates/
 examples/config.example.toml
 examples/bios.example.toml
 examples/compose.example.yaml  the hub's container, as Compose runs it
-docker/Dockerfile    the hub's container image: RAHasher built in one stage, warpzone from the checkout
+docker/Dockerfile    the hub's container image: RAHasher, dolphin-tool and Skyscraper built in stages of their own,
+                     warpzone from the checkout
 .dockerignore        keeps everything but the package out of the image's build context
 tests/               unittest; unit tests + e2e (two real Syncthing instances)
 website/             documentation site (Starlight); the design pages are
@@ -403,9 +404,12 @@ depends on them:
 
 - `image`: builds `docker/Dockerfile` with `docker build` from the root of the checkout (nothing
   is pushed and there is no registry login), then runs the image: `warpzone --version` must
-  print the version of the checkout, `chdman`, `bsdtar` and `RAHasher` must be on `PATH`, and
-  the default user must not be root. The RAHasher stage compiles C++, so the job has a timeout
-  of 45 minutes. It finds a base image or apt change that breaks the build before someone
+  print the version of the checkout, `chdman`, `bsdtar`, `RAHasher` and `Skyscraper` must be on
+  `PATH`, and the default user must not be root. `Skyscraper --version` runs as uid 65534 with
+  `--read-only --tmpfs /tmp --cap-drop ALL` and a folder mounted at `/skyscraper` (and must fail
+  without it), and `doctor` in the container must show `[ok]` for `Skyscraper` and, with a fake
+  `config.ini` on that folder, for the account. The job prints the size of the image. The
+  RAHasher, Dolphin and Skyscraper stages compile C++, so the job has a timeout of 45 minutes. It finds a base image or apt change that breaks the build before someone
   rebuilds the image on the hub.
 - `coverage`: the unit tests under `coverage` (pinned to an exact version) with branch
   measurement, limited to the `warpzone` package, on Ubuntu with Python 3.11 and without the

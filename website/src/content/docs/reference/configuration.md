@@ -107,7 +107,7 @@ Optional. Only `warpzone inbox` and `warpzone doctor` read it. `inbox` works wit
 | `vita_zrif` | none | A file you keep with the zRIF of each PS Vita `.pkg`: `CONTENT_ID<TAB>zRIF` lines, or a TSV with a header row such as NoPayStation's `PSV_GAMES.tsv`, of which only the `Content ID` and `zRIF` columns are read. warpzone never prints a zRIF and never downloads keys. |
 | `titledb_dir` | none | A local clone of `blawar/titledb`, which names Switch games. |
 | `switch_keys` | `~/.switch/prod.keys` | Your console's keys file. warpzone only passes the path to `nsz`; it never reads or prints the file. In the container, a file you mount read-only (for example `/keys/prod.keys`); it is never in the image. |
-| `skyscraper` | `Skyscraper` on `PATH` | The Skyscraper program that `warpzone scrape` and `warpzone inbox --apply` run (Gemba's fork, tested with 3.21.1). A path that does not exist is a configuration error. |
+| `skyscraper` | `Skyscraper` on `PATH` | The Skyscraper program that `warpzone scrape` and `warpzone inbox --apply` run (Gemba's fork, tested with 3.21.1). A path that does not exist is a configuration error. The hub image ships it on `PATH`, so it needs no setting there. |
 | `mame_dat` | none | MAME's `listxml`, or an official `mameXXXXlx.zip` as it is. |
 | `fbneo_dat` | none | FinalBurn Neo "ClrMame Pro XML, Arcade only". |
 | `mame2003plus_dat` | none | `metadata/mame2003-plus.xml` of MAME 2003-Plus. |

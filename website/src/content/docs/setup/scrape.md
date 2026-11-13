@@ -20,7 +20,11 @@ It only adds. An existing gamelist entry is never changed (consoles write play d
 
 ## Install Skyscraper
 
-warpzone is tested with Skyscraper 3.21.1 from the Gemba fork. It runs on the computer that mounts the share (and where `warpzone inbox` runs), not on a console and not in the hub container: the container image does not include Skyscraper, so `inbox` there places games and says it did not scrape them. Run `warpzone scrape` on a computer later.
+warpzone is tested with Skyscraper 3.21.1 from the Gemba fork. It runs where `warpzone inbox` runs, not on a console: in the hub container, which ships it, or on a computer that mounts the share, where you install it.
+
+- **In the hub container:** nothing to install. The image has Skyscraper on `PATH`; mount a folder for its config and cache at `/skyscraper` (the compose example does) and see [Scraping in the container](/warpzone/setup/hub-container/#scraping-in-the-container). Everything below applies there too, with `~/.skyscraper` being that folder.
+
+On a computer:
 
 - **macOS:** follow the macOS section of the project's [README](https://github.com/Gemba/skyscraper#readme). If you build it yourself, install Qt from Homebrew first (`brew install qt`).
 - **Linux:** install the distribution package if there is one, or build it following the project's [installation instructions](https://gemba.github.io/skyscraper/INSTALLATION/). Prebuilt binaries are on the [releases page](https://github.com/Gemba/skyscraper/releases).
@@ -49,12 +53,12 @@ Skyscraper uses one thread and the number of threads the account allows; warpzon
 If you have an account, put it in **Skyscraper's own config**, never in warpzone's:
 
 ```ini
-# ~/.skyscraper/config.ini
+# ~/.skyscraper/config.ini (in the hub container: ./skyscraper/config.ini next to compose.yaml)
 [screenscraper]
 userCreds="USER:PASSWORD"
 ```
 
-(`USER:PASSWORD` is a placeholder; Skyscraper builds that use XDG paths read `$XDG_CONFIG_HOME/skyscraper/config.ini` instead.) warpzone never reads the value, never prints it and never puts it on a command line: the only thing it checks, for `doctor` and the scrape report, is that a `userCreds` key exists in `[screenscraper]`. Keep the file private (`chmod 600 ~/.skyscraper/config.ini`).
+(`USER:PASSWORD` is a placeholder; Skyscraper builds that use XDG paths read `$XDG_CONFIG_HOME/skyscraper/config.ini` instead.) warpzone never reads the value, never prints it and never puts it on a command line: the only thing it checks, for `doctor` and the scrape report, is that a `userCreds` key exists in `[screenscraper]`. Keep the file private (`chmod 600 ~/.skyscraper/config.ini`; in the container, owned by the service's uid and mode 600).
 
 ## Language and region
 
@@ -85,7 +89,7 @@ For a game without an entry, warpzone adds a `<game>` with the name, description
 
 Not produced: `titlescreens` and `physicalmedia` (disc and cartridge scans). Skyscraper's ScreenScraper module does not fetch them, so scraped games go without them and ES-DE and the library UI fall back to the other kinds. Manuals and fanart are not fetched either.
 
-A game takes about 10 seconds and 2.6 MB of media, most of it the video, so a library of 1,000 games is about three hours and 2.6 GB on the hub (the videos stay on the hub; consoles ignore them) plus about as much in Skyscraper's cache on the computer that scrapes.
+A game takes about 10 seconds and 2.6 MB of media, most of it the video, so a library of 1,000 games is about three hours and 2.6 GB on the hub (the videos stay on the hub; consoles ignore them) plus about as much in Skyscraper's cache on the machine that scrapes (in the container, `skyscraper/cache/` on the NAS's disk).
 
 Scraped systems: `nes`, `snes`, `n64`, `gb`, `gbc`, `gba`, `nds`, `genesis`, `mastersystem`, `gamegear`, `sega32x`, `atari2600`, `atari7800`, `atarilynx`, `atarijaguar`, `wonderswan`, `wonderswancolor`, `psx`, `ps2`, `psp`, `saturn`, `dreamcast`, `gc`, `wii`, `n3ds`, `mame`, `ps3`, `xbox` and `switch`. Not yet: `ps4`, `psvita`, `xbox360` and `wiiu`.
 
@@ -100,7 +104,7 @@ scrape: snes: 1 added
 ```
 
 - A scrape that fails (the daily limit is reached, ScreenScraper is closed or unreachable, Skyscraper fails or runs out of time) is a **warning**. The games stay placed, no item goes to review, `inbox` exits as it would have without the scrape, and the report ends with `scrape: not finished; run warpzone scrape --system <system> later`.
-- Without Skyscraper (or in the hub container) the report says `scrape: Skyscraper not found; N games placed, not scraped`, and nothing else changes.
+- Without Skyscraper the report says `scrape: Skyscraper not found; N games placed, not scraped`, and nothing else changes.
 - `--no-scrape` skips the scrape for one run.
 - Without `--apply` the report only says `scrape: <system>: would scrape N games`; Skyscraper does not run.
 

@@ -80,6 +80,28 @@ class DockerfileTest(unittest.TestCase):
         self.assertIn('echo "${ORBIS_PKG_UTIL_SHA256}  orbis.crate" | sha256sum -c -', self.text)
         self.assertIn("cargo build --release --locked", self.text)
 
+    def test_skyscraper_is_pinned_by_commit_verified_and_built_with_its_files_bundled(self):
+        match = re.search(r"^ARG SKYSCRAPER_COMMIT=([0-9a-f]{40})$", self.text, re.MULTILINE)
+        self.assertIsNotNone(match, "Skyscraper must be pinned by a 40-character commit")
+        self.assertRegex(self.text, r"(?m)^ARG SKYSCRAPER_TAG=3\.21\.1$")
+        self.assertIn('test "$(git rev-parse HEAD)" = "${SKYSCRAPER_COMMIT}"', self.text)
+        # One file, with peas.json and the rest inside it: nothing to install under /usr/local/etc.
+        self.assertIn("BUNDLE_QRC=1 qmake6", self.text)
+        self.assertNotIn("make install", self.text)
+
+    def test_skyscraper_keeps_its_home_on_the_volume(self):
+        final = "\n".join(stages(self.text)[-1])
+        self.assertIn("COPY --from=skyscraper /out/Skyscraper /opt/skyscraper/Skyscraper", final)
+        # The script on PATH gives the program its own HOME, whose .skyscraper is the volume.
+        self.assertIn("HOME=/opt/skyscraper-home; export HOME", final)
+        self.assertIn('exec /opt/skyscraper/Skyscraper "$@"', final)
+        self.assertIn("ln -s /skyscraper /opt/skyscraper-home/.skyscraper", final)
+        # warpzone's own HOME stays on /tmp, and it is told where Skyscraper's config is.
+        self.assertIn("HOME=/tmp", final)
+        self.assertIn("WARPZONE_SKYSCRAPER_DIR=/skyscraper", final)
+        # Nothing of it is created in the image: the volume is the user's.
+        self.assertNotIn("mkdir /skyscraper", final)
+
     def test_nsz_is_installed_from_hashed_wheels_in_its_own_environment(self):
         installs = [line for line in self.lines if "/opt/nsz/bin/python install" in line]
         self.assertEqual(len(installs), 1, installs)
@@ -155,8 +177,20 @@ class DockerfileTest(unittest.TestCase):
         self.assertLess(run.index("apt-get install"), run.index("rm -rf /var/lib/apt/lists"))
         install = run.split("apt-get install", 1)[1].split("&&")[0]
         packages = [w for w in install.split() if not w.startswith("-")]
-        # chdman is in mame-tools, bsdtar in libarchive-tools (Debian trixie).
-        self.assertEqual(sorted(packages), ["libarchive-tools", "mame-tools"])
+        # chdman is in mame-tools, bsdtar in libarchive-tools (Debian trixie); Skyscraper links
+        # Qt 6 (core, gui for images, network, xml, sql) and loads Qt's SQLite driver.
+        self.assertEqual(
+            sorted(packages),
+            [
+                "libarchive-tools",
+                "libqt6gui6",
+                "libqt6network6",
+                "libqt6sql6",
+                "libqt6sql6-sqlite",
+                "libqt6xml6",
+                "mame-tools",
+            ],
+        )
 
     def test_installs_the_checkout_not_a_download(self):
         self.assertIn("COPY warpzone ./warpzone", self.text)
@@ -213,6 +247,15 @@ class ComposeExampleTest(unittest.TestCase):
         # The keys and data the tools read are named in the comments, with the paths mounted.
         for key in ("switch_keys", "vita_zrif", "titledb_dir", "dats_dir", "work_dir"):
             self.assertRegex(self.text, rf"#\s+{key} = \"/(keys|dats|work)/", key)
+
+    def test_the_inbox_service_keeps_skyscraper_config_and_cache_on_a_volume(self):
+        inbox = self.code.split("warpzone-inbox:", 1)[1]
+        # Read-write (the cache grows by about 2.6 MB a game), on disk and not in the tmpfs.
+        self.assertRegex(inbox, r"- \./skyscraper:/skyscraper\n")
+        self.assertNotRegex(inbox, r"- \./skyscraper:/skyscraper:ro")
+        # config.ini may hold the ScreenScraper account: the comments say warpzone never reads it.
+        self.assertIn("config.ini", self.text)
+        self.assertIn("userCreds", self.text)
 
     def test_has_no_secret_looking_value(self):
         # No assignment of a key, token or password to a value, in the code or in a comment.

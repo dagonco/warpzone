@@ -68,8 +68,9 @@ for every problem, the exact fix for this platform.
   older than 3.21.1. `ScreenScraper account` appears only when Skyscraper is found: `[ok]` when a
   `userCreds` key is in `[screenscraper]` of its `config.ini`, `[--]` (anonymous, with the limits)
   otherwise. The value is never read; the check is a pure function of the file's lines. In the hub
-  container Skyscraper is not in the image, so the line is `[--]` with the fix "run scrape on a
-  computer that mounts the share".
+  container Skyscraper is in the image and is checked like anywhere else, with its `config.ini` on the
+  volume `WARPZONE_SKYSCRAPER_DIR` names (`/skyscraper`); without that volume the line is `[--]`
+  ("nothing is mounted at /skyscraper") with the fix to mount it, and Skyscraper is not run.
 - **Leftover folders.** On a configured device, `Leftover folders` is `[! ]` when the local
   Syncthing `config.xml` has a `wz-*` folder that none of the device's config describes (a
   group taken out of its `folders`), and says nothing otherwise. Doctor is offline, so it

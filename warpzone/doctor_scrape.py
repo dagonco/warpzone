@@ -2,6 +2,8 @@
 
 Like the other optional inbox tools, Skyscraper is `[ok]` with its version when found, `[--]`
 when it is not (`inbox` then does not scrape), and a problem when a configured path is wrong.
+The hub image ships it and keeps its `config.ini` and cache on the volume mounted at
+`/skyscraper` (named by `WARPZONE_SKYSCRAPER_DIR`): without the volume the line is `[--]`.
 The account line says whether `userCreds` is set in `[screenscraper]` of Skyscraper's
 `config.ini`; the judgment is a pure function of the file's lines (`scrape.has_user_creds`)
 and the value is never kept, printed or logged. See development/design/scrape.md ("Doctor").
@@ -55,16 +57,6 @@ def judge_account(text: str) -> tuple[str, str, str]:
 
 def check_skyscraper(ctx: Context) -> list[Result]:
     p = ctx.probes
-    if p.in_container():
-        return [
-            Result(
-                SKYSCRAPER,
-                G_TOOLS,
-                OPTIONAL,
-                "not in the hub image: scraping runs on a computer that mounts the share",
-                "run scrape on a computer that mounts the share",
-            )
-        ]
     configured = ctx.config.settings.skyscraper
     if configured:
         if not p.is_executable(configured):
@@ -89,6 +81,21 @@ def check_skyscraper(ctx: Context) -> list[Result]:
                 OPTIONAL,
                 "not found: inbox will not scrape new games, and `warpzone scrape` needs it",
                 INSTALL_HINT,
+            )
+        ]
+    volume = scrape.skyscraper_dir(p.env)
+    if volume is not None and not p.is_dir(volume):
+        # The hub image keeps Skyscraper's config.ini and cache on a volume; without it the
+        # program stops at start, so it is not run.
+        return [
+            Result(
+                SKYSCRAPER,
+                G_TOOLS,
+                OPTIONAL,
+                f"{path} is in the image, but nothing is mounted at {volume}, where it keeps its "
+                "config.ini and cache: inbox will not scrape",
+                f"mount a folder at {volume} (`./skyscraper:{volume}` in the compose service, "
+                "owned by the container's uid)",
             )
         ]
     try:
