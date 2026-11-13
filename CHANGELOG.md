@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ### Added
 
+- `warpzone inbox` places Atari 2600, 7800, Lynx and Jaguar, WonderSwan and WonderSwan Color games: a `.a26`, `.a78`, `.lnx`, `.j64`, `.jag`, `.ws` or `.wsc` rom that matches its No-Intro DAT is filed as `roms/<system>/<game>.zip` (`atari2600`, `atari7800`, `atarilynx`, `atarijaguar`, `wonderswan`, `wonderswancolor`). A 7800 dump with its A78 header is matched by the data after the header, as NES dumps are, and kept as it is. Until now they went to review as "no DAT match".
 - `warpzone inbox` keeps the LibCrypt `.sbi` of a PAL PlayStation disc: the game goes in a `<game>.m3u/` folder with the CHD and `<game>.sbi`, which DuckStation and Beetle PSX need to pass the protection. Until now the CHD was placed alone and the `.sbi` went to review.
 - `warpzone inbox` places Nintendo DS games: a `.nds` rom (loose or in an archive) that matches the No-Intro `Nintendo - Nintendo DS` DAT is filed as `roms/nds/<game>.zip`. Until now it went to review as "no DAT match".
 

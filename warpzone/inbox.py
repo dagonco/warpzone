@@ -92,6 +92,8 @@ COMPRESSED_GC = (".gcz",)  # .rvz and .wia are read by `inbox_dolphin`
 GCZ_MAGIC = 0xB10BC001
 # Files that travel with a dump but are not part of any DAT; never identified.
 INES_HEADER_BYTES = 16
+A78_HEADER_BYTES = 128
+A78_MAGIC = b"ATARI7800"  # at offset 1 of an A78 header
 ZIP_DATE = (1996, 12, 24, 23, 32, 0)  # fixed, so the same game always zips to the same bytes
 DOLPHIN_HINT = "dolphin-tool convert -f rvz -c zstd -l 5 -b 131072"
 _DATE_DIR = re.compile(r"^\d{4}-\d\d-\d\d$")
@@ -228,25 +230,36 @@ def default_cache_dir() -> Path:
 # ------------------------------------------------------------------ files
 
 
+def header_bytes(head: bytes) -> int:
+    """How many leading bytes of a file are a dumper's header: 16 for an iNES (NES) file,
+    128 for an A78 (Atari 7800) file, 0 for any other. `head` is the start of the file."""
+    if len(head) >= INES_HEADER_BYTES and head.startswith(INES_MAGIC):
+        return INES_HEADER_BYTES
+    if len(head) >= A78_HEADER_BYTES and head[1:10] == A78_MAGIC:
+        return A78_HEADER_BYTES
+    return 0
+
+
 def fingerprint(path: Path, rel: str) -> FileInfo:
-    """Size, CRC32 and SHA-1 of a file; for one that starts with the iNES magic, also those
-    of the data after its 16-byte header, which `dat.match_dat` tries when the whole file
-    matches nothing."""
+    """Size, CRC32 and SHA-1 of a file; for one that starts with an iNES or A78 header, also
+    those of the data after it, which `dat.match_dat` tries when the whole file matches
+    nothing."""
     with path.open("rb") as f:
-        head = f.read(INES_HEADER_BYTES)
-        ines = len(head) == INES_HEADER_BYTES and head.startswith(INES_MAGIC)
+        head = f.read(A78_HEADER_BYTES)
+        skip = header_bytes(head)
         crc, sha1, size = zlib.crc32(head), hashlib.sha1(head), len(head)
-        body_crc, body_sha1, body_size = 0, hashlib.sha1(), 0
+        body = head[skip:]
+        body_crc, body_sha1, body_size = zlib.crc32(body), hashlib.sha1(body), len(body)
         while chunk := f.read(CHUNK):
             crc = zlib.crc32(chunk, crc)
             sha1.update(chunk)
             size += len(chunk)
-            if ines:
+            if skip:
                 body_crc = zlib.crc32(chunk, body_crc)
                 body_sha1.update(chunk)
                 body_size += len(chunk)
     without_header = (
-        (body_size, f"{body_crc & 0xFFFFFFFF:08x}", body_sha1.hexdigest()) if ines else None
+        (body_size, f"{body_crc & 0xFFFFFFFF:08x}", body_sha1.hexdigest()) if skip else None
     )
     return FileInfo(rel, size, f"{crc & 0xFFFFFFFF:08x}", sha1.hexdigest(), without_header)
 

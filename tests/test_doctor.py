@@ -761,7 +761,7 @@ class DatTests(TmpCase):
         ctx = context(self.tmp, f'[inbox]\ndats_dir = "{dats}"\n', now=lambda: self.NOW)
         folder, age = check_dats(ctx)
         self.assertEqual(folder.status, OK)
-        self.assertIn("2 of 16 systems (psx, saturn)", folder.detail)
+        self.assertIn("2 of 22 systems (psx, saturn)", folder.detail)
         self.assertIn("no DAT for", folder.detail)
         self.assertEqual(age.status, OK)
         self.assertIn("10 days", age.detail)
