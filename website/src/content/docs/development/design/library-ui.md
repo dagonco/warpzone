@@ -1222,9 +1222,11 @@ uses it to show what a change does before the user confirms it.
 lock `inbox/.warpzone.lock` like the other hub files (kept in memory, read again when size or
 mtime changed, checked at most every 5 seconds) and writes none of them. A record is served only
 under an id of the form `20261113T101500Z` or `20261113T101500Z-2` (anything else is
-`404 not-found` without touching the disk), a file that is a symbolic link is not read, and a
-file over 8 MiB, one that is not JSON or one whose `id` is not its file name is no record. The
-JSON is in [the unattended inbox](/warpzone/development/design/inbox-unattended/#api).
+`404 not-found` without touching the disk). Files are opened without following a final link and
+without waiting on a named pipe: a state file or record that is a link or not a regular file is
+no file, and one over 8 MiB, not JSON or (for a record) whose `id` is not its file name is damaged.
+A lock that is a link, not a regular file, over 64 KiB or unreadable still makes the inbox busy,
+with mode `unknown`. The JSON is in [the unattended inbox](/warpzone/development/design/inbox-unattended/#api).
 
 ### Media and byte ranges
 

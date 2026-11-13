@@ -439,7 +439,7 @@ def parse_state(text: str | None) -> tuple[State, str | None]:
         return State(), None
     try:
         doc = json.loads(text)
-    except ValueError:
+    except (ValueError, RecursionError):
         return State(), "the inbox state file cannot be parsed; starting from an empty one"
     if not isinstance(doc, dict) or doc.get("v") != STATE_VERSION:
         return State(), "the inbox state file is of an unknown form; starting from an empty one"

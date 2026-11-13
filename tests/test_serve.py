@@ -916,6 +916,35 @@ class InboxTests(ServeCase):
         (lock / ".warpzone.lock").unlink()
         self.assertIsNone(self.get("/api/v1/inbox").json["busy"])
 
+    def test_a_symlinked_lock_is_busy_and_never_followed(self) -> None:
+        folder = self.root / "inbox"
+        folder.mkdir(parents=True)
+        outside = self.tmp / "lock-elsewhere"
+        outside.write_text(json.dumps({"host": "h", "pid": 4, "started": 1_794_000_000}))
+        (folder / ".warpzone.lock").symlink_to(outside)
+        busy = self.get("/api/v1/inbox").json["busy"]
+        self.assertEqual(busy["mode"], "unknown")
+
+    @unittest.skipUnless(hasattr(os, "mkfifo"), "needs named pipes")
+    def test_a_fifo_lock_does_not_hang_the_server(self) -> None:
+        folder = self.root / "inbox"
+        folder.mkdir(parents=True)
+        os.mkfifo(folder / ".warpzone.lock")
+        done: list[Reply] = []
+        thread = threading.Thread(
+            target=lambda: done.append(self.get("/api/v1/inbox")), daemon=True
+        )
+        thread.start()
+        thread.join(5)
+        self.assertFalse(thread.is_alive(), "the request hung on the named pipe")
+        self.assertEqual(done[0].json["busy"]["mode"], "unknown")
+
+    def test_a_huge_lock_is_busy_with_an_unknown_mode(self) -> None:
+        folder = self.root / "inbox"
+        folder.mkdir(parents=True)
+        (folder / ".warpzone.lock").write_text(" " * (serve.INBOX_LOCK_MAX + 1))
+        self.assertEqual(self.get("/api/v1/inbox").json["busy"]["mode"], "unknown")
+
     def test_the_routes_need_a_session(self) -> None:
         self.assertEqual(self.get("/api/v1/inbox", auth=False).status, 401)
         self.assertEqual(self.get(f"/api/v1/inbox/runs/{self.RUN}", auth=False).status, 401)

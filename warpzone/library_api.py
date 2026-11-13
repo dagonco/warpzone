@@ -1425,7 +1425,7 @@ def parse_record(text: str | None, expected_id: str) -> dict[str, Any] | None:
         return None
     try:
         doc = json.loads(text)
-    except ValueError:
+    except (ValueError, RecursionError):
         return None
     if not isinstance(doc, dict) or doc.get("v") != _RECORD_VERSION or doc.get("id") != expected_id:
         return None
@@ -1438,7 +1438,9 @@ def parse_record(text: str | None, expected_id: str) -> dict[str, Any] | None:
         "mode": _text(doc.get("mode")) or "attended",
         "started": _text(doc.get("started")),
         "finished": _text(doc.get("finished")),
-        "exit": doc["exit"] if isinstance(doc.get("exit"), int) else None,
+        "exit": doc["exit"]
+        if isinstance(doc.get("exit"), int) and not isinstance(doc["exit"], bool)
+        else None,
         "items": [i for i in map(_parse_item, items) if i] if isinstance(items, list) else [],
         "counts": {k: _whole(counts.get(k)) if isinstance(counts, dict) else 0 for k in _COUNTS},
         "whitelist": _strings(doc.get("whitelist")),
@@ -1507,6 +1509,7 @@ def _run_row(record: Mapping[str, Any]) -> dict[str, Any]:
         "placed": counts["placed"],
         "already": counts["already"],
         "review": counts["review"],
+        "held": counts["held"],
         "exit": record["exit"],
     }
 

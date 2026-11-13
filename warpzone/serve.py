@@ -84,6 +84,7 @@ BODY_SECONDS = 4.0 * SOCKET_TIMEOUT
 MAX_DRAIN = 1024 * 1024  # bytes of a rejected request body read and thrown away before the answer
 LIBRARY_FOLDER = "wz-library"
 INBOX_STATE = "state.json"  # the unattended inbox's state file, in `catalog/inbox/`
+INBOX_LOCK_MAX = 64 * 1024  # bytes: a lock file over this is read as unreadable
 INBOX_FILE_MAX = 8 * 1024 * 1024  # bytes: a state file or run record over this is read as damaged
 CONTENT_TYPES = {
     ".html": "text/html; charset=utf-8",
@@ -613,12 +614,7 @@ class HubFiles:
         held = self._inbox_docs.get(path)
         if held is not None and held[0] == stamp:
             return held[1]
-        text = None
-        if stamp[0] <= INBOX_FILE_MAX:
-            try:
-                text = path.read_text(encoding="utf-8", errors="replace")
-            except OSError:
-                text = None
+        text = read_regular(path, INBOX_FILE_MAX) if stamp[0] <= INBOX_FILE_MAX else None
         doc = parse(text)
         self._inbox_docs[path] = (stamp, doc)
         return doc
@@ -663,16 +659,18 @@ class HubFiles:
             return self._inbox_record(run_id)
 
     def _busy(self) -> dict[str, str] | None:
+        """`busy`: null without a lock file. A lock that is a link, not a regular file, too big
+        or unreadable is busy with an unknown mode: it is never followed or waited on (a named
+        pipe in its place must not block the server)."""
         lock = self.root / "inbox" / inbox_lock.LOCK_NAME
         try:
-            mtime = lock.stat().st_mtime
-        except OSError:
+            info = os.lstat(lock)
+        except (FileNotFoundError, NotADirectoryError):
             return None
-        try:
-            text = lock.read_text(encoding="utf-8", errors="replace")
         except OSError:
-            text = None
-        return library_api.inbox_busy(text, mtime)
+            return library_api.inbox_busy(None, time.time())
+        text = read_regular(lock, INBOX_LOCK_MAX) if stat.S_ISREG(info.st_mode) else None
+        return library_api.inbox_busy(text, info.st_mtime)
 
     # ------------------------------------------------------------- whitelists
 
@@ -731,6 +729,21 @@ def open_regular(path: Path) -> tuple[BinaryIO, int] | None:
     except BaseException:
         os.close(fd)
         raise
+
+
+def read_regular(path: Path, limit: int) -> str | None:
+    """The text of a regular file of at most `limit` bytes, read without following a final link
+    or waiting on a named pipe; None for anything else or when it cannot be read."""
+    try:
+        opened = open_regular(path)
+        if opened is None:
+            return None
+        with opened[0] as handle:
+            if opened[1] > limit:
+                return None
+            return handle.read(limit + 1).decode("utf-8", errors="replace")
+    except OSError:
+        return None
 
 
 # --------------------------------------------------------------------------- background runs

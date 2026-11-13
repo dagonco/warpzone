@@ -11,8 +11,9 @@ every attended `--apply`, with their purge to 50) and the webhook (`inbox --noti
 attended run when some item went to review, with `notify.py` shared with `prune`), and the
 library UI's Inbox view with its two routes (`library_api.inbox_response`, `run_response` and
 `parse_record`, read by `serve`). The rest (`--unattended` in `inbox` with its per-item "still
-mine" checks, the state file I/O and the walk, and doctor) is design, not implemented. This page is the contract for running
-`warpzone inbox --apply` on the hub by itself, from a scheduled task, with nobody watching. The
+mine" checks, the state file I/O and the walk, and doctor) is design, not implemented. This page
+is the contract for running `warpzone inbox --apply` on the hub by itself, from a scheduled task,
+with nobody watching. The
 pages it touches when it is implemented ([Inbox](/warpzone/development/design/inbox/),
 [Configuration and command line](/warpzone/development/design/configuration/),
 [Pruning](/warpzone/development/design/prune/) for the shared webhook,
@@ -487,7 +488,7 @@ join the [endpoints](/warpzone/development/design/library-ui/#endpoints):
  "held": [{"item": "Game.cue", "since": "2026-11-13T09:45:00Z",
            "reason": "a disc dropped as loose files: put the sheet and its tracks in one folder"}],
  "runs": [{"id": "20261113T101500Z", "mode": "unattended", "finished": "2026-11-13T10:21:40Z",
-           "placed": 1, "already": 0, "review": 1, "exit": 1}],
+           "placed": 1, "already": 0, "review": 1, "held": 0, "exit": 1}],
  "last": {"...": "the newest record in full, each placed game with its catalog id"}}
 ```
 

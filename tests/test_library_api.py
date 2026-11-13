@@ -755,6 +755,14 @@ class InboxRecordTests(unittest.TestCase):
         self.assertIsNone(found["scrape"])
         self.assertIsNone(found["exit"])
 
+    def test_a_bool_is_not_an_exit_code(self) -> None:
+        self.assertIsNone(parsed(record(exit=True))["exit"])
+        self.assertEqual(parsed(record(exit=0))["exit"], 0)
+
+    def test_a_record_nested_too_deep_is_no_record(self) -> None:
+        deep = "[" * 100_000 + "]" * 100_000
+        self.assertIsNone(parse_record(deep, RUN_ID))
+
     def test_no_items_key_is_an_empty_run(self) -> None:
         doc = record()
         del doc["items"]
@@ -788,6 +796,7 @@ class InboxResponseTests(unittest.TestCase):
                 "placed": 2,
                 "already": 1,
                 "review": 1,
+                "held": 0,
                 "exit": 1,
             },
         )
