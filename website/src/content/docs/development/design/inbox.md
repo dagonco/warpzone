@@ -311,9 +311,16 @@ blawar/titledb and filed under the library's existing conventions. The code is i
   not start right after the NCA header) falls back to the size of the `.nsz`, a lower bound
   (the `.nsp` is never smaller), and the review says so. `nsz` exits 0 on some damaged
   inputs, so the output is accepted only if `nsz` exited 0 and printed `[DONE]`, its PFS0
-  header parses (magic, entry table, member bounds), and `nsz -V` exits 0 and prints
-  `[VERIFIED]`. Anything else is a review and the partial output is deleted with the work
-  folder. Only the `.nsp` reaches the library. `.xci` and `.xcz` are reviewed with the
+  header parses (magic, entry table, member bounds), and `nsz -V` passes
+  `inbox_switch.judge_nsz_verify(exit code, output)`, a pure function that returns
+  (accepted, note). It accepts when `nsz` exits 0, prints no `CORRUPTED`, `MISMATCH`,
+  `Traceback` or error line, and reports at least one NCA, each of them `[VERIFIED]` or
+  `[TICKETLESS]`. `nsz` does not hash-check the NCAs of a ticketless dump and prints
+  `[TICKETLESS]` for them (`[NSP SHA256]` lines only appear when it compares against an
+  original file, so they count for nothing). All `[VERIFIED]` is accepted with no note; any
+  `[TICKETLESS]` (alone or mixed with `[VERIFIED]`) is accepted with the note
+  `not hash-checked by nsz: ticketless dump` in the item's report. Anything else is a review
+  and the partial output is deleted with the work folder. Only the `.nsp` reaches the library. `.xci` and `.xcz` are reviewed with the
   reason that no tool converts them cleanly.
 - **Never overwrites.** The library is indexed once per run by `[TitleID][vN]` in file
   names (`roms/switch`, `extras/switch/updates`, `extras/switch/dlc`). The same TitleID and

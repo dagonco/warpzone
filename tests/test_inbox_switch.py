@@ -160,6 +160,38 @@ class PureTests(unittest.TestCase):
         self.assertEqual(sw.verdict(True, True), "already")
         self.assertEqual(sw.verdict(True, False), "conflict")
 
+    def test_judging_what_nsz_verify_prints(self) -> None:
+        note = "not hash-checked by nsz: ticketless dump"
+        ticketless = (
+            "[VERIFY NSP] base.nsp\n[OPEN] base.nsp\n[ADDING] a.nca\n"
+            "[EXISTS] a48ae7a4dfba73d215b4b53b4da22301.nca\n"
+            "[TICKETLESS] a48ae7a4dfba73d215b4b53b4da22301.nca\n"
+            "[EXISTS] edce42d40cae948c87a1f72733eafc59.cnmt.nca\n"
+            "[NSP SHA256] 69ac8a73852ecb5399cf1d8ffa3ba1ed6586c8a5ac8471915e951d08b0b189c4\n"
+        )
+        cases = [
+            ("all verified", 0, "[VERIFIED] a.nca\n[VERIFIED] b.nca\n", (True, None)),
+            ("ticketless", 0, ticketless, (True, note)),
+            ("mixed", 0, "[VERIFIED] a.nca\n[TICKETLESS] b.nca\n", (True, note)),
+            ("exit code", 1, "[VERIFIED] a.nca\n", (False, None)),
+            ("ticketless, exit code", 1, ticketless, (False, None)),
+            ("no NCA reported", 0, "[DONE] x\n[EXISTS] a.nca\n", (False, None)),
+            ("empty", 0, "", (False, None)),
+            ("corrupted", 0, "[VERIFIED] a.nca\n[CORRUPTED] b.nca\n", (False, None)),
+            ("mismatch", 0, ticketless + "[NSP SHA256] MISMATCH\n", (False, None)),
+            ("error", 0, "[TICKETLESS] a.nca\nError: bad\n", (False, None)),
+            (
+                "traceback",
+                0,
+                "[VERIFIED] a.nca\nTraceback (most recent call last):\n",
+                (False, None),
+            ),
+            ("sha256 line alone", 0, "[NSP SHA256] VERIFIED\n", (False, None)),
+        ]
+        for name, code, text, expected in cases:
+            with self.subTest(name):
+                self.assertEqual(sw.judge_nsz_verify(code, text), expected)
+
     def test_parsing_what_nsz_prints(self) -> None:
         text = f"""
         NCA Archive
@@ -597,6 +629,7 @@ class CompressedTests(SwitchBase):
             ("garbage", "not a valid NSP"),
             ("verify", "failed nsz verification"),
             ("unverified", "failed nsz verification"),
+            ("mismatch", "failed nsz verification"),
         ):
             with self.subTest(mode):
                 os.environ["STUB_NSZ_FAIL"] = mode
@@ -605,6 +638,21 @@ class CompressedTests(SwitchBase):
                 self.assertIn(reason, self.reason(f"{mode}.nsz"))
                 self.assertEqual(self.files("roms"), [], mode)
                 self.assertEqual(self.files("extras") if self.extras.exists() else [], [])
+
+    def place_with_verify_mode(self, mode: str) -> None:
+        os.environ["STUB_NSZ_FAIL"] = mode
+        self.drop("pack.nsz", make_nsz(make_nsp(MK8_UPD, 196608)))
+        self.assertEqual(self.go(), 0, self.out)
+        self.assertEqual(self.done(), ["pack.nsz"])
+        self.assertEqual(self.files("extras/switch"), [f"updates/Mario Kart 8 Deluxe/{UPD_NAME}"])
+        self.assertIn("not hash-checked by nsz: ticketless dump", self.out)
+
+    def test_a_ticketless_nsz_is_placed_with_a_note_that_it_was_not_hash_checked(self) -> None:
+        self.place_with_verify_mode("ticketless")
+
+    def test_a_mixed_verified_and_ticketless_nsz_is_placed_with_the_note(self) -> None:
+
+        self.place_with_verify_mode("mixed")
 
     def test_nsz_without_the_tool_or_the_keys_is_reviewed_not_guessed(self) -> None:
         self.drop("a.nsz", make_nsz(make_nsp(MK8)))

@@ -18,6 +18,10 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 - `warpzone inbox` checks the free space for a `.nsz` against the exact size of the `.nsp` that decompressing it produces, read from the file's headers, instead of the size of the `.nsz` plus 5%. The `.nsp` of a compressed game is usually much bigger than the `.nsz`, so a work folder too small for it is now caught before `nsz` starts, not when the disk fills up.
 - The updater's idle tick is faster on a console with many processes: looking for the menu no longer starts a program per process, which took about 1.4 s on a Steam Deck with ~430 processes and now takes about 40 ms.
 
+### Fixed
+
+- `warpzone inbox` places a `.nsz` of a ticketless dump: `nsz -V` skips the hash check of such a file and prints `[TICKETLESS]` where it prints `[VERIFIED]`, which sent a valid game to review as "failed nsz verification". It is now placed, and the report says it was not hash-checked by nsz.
+
 ### Security
 
 - The Syncthing client without `hub.api_cert_sha256` no longer follows redirects or uses the proxies in the environment, as the pinned client already did. Before, a redirect from the API address to another host received the `X-API-Key`. A redirect is now an error that names where it points, so `api_url` can be set to that address; a Syncthing reached through an environment proxy must be reached directly.
