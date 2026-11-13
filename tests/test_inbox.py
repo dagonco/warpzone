@@ -1017,6 +1017,7 @@ class CartridgeTests(Base):
             "Atari - Jaguar": ("atarijaguar", "Cube (World)", ".j64"),
             "Bandai - WonderSwan": ("wonderswan", "Mono (Japan)", ".ws"),
             "Bandai - WonderSwan Color": ("wonderswancolor", "Color (Japan)", ".wsc"),
+            "Sega - 32X": ("sega32x", "Add-on (World)", ".32x"),
         }
         for dat_name, (system, game, ext) in roms.items():
             data = f"{system} rom".encode()
@@ -1031,6 +1032,7 @@ class CartridgeTests(Base):
                 "atari7800/Maze (USA).zip",
                 "atarijaguar/Cube (World).zip",
                 "atarilynx/Handheld (World).zip",
+                "sega32x/Add-on (World).zip",
                 "wonderswan/Mono (Japan).zip",
                 "wonderswancolor/Color (Japan).zip",
             ],

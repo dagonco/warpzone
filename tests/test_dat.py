@@ -109,6 +109,7 @@ class ParseTests(unittest.TestCase):
         self.assertEqual(dat_system("Atari - Jaguar.dat"), "atarijaguar")
         self.assertEqual(dat_system("Bandai - WonderSwan.dat"), "wonderswan")
         self.assertEqual(dat_system("Bandai - WonderSwan Color.dat"), "wonderswancolor")
+        self.assertEqual(dat_system("Sega - 32X.dat"), "sega32x")
         self.assertIsNone(dat_system("Microsoft - Xbox.dat"))
         self.assertEqual(len(set(dat.SYSTEMS.values())), len(dat.SYSTEMS))
 

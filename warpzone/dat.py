@@ -44,6 +44,7 @@ SYSTEMS: dict[str, str] = {
     "Atari - Jaguar": "atarijaguar",
     "Bandai - WonderSwan": "wonderswan",
     "Bandai - WonderSwan Color": "wonderswancolor",
+    "Sega - 32X": "sega32x",
 }
 DISC_SYSTEMS = ("psx", "ps2", "saturn", "dreamcast")  # CHD, from cue/bin, gdi or iso
 FILE_SYSTEMS = ("psp", "gc")  # one image file, kept as it is
@@ -73,6 +74,7 @@ EXTENSION_HINTS: dict[str, str] = {
     ".jag": "atarijaguar",
     ".ws": "wonderswan",
     ".wsc": "wonderswancolor",
+    ".32x": "sega32x",
 }
 
 # Systems whose dumps carry a dumper's header the DAT leaves out: the extension of the DAT's
