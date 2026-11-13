@@ -418,5 +418,487 @@ class ClassifyTest(unittest.TestCase):
         self.assertEqual(scrape.classify_output(FOUND), scrape.Outcome(None, ()))
 
 
+ROOT = "/work/scrape/snes/input"
+SKY_FIELDS = {
+    "name": "Kirby Super Star",
+    "desc": "A collection of eight games.",
+    "rating": "0.8",
+    "releasedate": "19960920T000000",
+    "developer": "HAL Laboratory",
+    "publisher": "Nintendo",
+    "genre": "Platform",
+    "players": "1-2",
+}
+
+
+def staged_of(*games):
+    """The staged map of a batch: the staged name is the gamelist path below the folder."""
+    return {artwork.relative(g.gamelist): g for g in games}
+
+
+def files(*paths, kind="file"):
+    return {p: kind for p in paths}
+
+
+def plan(games, *, hub=(), hub_media=(), sky=(), main=None, box=None):
+    return scrape.plan_merge(
+        staged_of(*games), ROOT, list(hub), set(hub_media), list(sky), main or {}, box or {}
+    )
+
+
+def only(merge_plan):
+    (merged,) = merge_plan.games
+    return merged
+
+
+class MergeEntriesTest(unittest.TestCase):
+    def setUp(self):
+        self.g = game("snes", "roms/snes/Game (USA).zip", "Game (USA)")
+
+    def test_existing_entry_is_left_alone(self):
+        for hub_path in ("./Game (USA).zip", "Game (USA).zip"):
+            with self.subTest(hub_path=hub_path):
+                p = plan(
+                    [self.g],
+                    hub=[entry(hub_path, name="My name", playcount="3")],
+                    hub_media=media("Game (USA)", *ALL_KINDS),
+                    sky=[entry("./Game (USA).zip", **SKY_FIELDS)],
+                )
+                self.assertEqual(p.entries, ())
+                self.assertEqual(p.copies, ())
+                self.assertEqual(only(p).result, scrape.Result.UNCHANGED)
+                self.assertTrue(only(p).had_entry)
+
+    def test_existing_folder_entry_counts_as_existing(self):
+        p = plan(
+            [self.g], hub=[entry("./Game (USA).zip", tag="folder")], sky=[entry("Game (USA).zip")]
+        )
+        self.assertEqual(p.entries, ())
+
+    def test_new_entry_has_only_the_listed_fields(self):
+        sky = entry(
+            "./Game (USA).zip",
+            **SKY_FIELDS,
+            image="./covers/Game (USA).png",
+            video="./videos/Game (USA).mp4",
+            marquee="./marquees/Game (USA).png",
+            playcount="9",
+            favorite="true",
+            sortname="zzz",
+            kidgame="false",
+        )
+        p = plan([self.g], sky=[sky])
+        new = only(p).entry
+        self.assertEqual(new, artwork.Entry("game", "./Game (USA).zip", SKY_FIELDS))
+        self.assertEqual(only(p).result, scrape.Result.ADDED)
+        self.assertFalse(only(p).had_entry)
+        self.assertEqual(p.entries, (new,))
+
+    def test_empty_and_missing_fields_are_left_out(self):
+        p = plan([self.g], sky=[entry("./Game (USA).zip", name="Game", desc=" \x07 ", genre="")])
+        self.assertEqual(only(p).entry.fields, {"name": "Game"})
+
+    def test_catalog_path_is_written_not_skyscrapers(self):
+        g = game("snes", "roms/snes/Hacks/Hack.zip", "Hack", gamelist="./Hacks/Hack.zip")
+        p = plan([g], sky=[entry(f"{ROOT}/Hacks/Hack.zip", name="Hack")])
+        self.assertEqual(only(p).entry.path, "./Hacks/Hack.zip")
+
+    def test_absolute_and_dot_slash_paths_are_rewritten(self):
+        games = [game("snes", f"roms/snes/G{i}.zip", f"G{i}") for i in range(3)]
+        sky = [
+            entry(f"{ROOT}/G0.zip", name="zero"),
+            entry("./G1.zip", name="one"),
+            entry("G2.zip", name="two"),
+        ]
+        p = plan(games, sky=sky)
+        self.assertEqual([e.path for e in p.entries], ["./G0.zip", "./G1.zip", "./G2.zip"])
+        self.assertEqual([e.fields["name"] for e in p.entries], ["zero", "one", "two"])
+        self.assertEqual(p.dropped, ())
+
+    def test_paths_outside_the_staged_folder_or_unknown_are_dropped(self):
+        sky = [
+            entry("/elsewhere/Game (USA).zip", name="outside"),
+            entry(f"{ROOT}2/Game (USA).zip", name="lookalike"),
+            entry("../Game (USA).zip", name="climbs"),
+            entry("./Sub/../Game (USA).zip", name="dots"),
+            entry(f"{ROOT}/../Game (USA).zip", name="absolute climb"),
+            entry("./Unknown.zip", name="not staged"),
+        ]
+        p = plan([self.g], sky=sky)
+        self.assertEqual(p.entries, ())
+        self.assertEqual(len(p.dropped), 6)
+        self.assertEqual(
+            [d.what for d in p.dropped], [e.path for e in sky], "each is named in the warning"
+        )
+        self.assertTrue(all("dropped" in d.reason for d in p.dropped))
+        self.assertEqual(only(p).result, scrape.Result.NOT_FOUND)
+
+    def test_first_entry_for_a_game_wins(self):
+        p = plan(
+            [self.g],
+            sky=[entry("./Game (USA).zip", name="one"), entry("Game (USA).zip", name="two")],
+        )
+        self.assertEqual(only(p).entry.fields["name"], "one")
+
+    def test_m3u_folder_gets_a_game_entry(self):
+        g = game("psx", "roms/psx/Disc Game.m3u", "Disc Game", kind="dir")
+        p = plan([g], sky=[entry("./Disc Game.m3u", tag="folder", name="Disc Game")])
+        self.assertEqual(
+            only(p).entry, artwork.Entry("game", "./Disc Game.m3u", {"name": "Disc Game"})
+        )
+
+    def test_games_come_in_the_order_of_the_batch(self):
+        a = game("snes", "roms/snes/B.zip", "B")
+        b = game("snes", "roms/snes/A.zip", "A")
+        self.assertEqual([m.game for m in plan([a, b]).games], [a, b])
+
+
+class RenderEntriesTest(unittest.TestCase):
+    def test_text_is_escaped_and_illegal_characters_dropped(self):
+        new = artwork.Entry(
+            "game",
+            "./Tom & Jerry <1>.zip",
+            {
+                "name": "Tom & Jerry <1>",
+                "desc": "a\x00b\x0bc \ud800 </desc><x>&amp;",
+                "genre": "Action",
+            },
+        )
+        text = scrape.render_entries([new])
+        self.assertIn("<path>./Tom &amp; Jerry &lt;1&gt;.zip</path>", text)
+        self.assertIn("<name>Tom &amp; Jerry &lt;1&gt;</name>", text)
+        self.assertIn("<desc>abc  &lt;/desc&gt;&lt;x&gt;&amp;amp;</desc>", text)
+        self.assertNotIn("\x00", text)
+        # The entries read back as the text they were made from.
+        back = artwork.parse_gamelist(f"<gameList>\n{text}</gameList>\n")
+        self.assertEqual(back[0].path, "./Tom & Jerry <1>.zip")
+        self.assertEqual(back[0].fields["name"], "Tom & Jerry <1>")
+        self.assertEqual(back[0].fields["desc"], "abc  </desc><x>&amp;")
+
+    def test_layout_follows_the_given_indent_and_newline(self):
+        new = artwork.Entry("game", "./G.zip", {"genre": "RPG", "name": "G"})
+        self.assertEqual(
+            scrape.render_entries([new], indent="  ", eol="\r\n"),
+            "  <game>\r\n    <path>./G.zip</path>\r\n    <name>G</name>\r\n"
+            "    <genre>RPG</genre>\r\n  </game>\r\n",
+        )
+
+    def test_default_layout_and_no_entries(self):
+        new = artwork.Entry("game", "./G.zip", {"name": "G"})
+        self.assertEqual(
+            scrape.render_entries([new, new]),
+            "\t<game>\n\t\t<path>./G.zip</path>\n\t\t<name>G</name>\n\t</game>\n" * 2,
+        )
+        self.assertEqual(scrape.render_entries([]), "")
+
+
+class MergeMediaTest(unittest.TestCase):
+    def setUp(self):
+        self.g = game("snes", "roms/snes/Game.zip", "Game")
+
+    def test_every_kind_is_planned_from_its_pass(self):
+        main = files(
+            "covers/Game.png",
+            "screenshots/Game.png",
+            "miximages/Game.png",
+            "marquees/Game.png",
+            "backcovers/Game.png",
+            "videos/Game.mp4",
+        )
+        box = files("covers/Game.png")
+        p = plan([self.g], sky=[entry("./Game.zip")], main=main, box=box)
+        by_kind = {c.kind: c for c in p.copies}
+        self.assertEqual(tuple(by_kind), scrape.MEDIA_KINDS, "in MEDIA_KINDS order")
+        self.assertEqual(
+            by_kind["covers"],
+            scrape.MediaCopy("covers", "main", "covers/Game.png", "covers/Game.png"),
+        )
+        self.assertEqual(
+            by_kind["3dboxes"],
+            scrape.MediaCopy("3dboxes", "box", "covers/Game.png", "3dboxes/Game.png"),
+        )
+        self.assertEqual(by_kind["videos"].dest, "videos/Game.mp4")
+        self.assertEqual(only(p).kinds, scrape.MEDIA_KINDS)
+
+    def test_the_box_pass_feeds_only_3dboxes(self):
+        box = files("covers/Game.png", "screenshots/Game.png", "videos/Game.mp4")
+        p = plan([self.g], box=box)
+        self.assertEqual([c.kind for c in p.copies], ["3dboxes"])
+        p = plan([self.g], main=files("covers/Game.png"))
+        self.assertEqual([c.kind for c in p.copies], ["covers"], "main covers are not 3dboxes")
+
+    def test_the_extension_is_kept(self):
+        main = files("covers/Game.jpg", "marquees/Game.jpeg", "videos/Game.webm")
+        p = plan([self.g], main=main)
+        self.assertEqual(
+            sorted(c.dest for c in p.copies),
+            ["covers/Game.jpg", "marquees/Game.jpeg", "videos/Game.webm"],
+        )
+
+    def test_other_extensions_are_not_taken(self):
+        p = plan([self.g], main=files("covers/Game.gif", "videos/Game.mkv", "covers/Game.png.tmp"))
+        self.assertEqual(p.copies, ())
+
+    def test_png_wins_over_jpg(self):
+        p = plan([self.g], main=files("covers/Game.jpg", "covers/Game.png"))
+        self.assertEqual([c.dest for c in p.copies], ["covers/Game.png"])
+
+    def test_subfolder_is_kept(self):
+        g = game("snes", "roms/snes/Hacks/Hack.zip", "Hack", gamelist="./Hacks/Hack.zip")
+        p = plan([g], main=files("covers/Hacks/Hack.png", "videos/Hacks/Hack.mp4"))
+        self.assertEqual(
+            [(c.source, c.dest) for c in p.copies],
+            [
+                ("covers/Hacks/Hack.png", "covers/Hacks/Hack.png"),
+                ("videos/Hacks/Hack.mp4", "videos/Hacks/Hack.mp4"),
+            ],
+        )
+
+    def test_m3u_media_are_renamed_to_the_folder_name(self):
+        g = game("psx", "roms/psx/Disc Game.m3u", "Disc Game", kind="dir")
+        main = files("covers/Disc Game.png", "videos/Disc Game.mp4")
+        box = files("covers/Disc Game.png")
+        p = plan([g], sky=[entry("./Disc Game.m3u")], main=main, box=box)
+        self.assertEqual(
+            sorted((c.source, c.dest) for c in p.copies),
+            [
+                ("covers/Disc Game.png", "3dboxes/Disc Game.m3u.png"),
+                ("covers/Disc Game.png", "covers/Disc Game.m3u.png"),
+                ("videos/Disc Game.mp4", "videos/Disc Game.m3u.mp4"),
+            ],
+        )
+
+    def test_symbolic_links_are_skipped_with_a_warning(self):
+        main = {"covers/Game.png": "file", "videos/Game.mp4": "symlink"}
+        p = plan([self.g], main=main)
+        self.assertEqual([c.kind for c in p.copies], ["covers"])
+        (warning,) = p.dropped
+        self.assertEqual(warning.what, "main/videos/Game.mp4")
+        self.assertIn("symbolic link", warning.reason)
+        self.assertIn("`symlink`", warning.reason)
+
+    def test_a_regular_file_in_another_extension_is_used_when_one_is_a_link(self):
+        p = plan([self.g], main={"covers/Game.png": "symlink", "covers/Game.jpg": "file"})
+        self.assertEqual([c.dest for c in p.copies], ["covers/Game.jpg"])
+        self.assertEqual(len(p.dropped), 1)
+
+    def test_other_file_types_are_skipped(self):
+        p = plan([self.g], main={"covers/Game.png": "other"})
+        self.assertEqual(p.copies, ())
+        self.assertEqual(len(p.dropped), 1)
+
+    def test_nothing_is_planned_over_an_existing_file(self):
+        main = files("covers/Game.png", "screenshots/Game.png", "videos/Game.mp4")
+        present = {"covers/Game.jpg", "videos/Game.webm"}  # other extensions of the kind count
+        p = plan([self.g], hub_media=present, main=main)
+        self.assertEqual([c.kind for c in p.copies], ["screenshots"])
+
+    def test_a_link_over_an_existing_file_is_not_a_warning(self):
+        p = plan([self.g], hub_media={"videos/Game.mp4"}, main={"videos/Game.mp4": "symlink"})
+        self.assertEqual((p.copies, p.dropped), ((), ()))
+
+    def test_existing_entry_gets_the_media_it_lacks(self):
+        present = media(
+            "Game", "covers", "screenshots", "miximages", "marquees", "3dboxes", "backcovers"
+        )
+        p = plan(
+            [self.g],
+            hub=[entry("./Game.zip", name="Mine")],
+            hub_media=present,
+            sky=[entry("./Game.zip", name="Theirs")],
+            main=files("covers/Game.png", "videos/Game.mp4"),
+        )
+        merged = only(p)
+        self.assertEqual(merged.result, scrape.Result.FILLED)
+        self.assertTrue(merged.had_entry)
+        self.assertIsNone(merged.entry)
+        self.assertEqual(merged.kinds, ("videos",))
+
+    def test_nomultiscrape_gets_nothing_at_all(self):
+        p = plan(
+            [self.g],
+            hub=[entry("./Game.zip", nomultiscrape="true")],
+            sky=[entry("./Game.zip", name="Theirs")],
+            main=files("covers/Game.png"),
+            box=files("covers/Game.png"),
+        )
+        self.assertEqual((p.entries, p.copies), ((), ()))
+        self.assertEqual(only(p).result, scrape.Result.UNCHANGED)
+
+    def test_no_entry_and_media_only_is_a_fill(self):
+        p = plan([self.g], main=files("covers/Game.png"))
+        merged = only(p)
+        self.assertEqual(merged.result, scrape.Result.FILLED)
+        self.assertFalse(merged.had_entry)
+        self.assertIsNone(merged.entry)
+
+    def test_new_entry_without_media(self):
+        merged = only(plan([self.g], sky=[entry("./Game.zip", name="Game")]))
+        self.assertEqual(merged.result, scrape.Result.ADDED)
+        self.assertEqual(merged.copies, ())
+
+    def test_nothing_from_skyscraper_is_not_found(self):
+        self.assertEqual(only(plan([self.g])).result, scrape.Result.NOT_FOUND)
+        with_entry = plan([self.g], hub=[entry("./Game.zip")])
+        self.assertEqual(only(with_entry).result, scrape.Result.NOT_FOUND)
+
+    def test_media_the_hub_already_has_is_not_a_miss(self):
+        p = plan(
+            [self.g],
+            hub=[entry("./Game.zip")],
+            hub_media={"covers/Game.png"},
+            main=files("covers/Game.png"),
+        )
+        self.assertEqual(only(p).result, scrape.Result.UNCHANGED)
+
+    def test_two_games_never_plan_the_same_destination(self):
+        a = game("snes", "roms/snes/A.zip", "A", gamelist="./Same.zip")
+        b = game("snes", "roms/snes/B.zip", "B", gamelist="./Same.zip")
+        p = scrape.plan_merge(
+            {"A.zip": a, "B.zip": b}, ROOT, [], set(), [], files("covers/A.png", "covers/B.png"), {}
+        )
+        self.assertEqual([c.dest for c in p.copies], ["covers/Same.png"])
+
+
+class ReportTest(unittest.TestCase):
+    def merges(self):
+        kirby = game("snes", "roms/snes/Kirby Super Star (USA).zip", "Kirby Super Star (USA)")
+        chrono = game("snes", "roms/snes/Chrono Trigger (USA).zip", "Chrono Trigger (USA)")
+        homebrew = game("snes", "roms/snes/Example Homebrew (World).zip", "Example Homebrew")
+        done = game("snes", "roms/snes/Done (USA).zip", "Done (USA)")
+        mc = scrape.MediaCopy
+        return (
+            scrape.GameMerge(
+                kirby,
+                scrape.Result.ADDED,
+                False,
+                artwork.Entry("game", kirby.gamelist),
+                tuple(mc(k, "main", "x", "y") for k in scrape.MEDIA_KINDS),
+            ),
+            scrape.GameMerge(
+                chrono,
+                scrape.Result.FILLED,
+                True,
+                None,
+                (mc("3dboxes", "box", "x", "y"), mc("videos", "main", "x", "y")),
+            ),
+            scrape.GameMerge(homebrew, scrape.Result.NOT_FOUND, False),
+            scrape.GameMerge(done, scrape.Result.UNCHANGED, True),
+        )
+
+    def test_the_designed_report(self):
+        merges = self.merges()
+        report = scrape.Report("snes", merges[:3], version="3.21.1", account=True)
+        self.assertEqual(
+            scrape.render_report(report),
+            "scrape: snes: 3 games (Skyscraper 3.21.1, ScreenScraper account: set)\n"
+            "  added      Kirby Super Star (USA).zip: covers, screenshots, miximages, marquees, "
+            "3dboxes, backcovers, videos\n"
+            "  filled     Chrono Trigger (USA).zip: 3dboxes, videos (entry kept)\n"
+            "  not found  Example Homebrew (World).zip\n"
+            "scrape: snes: 1 added, 1 filled, 1 not found",
+        )
+
+    def test_a_complete_game_is_counted_and_not_listed(self):
+        text = scrape.render_report(scrape.Report("snes", self.merges(), version="3.21.1"))
+        self.assertNotIn("Done (USA)", text)
+        self.assertIn("ScreenScraper account: anonymous", text)
+        self.assertTrue(text.endswith("scrape: snes: 1 added, 1 filled, 1 not found, 1 unchanged"))
+        self.assertTrue(text.startswith("scrape: snes: 4 games"))
+
+    def test_skipped_not_found_is_counted(self):
+        report = scrape.Report("snes", self.merges()[:1], skipped_not_found=4)
+        self.assertTrue(
+            scrape.render_report(report).endswith(
+                "scrape: snes: 1 added, skipped 4 not found in the last 30 days"
+            )
+        )
+
+    def test_nothing_to_do(self):
+        self.assertEqual(
+            scrape.render_report(scrape.Report("gba", ())),
+            "scrape: gba: 0 games (Skyscraper, ScreenScraper account: anonymous)\n"
+            "scrape: gba: nothing to do",
+        )
+        text = scrape.render_report(scrape.Report("gba", self.merges()[3:], skipped_not_found=2))
+        self.assertTrue(text.startswith("scrape: gba: 1 game ("))
+
+    def test_added_without_media_and_filled_without_an_entry(self):
+        g = game("snes", "roms/snes/Hacks/Hack.zip", "Hack", gamelist="./Hacks/Hack.zip")
+        a = scrape.GameMerge(g, scrape.Result.ADDED, False, artwork.Entry("game", g.gamelist))
+        f = scrape.GameMerge(
+            g, scrape.Result.FILLED, False, None, (scrape.MediaCopy("covers", "main", "x", "y"),)
+        )
+        lines = scrape.render_report(scrape.Report("snes", (a, f))).splitlines()
+        self.assertEqual(lines[1], "  added      Hacks/Hack.zip: no media")
+        self.assertEqual(lines[2], "  filled     Hacks/Hack.zip: covers")
+
+    def test_dropped_things_are_warnings(self):
+        dropped = (
+            scrape.Dropped(
+                "main/videos/Game.mp4",
+                "is a symbolic link (Skyscraper's `symlink` option); skipped",
+            ),
+        )
+        text = scrape.render_report(scrape.Report("snes", (), dropped))
+        self.assertIn(
+            "  warning    main/videos/Game.mp4: is a symbolic link "
+            "(Skyscraper's `symlink` option); skipped",
+            text,
+        )
+
+    def test_report_from_a_plan(self):
+        g = game("snes", "roms/snes/Game.zip", "Game")
+        p = plan([g], sky=[entry("./Game.zip", name="Game")], main=files("covers/Game.png"))
+        text = scrape.render_report(scrape.Report("snes", p.games, p.dropped))
+        self.assertIn("  added      Game.zip: covers", text)
+
+
+class FailureMessageTest(unittest.TestCase):
+    def test_quota(self):
+        self.assertEqual(
+            scrape.stop_message(scrape.Stop.QUOTA, not_tried=12),
+            "quota: ScreenScraper's daily request limit is reached; 12 games not tried. "
+            "Run warpzone scrape again tomorrow.",
+        )
+        self.assertIn("1 game not tried", scrape.stop_message(scrape.Stop.QUOTA, not_tried=1))
+
+    def test_busy_hints_at_an_account_only_without_one(self):
+        anonymous = scrape.stop_message(scrape.Stop.BUSY)
+        self.assertIn("too busy for anonymous users", anonymous)
+        self.assertIn("userCreds", anonymous)
+        self.assertIn("[screenscraper]", anonymous)
+        with_account = scrape.stop_message(scrape.Stop.BUSY, account=True)
+        self.assertNotIn("userCreds", with_account)
+
+    def test_the_other_reasons(self):
+        self.assertIn("closed", scrape.stop_message(scrape.Stop.CLOSED))
+        self.assertIn("refused", scrape.stop_message(scrape.Stop.BLACKLISTED))
+        self.assertEqual(
+            scrape.stop_message(scrape.Stop.NETWORK), "ScreenScraper could not be reached"
+        )
+
+    def test_every_stop_has_a_message_and_none_holds_a_credential(self):
+        for stop in scrape.Stop:
+            text = scrape.stop_message(stop, not_tried=3)
+            self.assertTrue(text, stop)
+            self.assertNotIn(FAKE_CREDS, text)
+
+    def test_skyscraper_failed(self):
+        self.assertEqual(
+            scrape.failed_message("snes", "/work/scrape/snes.log"),
+            "Skyscraper failed on snes (see /work/scrape/snes.log)",
+        )
+
+    def test_gamelist_not_written(self):
+        self.assertEqual(
+            scrape.gamelist_message(
+                "snes", "the gamelist changed three times while it was written"
+            ),
+            "snes: the gamelist changed three times while it was written; "
+            "the entries are left for the next run",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
