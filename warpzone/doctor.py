@@ -85,7 +85,9 @@ from warpzone.doctor_inbox import (
     check_inbox_way,
     check_ra,
     check_switch,
+    check_unattended_inbox,
     collapse_inbox,
+    judge_unattended_inbox,
 )
 from warpzone.doctor_probes import (
     Probes,
@@ -193,6 +195,7 @@ __all__ = [
     "check_syncthing_unit",
     "check_tool",
     "check_tools",
+    "check_unattended_inbox",
     "check_undescribed_folders",
     "check_update_timer",
     "check_updater",
@@ -218,6 +221,7 @@ __all__ = [
     "judge_shadps4_version",
     "judge_systems_override",
     "judge_title_links",
+    "judge_unattended_inbox",
     "judge_unit_state",
     "judge_update_timer",
     "judge_updater_conf",
@@ -265,6 +269,7 @@ CHECKS: tuple[Callable[[Context], list[Result]], ...] = (
     check_dats,
     check_arcade_dats,
     check_hub,
+    check_unattended_inbox,
     check_ra,
 )
 
