@@ -31,7 +31,7 @@ report only: run again with --apply to convert and place
 The command and its result are the same in both places; what differs is where the tools come from and what the `[inbox]` paths mean.
 
 - **On a computer that mounts the hub's share** (a desktop or laptop). You install the tools there, keep the DATs in a folder there, and `[inbox] root` is where the share is mounted on that computer. This is the usual way: conversions use that computer's processor, and the files cross the network once.
-- **In the hub's container**, the one from [the hub container guide](/warpzone/setup/hub-container/). The tools come from the image, the share is read where it lives (no network), and every path in `[inbox]` is a path inside the container. Use it when you have no computer to spare, or for work that needs no conversion. A NAS processor is slow with `chdman`.
+- **In the hub's container**, the one from [the hub container guide](/warpzone/setup/hub-container/). The tools come from the image, so nothing is installed on the NAS; the share is read where it lives (no network), and every path in `[inbox]` is a path inside the container. Use it when you have no computer to spare. A NAS processor is slow with `chdman`, and with `dolphin-tool` and `nsz` on big images.
 
 | | On a computer | In the hub container |
 |---|---|---|
@@ -49,9 +49,14 @@ Which tools exist in each place:
 | `chdman` | CHD conversions (`psx`, `ps2`, `saturn`, `dreamcast`) | install `mame-tools` or `rom-tools` | `/usr/bin/chdman` (on `PATH`), from Debian's `mame-tools` |
 | `bsdtar` | `.7z` and `.rar` archives | install `libarchive-tools` (ships with macOS) | `/usr/bin/bsdtar` (on `PATH`), from Debian's `libarchive-tools` |
 | `RAHasher` | the RetroAchievements hash check | build it, set `rahasher` | `/usr/local/bin/RAHasher` |
-| `dolphin-tool`, `nsz`, `orbis-pkg-util`, `vita3k` | `.gcz`, Switch metadata, PS4 and Vita packages | install them | not in the image |
+| `dolphin-tool` | `.gcz` GameCube images | install Dolphin | `/usr/local/bin/dolphin-tool` (on `PATH`), built from Dolphin's source |
+| `nsz` | Switch metadata, `.nsz` decompression | `uv tool install nsz` | `/usr/local/bin/nsz` (on `PATH`), in its own virtual environment |
+| `orbis-pkg-util` | PS4 `.pkg` games | `cargo install orbis-pkg-util` | `/usr/local/bin/orbis-pkg-util` (on `PATH`), built from its crate |
+| `vita3k` | PS Vita `.pkg` games | install it | not in the image |
 
-An item that needs a tool the place lacks goes to `inbox/_revisar/` with the reason "missing tool"; the other items are filed. `.zip` archives, cartridge systems, `.rvz`, `.wia` and 3DS files need none of the missing tools. `chdman` and `bsdtar` need no `[inbox]` setting in the container: inbox finds them on `PATH`. When the image gains a tool it is on the image's `PATH`, and this table is the place that says so.
+An item that needs a tool the place lacks goes to `inbox/_revisar/` with the reason "missing tool"; the other items are filed. In the container that is a PS Vita `.pkg`: Vita3K is not in the image (see [PS Vita packages](/warpzone/development/design/inbox/#ps-vita-packages-in-the-container)), so run those on a computer. `chdman`, `bsdtar`, `dolphin-tool`, `nsz` and `orbis-pkg-util` need no `[inbox]` setting in the container: inbox finds them on `PATH`. When the image gains a tool it is on the image's `PATH`, and this table is the place that says so.
+
+What a tool needs besides itself never goes into the image. The Switch keys file (`switch_keys`), the PS Vita zRIF file (`vita_zrif`), `titledb_dir` and the arcade DATs are folders or files you mount from the NAS, read-only, and name in `[inbox]`.
 
 ### Running it in the container
 
@@ -75,7 +80,8 @@ Add a service for it to `compose.yaml`, next to `warpzone`. It repeats the mount
     volumes:
       - /srv/games:/srv/games             # the hub root (an example path), read-write, same path as [hub] root
       - ./config:/config:ro
-      - ./dats:/dats:ro                   # a clone of libretro-database (see below)
+      - ./dats:/dats:ro                   # libretro-database, and titledb and the arcade DATs if you use them (see below)
+      - ./keys:/keys:ro                   # your Switch keys and PS Vita zRIF file; not on the share, not in the image
       - ./work:/work                      # unpacked archives and conversions: room for a few GiB
     env_file:
       - ./warpzone.env                    # RA_API_KEY, to look RA hashes up
@@ -91,9 +97,13 @@ root = "/srv/games"                          # the hub root as mounted in the co
 dats_dir = "/dats/libretro-database/metadat"  # redump/ and no-intro/ inside
 work_dir = "/work/tmp"
 rahasher = "/usr/local/bin/RAHasher"          # optional
+titledb_dir = "/dats/titledb"                 # optional: Switch names (a clone of blawar/titledb)
+switch_keys = "/keys/prod.keys"               # Switch .nsp and .nsz: nsz reads it, warpzone only passes the path
+vita_zrif = "/keys/PSV_GAMES.tsv"             # PS Vita .pkg: needs Vita3K, which the image lacks
+mame_dat = "/dats/mame0282lx.zip"             # optional: arcade (see "Arcade sets")
 ```
 
-Make the `dats` and `work` folders next to `compose.yaml` (`work` writable by the service's uid), and clone the DATs there: `git clone --depth 1 --filter=blob:none --sparse https://github.com/libretro/libretro-database dats/libretro-database && git -C dats/libretro-database sparse-checkout set metadat/redump metadat/no-intro`. warpzone never downloads them. Then, from the folder with `compose.yaml`:
+[`examples/compose.example.yaml`](https://github.com/dagonco/warpzone/blob/main/examples/compose.example.yaml) has the same service, with the `[inbox]` keys as comments. Make the `dats`, `keys` and `work` folders next to `compose.yaml` (`work` writable by the service's uid; `keys` readable by it and by nobody else if the NAS has other users), put your keys file in `keys/`, and clone the DATs into `dats/`: `git clone --depth 1 --filter=blob:none --sparse https://github.com/libretro/libretro-database dats/libretro-database && git -C dats/libretro-database sparse-checkout set metadat/redump metadat/no-intro`. warpzone never downloads them. Then, from the folder with `compose.yaml`:
 
 ```bash
 docker compose run --rm warpzone-inbox inbox            # report only

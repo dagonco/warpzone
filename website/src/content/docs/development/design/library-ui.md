@@ -1390,9 +1390,36 @@ commit; only its binary reaches the last stage, at `/usr/local/bin/RAHasher`. Th
 installs `mame-tools` (`chdman`) and `libarchive-tools` (`bsdtar`) with `apt-get install
 --no-install-recommends` and removes the apt lists in the same layer, so `inbox` can convert discs
 and unpack `.7z` and `.rar` there. They land in `/usr/bin`, on `PATH`, so `doctor` needs no path
-for them. The other tools of `inbox` (`dolphin-tool`, `nsz`, `orbis-pkg-util`, Vita3K) are not
-packaged for Debian and are not in the image (see
-[where inbox runs](/warpzone/setup/inbox/#where-inbox-runs)). The entry point is `warpzone` and the default
+for them. The tools Debian does not package are built or installed in stages of their own, and
+only the result reaches the last stage, all on `PATH` in `/usr/local/bin`:
+
+- **`dolphin-tool`** is built from Dolphin's source at an annotated tag, checked against the
+  pinned commit, with the submodules the build needs fetched at the commits that commit records.
+  Only the `dolphin-tool` target is built, with Dolphin's bundled libraries linked statically
+  (`USE_SYSTEM_LIBS=OFF`) and the Qt, NoGUI, Vulkan, X11, EGL, sound, controller, update,
+  analytics, RetroAchievements, UPnP and GBA parts switched off, so the binary needs only the C and
+  C++ runtime libraries the last stage already has. It still compiles Dolphin's emulation core,
+  because `dolphin-tool` links it; that is most of the image build time (see the CI job below).
+- **`nsz`** is installed from PyPI into a virtual environment of its own, `/opt/nsz`, from
+  `docker/nsz-requirements.txt`: every package, `nsz` and its dependencies, pinned to an exact
+  version with its SHA-256 (`pip install --require-hashes --no-deps --only-binary=:all:`, so a
+  package with no wheel for the architecture fails the build rather than compiling). Only
+  `/opt/nsz/bin/nsz` is linked onto `PATH`, so warpzone's own Python has none of its packages.
+- **`orbis-pkg-util`** is built with Cargo from the crate on crates.io: the download must match a
+  pinned SHA-256 and the build uses the `Cargo.lock` packaged in the crate (`--locked`). The
+  stage's base image (`rust`, slim, trixie) is pinned by digest.
+
+Each is licensed apart from warpzone's MIT: RAHasher GPL-3.0, `dolphin-tool` GPL-2.0-or-later,
+`nsz` MIT, `orbis-pkg-util` MIT or Apache-2.0, and the Debian packages as Debian says. Only the
+Dockerfile and the requirements file are in the repository, never the sources or the binaries:
+the image is built by whoever runs it, from the pinned upstream tags.
+Vita3K is the one tool of `inbox` not in the image (see
+[PS Vita packages in the container](/warpzone/development/design/inbox/#ps-vita-packages-in-the-container)),
+and keys and big data (`switch_keys`, `vita_zrif`, `titledb_dir`, the DATs) are mounted, never
+copied into it (see [where inbox runs](/warpzone/setup/inbox/#where-inbox-runs)).
+The CI `image` job (weekly and manual runs; it builds the image, checks every tool and runs
+`warpzone doctor` inside it) is what shows that a pin or a base image change still builds.
+The entry point is `warpzone` and the default
 command `serve`, so `docker compose run --rm warpzone catalog ...` runs the other commands. The
 image runs as a non-root user and the Compose file sets `user:` to the uid and gid that own the
 games share. An example Compose file is `examples/compose.example.yaml`, and the steps are in

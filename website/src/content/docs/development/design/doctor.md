@@ -51,7 +51,11 @@ for every problem, the exact fix for this platform.
   an install command, since the root of a container is read-only and rebuilt from the
   image; `chdman` and `bsdtar` stay `[!!]` there as on a computer, so an image without them
   fails (the image ships both from Debian packages, in `/usr/bin`, so `PATH` finds them and
-  `IMAGE_TOOL_PATHS` lists only the tools outside `PATH`). `Hub root for inbox` is `[! ]` when `[inbox] root` is unset but `[hub] root` is
+  `IMAGE_TOOL_PATHS` lists only the tools outside `PATH`). `dolphin-tool`, `nsz` and
+  `orbis-pkg-util` are in `/usr/local/bin`, also on `PATH`, so they are `[ok]` with no setting;
+  Vita3K is the one tool the image lacks, so it is the one line of the tools table that is
+  `[--]` there with the "does not ship it" fix. The CI `image` job runs `doctor` in the built
+  image and fails when a tool of the image is not `[ok]`. `Hub root for inbox` is `[! ]` when `[inbox] root` is unset but `[hub] root` is
   there, because `inbox` needs its own `root` (the same path as `[hub] root` in the
   container). `Work folder` is `[! ]` when `work_dir` is unset (`/tmp` is memory in the
   container) or is not a mounted folder, and the missing-DATs fix says to mount a folder.

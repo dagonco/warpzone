@@ -100,13 +100,13 @@ Optional. Only `warpzone inbox` and `warpzone doctor` read it. `inbox` works wit
 | `chdman` | `chdman` on `PATH` | Converts discs to CHD. |
 | `bsdtar` | `bsdtar` on `PATH` | Unpacks `.7z` and `.rar`. |
 | `rahasher` | none (used only when set) | RAHasher from RALibretro, built with CHD support: checks that a conversion keeps the RetroAchievements hash. In the container, `/usr/local/bin/RAHasher`, the copy in the image. |
-| `dolphin_tool` | `dolphin-tool` on `PATH` | Reads compressed GameCube `.gcz` images. `.rvz` and `.wia` need no tool. |
-| `nsz` | `nsz` on `PATH` | Reads the title ID and version of Switch `.nsp` and `.nsz` files, and decompresses `.nsz`. |
-| `orbis_pkg_util` | `orbis-pkg-util` on `PATH` | Unpacks PS4 `.pkg` games. Without it the package is filed as it is. |
-| `vita3k` | `/Applications/Vita3K.app` on macOS, else `vita3k` on `PATH` | Vita3K, which installs PS Vita `.pkg` games: on macOS the app bundle (or a link to its binary), on Linux a plain binary (an AppImage is refused). It runs only in a work folder of its own, never in its own data. Without it such a package goes to review. |
+| `dolphin_tool` | `dolphin-tool` on `PATH` | Reads compressed GameCube `.gcz` images. `.rvz` and `.wia` need no tool. In the container it is on `PATH`, so this needs no setting. |
+| `nsz` | `nsz` on `PATH` | Reads the title ID and version of Switch `.nsp` and `.nsz` files, and decompresses `.nsz`. In the container it is on `PATH`. |
+| `orbis_pkg_util` | `orbis-pkg-util` on `PATH` | Unpacks PS4 `.pkg` games. Without it the package is filed as it is. In the container it is on `PATH`. |
+| `vita3k` | `/Applications/Vita3K.app` on macOS, else `vita3k` on `PATH` | Vita3K, which installs PS Vita `.pkg` games: on macOS the app bundle (or a link to its binary), on Linux a plain binary (an AppImage is refused). It runs only in a work folder of its own, never in its own data. Without it such a package goes to review. It is not in the hub container image. |
 | `vita_zrif` | none | A file you keep with the zRIF of each PS Vita `.pkg`: `CONTENT_ID<TAB>zRIF` lines, or a TSV with a header row such as NoPayStation's `PSV_GAMES.tsv`, of which only the `Content ID` and `zRIF` columns are read. warpzone never prints a zRIF and never downloads keys. |
 | `titledb_dir` | none | A local clone of `blawar/titledb`, which names Switch games. |
-| `switch_keys` | `~/.switch/prod.keys` | Your console's keys file. warpzone only passes the path to `nsz`; it never reads or prints the file. |
+| `switch_keys` | `~/.switch/prod.keys` | Your console's keys file. warpzone only passes the path to `nsz`; it never reads or prints the file. In the container, a file you mount read-only (for example `/keys/prod.keys`); it is never in the image. |
 | `mame_dat` | none | MAME's `listxml`, or an official `mameXXXXlx.zip` as it is. |
 | `fbneo_dat` | none | FinalBurn Neo "ClrMame Pro XML, Arcade only". |
 | `mame2003plus_dat` | none | `metadata/mame2003-plus.xml` of MAME 2003-Plus. |

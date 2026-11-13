@@ -19,6 +19,11 @@
 #                        RA_API_KEY=<your RetroAchievements web API key>
 # The files in config/ must be readable by the uid below (chmod 640 with the share's group, or 644
 # if nobody else uses the NAS).
+#
+# The second service, `warpzone-inbox`, at the end of the file, runs `warpzone inbox` with the tools
+# in the image. It also needs dats/ (the DATs), keys/ (your Switch keys and PS Vita zRIF file) and
+# work/ (room for conversions) next to this file; the keys and the big data are read from them and
+# are never part of the image.
 
 name: warpzone
 
@@ -78,3 +83,54 @@ services:
     # the host's network instead: remove `ports:` above, uncomment the next line, and set
     # `api_url = "http://127.0.0.1:8384"`. The UI is then on port 8780 of the NAS.
     # network_mode: host
+
+  # `warpzone inbox` in the same image: it files the games dropped in <hub root>/inbox/ with the
+  # tools the image ships (chdman, bsdtar, RAHasher, dolphin-tool, nsz, orbis-pkg-util), so nothing
+  # has to be installed on the NAS. A profile keeps `docker compose up -d` from starting it; run it
+  # with `docker compose run --rm warpzone-inbox inbox` (a report) and `... inbox --apply`.
+  # It repeats the mounts and limits above and adds three folders the image does not hold, because
+  # they are keys or big data: they come from the NAS, read-only, and never go into the image.
+  warpzone-inbox:
+    image: warpzone:local
+    container_name: warpzone-inbox
+    profiles: ["inbox"]
+    user: "1000:1000"                    # CHANGE: the same uid and gid as above
+    # group_add:
+    #   - "101"                          # if the warpzone service needs it
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 2g                        # more than the server: conversions and archives
+    volumes:
+      - /srv/games:/srv/games            # CHANGE: the hub root, read-write, the same path as [hub] root
+      - ./config:/config:ro
+      # libretro-database's metadat/redump and metadat/no-intro, and, if you use them, titledb
+      # (Switch names) and the arcade DATs. warpzone never downloads them.
+      - ./dats:/dats:ro
+      # Your Switch keys file (prod.keys, which nsz reads) and your PS Vita zRIF file.
+      # Keep this folder out of the share and out of Syncthing; only inbox reads it.
+      - ./keys:/keys:ro
+      # Unpacked archives and conversions: room for a few GiB. The container's /tmp is memory.
+      - ./work:/work
+    env_file:
+      - ./warpzone.env
+    environment:
+      XDG_CACHE_HOME: /work/cache        # the parsed DATs are cached here
+    # In config/config.toml, next to the keys the warpzone service reads:
+    #   [inbox]
+    #   root = "/srv/games"                                  # the hub root as mounted above
+    #   dats_dir = "/dats/libretro-database/metadat"
+    #   work_dir = "/work/tmp"
+    #   rahasher = "/usr/local/bin/RAHasher"                 # optional
+    #   titledb_dir = "/dats/titledb"                        # optional: Switch names
+    #   switch_keys = "/keys/prod.keys"                      # Switch .nsp / .nsz
+    #   vita_zrif = "/keys/PSV_GAMES.tsv"                    # PS Vita .pkg (needs Vita3K, see the docs)
+    #   mame_dat = "/dats/mame0282lx.zip"                    # optional: arcade
+    #   fbneo_dat = "/dats/fbneo-arcade.dat"
+    #   mame2003plus_dat = "/dats/mame2003-plus.xml"
+    # dolphin-tool, nsz and orbis-pkg-util are on PATH in the image, so they need no setting.
