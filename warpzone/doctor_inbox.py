@@ -35,9 +35,9 @@ from warpzone.doctor_hints import (
     TITLEDB_HINT,
     TITLEDB_REPO,
 )
+from warpzone.inbox_core import MIN_FREE_GIB
 
 DAT_MAX_AGE_DAYS = 180
-MIN_FREE_GIB = 20
 
 GIB = 1024**3
 DAY_SECONDS = 86400

@@ -35,6 +35,7 @@ from warpzone.dat import DatLibrary, FileInfo
 from warpzone.errors import UsageError
 from warpzone.report import Reporter
 
+MIN_FREE_GIB = 20  # the hub's free space below which doctor warns and unattended runs wait
 MAX_ARCHIVE_DEPTH = 2
 CHUNK = 8 * 1024 * 1024
 ARCHIVE_EXTENSIONS = (".zip", ".7z", ".rar")
