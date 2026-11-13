@@ -6,7 +6,7 @@ import argparse
 import os
 import sys
 import urllib.parse
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -787,9 +787,10 @@ def _settings(args: argparse.Namespace, cfg: Config, profiles: dict[str, Profile
     )
 
 
-def _frontend(args: argparse.Namespace, cfg: Config, profiles: dict[str, Profile]) -> int:
+def _frontend(
+    args: argparse.Namespace, cfg: Config, profiles: dict[str, Profile], rep: Reporter
+) -> int:
     from warpzone import provision
-    from warpzone.report import Reporter
 
     name = _device(cfg, args.name) if args.name else None
     client: Client | None = None
@@ -814,7 +815,7 @@ def _frontend(args: argparse.Namespace, cfg: Config, profiles: dict[str, Profile
         name,
         profile,
         Path.home(),
-        Reporter(print, warn_sink=_eprint),
+        rep,
         local=client,
         dry_run=args.dry_run,
     )
@@ -903,7 +904,7 @@ def _saves(args: argparse.Namespace, cfg: Config, profiles: dict[str, Profile]) 
     return EXIT_RUNTIME if outcome.errors else EXIT_OK
 
 
-def _self_update(rep: Reporter, args: argparse.Namespace) -> int:
+def _self_update(args: argparse.Namespace, rep: Reporter) -> int:
     from warpzone import selfupdate
 
     if args.dry_run and args.channel is None:
@@ -937,7 +938,9 @@ def _health(args: argparse.Namespace, rep: Reporter) -> int:
     return health.run_health(lambda: _load(args), args.name, probes, rep.out)
 
 
-def _whitelist(args: argparse.Namespace, cfg: Config) -> int:
+def _whitelist(
+    args: argparse.Namespace, cfg: Config, profiles: dict[str, Profile], rep: Reporter
+) -> int:
     from warpzone import whitelist_store
 
     root = args.root or Path(cfg.hub.root)
@@ -966,110 +969,107 @@ def _whitelist(args: argparse.Namespace, cfg: Config) -> int:
     )
 
 
-def _run(args: argparse.Namespace) -> int:
-    if args.command == "settings":  # the apply path: no network code
-        return _settings(args, *_load(args))
-    if args.command == "play-state":  # ES-DE waits for it too: no network code either
-        return _play_state(args, *_load(args))
-    if args.command == "links":  # and so does this one
-        return _links(args, *_load(args))
-    if args.command == "saves":  # ES runs it around the emulator: no network code either
-        return _saves(args, *_load(args))
-    from warpzone import doctor, provision, prune
-    from warpzone.report import Reporter
+def _doctor(args: argparse.Namespace, rep: Reporter) -> int:
+    from warpzone import doctor
 
-    rep = Reporter(print, warn_sink=_eprint)
-    if args.command == "self-update":  # needs no config
-        return _self_update(rep, args)
-    if args.command == "health":  # a failed check is a result, not a usage error
-        return _health(args, rep)
-    if args.command == "doctor":  # offline, read-only, needs no valid config
-        return doctor.run_doctor(doctor.Probes(config_path=_config_path(args)), rep.out)
-    if args.command == "bios":  # works without a config when --root is given
-        return _bios(args, rep)
-    if args.command == "inbox":  # needs at most the [inbox] table
-        return _inbox(args, rep)
-    if args.command == "catalog":  # needs the config only for the hub root
-        return _catalog(args, rep)
-    cfg, profiles = _load(args)
+    return doctor.run_doctor(doctor.Probes(config_path=_config_path(args)), rep.out)
 
-    if args.command == "whitelist":
-        return _whitelist(args, cfg)
 
-    if args.command == "serve":
-        from warpzone import serve
+def _serve(
+    args: argparse.Namespace, cfg: Config, profiles: dict[str, Profile], rep: Reporter
+) -> int:
+    from warpzone import serve
 
-        return serve.run(
-            cfg, listen=args.listen, client_factory=lambda: _hub_client(cfg), log=_eprint
-        )
+    return serve.run(cfg, listen=args.listen, client_factory=lambda: _hub_client(cfg), log=_eprint)
 
-    if args.command == "check":
-        from warpzone import whitelist_store
 
-        rep.out(f"config ok: {len(cfg.devices)} device(s), profiles: {', '.join(profiles)}")
-        excluded, notes = whitelist_store.excluded_system_report(
-            cfg, profiles, root=args.root, home=Path.home()
-        )
-        for text in [*notes, *excluded]:
-            rep.out(text)
-        problems = len(excluded)
-        if not args.offline:
-            problems += provision.check_hub(cfg, profiles, _hub_client(cfg), rep)
-        return EXIT_RUNTIME if problems else EXIT_OK
+def _check(
+    args: argparse.Namespace, cfg: Config, profiles: dict[str, Profile], rep: Reporter
+) -> int:
+    from warpzone import provision, whitelist_store
 
-    if args.command == "render-ignores":
-        name = _device(cfg, args.name)
-        profile = profiles[cfg.devices[name].profile]
-        # Artwork folders let in the systems that have a folder in this machine's library.
-        scope = provision.artwork_scope(profile, Path.home())
-        for spec in model.device_specs(cfg, name, profile, scope):
-            rep.out(f"# {spec.id}")
-            if spec.bootstrap_ignores is not None:
-                rep.out("# bootstrap, replaced once the whitelist has arrived:")
-                rep.out("\n".join(f"#   {line}" for line in spec.bootstrap_ignores))
-            rep.out("\n".join(spec.ignores))
-        hub_library = {s.id: s for s in model.hub_specs(cfg, profiles)}.get(model.LIBRARY_ID)
-        if hub_library is not None:
-            rep.out("# hub .stignore of the library folder:")
-            rep.out("\n".join(hub_library.ignores))
-        return EXIT_OK
+    rep.out(f"config ok: {len(cfg.devices)} device(s), profiles: {', '.join(profiles)}")
+    excluded, notes = whitelist_store.excluded_system_report(
+        cfg, profiles, root=args.root, home=Path.home()
+    )
+    for text in [*notes, *excluded]:
+        rep.out(text)
+    problems = len(excluded)
+    if not args.offline:
+        problems += provision.check_hub(cfg, profiles, _hub_client(cfg), rep)
+    return EXIT_RUNTIME if problems else EXIT_OK
 
-    if args.command == "status":
-        provision.folder_status(_hub_client(cfg), "hub", rep)
-        try:
-            local = localst.parse_config(localst.find_config())
-        except localst.LocalSyncthingError:
-            return EXIT_OK  # no Syncthing on this machine: hub status is enough
-        client = _client(local.base_url, local.api_key, label="local")
-        provision.folder_status(client, "this machine", rep)
-        return EXIT_OK
 
-    if args.command == "frontend":
-        return _frontend(args, cfg, profiles)
+def _render_ignores(
+    args: argparse.Namespace, cfg: Config, profiles: dict[str, Profile], rep: Reporter
+) -> int:
+    from warpzone import provision
 
-    if args.command == "prune":
-        if args.unattended and (not args.apply or args.max_gib is not None or args.force):
-            raise UsageError("prune --unattended needs --apply and takes no --max-gib or --force")
-        local = localst.parse_config(localst.find_config(args.syncthing_config))
-        client = _client(local.base_url, local.api_key, label="local")
-        name = args.name or _this_device(cfg, client)
-        problems = prune.prune_device(
-            cfg,
-            _device(cfg, name),
-            profiles[cfg.devices[name].profile],
-            client,
-            rep,
-            home=Path.home(),
-            apply=args.apply,
-            max_gib=DEFAULT_MAX_GIB if args.max_gib is None else args.max_gib,
-            force=args.force,
-            list_all=args.list_all,
-            notify_url=args.notify_url,
-            rescan_timeout=args.timeout,
-            unattended=args.unattended,
-            state_base=settings_state.state_dir().parent,
-        )
-        return EXIT_RUNTIME if problems else EXIT_OK
+    name = _device(cfg, args.name)
+    profile = profiles[cfg.devices[name].profile]
+    # Artwork folders let in the systems that have a folder in this machine's library.
+    scope = provision.artwork_scope(profile, Path.home())
+    for spec in model.device_specs(cfg, name, profile, scope):
+        rep.out(f"# {spec.id}")
+        if spec.bootstrap_ignores is not None:
+            rep.out("# bootstrap, replaced once the whitelist has arrived:")
+            rep.out("\n".join(f"#   {line}" for line in spec.bootstrap_ignores))
+        rep.out("\n".join(spec.ignores))
+    hub_library = {s.id: s for s in model.hub_specs(cfg, profiles)}.get(model.LIBRARY_ID)
+    if hub_library is not None:
+        rep.out("# hub .stignore of the library folder:")
+        rep.out("\n".join(hub_library.ignores))
+    return EXIT_OK
+
+
+def _status(
+    args: argparse.Namespace, cfg: Config, profiles: dict[str, Profile], rep: Reporter
+) -> int:
+    from warpzone import provision
+
+    provision.folder_status(_hub_client(cfg), "hub", rep)
+    try:
+        local = localst.parse_config(localst.find_config())
+    except localst.LocalSyncthingError:
+        return EXIT_OK  # no Syncthing on this machine: hub status is enough
+    client = _client(local.base_url, local.api_key, label="local")
+    provision.folder_status(client, "this machine", rep)
+    return EXIT_OK
+
+
+def _prune(
+    args: argparse.Namespace, cfg: Config, profiles: dict[str, Profile], rep: Reporter
+) -> int:
+    from warpzone import prune
+
+    if args.unattended and (not args.apply or args.max_gib is not None or args.force):
+        raise UsageError("prune --unattended needs --apply and takes no --max-gib or --force")
+    local = localst.parse_config(localst.find_config(args.syncthing_config))
+    client = _client(local.base_url, local.api_key, label="local")
+    name = args.name or _this_device(cfg, client)
+    problems = prune.prune_device(
+        cfg,
+        _device(cfg, name),
+        profiles[cfg.devices[name].profile],
+        client,
+        rep,
+        home=Path.home(),
+        apply=args.apply,
+        max_gib=DEFAULT_MAX_GIB if args.max_gib is None else args.max_gib,
+        force=args.force,
+        list_all=args.list_all,
+        notify_url=args.notify_url,
+        rescan_timeout=args.timeout,
+        unattended=args.unattended,
+        state_base=settings_state.state_dir().parent,
+    )
+    return EXIT_RUNTIME if problems else EXIT_OK
+
+
+def _provision(
+    args: argparse.Namespace, cfg: Config, profiles: dict[str, Profile], rep: Reporter
+) -> int:
+    from warpzone import provision
 
     if args.target == "hub" and args.additive:
         provision.provision_hub_additive(cfg, profiles, _hub_client(cfg, dry_run=args.dry_run), rep)
@@ -1106,6 +1106,57 @@ def _run(args: argparse.Namespace) -> int:
         unattended=args.unattended,
     )
     return EXIT_DEFERRED if args.unattended and rep.deferred else EXIT_OK
+
+
+# Dispatch: the command argparse parsed (`args.command`) to the function that runs it, in three
+# tables by what the command needs before it can run. A new command is a parser in
+# `_build_parser`, a handler function, and one line in the table that fits; a test fails when a
+# parser has no handler.
+#
+# These need the config but no network code: ES-DE runs them around the emulator, so they load
+# none of it (see "Speed" in development/design/emulator-settings.md).
+_LOCAL_COMMANDS: dict[str, Callable[[argparse.Namespace, Config, dict[str, Profile]], int]] = {
+    "settings": _settings,
+    "play-state": _play_state,
+    "links": _links,
+    "saves": _saves,
+}
+# These work without a valid config (some need none) and get the `Reporter`.
+_STANDALONE_COMMANDS: dict[str, Callable[[argparse.Namespace, Reporter], int]] = {
+    "self-update": _self_update,  # needs no config
+    "health": _health,  # a failed check is a result, not a usage error
+    "doctor": _doctor,  # offline, read-only, needs no valid config
+    "bios": _bios,  # works without a config when --root is given
+    "inbox": _inbox,  # needs at most the [inbox] table
+    "catalog": _catalog,  # needs the config only for the hub root
+}
+# These load and validate the config first. Every handler takes the same four arguments,
+# whether it uses them all or not.
+_CONFIG_COMMANDS: dict[
+    str, Callable[[argparse.Namespace, Config, dict[str, Profile], Reporter], int]
+] = {
+    "whitelist": _whitelist,
+    "serve": _serve,
+    "check": _check,
+    "render-ignores": _render_ignores,
+    "status": _status,
+    "frontend": _frontend,
+    "prune": _prune,
+    "provision": _provision,
+}
+
+
+def _run(args: argparse.Namespace) -> int:
+    command: str = args.command
+    if command in _LOCAL_COMMANDS:
+        return _LOCAL_COMMANDS[command](args, *_load(args))
+    from warpzone.report import Reporter
+
+    rep = Reporter(print, warn_sink=_eprint)
+    if command in _STANDALONE_COMMANDS:
+        return _STANDALONE_COMMANDS[command](args, rep)
+    cfg, profiles = _load(args)
+    return _CONFIG_COMMANDS[command](args, cfg, profiles, rep)
 
 
 def main(argv: Sequence[str] | None = None) -> int:

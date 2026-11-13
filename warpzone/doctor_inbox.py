@@ -1,0 +1,406 @@
+"""The doctor checks that only matter to the machine that runs `warpzone inbox`.
+
+DATs, arcade DATs, Switch titledb and keys, the hub folder, where inbox runs, the
+RetroAchievements key, and `collapse_inbox` (pure), which folds the optional ones into one line
+without an `[inbox]` table. See development/design/doctor.md.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Sequence
+from pathlib import Path
+
+from warpzone import inbox_switch as switch
+from warpzone import ra
+from warpzone.dat import SYSTEMS, DatLibrary
+from warpzone.doctor_core import (
+    FAIL,
+    G_DATS,
+    G_HUB,
+    G_INBOX,
+    G_RA,
+    G_SWITCH,
+    G_WAY,
+    INBOX_GROUPS,
+    OK,
+    OPTIONAL,
+    WARN,
+    Context,
+    Result,
+)
+from warpzone.doctor_hints import (
+    DAT_CLONE_HINT,
+    DAT_MOUNT_HINT,
+    KEYS_HINT,
+    TITLEDB_HINT,
+    TITLEDB_REPO,
+)
+
+DAT_MAX_AGE_DAYS = 180
+MIN_FREE_GIB = 20
+
+GIB = 1024**3
+DAY_SECONDS = 86400
+
+
+def _dat_files(library: DatLibrary) -> list[Path]:
+    return [path for paths in library.paths.values() for path in paths]
+
+
+def check_dats(ctx: Context) -> list[Result]:
+    p = ctx.probes
+    dats_dir = ctx.config.settings.dats_dir
+    inbox = ctx.inbox_configured
+    missing = FAIL if inbox else OPTIONAL
+    clone = DAT_MOUNT_HINT if p.in_container() else DAT_CLONE_HINT
+    if not dats_dir:
+        return [
+            Result(
+                "DAT folder",
+                G_DATS,
+                missing,
+                "dats_dir is not set in [inbox]; inbox needs the Redump and No-Intro DATs "
+                "to identify games"
+                if inbox
+                else "no [inbox] dats_dir; only needed by inbox (or pass --dats)",
+                clone,
+            )
+        ]
+    directory = Path(dats_dir)
+    if not p.is_dir(directory):
+        return [Result("DAT folder", G_DATS, missing, f"{directory} does not exist", clone)]
+    library = DatLibrary(directory, None)
+    found = library.systems()
+    known = sorted(set(SYSTEMS.values()))
+    if not found:
+        return [
+            Result(
+                "DAT folder",
+                G_DATS,
+                missing,
+                f"{directory} holds no Redump or No-Intro DATs warpzone knows",
+                f"point dats_dir at libretro-database's metadat folder. {clone}",
+            )
+        ]
+    absent = [s for s in known if s not in found]
+    detail = f"{directory}: {len(found)} of {len(known)} systems ({', '.join(found)})"
+    if absent:
+        detail += f"; no DAT for {', '.join(absent)}"
+    results = [Result("DAT folder", G_DATS, OK, detail)]
+    try:
+        newest = max(p.mtime(path) for path in _dat_files(library))
+    except OSError as exc:
+        results.append(
+            Result("DAT age", G_DATS, WARN, f"cannot read DAT file times ({exc.strerror})")
+        )
+        return results
+    days = int((p.now() - newest) // DAY_SECONDS)
+    if days > DAT_MAX_AGE_DAYS:
+        results.append(
+            Result(
+                "DAT age",
+                G_DATS,
+                WARN,
+                f"newest DAT is {days} days old (limit {DAT_MAX_AGE_DAYS}); newer dumps may not "
+                "be recognized",
+                "update your libretro-database clone: git -C <path of the clone> pull",
+            )
+        )
+    else:
+        results.append(Result("DAT age", G_DATS, OK, f"newest DAT is {max(days, 0)} days old"))
+    return results
+
+
+# The arcade databases `inbox` can use: ([inbox] key, name, what it is, where to get it).
+ARCADE_DATS = (
+    (
+        "mame_dat",
+        "MAME DAT",
+        "MAME's -listxml (or the official mameXXXXlx.zip, read as it is)",
+        "download the mameXXXXlx.zip of the MAME version your frontend runs from "
+        "https://github.com/mamedev/mame/releases (the file is the zipped listxml)",
+    ),
+    (
+        "fbneo_dat",
+        "FinalBurn Neo DAT",
+        "the FinalBurn Neo arcade DAT",
+        "download 'FinalBurn Neo (ClrMame Pro XML, Arcade only).dat' from the dats/ folder of "
+        "https://github.com/libretro/FBNeo",
+    ),
+    (
+        "mame2003plus_dat",
+        "MAME 2003-Plus DAT",
+        "the MAME 2003-Plus DAT",
+        "download mame2003-plus.xml from the metadata/ folder of "
+        "https://github.com/libretro/mame2003-plus-libretro",
+    ),
+)
+
+
+def check_arcade_dats(ctx: Context) -> list[Result]:
+    """The optional arcade databases: each is `[--]` when not set, a problem when set
+    to something that is not a file (`inbox` would refuse to start), and `[ok]` when
+    the file is there."""
+    results = []
+    for key, name, what, fix in ARCADE_DATS:
+        value = getattr(ctx.config.settings, key)
+        if not value:
+            results.append(
+                Result(name, G_DATS, OPTIONAL, f"{key} is not set; arcade zips need {what}", fix)
+            )
+            continue
+        path = Path(value)
+        try:
+            size = path.stat().st_size if path.is_file() else None
+        except OSError:
+            size = None
+        if size is None:
+            results.append(Result(name, G_DATS, FAIL, f"{path} is not a file", fix))
+        else:
+            results.append(Result(name, G_DATS, OK, f"{path} ({size // 2**20} MiB)"))
+    return results
+
+
+def check_switch(ctx: Context) -> list[Result]:
+    """Presence only: the titledb clone and the keys file. The keys file is never opened."""
+    p = ctx.probes
+    settings = ctx.config.settings
+    results: list[Result] = []
+    if not settings.titledb_dir:
+        results.append(
+            Result(
+                "titledb_dir",
+                G_SWITCH,
+                OPTIONAL,
+                "not set; only needed for Switch games (.nsp / .nsz) in inbox",
+                TITLEDB_HINT,
+            )
+        )
+    else:
+        directory = Path(settings.titledb_dir)
+        if not p.is_dir(directory):
+            results.append(
+                Result(
+                    "titledb_dir",
+                    G_SWITCH,
+                    FAIL,
+                    f"{directory} does not exist",
+                    f"clone it: {TITLEDB_HINT}",
+                )
+            )
+        elif not (found := switch.region_files(directory)):
+            results.append(
+                Result(
+                    "titledb_dir",
+                    G_SWITCH,
+                    FAIL,
+                    f"{directory} has no region files (like US.en.json)",
+                    f"is it a clone of {TITLEDB_REPO}? {TITLEDB_HINT}",
+                )
+            )
+        else:
+            results.append(
+                Result("titledb_dir", G_SWITCH, OK, f"{directory}: {len(found)} region file(s)")
+            )
+    keys = Path(settings.switch_keys) if settings.switch_keys else switch.default_keys(p.home)
+    if p.is_file(keys):
+        results.append(
+            Result("switch_keys", G_SWITCH, OK, f"{keys} (not read, only passed to nsz)")
+        )
+    elif settings.switch_keys:
+        results.append(
+            Result(
+                "switch_keys",
+                G_SWITCH,
+                FAIL,
+                f"[inbox] switch_keys = {keys} is not a file",
+                f"fix the path. {KEYS_HINT}",
+            )
+        )
+    else:
+        results.append(
+            Result(
+                "switch_keys",
+                G_SWITCH,
+                OPTIONAL,
+                f"{keys} not found; nsz needs it to read Switch metadata and to decompress .nsz",
+                KEYS_HINT,
+            )
+        )
+    return results
+
+
+def check_hub(ctx: Context) -> list[Result]:
+    p = ctx.probes
+    settings = ctx.config.settings
+    root = settings.root
+    level = FAIL
+    source = "[inbox] root"
+    if not root:
+        hub_root = ctx.config.hub_root
+        if hub_root and p.is_dir(Path(hub_root)):
+            where = "mounted in this container" if p.in_container() else "this machine is the hub"
+            root, level, source = hub_root, WARN, f"[hub] root ({where})"
+        else:
+            return [
+                Result(
+                    "Hub folder",
+                    G_HUB,
+                    OPTIONAL,
+                    "no [inbox] root; only needed by inbox (or pass --root), where it is the "
+                    "hub's games share as mounted on this machine",
+                    'set root = "/path/to/mounted/share" in the [inbox] table',
+                )
+            ]
+    folder = Path(root)
+    mount_fix = (
+        f"mount the hub's games share on this machine, then check that {source} points at "
+        "the folder that holds inbox/ and library/"
+    )
+    if not p.is_dir(folder):
+        return [
+            Result("Hub folder", G_HUB, level, f"{folder} is not reachable ({source})", mount_fix)
+        ]
+    needed = ("inbox", "library/roms")
+    lacking = [n for n in needed if not p.is_dir(folder / n)]
+    if lacking:
+        return [
+            Result(
+                "Hub folder",
+                G_HUB,
+                level,
+                f"{folder} lacks {', '.join(n + '/' for n in lacking)}",
+                f"is {source} the hub root? It must hold inbox/ and library/roms/ "
+                "(see https://dagonco.github.io/warpzone/overview/concepts/#the-hub)",
+            )
+        ]
+    results = [Result("Hub folder", G_HUB, OK, f"{folder} has inbox/ and library/roms/")]
+    try:
+        total, free = p.disk_free(folder)
+    except OSError as exc:
+        results.append(Result("Free space", G_HUB, WARN, f"cannot read: {exc.strerror or exc}"))
+        return results
+    detail = f"{free / GIB:.1f} GiB free of {total / GIB:.0f} GiB"
+    if free < MIN_FREE_GIB * GIB:
+        results.append(
+            Result(
+                "Free space",
+                G_HUB,
+                WARN,
+                f"{detail} (below {MIN_FREE_GIB} GiB)",
+                "free space on the hub's volume before adding games; inbox never overwrites, "
+                "but a full disk stops placing",
+            )
+        )
+    else:
+        results.append(Result("Free space", G_HUB, OK, detail))
+    return results
+
+
+def check_inbox_way(ctx: Context) -> list[Result]:
+    """Which way `inbox` would run here, and what that way needs besides the tools: in the hub
+    container the hub root is [hub] root, the DATs and the work folder have to be mounted, and
+    the work folder must not be the container's memory-backed /tmp. Only with an [inbox] table."""
+    if not ctx.inbox_configured:
+        return []
+    p = ctx.probes
+    settings = ctx.config.settings
+    if not p.in_container():
+        return [
+            Result(
+                "Where inbox runs",
+                G_WAY,
+                OK,
+                "on a computer: tools come from the [inbox] paths or PATH, the hub's share "
+                "must be mounted here",
+            )
+        ]
+    results = [
+        Result(
+            "Where inbox runs",
+            G_WAY,
+            OK,
+            "in the hub container: tools come from the image; paths in [inbox] are paths "
+            "inside the container",
+        )
+    ]
+    hub_root = ctx.config.hub_root
+    if not settings.root and hub_root:
+        results.append(
+            Result(
+                "Hub root for inbox",
+                G_WAY,
+                WARN,
+                "[inbox] root is not set; inbox needs it (or --root) even though the hub "
+                "root is mounted here",
+                f'set root = "{hub_root}" in the [inbox] table: the hub root is mounted at '
+                "the same path as [hub] root",
+            )
+        )
+    work = settings.work_dir
+    if not work:
+        results.append(
+            Result(
+                "Work folder",
+                G_WAY,
+                WARN,
+                "work_dir is not set; inbox would unpack and convert in /tmp, which is "
+                "memory in the container (a few GiB per game)",
+                "mount a folder with room (the compose file's volumes) and set work_dir in "
+                "[inbox] to it",
+            )
+        )
+    elif not p.is_dir(Path(work)):
+        results.append(
+            Result(
+                "Work folder",
+                G_WAY,
+                WARN,
+                f"{work} does not exist in this container",
+                "mount a folder at that path (the compose file's volumes), or point work_dir "
+                "at one that is mounted",
+            )
+        )
+    else:
+        results.append(Result("Work folder", G_WAY, OK, work))
+    return results
+
+
+def check_ra(ctx: Context) -> list[Result]:
+    # The value is never read into a result: only whether it is there.
+    if ctx.probes.env.get(ra.KEY_ENV):
+        return [Result(ra.KEY_ENV, G_RA, OK, "set (hash lookups enabled)")]
+    return [
+        Result(
+            ra.KEY_ENV,
+            G_RA,
+            OPTIONAL,
+            "not set; inbox still hashes with RAHasher, but cannot look hashes up",
+            f"export {ra.KEY_ENV}=<your key> (from your retroachievements.org settings) in the "
+            "shell or service that runs warpzone; keep it out of the config and the repository",
+        )
+    ]
+
+
+def collapse_inbox(results: Sequence[Result]) -> list[Result]:
+    """Without an [inbox] table, the optional inbox-only items become one line. Items that
+    are ok, warn or fail stay: the machine has that tool or folder, and a broken one is worth
+    saying. Pure."""
+    kept = [r for r in results if not (r.group in INBOX_GROUPS and r.status == OPTIONAL)]
+    hidden = len(results) - len(kept)
+    if not hidden:
+        return kept
+    return [
+        *kept,
+        Result(
+            "Inbox",
+            G_INBOX,
+            OK,
+            f"not set up on this machine ({hidden} optional item(s) not listed): only the "
+            "machine that runs `warpzone inbox` (a computer or the hub container) needs its "
+            "tools, Switch titledb and keys, "
+            "DATs, hub folder and RetroAchievements key",
+            "add an [inbox] table to the config to check them here "
+            "(see examples/config.example.toml)",
+        ),
+    ]

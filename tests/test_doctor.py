@@ -15,7 +15,16 @@ from unittest import mock
 from process_support import SPAWNER, GroupKillCase
 from support import API_KEY, DECK_ID, HUB_ID
 from test_cli import run
-from warpzone import __version__, doctor, esde, prune, selfupdate, updatetimer
+from warpzone import (
+    __version__,
+    doctor,
+    doctor_probes,
+    esde,
+    flatpak,
+    prune,
+    selfupdate,
+    updatetimer,
+)
 from warpzone.doctor import (
     FAIL,
     GIB,
@@ -881,9 +890,9 @@ class HubContainerTests(TmpCase):
 
     def test_the_real_probe_reads_the_runtime_markers(self) -> None:
         with mock.patch("os.path.exists", side_effect=lambda p: p == "/run/.containerenv"):
-            self.assertTrue(doctor._in_container())
+            self.assertTrue(doctor_probes._in_container())
         with mock.patch("os.path.exists", return_value=False):
-            self.assertFalse(doctor._in_container())
+            self.assertFalse(doctor_probes._in_container())
 
     def test_image_paths_count_only_in_the_container(self) -> None:
         self.assertEqual(doctor.known_tool_paths(self.RAHASHER, True)[0], self.IMAGE_RAHASHER)
@@ -1255,29 +1264,29 @@ def layers(common: str | None = LAYER, own: str | None = LAYER, names=("common.t
 
 
 class RunToolProcessTests(GroupKillCase):
-    """`doctor._run` runs a tool of the user's (`--version`) or a query of the system, with the
-    time limit of the probes, and kills everything the tool started when it runs past it."""
+    """`doctor_probes._run` runs a tool of the user's (`--version`) or a query of the system, with
+    the time limit of the probes, and kills everything the tool started when it runs past it."""
 
     def test_a_tool_that_runs_past_the_limit_is_killed_with_the_processes_it_started(self) -> None:
         started = time.monotonic()
         with (
-            mock.patch.object(doctor, "RUN_TIMEOUT_SECONDS", 1.0),
+            mock.patch.object(doctor_probes, "RUN_TIMEOUT_SECONDS", 1.0),
             self.assertRaises(subprocess.TimeoutExpired),
         ):
-            doctor._run(["sh", "-c", SPAWNER, "sh", str(self.pidfile)])
+            doctor_probes._run(["sh", "-c", SPAWNER, "sh", str(self.pidfile)])
         self.assertLess(time.monotonic() - started, 10.0)
         self.assert_gone(self.child_pid())
 
     def test_the_output_is_stdout_and_stderr_together_with_the_exit_code(self) -> None:
-        out = doctor._run(["sh", "-c", "echo out; echo err >&2; exit 3"])
+        out = doctor_probes._run(["sh", "-c", "echo out; echo err >&2; exit 3"])
         self.assertEqual((out.returncode, out.output), (3, "out\nerr\n"))
 
     def test_the_tool_does_not_read_the_terminal(self) -> None:
-        self.assertEqual(doctor._run(["cat"]), RunOutput(0, ""))
+        self.assertEqual(doctor_probes._run(["cat"]), RunOutput(0, ""))
 
     def test_a_program_that_cannot_start_raises_oserror(self) -> None:
         with self.assertRaises(OSError):
-            doctor._run(["/nonexistent/tool"])
+            doctor_probes._run(["/nonexistent/tool"])
 
 
 class SettingsJudgeTests(unittest.TestCase):
@@ -1624,7 +1633,7 @@ class JudgeGameModeTests(unittest.TestCase):
         self.assertEqual(status, WARN)
         self.assertIn("desktop autostart", detail)
         self.assertIn("never runs", detail)
-        self.assertIn(doctor.SYNCTHINGY_EXEC, fix)
+        self.assertIn(flatpak.SYNCTHINGY_EXEC, fix)
         self.assertIn("systemctl --user enable --now syncthing.service", fix)
         self.assertIn("remove ~/.config/autostart/syncthingy.desktop", fix)
         self.assertIn("two instances", fix)
@@ -1633,7 +1642,7 @@ class JudgeGameModeTests(unittest.TestCase):
         status, detail, fix = judge_game_mode({}, set(), {})
         self.assertEqual(status, WARN)
         self.assertIn("no systemd user unit", detail)
-        self.assertIn("ExecStart=" + doctor.SYNCTHINGY_EXEC, fix)
+        self.assertIn("ExecStart=" + flatpak.SYNCTHINGY_EXEC, fix)
         self.assertNotIn("remove", fix)
 
     def test_a_unit_that_is_not_enabled_warns_and_names_it(self) -> None:
@@ -1735,7 +1744,7 @@ class JudgeUnitStateTests(unittest.TestCase):
         self.assertIn("auto-restart", detail)
         self.assertIn("scope of its own", detail)
         self.assertIn("flatpak kill com.github.zocker_160.SyncThingy", fix)
-        self.assertIn("ExecStart=" + doctor.SYNCTHINGY_EXEC, fix)
+        self.assertIn("ExecStart=" + flatpak.SYNCTHINGY_EXEC, fix)
         self.assertIn("ExecStop=/usr/bin/flatpak kill com.github.zocker_160.SyncThingy", fix)
         self.assertIn("systemctl --user restart syncthing", fix)
 
@@ -1757,7 +1766,7 @@ class JudgeUnitStateTests(unittest.TestCase):
         self.assertEqual(judge_unit_state(out, flatpak=True, stops_flatpak=False)[0], WARN)
 
     def test_the_unit_shown_by_the_game_mode_fix_has_exec_stop(self) -> None:
-        self.assertIn("ExecStop=" + doctor.SYNCTHINGY_STOP, doctor.SYNCTHING_UNIT)
+        self.assertIn("ExecStop=" + flatpak.SYNCTHINGY_STOP, doctor.SYNCTHING_UNIT)
 
 
 class SyncthingUnitTests(TmpCase):
