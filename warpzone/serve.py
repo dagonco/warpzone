@@ -37,6 +37,8 @@ from warpzone import (
     catalog,
     catalog_store,
     diskstatus_io,
+    inbox_lock,
+    inbox_unattended_io,
     library_api,
     playstate,
     playstate_device,
@@ -51,6 +53,7 @@ from warpzone import (
 from warpzone import whitelist_store as store
 from warpzone.config import Config, ServeSettings, split_listen
 from warpzone.errors import EXIT_OK, UsageError, WarpzoneError
+from warpzone.inbox_unattended import State, is_record_id, newest_record_ids, parse_state
 from warpzone.library_api import ApiError
 from warpzone.syncthing import Client, SyncthingError
 
@@ -80,6 +83,8 @@ CHUNK = 64 * 1024  # bytes of a media file read and sent at a time
 BODY_SECONDS = 4.0 * SOCKET_TIMEOUT
 MAX_DRAIN = 1024 * 1024  # bytes of a rejected request body read and thrown away before the answer
 LIBRARY_FOLDER = "wz-library"
+INBOX_STATE = "state.json"  # the unattended inbox's state file, in `catalog/inbox/`
+INBOX_FILE_MAX = 8 * 1024 * 1024  # bytes: a state file or run record over this is read as damaged
 CONTENT_TYPES = {
     ".html": "text/html; charset=utf-8",
     ".css": "text/css; charset=utf-8",
@@ -299,6 +304,17 @@ def error_response(error: ApiError) -> Response:
 # --------------------------------------------------------------------------- reading the hub
 
 
+@dataclass(frozen=True)
+class InboxFiles:
+    """What the hub holds of the unattended inbox, parsed: the state, the newest run records
+    (newest first) and the lock's `busy`. A missing or damaged file is an empty state or no
+    record."""
+
+    state: State
+    records: tuple[dict[str, Any], ...]
+    busy: dict[str, str] | None
+
+
 class HubFiles:
     """The hub root's files, read and kept in memory. A file is read again when its size or
     mtime changed, and checked for that at most every `interval` seconds. The whitelists are
@@ -333,6 +349,9 @@ class HubFiles:
         self._ledgers_checked = float("-inf")
         self._queue: tuple[tuple[int, int] | None, queue_store.Loaded] | None = None
         self._queue_checked = float("-inf")
+        self._inbox_docs: dict[Path, tuple[tuple[int, int], Any]] = {}
+        self._inbox: InboxFiles | None = None
+        self._inbox_checked = float("-inf")
 
     # ------------------------------------------------------------- the catalog
 
@@ -578,6 +597,82 @@ class HubFiles:
         with self._lock:
             self._queue = None
             self._queue_checked = float("-inf")
+
+    # ------------------------------------------------------------- the unattended inbox
+
+    def _inbox_file(self, path: Path | None, parse: Callable[[str | None], Any]) -> Any:
+        """`parse` of a file's text (None when there is no file), read again only when its size
+        or mtime changed. A file over `INBOX_FILE_MAX` or one that cannot be read is damaged:
+        `parse` gets None for it, as for a missing one."""
+        if path is None:
+            return parse(None)
+        stamp = self._stat(path)
+        if stamp is None:
+            self._inbox_docs.pop(path, None)
+            return parse(None)
+        held = self._inbox_docs.get(path)
+        if held is not None and held[0] == stamp:
+            return held[1]
+        text = None
+        if stamp[0] <= INBOX_FILE_MAX:
+            try:
+                text = path.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                text = None
+        doc = parse(text)
+        self._inbox_docs[path] = (stamp, doc)
+        return doc
+
+    def _inbox_record(self, run_id: str) -> dict[str, Any] | None:
+        base = inbox_unattended_io.runs_dir(self.root)
+        path = safe_file(self.root, base, (f"{run_id}.json",))
+        found: dict[str, Any] | None = self._inbox_file(
+            path, lambda text: library_api.parse_record(text, run_id)
+        )
+        return found
+
+    def inbox(self) -> InboxFiles:
+        """The state file, the newest run records and the lock, checked at most every
+        `interval` seconds."""
+        with self._lock:
+            if self._inbox is not None and self.clock() - self._inbox_checked < self.interval:
+                return self._inbox
+            self._inbox_checked = self.clock()
+            base = inbox_unattended_io.inbox_dir(self.root)
+            state: State = self._inbox_file(
+                safe_file(self.root, base, (INBOX_STATE,)), lambda text: parse_state(text)[0]
+            )
+            try:
+                names = [p.name.removesuffix(".json") for p in base.joinpath("runs").glob("*.json")]
+            except OSError:
+                names = []
+            ids = newest_record_ids(names, library_api.INBOX_RUNS_SHOWN)
+            records = tuple(r for r in map(self._inbox_record, ids) if r is not None)
+            if len(self._inbox_docs) > 4 * library_api.INBOX_RUNS_SHOWN:
+                keep = {inbox_unattended_io.runs_dir(self.root) / f"{i}.json" for i in ids}
+                keep.add(base / INBOX_STATE)
+                self._inbox_docs = {k: v for k, v in self._inbox_docs.items() if k in keep}
+            self._inbox = InboxFiles(state, records, self._busy())
+            return self._inbox
+
+    def inbox_run(self, run_id: str) -> dict[str, Any] | None:
+        """One run record, or None for an id that is not valid or has no (readable) record."""
+        if not is_record_id(run_id):
+            return None
+        with self._lock:
+            return self._inbox_record(run_id)
+
+    def _busy(self) -> dict[str, str] | None:
+        lock = self.root / "inbox" / inbox_lock.LOCK_NAME
+        try:
+            mtime = lock.stat().st_mtime
+        except OSError:
+            return None
+        try:
+            text = lock.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            text = None
+        return library_api.inbox_busy(text, mtime)
 
     # ------------------------------------------------------------- whitelists
 
@@ -1035,6 +1130,19 @@ class App:
                 return json_response(200, self._catalog_status())
             case ["queue"]:
                 return self._queue_get(request)
+            case ["inbox"]:
+                found = self.files.inbox()
+                return json_response(
+                    200,
+                    library_api.inbox_response(
+                        found.state, found.records, self.files.library(), found.busy
+                    ),
+                )
+            case ["inbox", "runs", run_id]:
+                record = self.files.inbox_run(run_id)
+                if record is None:
+                    raise ApiError("not-found", "no such run")
+                return json_response(200, library_api.run_response(record, self.files.library()))
         raise ApiError("not-found", "no such route")
 
     def _api_write(self, request: Request, segments: list[str]) -> Response:

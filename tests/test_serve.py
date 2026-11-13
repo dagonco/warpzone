@@ -22,7 +22,16 @@ from unittest import mock
 from library_support import GIB, config, games, managed, write_catalog
 from support import API_KEY, DECK_ID, HUB_ID, MACHINE_ID, FakeSyncthing
 from test_cli import run
-from warpzone import __version__, artwork, catalog, library_api, playstate, playstate_device, serve
+from warpzone import (
+    __version__,
+    artwork,
+    catalog,
+    inbox_unattended,
+    library_api,
+    playstate,
+    playstate_device,
+    serve,
+)
 from warpzone import whitelist as wl
 from warpzone.config import ServeSettings, parse_config
 from warpzone.syncthing import Client
@@ -746,6 +755,185 @@ class ReadTests(ServeCase):
             (True, 4, 7, False),
         )
         self.assertEqual(status["updated"], "2026-11-06T10:00:00Z")
+
+
+class InboxTests(ServeCase):
+    """`GET /api/v1/inbox` and `GET /api/v1/inbox/runs/{id}` over files the server only reads."""
+
+    RUN = "20261113T101500Z"
+
+    def inbox_dir(self) -> Path:
+        path = self.root / "catalog" / "inbox"
+        (path / "runs").mkdir(parents=True, exist_ok=True)
+        return path
+
+    def write_run(self, run_id: str, text: str | None = None, **extra: Any) -> Path:
+        placed = {
+            "system": "psx",
+            "entry": "Example Game (Europe).chd",
+            "outcome": "placed",
+            "path": "library/roms/psx/Example Game (Europe).chd",
+            "whitelist": [],
+            "ra": [],
+            "notes": [],
+        }
+        doc = {
+            "v": 1,
+            "id": run_id,
+            "mode": "unattended",
+            "started": "2026-11-13T10:15:00Z",
+            "finished": "2026-11-13T10:21:40Z",
+            "exit": 0,
+            "items": [
+                {
+                    "item": "a.zip",
+                    "outcome": "done",
+                    "moved_to": "inbox/_done/a.zip",
+                    "games": [
+                        placed,
+                        {**placed, "entry": "New.chd", "path": "library/roms/psx/New.chd"},
+                    ],
+                    "reasons": [],
+                    "notes": [],
+                }
+            ],
+            "counts": {"placed": 2, "already": 0, "review": 0, "held": 0, "waiting": 0},
+            "whitelist": [],
+            "purged": [],
+            "warnings": [],
+            **extra,
+        }
+        path = self.inbox_dir() / "runs" / f"{run_id}.json"
+        path.write_text(json.dumps(doc) if text is None else text)
+        return path
+
+    def test_no_files_is_an_empty_answer_not_an_error(self) -> None:
+        reply = self.get("/api/v1/inbox")
+        self.assertEqual(reply.status, 200)
+        self.assertEqual(
+            reply.json,
+            {
+                "checked": None,
+                "busy": None,
+                "error": None,
+                "waiting": [],
+                "held": [],
+                "runs": [],
+                "last": None,
+            },
+        )
+
+    def test_the_newest_record_comes_in_full_with_catalog_ids(self) -> None:
+        self.write_run("20261112T090000Z")
+        self.write_run(self.RUN)
+        body = self.get("/api/v1/inbox").json
+        self.assertEqual([r["id"] for r in body["runs"]], [self.RUN, "20261112T090000Z"])
+        self.assertEqual(body["runs"][0]["placed"], 2)
+        games = body["last"]["items"][0]["games"]
+        self.assertEqual(body["last"]["id"], self.RUN)
+        self.assertEqual(games[0]["id"], EXAMPLE.id)
+        self.assertIsNone(games[1]["id"], "filed, but the catalog has no such game yet")
+
+    def test_one_record_by_its_id(self) -> None:
+        self.write_run("20261112T090000Z")
+        reply = self.get("/api/v1/inbox/runs/20261112T090000Z")
+        self.assertEqual(reply.status, 200)
+        self.assertEqual(reply.json["id"], "20261112T090000Z")
+        self.assertEqual(reply.json["items"][0]["games"][0]["id"], EXAMPLE.id)
+
+    def test_an_unknown_run_is_404(self) -> None:
+        self.write_run(self.RUN)
+        for run_id in ("20250101T000000Z", "20261113T101500Z-2"):
+            reply = self.get(f"/api/v1/inbox/runs/{run_id}")
+            self.assertEqual(reply.status, 404, run_id)
+            self.assertEqual(self.error(reply)["code"], "not-found")
+
+    def test_an_id_that_is_not_a_record_id_is_404_and_reads_nothing_else(self) -> None:
+        self.write_run(self.RUN)
+        (self.inbox_dir() / "state.json").write_text("{}")
+        for run_id in ("..", "%2e%2e%2fstate", "state", f"{self.RUN}.json", "2026111", "x%2Fy"):
+            reply = self.get(f"/api/v1/inbox/runs/{run_id}")
+            self.assertEqual(reply.status, 404, run_id)
+
+    def test_a_record_of_another_id_or_damaged_is_not_served(self) -> None:
+        self.write_run(self.RUN, "{ not json")
+        self.assertEqual(self.get(f"/api/v1/inbox/runs/{self.RUN}").status, 404)
+        self.write_run("20261113T111500Z", json.dumps({"v": 1, "id": "20261113T121500Z"}))
+        self.assertEqual(self.get("/api/v1/inbox/runs/20261113T111500Z").status, 404)
+        body = self.get("/api/v1/inbox").json
+        self.assertEqual(body["runs"], [])
+        self.assertIsNone(body["last"])
+
+    def test_a_damaged_record_does_not_hide_the_others(self) -> None:
+        self.write_run("20261112T090000Z")
+        self.write_run(self.RUN, "[]")
+        body = self.get("/api/v1/inbox").json
+        self.assertEqual([r["id"] for r in body["runs"]], ["20261112T090000Z"])
+
+    def test_a_symlinked_record_is_not_read(self) -> None:
+        outside = self.tmp / "elsewhere.json"
+        outside.write_text(json.dumps({"v": 1, "id": self.RUN, "items": []}))
+        (self.inbox_dir() / "runs" / f"{self.RUN}.json").symlink_to(outside)
+        self.assertEqual(self.get(f"/api/v1/inbox/runs/{self.RUN}").status, 404)
+        self.assertEqual(self.get("/api/v1/inbox").json["runs"], [])
+
+    def test_the_state_file_is_read_and_a_damaged_one_is_empty(self) -> None:
+        t0 = datetime(2026, 11, 13, 9, 0, tzinfo=UTC)
+        state = inbox_unattended.State(
+            checked=t0 + timedelta(hours=1),
+            items={
+                "Other Game.zip": inbox_unattended.Entry(
+                    "sha256:x", 1, 500, t0, t0, 0, inbox_unattended.Held("died twice", t0)
+                ),
+                "New.zip": inbox_unattended.Entry("sha256:y", 2, 900, t0, t0),
+            },
+            error=inbox_unattended.RunError("no DATs", 5, t0, 2, True),
+        )
+        (self.inbox_dir() / "state.json").write_text(inbox_unattended.render_state(state))
+        body = self.get("/api/v1/inbox").json
+        self.assertEqual(body["checked"], "2026-11-13T10:00:00Z")
+        self.assertEqual(body["error"]["message"], "no DATs")
+        self.assertEqual(body["held"][0]["item"], "Other Game.zip")
+        self.assertEqual(body["held"][0]["reason"], "died twice")
+        self.assertEqual(
+            body["waiting"],
+            [{"item": "New.zip", "since": "2026-11-13T09:00:00Z", "bytes": 900, "why": "space"}],
+        )
+        (self.inbox_dir() / "state.json").write_text("{ torn")
+        body = self.get("/api/v1/inbox").json
+        self.assertEqual(
+            (body["checked"], body["error"], body["waiting"], body["held"]), (None, None, [], [])
+        )
+
+    def test_a_lock_makes_the_inbox_busy(self) -> None:
+        lock = self.root / "inbox"
+        lock.mkdir(parents=True)
+        info = {"host": "h", "pid": 4, "started": 1_794_000_000, "beat": 60, "mode": "unattended"}
+        (lock / ".warpzone.lock").write_text(json.dumps(info))
+        busy = self.get("/api/v1/inbox").json["busy"]
+        self.assertEqual(busy["mode"], "unattended")
+        self.assertRegex(busy["since"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
+        (lock / ".warpzone.lock").unlink()
+        self.assertIsNone(self.get("/api/v1/inbox").json["busy"])
+
+    def test_the_routes_need_a_session(self) -> None:
+        self.assertEqual(self.get("/api/v1/inbox", auth=False).status, 401)
+        self.assertEqual(self.get(f"/api/v1/inbox/runs/{self.RUN}", auth=False).status, 401)
+
+    def test_nothing_is_written(self) -> None:
+        self.write_run(self.RUN)
+        before = sorted(p for p in self.root.rglob("*") if p.is_file())
+        self.get("/api/v1/inbox")
+        self.get(f"/api/v1/inbox/runs/{self.RUN}")
+        self.assertEqual(sorted(p for p in self.root.rglob("*") if p.is_file()), before)
+
+    def test_a_changed_file_is_read_again(self) -> None:
+        path = self.write_run(self.RUN)
+        self.assertEqual(self.get("/api/v1/inbox").json["runs"][0]["placed"], 2)
+        doc = json.loads(path.read_text())
+        doc["counts"]["placed"] = 7
+        path.write_text(json.dumps(doc, indent=2))
+        self.assertEqual(self.get("/api/v1/inbox").json["runs"][0]["placed"], 7)
 
 
 class MediaTests(ServeCase):

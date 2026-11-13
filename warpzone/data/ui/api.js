@@ -68,6 +68,9 @@
     // The play queue and the one write that changes it; `history` is how many ended entries to list.
     queue: (history) => request('GET', `/api/v1/queue?history=${encodeURIComponent(history)}`),
     queueChange: (body) => request('POST', '/api/v1/queue', body),
+    // The unattended inbox: its state with the newest runs, and one run record in full.
+    inbox: () => request('GET', '/api/v1/inbox'),
+    inboxRun: (id) => request('GET', `/api/v1/inbox/runs/${encodeURIComponent(id)}`),
     // An image URL, not a request: the browser loads it (lazily) through an <img>.
     mediaUrl: (id, kind) => `/api/v1/games/${encodeURIComponent(id)}/media/${kind}`,
     // The same for a cached RetroAchievements badge; `variant` is 'unlocked' or 'locked'.

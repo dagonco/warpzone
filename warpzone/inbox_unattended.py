@@ -615,6 +615,26 @@ def record_id(started: datetime, n: int = 1) -> str:
     return base if n <= 1 else f"{base}-{n}"
 
 
+def is_record_id(text: object) -> bool:
+    """Whether `text` is the id of a run record (`20261113T101500Z`, `-2`, `-3` ...): ASCII only,
+    so an id read from a URL can be joined to a folder with no traversal."""
+    if not isinstance(text, str) or not text.isascii():
+        return False
+    return _RECORD_NAME.match(f"{text}.json") is not None
+
+
+def newest_record_ids(ids: Iterable[str], limit: int | None = None) -> list[str]:
+    """The valid record ids among `ids`, newest first (`...Z-2` after `...Z`, `-10` after `-9`),
+    at most `limit` of them."""
+    found = []
+    for rid in ids:
+        match = _RECORD_NAME.match(f"{rid}.json") if is_record_id(rid) else None
+        if match:
+            found.append(((match.group(1), int(match.group(2) or 1)), rid))
+    found.sort(reverse=True)
+    return [rid for _, rid in found[:limit]]
+
+
 def select_records_purge(names: Iterable[str], keep: int = RECORDS_KEPT) -> list[str]:
     """The file names of `runs/` to delete so the newest `keep` records remain, oldest first.
     Only names of the form `<id>.json` count; anything else is left alone."""

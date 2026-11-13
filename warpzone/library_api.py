@@ -8,6 +8,7 @@ gamelists and the whitelists and hands them in as plain data (`Library`, `System
 
 from __future__ import annotations
 
+import json
 import posixpath
 import re
 from collections.abc import Callable, Mapping, Sequence
@@ -16,15 +17,17 @@ from datetime import UTC, datetime
 from functools import cached_property
 from typing import Any
 
-from warpzone import artwork, catalog, diskstatus, playstate, ra_data, recommend
+from warpzone import artwork, catalog, diskstatus, inbox_lock, playstate, ra_data, recommend
 from warpzone import whitelist as wl
 from warpzone import whitelist_history as hist
 from warpzone.config import Config, Device
+from warpzone.inbox_unattended import STABLE_SECONDS, Entry, State
 
 MAX_BODY = 64 * 1024
 MAX_CHANGES = 1000
 RECENT_DEFAULT = 20
 RECENT_MAX = 100
+INBOX_RUNS_SHOWN = 10  # run records listed by `GET /api/v1/inbox`
 SEARCH_LIMIT = 100
 MEDIA_KINDS = (
     "covers",
@@ -145,6 +148,20 @@ class Library:
         return {
             system: tuple(self.wl_by_id[i] for i in games) for system, games in self.systems.items()
         }
+
+    @cached_property
+    def by_path(self) -> dict[str, str]:
+        """Game id by the path of one of its parts, relative to `library/`; a path that is the
+        primary part of a game gives that game."""
+        found: dict[str, str] = {}
+        for _, games in sorted(self.systems.items()):
+            for game in games.values():
+                for part in game.parts:
+                    found.setdefault(part.path, game.id)
+        for _, games in self.systems.items():
+            for game in games.values():
+                found[game.primary] = game.id
+        return found
 
     @cached_property
     def by_key(self) -> dict[str, list[tuple[str, catalog.Game]]]:
@@ -1351,3 +1368,198 @@ def recommendations_response(
             games.append(item)
         similar = {"to": _shelf_game(lib, extras, picked.seed), "games": games}
     return {"unfinished": unfinished, "similar": similar}
+
+
+# --------------------------------------------------------------------------- the unattended inbox
+
+_RECORD_VERSION = 1
+_COUNTS = ("placed", "already", "review", "held", "waiting")
+
+
+def _strings(value: object) -> list[str]:
+    return [x for x in value if isinstance(x, str)] if isinstance(value, list) else []
+
+
+def _text(value: object) -> str | None:
+    return value if isinstance(value, str) else None
+
+
+def _whole(value: object) -> int:
+    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else 0
+
+
+def _parse_game(raw: object) -> dict[str, Any] | None:
+    if not isinstance(raw, dict) or not isinstance(raw.get("entry"), str):
+        return None
+    return {
+        "system": _text(raw.get("system")) or "",
+        "entry": raw["entry"],
+        "outcome": _text(raw.get("outcome")) or "",
+        "path": _text(raw.get("path")),
+        "whitelist": _strings(raw.get("whitelist")),
+        "ra": _strings(raw.get("ra")),
+        "notes": _strings(raw.get("notes")),
+    }
+
+
+def _parse_item(raw: object) -> dict[str, Any] | None:
+    if not isinstance(raw, dict) or not isinstance(raw.get("item"), str):
+        return None
+    games = raw.get("games")
+    return {
+        "item": raw["item"],
+        "outcome": _text(raw.get("outcome")) or "",
+        "moved_to": _text(raw.get("moved_to")),
+        "games": [g for g in map(_parse_game, games) if g] if isinstance(games, list) else [],
+        "reasons": _strings(raw.get("reasons")),
+        "notes": _strings(raw.get("notes")),
+    }
+
+
+def parse_record(text: str | None, expected_id: str) -> dict[str, Any] | None:
+    """The run record in `text` (the file `<expected_id>.json`), cleaned to the shape the API
+    serves, or None when there is none: no file, not JSON, not an object, of another version, or
+    one whose `id` is not its file's. A damaged part (an item, a game, a count) is dropped or
+    zeroed; the rest is kept."""
+    if text is None:
+        return None
+    try:
+        doc = json.loads(text)
+    except ValueError:
+        return None
+    if not isinstance(doc, dict) or doc.get("v") != _RECORD_VERSION or doc.get("id") != expected_id:
+        return None
+    items = doc.get("items")
+    counts = doc.get("counts")
+    scrape = doc.get("scrape")
+    record: dict[str, Any] = {
+        "v": _RECORD_VERSION,
+        "id": expected_id,
+        "mode": _text(doc.get("mode")) or "attended",
+        "started": _text(doc.get("started")),
+        "finished": _text(doc.get("finished")),
+        "exit": doc["exit"] if isinstance(doc.get("exit"), int) else None,
+        "items": [i for i in map(_parse_item, items) if i] if isinstance(items, list) else [],
+        "counts": {k: _whole(counts.get(k)) if isinstance(counts, dict) else 0 for k in _COUNTS},
+        "whitelist": _strings(doc.get("whitelist")),
+        "scrape": None,
+        "purged": _strings(doc.get("purged")),
+        "warnings": _strings(doc.get("warnings")),
+    }
+    if isinstance(scrape, dict) and isinstance(scrape.get("state"), str):
+        record["scrape"] = {
+            "state": scrape["state"],
+            "systems": _strings(scrape.get("systems")),
+            "message": _text(scrape.get("message")),
+        }
+    return record
+
+
+def inbox_busy(lock_text: str | None, mtime: float | None) -> dict[str, str] | None:
+    """`busy` of the inbox answer: null without a lock file (`mtime` None); else when the run
+    began (the lock's own start, or the file's time when it cannot be read) and its mode
+    (`unknown` when the lock says nothing)."""
+    if mtime is None:
+        return None
+    info = inbox_lock.parse(lock_text) if lock_text is not None else None
+    started = info.started if info is not None else mtime
+    mode = (info.mode or inbox_lock.ATTENDED) if info is not None else "unknown"
+    try:
+        since = _iso(datetime.fromtimestamp(started, UTC))
+    except (OverflowError, OSError, ValueError):
+        return None
+    return {"since": since, "mode": mode}
+
+
+def _with_ids(record: Mapping[str, Any], lib: Library) -> dict[str, Any]:
+    """The record with the catalog `id` of each game that has a path (null when the catalog
+    has no game there yet)."""
+    out = dict(record)
+    out["items"] = [
+        {
+            **item,
+            "games": [
+                {
+                    **game,
+                    "id": lib.by_path.get(game["path"].removeprefix("library/"))
+                    if game["path"]
+                    else None,
+                }
+                for game in item["games"]
+            ],
+        }
+        for item in record["items"]
+    ]
+    return out
+
+
+def run_response(record: Mapping[str, Any], lib: Library) -> dict[str, Any]:
+    """`GET /api/v1/inbox/runs/{id}`: a parsed record in full, each game with its catalog id."""
+    return _with_ids(record, lib)
+
+
+def _run_row(record: Mapping[str, Any]) -> dict[str, Any]:
+    counts = record["counts"]
+    return {
+        "id": record["id"],
+        "mode": record["mode"],
+        "finished": record["finished"],
+        "placed": counts["placed"],
+        "already": counts["already"],
+        "review": counts["review"],
+        "exit": record["exit"],
+    }
+
+
+def _stamp_of(when: datetime) -> str:
+    return _iso(when.astimezone(UTC))
+
+
+def _waiting_why(entry: Entry, state: State, busy: Mapping[str, str] | None) -> str:
+    """`space` for an item that had been stable for the time the last check judged it and is
+    still there with no run working (a ready item is processed unless there is no room);
+    `settling` otherwise."""
+    if busy is None and state.checked is not None:
+        stable = (state.checked - entry.seen).total_seconds() >= STABLE_SECONDS
+        return "space" if stable else "settling"
+    return "settling"
+
+
+def inbox_response(
+    state: State,
+    records: Sequence[Mapping[str, Any]],
+    lib: Library,
+    busy: Mapping[str, str] | None = None,
+) -> dict[str, Any]:
+    """`GET /api/v1/inbox`: the unattended runs' state and the newest records (parsed ones,
+    newest first). A missing or damaged file is no state or no record, never an error."""
+    held = sorted(
+        (e.held.at, name, e.held.reason) for name, e in state.items.items() if e.held is not None
+    )
+    waiting = [
+        {
+            "item": name,
+            "since": _stamp_of(e.first),
+            "bytes": e.bytes,
+            "why": _waiting_why(e, state, busy),
+        }
+        for name, e in sorted(state.items.items(), key=lambda kv: (kv[1].first, kv[0]))
+        if e.held is None
+    ]
+    error = state.error
+    return {
+        "checked": None if state.checked is None else _stamp_of(state.checked),
+        "busy": None if busy is None else dict(busy),
+        "error": None
+        if error is None
+        else {
+            "message": error.message,
+            "since": _stamp_of(error.first),
+            "count": error.count,
+            "config": error.config,
+        },
+        "waiting": waiting,
+        "held": [{"item": n, "since": _stamp_of(at), "reason": why} for at, n, why in held],
+        "runs": [_run_row(r) for r in records[:INBOX_RUNS_SHOWN]],
+        "last": run_response(records[0], lib) if records else None,
+    }

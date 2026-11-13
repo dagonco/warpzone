@@ -1,11 +1,13 @@
 """The library API's pure functions: validation, `plan_changes` and the answers' shapes."""
 
+import json
 import unittest
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from library_support import GIB, config, games, library, managed
 from library_support import game as make_game
-from warpzone import artwork, catalog, ra
+from warpzone import artwork, catalog, inbox_unattended, ra
 from warpzone import whitelist as wl
 from warpzone.library_api import (
     ApiError,
@@ -20,11 +22,15 @@ from warpzone.library_api import (
     game_meta,
     game_response,
     games_response,
+    inbox_busy,
+    inbox_response,
     media_file,
     media_index,
     name_tags,
     parse_range,
+    parse_record,
     plan_changes,
+    run_response,
     safe_parts,
     search_response,
     systems_response,
@@ -635,6 +641,249 @@ class ErrorTests(unittest.TestCase):
         )
         self.assertEqual(
             ApiError("stale", "m").body(), {"error": {"code": "stale", "message": "m"}}
+        )
+
+
+NOW = datetime(2026, 11, 13, 10, 30, tzinfo=UTC)
+RUN_ID = "20261113T101500Z"
+
+
+def record(run_id: str = RUN_ID, **extra: Any) -> dict[str, Any]:
+    """A run record as `build_record` writes it, with a game that is in the catalog, one that
+    is not, one for review and one already there."""
+    placed = {
+        "system": "psx",
+        "entry": "Example Game (Europe).chd",
+        "outcome": "placed",
+        "path": "library/roms/psx/Example Game (Europe).chd",
+        "whitelist": ["!/roms/psx/Example Game (Europe).chd"],
+        "ra": ["RA: hash not linked"],
+        "notes": [],
+    }
+    new = {**placed, "entry": "Brand New.chd", "path": "library/roms/psx/Brand New.chd"}
+    doc: dict[str, Any] = {
+        "v": 1,
+        "id": run_id,
+        "mode": "unattended",
+        "started": "2026-11-13T10:15:00Z",
+        "finished": "2026-11-13T10:21:40Z",
+        "exit": 1,
+        "items": [
+            {
+                "item": "pack.zip",
+                "outcome": "done",
+                "moved_to": "inbox/_done/2026-11-13/pack.zip",
+                "games": [
+                    placed,
+                    new,
+                    {
+                        **placed,
+                        "outcome": "already",
+                        "entry": "Other Game.chd",
+                        "path": "library/roms/psx/Other Game.chd",
+                    },
+                ],
+                "reasons": [],
+                "notes": [],
+            },
+            {
+                "item": "some dump.7z",
+                "outcome": "review",
+                "moved_to": "inbox/_revisar/some dump.7z",
+                "games": [{**placed, "outcome": "review", "path": None, "whitelist": []}],
+                "reasons": ["no DAT match: track01.bin"],
+                "notes": [],
+            },
+        ],
+        "counts": {"placed": 2, "already": 1, "review": 1, "held": 0, "waiting": 0},
+        "whitelist": ["!/roms/psx/Brand New.chd"],
+        "scrape": {"state": "done", "systems": ["psx"]},
+        "purged": [],
+        "warnings": [],
+    }
+    doc.update(extra)
+    return doc
+
+
+def parsed(doc: dict[str, Any]) -> dict[str, Any]:
+    found = parse_record(json.dumps(doc), doc["id"])
+    assert found is not None
+    return found
+
+
+def entry(
+    first: datetime, seen: datetime, held: tuple[str, datetime] | None = None
+) -> inbox_unattended.Entry:
+    return inbox_unattended.Entry(
+        "sha256:x",
+        1,
+        700,
+        first,
+        seen,
+        0,
+        None if held is None else inbox_unattended.Held(*held),
+    )
+
+
+class InboxRecordTests(unittest.TestCase):
+    def test_a_complete_record_is_kept(self) -> None:
+        found = parsed(record())
+        self.assertEqual(found["id"], RUN_ID)
+        self.assertEqual(found["counts"]["placed"], 2)
+        self.assertEqual(len(found["items"]), 2)
+        self.assertEqual(found["scrape"], {"state": "done", "systems": ["psx"], "message": None})
+
+    def test_no_text_or_unreadable_text_is_no_record(self) -> None:
+        self.assertIsNone(parse_record(None, RUN_ID))
+        self.assertIsNone(parse_record("not json {", RUN_ID))
+        self.assertIsNone(parse_record("[]", RUN_ID))
+        self.assertIsNone(parse_record(json.dumps({**record(), "v": 2}), RUN_ID))
+
+    def test_a_record_that_names_another_run_is_no_record(self) -> None:
+        self.assertIsNone(parse_record(json.dumps(record("20261113T101501Z")), RUN_ID))
+
+    def test_a_damaged_part_is_dropped_and_the_rest_kept(self) -> None:
+        doc = record(counts={"placed": "many", "review": -1}, scrape="x", exit="1")
+        doc["items"][0]["games"].append("junk")
+        doc["items"].append({"outcome": "done"})
+        doc["items"][1]["reasons"] = "not a list"
+        found = parsed(doc)
+        self.assertEqual(len(found["items"]), 2)
+        self.assertEqual(len(found["items"][0]["games"]), 3)
+        self.assertEqual(found["items"][1]["reasons"], [])
+        self.assertEqual(found["counts"]["placed"], 0)
+        self.assertIsNone(found["scrape"])
+        self.assertIsNone(found["exit"])
+
+    def test_no_items_key_is_an_empty_run(self) -> None:
+        doc = record()
+        del doc["items"]
+        self.assertEqual(parsed(doc)["items"], [])
+
+
+class InboxResponseTests(unittest.TestCase):
+    def test_no_files_is_an_empty_answer(self) -> None:
+        self.assertEqual(
+            inbox_response(inbox_unattended.State(), [], LIB),
+            {
+                "checked": None,
+                "busy": None,
+                "error": None,
+                "waiting": [],
+                "held": [],
+                "runs": [],
+                "last": None,
+            },
+        )
+
+    def test_the_newest_record_is_in_full_with_catalog_ids(self) -> None:
+        older = parsed(record("20261112T090000Z"))
+        out = inbox_response(inbox_unattended.State(), [parsed(record()), older], LIB)
+        self.assertEqual(
+            out["runs"][0],
+            {
+                "id": RUN_ID,
+                "mode": "unattended",
+                "finished": "2026-11-13T10:21:40Z",
+                "placed": 2,
+                "already": 1,
+                "review": 1,
+                "exit": 1,
+            },
+        )
+        self.assertEqual([r["id"] for r in out["runs"]], [RUN_ID, "20261112T090000Z"])
+        games = out["last"]["items"][0]["games"]
+        self.assertEqual(games[0]["id"], EXAMPLE.id)
+        self.assertIsNone(games[1]["id"], "a game the catalog does not have yet")
+        self.assertEqual(games[2]["id"], OTHER.id)
+        self.assertIsNone(out["last"]["items"][1]["games"][0]["id"], "a review has no path")
+
+    def test_only_the_newest_ten_runs_are_listed(self) -> None:
+        records = [parsed(record(f"202611{d:02d}T090000Z")) for d in range(20, 0, -1)]
+        out = inbox_response(inbox_unattended.State(), records, LIB)
+        self.assertEqual(len(out["runs"]), 10)
+        self.assertEqual(out["last"]["id"], "20261120T090000Z")
+
+    def test_a_game_is_found_by_a_part_when_it_is_not_the_primary(self) -> None:
+        folder = by_title("ps4", "Example PS4")
+        part = folder.parts[0].path
+        doc = record()
+        doc["items"][0]["games"][0]["path"] = f"library/{part}"
+        found = run_response(parsed(doc), LIB)["items"][0]["games"][0]["id"]
+        self.assertEqual(found, folder.id)
+
+    def test_the_state_is_waiting_held_and_error(self) -> None:
+        t0 = NOW - timedelta(hours=3)
+        state = inbox_unattended.State(
+            checked=NOW,
+            items={
+                "Fresh.zip": entry(NOW - timedelta(minutes=1), NOW - timedelta(minutes=1)),
+                "Stuck.zip": entry(t0, t0),
+                "Game.cue": entry(t0, t0, ("a disc dropped as loose files", t0)),
+            },
+            error=inbox_unattended.RunError("the DATs cannot be read", 5, t0, 3, True),
+        )
+        out = inbox_response(state, [], LIB)
+        self.assertEqual(out["checked"], "2026-11-13T10:30:00Z")
+        self.assertEqual(
+            out["error"],
+            {
+                "message": "the DATs cannot be read",
+                "since": "2026-11-13T07:30:00Z",
+                "count": 3,
+                "config": True,
+            },
+        )
+        self.assertEqual(
+            [(w["item"], w["why"], w["bytes"]) for w in out["waiting"]],
+            [("Stuck.zip", "space", 700), ("Fresh.zip", "settling", 700)],
+        )
+        self.assertEqual(
+            out["held"],
+            [
+                {
+                    "item": "Game.cue",
+                    "since": "2026-11-13T07:30:00Z",
+                    "reason": "a disc dropped as loose files",
+                }
+            ],
+        )
+
+    def test_while_a_run_works_a_waiting_item_is_settling(self) -> None:
+        t0 = NOW - timedelta(hours=1)
+        state = inbox_unattended.State(checked=NOW, items={"A.zip": entry(t0, t0)})
+        busy = {"since": "2026-11-13T10:29:00Z", "mode": "unattended"}
+        out = inbox_response(state, [], LIB, busy)
+        self.assertEqual(out["busy"], busy)
+        self.assertEqual(out["waiting"][0]["why"], "settling")
+
+
+class InboxBusyTests(unittest.TestCase):
+    def test_no_lock_is_not_busy(self) -> None:
+        self.assertIsNone(inbox_busy(None, None))
+
+    def test_the_lock_names_its_start_and_mode(self) -> None:
+        text = json.dumps(
+            {"host": "h", "pid": 4, "started": NOW.timestamp(), "beat": 60, "mode": "unattended"}
+        )
+        self.assertEqual(
+            inbox_busy(text, 0.0), {"since": "2026-11-13T10:30:00Z", "mode": "unattended"}
+        )
+
+    def test_a_lock_of_an_older_warpzone_is_attended(self) -> None:
+        text = json.dumps({"host": "h", "pid": 4, "started": NOW.timestamp()})
+        self.assertEqual(
+            inbox_busy(text, 0.0), {"since": "2026-11-13T10:30:00Z", "mode": "attended"}
+        )
+
+    def test_an_unreadable_lock_is_busy_with_the_file_time(self) -> None:
+        self.assertEqual(
+            inbox_busy("junk", NOW.timestamp()),
+            {"since": "2026-11-13T10:30:00Z", "mode": "unknown"},
+        )
+        self.assertEqual(
+            inbox_busy(None, NOW.timestamp()),
+            {"since": "2026-11-13T10:30:00Z", "mode": "unknown"},
         )
 
 
