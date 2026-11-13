@@ -151,6 +151,23 @@ def _pinned_opener(pin_hex: str) -> urllib.request.OpenerDirector:
     return opener
 
 
+def _direct_opener(context: ssl.SSLContext | None) -> urllib.request.OpenerDirector:
+    """The opener of an unpinned client: plain HTTP and HTTPS (`context` for a loopback
+    https URL, else the default checks), with the two rules of the pinned one. No redirect
+    handler (a 3xx is an error, so the key cannot be copied to another host) and no proxy
+    from the environment (an empty `ProxyHandler` connects directly)."""
+    opener = urllib.request.OpenerDirector()
+    for handler in (
+        urllib.request.ProxyHandler({}),
+        urllib.request.HTTPHandler(),
+        urllib.request.HTTPSHandler(context=context),
+        urllib.request.HTTPDefaultErrorHandler(),
+        urllib.request.HTTPErrorProcessor(),
+    ):
+        opener.add_handler(handler)
+    return opener
+
+
 @dataclass(frozen=True)
 class Call:
     method: str
@@ -183,16 +200,17 @@ class Client:
         self._context: ssl.SSLContext | None = None
         # With a pin: TLS to the one certificate with that SHA-256, whatever the host.
         self._pin = cert_sha256
-        self._opener: urllib.request.OpenerDirector | None = None
         if cert_sha256 is not None:
             if parsed.scheme != "https":
                 raise SyncthingError(f"{label}: a pinned certificate needs an https:// URL")
             self._opener = _pinned_opener(cert_sha256)
-        elif parsed.scheme == "https" and _is_loopback(parsed.hostname or ""):
-            # Syncthing's own certificate is self-signed; trust it only on loopback.
-            self._context = ssl.create_default_context()
-            self._context.check_hostname = False
-            self._context.verify_mode = ssl.CERT_NONE
+        else:
+            if parsed.scheme == "https" and _is_loopback(parsed.hostname or ""):
+                # Syncthing's own certificate is self-signed; trust it only on loopback.
+                self._context = ssl.create_default_context()
+                self._context.check_hostname = False
+                self._context.verify_mode = ssl.CERT_NONE
+            self._opener = _direct_opener(self._context)
 
     def __repr__(self) -> str:
         return f"Client({self.base_url!r}, label={self.label!r})"
@@ -215,14 +233,16 @@ class Client:
         )
         secrets = (self._api_key,)
         try:
-            if self._opener is not None:
-                opened = self._opener.open(req, timeout=self.timeout)
-            else:
-                opened = urllib.request.urlopen(req, timeout=self.timeout, context=self._context)
-            with opened as resp:
+            with self._opener.open(req, timeout=self.timeout) as resp:
                 raw = resp.read()
         except urllib.error.HTTPError as exc:
             detail = scrub(exc.read(300).decode(errors="replace").strip(), secrets)
+            location = exc.headers.get("Location") if exc.headers else None
+            if 300 <= exc.code < 400 and location:
+                # Never followed: say where it points, so api_url can be set to it.
+                detail = f"redirects to {scrub(location, secrets)}, not followed; {detail}".rstrip(
+                    "; "
+                )
             exc.close()
             raise SyncthingError(
                 f"{self.label}: {method} {path}: HTTP {exc.code} {detail}".rstrip(), exc.code
