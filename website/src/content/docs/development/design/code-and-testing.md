@@ -76,6 +76,7 @@ warpzone/
   dat.py             Redump / No-Intro DAT parsing, cache, matching, disc grouping (pure)
   inbox_core.py      what the inbox pipeline and its handlers share: errors, options, results, staging
   inbox_lock.py      the `inbox/.warpzone.lock` file that keeps two `--apply` runs apart
+  inbox_unattended.py  the pure decisions of the unattended inbox: fingerprint, readiness, the state file and its changes, space, news and exit code
   inbox_scrape.py    the scrape at the end of `inbox`: which placed games, the report lines, failures as warnings
   inbox.py           unpack, identify, convert, place, file the originals
   sfo.py             the key/value table of a PARAM.SFO (pure; PS3 discs and PS4 packages)

@@ -2,9 +2,13 @@
 title: "Unattended inbox"
 ---
 
-**Status: design, partly implemented** (`[inbox] chdman_threads` is; see [Resource limits](#resource-limits)). This page is the contract for running `warpzone inbox
---apply` on the hub by itself, from a scheduled task, with nobody watching. The pages it touches
-when it is implemented ([Inbox](/warpzone/development/design/inbox/),
+**Status: partly implemented.** The pure decisions are in the code (`inbox_unattended.py`: the
+fingerprint, readiness, the state file and the changes made to it, space, news and the exit code),
+and so is `[inbox] chdman_threads` (see [Resource limits](#resource-limits)); the rest (the I/O
+layer, the lock heartbeat, the run records, the webhook, `--unattended` in `inbox`, the UI and
+doctor) is design, not implemented. This page is the contract for running
+`warpzone inbox --apply` on the hub by itself, from a scheduled task, with nobody watching. The
+pages it touches when it is implemented ([Inbox](/warpzone/development/design/inbox/),
 [Configuration and command line](/warpzone/development/design/configuration/),
 [Pruning](/warpzone/development/design/prune/) for the shared webhook,
 [Doctor](/warpzone/development/design/doctor/), [Library UI](/warpzone/development/design/library-ui/),
@@ -61,6 +65,25 @@ Decided by the maintainer on 2026-11-13, on the first draft of this page:
    container.
 10. **An empty run writes the heartbeat** (`checked` in the state) at most once an hour, so doctor
     and the UI can tell a stopped task from an empty inbox.
+
+Decided by the maintainer on 2026-11-13, when the pure decisions were written; each changes the
+sections it is named in:
+
+1. **Each state entry keeps `first`**, when the item was first seen, besides `seen`, which is
+   reset on every change of the fingerprint. "Waiting since" and doctor's "waiting more than two
+   hours" use `first` (see [The memory](#the-memory)).
+2. **A stored error keeps the `step` where it failed.** Only a run that gets past that step clears
+   it; a run that finds the inbox empty can only clear the errors of step 1 (see
+   [The memory](#the-memory)).
+3. **The state is updated by read-modify-write.** A change is a pure function from the state to
+   the state, applied again to what is read again when the write finds the file changed (see
+   [The memory](#the-memory)).
+4. **An original that cannot be moved to `_done` after its games were placed is held** and counts
+   as news (see [The memory](#the-memory)).
+5. **`MIN_FREE_GIB` lives in `inbox_core.py`**, and doctor and the unattended run both import it
+   from there (see [Resource limits](#resource-limits)).
+6. **The mount check** of step 1 asks for `library/.stfolder` and `library/roms` (see
+   [The command](#the-command)).
 
 **Done when** the maintainer drops a game in `inbox/` from a computer that has no warpzone, and
 within two ticks of the timer it is in the catalog and on the library UI's inbox view, with
@@ -143,9 +166,10 @@ used at the next tick without restarting anything.
 refuses `--force-lock` (usage error, exit 2). A run goes through these steps, and stops at the
 first that says so:
 
-1. **Load the config** and find the hub root (`[inbox] root` or `--root`). `inbox/` and
-   `library/.stfolder` must exist (as for `serve`, an unmounted share never looks like an empty
-   library); otherwise it is a run-level error (see [The memory](#the-memory)).
+1. **Load the config** and find the hub root (`[inbox] root` or `--root`). `inbox/`,
+   `library/.stfolder` and `library/roms` must all exist (as for `serve`, an unmounted share never
+   looks like an empty library, and a share that is mounted but is not the hub root does not
+   pass); otherwise it is a run-level error (see [The memory](#the-memory)).
 2. **List the items** (`scan` and `scan_unverified`: directory listings only) and read the state
    file. With no item and no state entry to drop, the run writes the heartbeat if it is due
    (`checked` older than one hour) and exits `0`, printing nothing. No DAT, tool, lock or work
@@ -186,13 +210,15 @@ a fingerprint (`inbox_unattended.fingerprint`, pure, over what a walk returns): 
 every entry under it, without following symbolic links and including hidden files (a copier's
 temporary file inside a folder counts), the line `<kind> <size> <mtime_ns> <path relative to the
 item>`; the lines are sorted, joined with NUL bytes and hashed with SHA-256. Only `stat` is called,
-no file is read. The state keeps, per item, the fingerprint, when it was first seen with it, its
-file count and bytes.
+no file is read. The state keeps, per item, the fingerprint, when it was first seen with it
+(`seen`), when the item itself was first seen (`first`), its file count and bytes.
 
 An item is ready when the fingerprint now equals the recorded one and that one was first seen at
 least `STABLE_SECONDS` (300, five minutes) ago by the judging run's clock. Any change (a byte
 written, a file added, a size or a modification time that moved) records the new fingerprint with
-the time now and starts the wait again. With a tick of 15 minutes a new item is processed at the
+the time now as `seen` and starts the wait again; `first` is kept, so the time an item has been
+waiting is not lost by a copy that keeps writing. A clock that goes back (`seen` in the future of
+the clock now) never makes an item ready: the run records `seen` again with the time now. With a tick of 15 minutes a new item is processed at the
 second tick that sees it, so between 15 and 30 minutes after the copy ends.
 
 Size alone is not enough: a Windows copy can set a file to its full size when it starts and fill
@@ -237,14 +263,22 @@ catalog index: outside every Syncthing folder, covered by the hub's snapshots, r
 ```json
 {"v": 1, "checked": "2026-11-13T10:15:02Z",
  "items": {"Example Game (Europe).zip": {"fingerprint": "sha256:...", "files": 1, "bytes": 52428800,
+                                          "first": "2026-11-13T10:00:01Z",
                                           "seen": "2026-11-13T10:00:01Z", "attempts": 0,
                                           "held": null}},
  "lock_seen": null,
  "error": null}
 ```
 
+A held item is `"held": {"reason": "...", "at": "..."}`; an error is `{"message", "step",
+"first", "count", "config"}`; `lock_seen` is `{"mtime_ns", "at"}`.
+
 - **Keys** are the item names as the report shows them (`<name>`, or
   `_unverified/<system>/<name>`). Entries of names no longer in the inbox are dropped.
+- **`first` and `seen`.** `first` is when the item was first seen under this name, kept through
+  changes of the fingerprint; it restarts only for an item whose hold a change cleared (that item
+  is new again). `seen` is when the current fingerprint was first seen and is reset on every
+  change. Doctor's and the UI's "waiting since" read `first`.
 - **Attempts.** Right before an item is processed, `attempts` goes up by one and the state is
   written. When the item has been filed away (to `_done` or `_revisar`) its entry is removed. An
   entry found with `attempts` above zero and the same fingerprint therefore belongs to a run that
@@ -254,25 +288,40 @@ catalog index: outside every Syncthing folder, covered by the hub's snapshots, r
   (`mem_limit`), or run inbox on a computer".
 - **Held items** are not processed again while their fingerprint stays the same: `held` holds the
   reason and the time. An item is held when the run died twice on it, when its original could not
-  be moved after its games were placed ("could not move the original: ..."), and for loose disc
-  files. A changed fingerprint (the user replaced, renamed or touched it) clears the hold and the
+  be moved after its games were placed ("could not move the original: ..."; the games are in the
+  library and the original is still in the inbox, so a retry would only report them as already
+  there and fail to move it again), and for loose disc files. A hold of the last kind is news
+  like any other (see [Logging and exit codes](#logging-and-exit-codes)). A changed fingerprint (the user replaced, renamed or touched it) clears the hold and the
   item waits as new; an attended `--apply` processes it whatever the state says.
 - **Items for review are not held:** they are moved to `_revisar/` with their reason file, as
   today, so they leave the inbox and are never retried.
 - **Run-level errors** (the config, the DATs, a missing `library/.stfolder`, a work folder on
-  memory, a stale lock of an older warpzone) are kept in `error`: the message, when it first
-  happened and how many runs met it since. The next run that gets past the failed step clears it.
+  memory, a stale lock of an older warpzone) are kept in `error`: the message, the `step` of
+  [The command](#the-command) where it failed, whether it is a configuration error (`config`,
+  which decides exit `2` or `1`), when it first happened and how many runs met it since. The error
+  stays until a run gets past its step: a run reaches a step when it starts it, and clears the
+  errors of the steps before it. A run that finds the inbox empty stops at step 2 and so clears
+  only the errors of step 1; a run with only waiting items stops at step 4 and leaves an error of
+  step 5 or 6 where it is. Meeting the same message again keeps the step and raises the count.
   The first run that meets an error exits `2` (`1` for an unexpected failure outside an item) and
   sends the webhook; the runs after it that meet the same message exit `0` and only raise the
   count (see [Logging and exit codes](#logging-and-exit-codes)).
-- **Writes.** The state is written with `safefile.atomic_write` against the stamp of the file as it
-  was read; a file that changed in between is read again, the change applied again and the write
-  retried (three times, then a warning), as the catalog files are. A state file that cannot be
-  parsed is treated as empty with a warning and replaced: the worst case is that items wait one
-  more tick.
+- **Writes: read, modify, write.** A change to the state is a pure function from a state to a
+  state (`inbox_unattended.Change`; `update(state, *changes)` applies them in order). The writer
+  reads the file, applies the changes, and writes with `safefile.atomic_write` against the stamp of
+  the file as it was read; a file that changed in between is read again, **the same changes are
+  applied to what was read again** and the write is retried (three times, then a warning), as the
+  catalog files are. So a change never holds a state it read earlier, only what it is given. The
+  changes are `with_checked`, `with_lock_seen`, `with_judged` (records the judged entries and drops
+  those of names no longer in the inbox), `with_attempt`, `with_item_filed`, `with_held`,
+  `with_error` and `with_error_cleared`. A state file that cannot be parsed is treated as empty
+  with a warning and replaced; a damaged entry, error or lock note is dropped with a warning and
+  the rest kept: the worst case is that items wait one more tick.
 
-`inbox_unattended.render_state` and `parse_state` are the pure ends; `decide` takes an entry, the
-fingerprint now and the time, and returns the verdict and the new entry.
+`inbox_unattended.render_state` and `parse_state` are the pure ends; `decide` takes an entry (or
+none), what the walk shows now (`Observed`) and the time, and returns the verdict and the entry to
+record. A loose disc file reaches it as `hold_reason`, and holds the item at the moment it would
+be ready.
 
 ## Locking
 
@@ -335,7 +384,8 @@ lock and exits as busy, costing one container start.
   link), since they may hold a Vita licence.
 - **Space on the hub.** Before each item the run compares the free space of the filesystem that
   holds `library/` with twice the item's bytes plus 20 GiB (the doctor's threshold for the hub,
-  `MIN_FREE_GIB`). An item that does not fit waits, it does not go to review, and its state says
+  `MIN_FREE_GIB`, which lives in `inbox_core.py` and is imported from there by doctor and by the
+  unattended run). Exactly enough fits; the shortfall is rounded up to whole GiB. An item that does not fit waits, it does not go to review, and its state says
   "waiting for space: N GiB more needed"; doctor shows it (`space_verdict`, pure).
 
 ## Safety rules that still hold
@@ -478,14 +528,15 @@ run exits non-zero only when it has news, so a scheduler that mails on an abnorm
 per problem. What is still pending (held items, an error that persists) stays in the state, and
 doctor and the UI show it on every look.
 
-`news` (`inbox_unattended.news`, pure) compares the state as the run read it at its start with the
+`news` (`inbox_unattended.news`, pure; `exit_code` turns its result into the exit code) compares the state as the run read it at its start with the
 state it writes, plus the results of this run. News is any of:
 
 - **a new item for review**: an item this run sent to `_revisar/` (it leaves the inbox, so each one
   is news once);
 - **a newly held item**: an entry whose `held` is set in the state written and was not set, or
   belonged to another fingerprint, in the state read (an item whose hold was cleared by a change
-  and is held again is news again);
+  and is held again is news again). An original that could not be moved after a successful place
+  is one of these;
 - **a new run-level error**: an `error` in the state written whose message differs from the one in
   the state read, or with none there. A run that meets the same message raises `count` and has no
   news. A run that gets past the failed step clears `error`, so the same error coming back later
@@ -518,8 +569,8 @@ inbox group, on a computer as well as in the container (the state is on the shar
   scheduled task enabled?" (the heartbeat writes at least hourly).
 - `[! ]` held items: each with its reason, and the fix "look at it, run `warpzone inbox` to see the
   report, then `warpzone inbox --apply` by hand, or replace the item to retry".
-- `[! ]` an item waiting for more than two hours (a copy that keeps writing, a file a program keeps
-  open, or no space).
+- `[! ]` an item waiting for more than two hours since it was first seen (`first`: a copy that
+  keeps writing, a file a program keeps open, or no space).
 - `[! ]` a lock held for more than six hours.
 - `[ok]` otherwise: "last check N min ago; last run <date>: placed X, for review Y".
 
@@ -563,9 +614,11 @@ pass it); nothing implies it.
 
 ## Code and testing
 
-- `inbox_unattended.py` (pure): `fingerprint`, `decide`, `loose_sheets`, `render_state`,
-  `parse_state`, `space_verdict`, `memory_fs`, `stale_work_dirs`, `render_record`,
-  `select_records_purge`, `news`, `notify_payload`, `should_notify`.
+- `inbox_unattended.py` (pure). Implemented: `fingerprint` and `observe`, `decide`,
+  `loose_sheets`, `render_state` and `parse_state`, the state changes (`update` and the `with_*`
+  functions), `heartbeat_due`, `space_verdict`, `memory_fs`, `stale_work_dirs`, `news` and
+  `exit_code`. Still to come: `render_record`, `select_records_purge`, `notify_payload`,
+  `should_notify`.
 - `inbox_unattended_io.py`: the walk with `stat`, the state and record writes through `safefile`,
   the work folder cleanup, `os.nice`, the free space.
 - `inbox_lock.py`: `beat` and `mode`, the `Heartbeat` thread, `judge` over two readings,
@@ -583,25 +636,28 @@ The modules are added to the [code layout](/warpzone/development/design/code-and
 Unit tests, pure parts first, with no Docker, no scheduler and no real tools:
 
 - `fingerprint`: order of the listing does not matter; a size, an mtime, a new file or a hidden
-  file changes it; a symbolic link is not followed.
+  file changes it; a link is its own line. That the walk never follows a link is a test of
+  `inbox_unattended_io`.
 - `decide`: a new item, a changed one, a stable one before and after 300 seconds, a held item with
   the same and with another fingerprint, an entry with one and with two attempts, a name that is
-  gone; a clock that goes back does not make an item ready.
+  gone; a clock that goes back does not make an item ready; `first` survives a change.
 - `loose_sheets`: a loose cue and the tracks it names, a gdi, a cue naming a file that is not
   there, a loose `.bin` alone, a cue inside a folder (not loose).
 - `inbox_lock`: a lock with `beat` whose mtime moved is live, one unchanged for 10 minutes across
   two readings is stale on any host for an unattended run, an attended run judges the age on its own
   clock, a lock without `beat` keeps the 12-hour and pid rules and is
   never taken over unattended; the heartbeat stops touching a lock that is no longer this run's.
-- `render_state`/`parse_state` round trip; a damaged state is empty; `render_record` from
+- `render_state`/`parse_state` round trip; a damaged state is empty, a damaged entry is dropped;
+  the changes apply in order, never mutate their input and give the same result when applied to
+  another state; an error keeps its step and is cleared only by a run that got past it; `render_record` from
   `ItemResult` values (placed, already, review, held), with no absolute path and the zRIF redacted;
   `select_records_purge` keeps 50.
-- `space_verdict` at the edges; `memory_fs` on `mountinfo` samples (a volume, `tmpfs`, a nested
+- `space_verdict` at the edges (and `MIN_FREE_GIB` is one value for doctor and the run); `memory_fs` on `mountinfo` samples (a volume, `tmpfs`, a nested
   mount); `stale_work_dirs` by age, never a link.
 - `news`: a review item in this run; an item held now and not before, held before with the same
   fingerprint (no news), held before with another fingerprint (news); an error new, the same
-  (`count` up, no news), changed (news), cleared and back (news); the exit code for each, `2`
-  winning over `1`.
+  (`count` up, no news), changed (news), cleared and back (news); an original held after a
+  successful place; the exit code for each, `2` winning over `1`.
 - The scrape of an unattended run: with a stand-in Skyscraper, a run that places a cartridge zip
   scrapes it and the record says `scrape.state` `done`; one that places nothing, or only `already`
   games, starts no Skyscraper; a stand-in that prints the quota line, one that fails and a missing
