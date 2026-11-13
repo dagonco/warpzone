@@ -15,6 +15,7 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ### Changed
 
+- `warpzone inbox` checks the free space for a `.nsz` against the exact size of the `.nsp` that decompressing it produces, read from the file's headers, instead of the size of the `.nsz` plus 5%. The `.nsp` of a compressed game is usually much bigger than the `.nsz`, so a work folder too small for it is now caught before `nsz` starts, not when the disk fills up.
 - The updater's idle tick is faster on a console with many processes: looking for the menu no longer starts a program per process, which took about 1.4 s on a Steam Deck with ~430 processes and now takes about 40 ms.
 
 ### Security

@@ -4,8 +4,9 @@
 copy of the games and merge what it produced into the hub's ES-DE gamelists and media. This
 module holds the parts that need no filesystem and no subprocess: which systems are scraped
 and under which Skyscraper platform (`PLATFORMS`, `UNSCRAPED`), which games need a scrape
-(`select`), the command lines (`skyscraper_args`) and what Skyscraper's output says
-(`classify_output`). See development/design/scrape.md.
+(`select`), the command lines (`skyscraper_args`), what Skyscraper's output says
+(`classify_output`), what to merge into the hub (`plan_merge`) and what the run prints
+(`render_report`, `stop_message`). See development/design/scrape.md.
 """
 
 from __future__ import annotations
@@ -19,7 +20,7 @@ from enum import Enum
 from pathlib import PurePath
 from typing import Literal
 
-from warpzone import artwork
+from warpzone import artwork, gamelist
 from warpzone.catalog import DIR, Game
 
 # The version the flags below were tested with.
@@ -142,6 +143,17 @@ def _has_media(media: Collection[str], kind: str, stem: str) -> bool:
     return any(f"{kind}/{stem}.{ext}" in media for ext in KIND_EXTENSIONS[kind])
 
 
+def _entries_by_path(entries: Sequence[artwork.Entry]) -> dict[str, artwork.Entry]:
+    """The `<game>` and `<folder>` entries by their path below the system folder (`./` removed);
+    the first one wins and a path that is not a plain relative path is left out."""
+    by_path: dict[str, artwork.Entry] = {}
+    for item in entries:
+        rel = artwork.relative(item.path)
+        if rel is not None and item.tag in ("game", "folder"):
+            by_path.setdefault(rel, item)
+    return by_path
+
+
 def _known_recently(
     game: Game, not_found: Mapping[str, NotFound], today: date, retry_not_found: bool
 ) -> bool:
@@ -170,11 +182,7 @@ def select(
     ScreenScraper did not know less than `NOT_FOUND_DAYS` days ago, with the same size, is
     left out and counted, unless `retry_not_found`; `not_found` is keyed by gamelist path.
     """
-    by_path: dict[str, artwork.Entry] = {}
-    for item in entries:
-        rel = artwork.relative(item.path)
-        if rel is not None and item.tag in ("game", "folder"):
-            by_path.setdefault(rel, item)
+    by_path = _entries_by_path(entries)
     records = not_found or {}
     picks: list[Pick] = []
     skipped = 0
@@ -195,10 +203,10 @@ def select(
 
 # ------------------------------------------------------------------ command lines
 
-GATHER = "gather"
-MAIN = "main"
-BOX = "box"
 Step = Literal["gather", "main", "box"]
+GATHER: Step = "gather"
+MAIN: Step = "main"
+BOX: Step = "box"
 
 # The artwork files warpzone ships in `warpzone/data/skyscraper/`.
 ARTWORK_ESDE = "artwork-esde.xml"
@@ -317,3 +325,329 @@ def classify_output(text: str) -> Outcome:
     if stop is None and not answered:
         stop = next((s for s, needle in _SOFT_STOPS if needle in joined), None)
     return Outcome(stop, names)
+
+
+# ------------------------------------------------------------------ merge
+
+# The text fields a new entry takes from Skyscraper's (the ones the library UI reads), in the
+# order they are written.
+ENTRY_FIELDS: tuple[str, ...] = (
+    "name",
+    "desc",
+    "rating",
+    "releasedate",
+    "developer",
+    "publisher",
+    "genre",
+    "players",
+)
+
+# Where Skyscraper leaves each hub kind: the pass (`MAIN` or `BOX`) and the folder of that
+# pass's media folder (`3dboxes` are the `covers` of the 3D box pass).
+MEDIA_SOURCES: dict[str, tuple[Step, str]] = {
+    "covers": (MAIN, "covers"),
+    "screenshots": (MAIN, "screenshots"),
+    "miximages": (MAIN, "miximages"),
+    "marquees": (MAIN, "marquees"),
+    "3dboxes": (BOX, "covers"),
+    "backcovers": (MAIN, "backcovers"),
+    "videos": (MAIN, "videos"),
+}
+
+# What a listed file of Skyscraper's output is. Only a regular file is copied.
+FileType = Literal["file", "symlink", "other"]
+
+# Characters XML 1.0 cannot hold.
+_ILLEGAL = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f\ud800-\udfff￾￿]")
+
+
+class Result(Enum):
+    """What a merge did for one game."""
+
+    ADDED = "added"  # a new gamelist entry (and the media Skyscraper made)
+    FILLED = "filled"  # no new entry, but media the hub lacked
+    NOT_FOUND = "not found"  # Skyscraper produced nothing for the game
+    UNCHANGED = "unchanged"  # nothing new to add (or `<nomultiscrape>`)
+
+
+@dataclass(frozen=True)
+class MediaCopy:
+    """One file to copy from Skyscraper's output to the hub.
+
+    `source` is below the media folder of the pass `step`; `dest` is below the hub's media
+    folder of the system, `<kind>/<stem>.<ext>`."""
+
+    kind: str
+    step: Step
+    source: str
+    dest: str
+
+
+@dataclass(frozen=True)
+class Dropped:
+    """Something the merge left out, and why (a warning for the report)."""
+
+    what: str
+    reason: str
+
+
+@dataclass(frozen=True)
+class GameMerge:
+    """The plan for one game: the entry to add (None when the hub has one or Skyscraper gave
+    none), the files to copy and the verdict."""
+
+    game: Game
+    result: Result
+    had_entry: bool
+    entry: artwork.Entry | None = None
+    copies: tuple[MediaCopy, ...] = ()
+
+    @property
+    def kinds(self) -> tuple[str, ...]:
+        return tuple(c.kind for c in self.copies)
+
+
+@dataclass(frozen=True)
+class MergePlan:
+    """What `plan_merge` decided, for the writer to execute: media first, then the entries."""
+
+    games: tuple[GameMerge, ...] = ()
+    dropped: tuple[Dropped, ...] = ()
+
+    @property
+    def entries(self) -> tuple[artwork.Entry, ...]:
+        return tuple(g.entry for g in self.games if g.entry is not None)
+
+    @property
+    def copies(self) -> tuple[MediaCopy, ...]:
+        return tuple(c for g in self.games for c in g.copies)
+
+
+def _clean(text: str) -> str:
+    return _ILLEGAL.sub("", text)
+
+
+def _staged_name(path: str, root: str) -> str | None:
+    """A Skyscraper entry's `<path>` as a name below the staged folder, or None when it is
+    outside it, climbs with `..` or is empty. `./Game.zip`, `Game.zip` and `<root>/Game.zip`
+    are the same name."""
+    p = path.strip().replace("\\", "/")
+    if p.startswith("/"):
+        prefix = root.rstrip("/") + "/"
+        if not p.startswith(prefix):
+            return None
+        p = p[len(prefix) :]
+    return artwork.relative(p)
+
+
+def _new_entry(game: Game, source: artwork.Entry | None) -> artwork.Entry | None:
+    if source is None:
+        return None
+    fields: dict[str, str] = {}
+    for key in ENTRY_FIELDS:
+        value = _clean(source.fields.get(key, "")).strip()
+        if value:
+            fields[key] = value
+    return artwork.Entry("game", game.gamelist, fields)
+
+
+def _plan_copies(
+    game: Game,
+    name: str,
+    hub_media: Collection[str],
+    main_files: Mapping[str, FileType],
+    box_files: Mapping[str, FileType],
+    claimed: set[str],
+    dropped: list[Dropped],
+) -> tuple[list[MediaCopy], bool]:
+    """The copies for one game, and whether Skyscraper's output has any media for it."""
+    stem = media_stem(game)
+    source_stem = posixpath.splitext(name)[0]  # Skyscraper drops the last extension
+    copies: list[MediaCopy] = []
+    seen = False
+    for kind in MEDIA_KINDS:
+        step, folder = MEDIA_SOURCES[kind]
+        files = main_files if step == MAIN else box_files
+        have = _has_media(hub_media, kind, stem)
+        for ext in KIND_EXTENSIONS[kind]:
+            source = f"{folder}/{source_stem}.{ext}"
+            file_type = files.get(source)
+            if file_type is None:
+                continue
+            seen = True
+            dest = f"{kind}/{stem}.{ext}"
+            if have or dest in claimed:
+                break
+            if file_type == "symlink":
+                dropped.append(
+                    Dropped(
+                        f"{step}/{source}",
+                        "is a symbolic link (Skyscraper's `symlink` option); skipped",
+                    )
+                )
+                continue
+            if file_type != "file":
+                dropped.append(Dropped(f"{step}/{source}", "is not a regular file; skipped"))
+                continue
+            claimed.add(dest)
+            copies.append(MediaCopy(kind, step, source, dest))
+            break
+    return copies, seen
+
+
+def plan_merge(
+    staged: Mapping[str, Game],
+    staged_root: str,
+    hub_entries: Sequence[artwork.Entry],
+    hub_media: Collection[str],
+    skyscraper_entries: Sequence[artwork.Entry],
+    main_files: Mapping[str, FileType],
+    box_files: Mapping[str, FileType],
+) -> MergePlan:
+    """What to add to the hub for one batch of staged games. Pure: nothing is read or written.
+
+    - `staged` maps a staged name (the `gamelist` path below the staged folder) to its game,
+      for the games of the batch; `staged_root` is the staged folder, to read absolute paths.
+    - `hub_entries` are the hub gamelist's (`artwork.parse_gamelist`); `hub_media` holds the
+      hub's media paths as for `select`, `<kind>/<stem>.<ext>`.
+    - `skyscraper_entries` are the entries of the main pass's gamelist.
+    - `main_files` and `box_files` list the files of the two passes' media folders,
+      `<folder>/<name>.<ext>` with `/`, with their type.
+
+    It only adds: a game with an entry in the hub keeps it as it is and gets the media it lacks
+    (none at all when marked `<nomultiscrape>`); a game without one gets a new entry with the
+    fields in `ENTRY_FIELDS`, under the catalog's path. A media kind is never planned over a
+    file the hub has, in any extension the UI reads.
+    """
+    dropped: list[Dropped] = []
+    source: dict[str, artwork.Entry] = {}
+    for item in skyscraper_entries:
+        if item.tag not in ("game", "folder"):
+            continue
+        name = _staged_name(item.path, staged_root)
+        if name is None:
+            dropped.append(Dropped(item.path, "entry path is outside the staged folder; dropped"))
+        elif name not in staged:
+            dropped.append(Dropped(item.path, "entry is not a staged game; dropped"))
+        else:
+            source.setdefault(name, item)
+    hub = _entries_by_path(hub_entries)
+    claimed: set[str] = set()
+    games: list[GameMerge] = []
+    for name, game in staged.items():
+        existing = hub.get(artwork.relative(game.gamelist) or "")
+        if existing is not None and existing.fields.get(NO_MULTISCRAPE, "").lower() == "true":
+            games.append(GameMerge(game, Result.UNCHANGED, True))
+            continue
+        copies, seen = _plan_copies(game, name, hub_media, main_files, box_files, claimed, dropped)
+        entry = None if existing is not None else _new_entry(game, source.get(name))
+        if entry is not None:
+            result = Result.ADDED
+        elif copies:
+            result = Result.FILLED
+        elif not seen and name not in source:
+            result = Result.NOT_FOUND
+        else:
+            result = Result.UNCHANGED
+        games.append(GameMerge(game, result, existing is not None, entry, tuple(copies)))
+    return MergePlan(tuple(games), tuple(dropped))
+
+
+def render_entries(entries: Sequence[artwork.Entry], *, indent: str = "\t", eol: str = "\n") -> str:
+    """The text of new gamelist entries, to go before `</gameList>`: each one's `<path>` and
+    its fields in `ENTRY_FIELDS` order, XML-escaped, with the characters XML 1.0 cannot hold
+    dropped. `indent` is the file's own indentation of an entry and `eol` its line ending."""
+    lines: list[str] = []
+    for item in entries:
+        lines.append(f"{indent}<{item.tag}>")
+        lines.append(f"{indent * 2}<path>{gamelist.escape(_clean(item.path))}</path>")
+        for key in ENTRY_FIELDS:
+            if key in item.fields:
+                text = gamelist.escape(_clean(item.fields[key]))
+                lines.append(f"{indent * 2}<{key}>{text}</{key}>")
+        lines.append(f"{indent}</{item.tag}>")
+    return "".join(line + eol for line in lines)
+
+
+# ------------------------------------------------------------------ report
+
+
+@dataclass(frozen=True)
+class Report:
+    """One system's scrape, to print. `merges` are the games of every batch merged;
+    `account` is whether `userCreds` is set in Skyscraper's config."""
+
+    system: str
+    merges: tuple[GameMerge, ...]
+    dropped: tuple[Dropped, ...] = ()
+    skipped_not_found: int = 0
+    version: str | None = None
+    account: bool = False
+
+
+def _label(merge: GameMerge) -> str:
+    return artwork.relative(merge.game.gamelist) or merge.game.gamelist
+
+
+def render_report(report: Report) -> str:
+    """The lines `scrape` prints for a system (no trailing newline). Games with an entry and
+    nothing new are counted, not listed."""
+    count = len(report.merges)
+    tool = "Skyscraper" + (f" {report.version}" if report.version else "")
+    account = "set" if report.account else "anonymous"
+    noun = "game" if count == 1 else "games"
+    lines = [f"scrape: {report.system}: {count} {noun} ({tool}, ScreenScraper account: {account})"]
+    totals = {result: 0 for result in Result}
+    for merge in report.merges:
+        totals[merge.result] += 1
+        if merge.result is Result.ADDED:
+            lines.append(f"  {'added':<9}  {_label(merge)}: {', '.join(merge.kinds) or 'no media'}")
+        elif merge.result is Result.FILLED:
+            kept = " (entry kept)" if merge.had_entry else ""
+            lines.append(f"  {'filled':<9}  {_label(merge)}: {', '.join(merge.kinds)}{kept}")
+        elif merge.result is Result.NOT_FOUND:
+            lines.append(f"  {'not found':<9}  {_label(merge)}")
+    lines += [f"  {'warning':<9}  {d.what}: {d.reason}" for d in report.dropped]
+    parts = [f"{totals[r]} {r.value}" for r in Result if totals[r]]
+    if report.skipped_not_found:
+        parts.append(
+            f"skipped {report.skipped_not_found} not found in the last {NOT_FOUND_DAYS} days"
+        )
+    lines.append(f"scrape: {report.system}: {', '.join(parts) or 'nothing to do'}")
+    return "\n".join(lines)
+
+
+# The reasons a gather stops, besides the quota (see "Failures" in the design).
+_STOP_REASONS: dict[Stop, str] = {
+    Stop.CLOSED: "ScreenScraper's API is closed",
+    Stop.BLACKLISTED: "ScreenScraper refused Skyscraper",
+    Stop.BUSY: "ScreenScraper is closed or too busy for anonymous users",
+    Stop.NETWORK: "ScreenScraper could not be reached",
+}
+
+
+def stop_message(stop: Stop, *, not_tried: int = 0, account: bool = False) -> str:
+    """The line for a condition that stops the gather. `not_tried` is the games left;
+    `account` is whether `userCreds` is already set, which makes the hint for a busy
+    ScreenScraper pointless."""
+    if stop is Stop.QUOTA:
+        noun = "game" if not_tried == 1 else "games"
+        return (
+            "quota: ScreenScraper's daily request limit is reached; "
+            f"{not_tried} {noun} not tried. Run warpzone scrape again tomorrow."
+        )
+    text = _STOP_REASONS[stop]
+    if stop is Stop.BUSY and not account:
+        text += "; add `userCreds` to `[screenscraper]` in Skyscraper's config.ini"
+    return text
+
+
+def failed_message(system: str, log: str) -> str:
+    """The line for a Skyscraper run that failed, cannot run or hit the time limit."""
+    return f"Skyscraper failed on {system} (see {log})"
+
+
+def gamelist_message(system: str, reason: str) -> str:
+    """The line for a hub gamelist that cannot be written (it changed three times during the
+    write, or cannot be read): the entries wait for the next run."""
+    return f"{system}: {reason}; the entries are left for the next run"

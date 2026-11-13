@@ -13,9 +13,12 @@ from switch_support import (
     KEYS_TEXT,
     NSZ,
     entry,
+    make_ncz,
     make_nsp,
     make_nsp_multi,
     make_nsz,
+    make_real_nsz,
+    ncz_sections,
     pfs0,
     write_titledb,
 )
@@ -203,6 +206,40 @@ class PureTests(unittest.TestCase):
         for label, (blob, size) in bad.items():
             with self.subTest(label), self.assertRaises(sw.SwitchError):
                 sw.parse_pfs0(blob, size)
+
+    def test_nsp_size_is_the_header_the_plain_members_and_every_nca(self) -> None:
+        for label, sections, pad in (
+            ("one ncz", [[0x10000, 0x2000]], 0),
+            ("two ncz", [[0x500000], [0x4000, 0x30000, 0x200]], 0),
+            ("padded header", [[0x8000]], 0x1A0),
+        ):
+            with self.subTest(label):
+                data = make_real_nsz(sections, pad)
+                ncz = sum(len(make_ncz(s)) for s in sections)
+                expected = len(data) - ncz + sum(0x4000 + sum(s) for s in sections)
+                heads = {
+                    f"n{i}.ncz": ncz_sections(s) + b"zstd" * 10 for i, s in enumerate(sections)
+                }
+                self.assertEqual(sw.nsp_size(data[:600], len(data), heads), expected)
+
+    def test_nsp_size_refuses_a_table_it_cannot_trust(self) -> None:
+        data = make_real_nsz([[0x8000]])
+        good = {"n0.ncz": ncz_sections([0x8000])}
+        bad = {
+            "no magic": {"n0.ncz": b"X" * 80},
+            "no section": {"n0.ncz": ncz_sections([])},
+            "too many": {"n0.ncz": ncz_sections([1] * 65)},
+            "cut short": {"n0.ncz": ncz_sections([5, 6])[:90]},
+            "gap after the header": {"n0.ncz": ncz_sections([0x8000], first_at=0x6000)},
+            "table not read": {},
+        }
+        whole = len(data) - len(make_ncz([0x8000])) + 0x4000 + 0x8000
+        self.assertEqual(sw.nsp_size(data[:600], len(data), good), whole)
+        for label, heads in bad.items():
+            with self.subTest(label), self.assertRaises(sw.SwitchError):
+                sw.nsp_size(data[:600], len(data), heads)
+        with self.assertRaises(sw.SwitchError):
+            sw.nsp_size(b"XXXX" + data[4:600], len(data), good)
 
     def test_bundle_parts_are_numbered_without_the_pack_itself(self) -> None:
         region = sw.parse_region({"1": entry(PACK, "Pack", [PACK, PART1, PART2, PART3])})
@@ -496,6 +533,46 @@ class CompressedTests(SwitchBase):
         self.assertIn("not enough free space", self.reason("big.nsz"))
         self.assertNotIn("-D", [c.split()[0] for c in self.nsz_calls()])
         self.assertEqual(self.files("roms"), [])
+
+    def test_decompressed_size_reads_the_headers_of_a_file(self) -> None:
+        data = make_real_nsz([[0x10000, 0x2000]], 0x40)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "x.nsz"
+            path.write_bytes(data)
+            expected = len(data) - len(make_ncz([0x10000, 0x2000])) + 0x4000 + 0x12000
+            self.assertEqual(sw.decompressed_size(path), (expected, None))
+            path.write_bytes(data[:300])
+            size, why = sw.decompressed_size(path)
+            self.assertEqual(size, 300)
+            self.assertIn("exact size", why or "")
+            path.write_bytes(b"not a pfs0")
+            self.assertIsNotNone(sw.decompressed_size(path)[1])
+
+    def test_the_exact_size_decides_the_free_space(self) -> None:
+        nsz = make_nsz(make_nsp(MK8))
+        self.drop("big.nsz", nsz)
+        exact = 3 * 2**30
+        usage = SimpleNamespace(total=1, used=0, free=int(exact * 1.05) - 1)
+        with (
+            mock.patch.object(sw, "decompressed_size", return_value=(exact, None)),
+            mock.patch("shutil.disk_usage", return_value=usage),
+        ):
+            self.assertEqual(self.go(), 1, self.out)
+        reason = self.reason("big.nsz")
+        self.assertIn("not enough free space", reason)
+        self.assertIn("3072 MiB", reason)
+        self.assertNotIn("at least", reason)
+        self.assertNotIn("-D", [c.split()[0] for c in self.nsz_calls()])
+
+    def test_nsz_with_unreadable_headers_falls_back_to_the_lower_bound_and_says_why(self) -> None:
+        nsz = make_nsz(make_nsp(MK8))
+        self.drop("big.nsz", nsz)
+        usage = SimpleNamespace(total=1, used=0, free=int(len(nsz) * 1.05) - 1)
+        with mock.patch("shutil.disk_usage", return_value=usage):
+            self.assertEqual(self.go(), 1, self.out)
+        reason = self.reason("big.nsz")
+        self.assertIn("at least", reason)
+        self.assertIn("exact size", reason)
 
     def test_nsz_that_has_the_room_for_the_lower_bound_is_decompressed(self) -> None:
         nsz = make_nsz(make_nsp(MK8))
