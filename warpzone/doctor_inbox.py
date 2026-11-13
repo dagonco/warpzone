@@ -43,7 +43,7 @@ from warpzone.doctor_hints import (
 from warpzone.inbox_core import MIN_FREE_GIB
 from warpzone.inbox_lock import LOCK_NAME
 from warpzone.inbox_lock import parse as parse_lock
-from warpzone.inbox_unattended import State, newest_record, parse_state
+from warpzone.inbox_unattended import STATE_FILE, State, newest_record, parse_state
 from warpzone.inbox_unattended_io import inbox_dir, runs_dir
 
 DAT_MAX_AGE_DAYS = 180
@@ -52,7 +52,6 @@ GIB = 1024**3
 DAY_SECONDS = 86400
 
 UNATTENDED_NAME = "Unattended inbox"
-STATE_FILE = "state.json"  # in catalog/inbox/ of the hub
 STALE_CHECK = timedelta(hours=2)  # the heartbeat writes `checked` at least hourly
 LONG_WAIT = timedelta(hours=2)  # an item waiting this long since `first` is worth a look
 LONG_LOCK = timedelta(hours=6)  # a lock held this long is stuck, not working

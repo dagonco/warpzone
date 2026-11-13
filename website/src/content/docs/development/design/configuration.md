@@ -167,7 +167,8 @@ wrong while working (a missing BIOS, an item sent to review).
 `--list`, `--notify-url URL`, `--timeout SECONDS` (wait for the rescan),
 `--syncthing-config PATH`. It does not take `--dry-run`: without `--apply` it
 is one. `inbox` takes `--notify-url URL` too (an `http://` or `https://` URL, never printed),
-which does something only with `--apply`. If the device name is left out, it is the configured device whose ID
+which does something only with `--apply`, and `--unattended` (only with `--apply`, not with
+`--force-lock`; both are usage errors, exit `2`). If the device name is left out, it is the configured device whose ID
 matches the local Syncthing.
 
 ### Writing commands
@@ -186,8 +187,16 @@ console by itself, so the prune timer runs `prune --apply --unattended` with nob
 keeps every safety rule of `prune` and its re-check before each delete, drops the size cap (one
 PS4 game is larger than the default) and refuses to delete anything when a folder would lose
 more than half of what the device holds in it (see
-[Unattended runs](/warpzone/development/design/prune/#unattended-runs)). No other destructive
-command runs unattended.
+[Unattended runs](/warpzone/development/design/prune/#unattended-runs)).
+
+**The second exception: the unattended inbox.** A game dropped in `inbox/` from any computer must
+reach the library by itself, so a scheduled task runs `inbox --apply --unattended` every 15
+minutes with nobody watching. What it can do is bounded: it only adds to the library and never
+overwrites a file there (the one replacement, a newer PS4 update, is done as an attended run does
+it), the originals it moves stay in `_done/` for 7 days, and it never acts on an item that is
+still being written (the item must hold still for 5 minutes across runs). It exits non-zero only
+for news. See [Unattended inbox](/warpzone/development/design/inbox-unattended/#the-exception).
+No other destructive command runs unattended.
 
 **Convergent commands write by default and accept `--dry-run`.** They bring the machine to
 the state the config and the profile describe: running one again changes nothing, and what

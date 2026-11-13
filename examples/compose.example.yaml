@@ -107,8 +107,10 @@ services:
     security_opt:
       - no-new-privileges:true
     mem_limit: 2g                        # more than the server: conversions and archives
-    # chdman counts the host's cores, not a CPU limit set here: put the same number in
-    # `[inbox] chdman_threads` of the config.
+    # Leave the NAS's other cores to SMB and Syncthing, especially for the scheduled
+    # `inbox --apply --unattended`. chdman counts the host's cores, not this limit: put the same
+    # number in `[inbox] chdman_threads` of the config.
+    cpus: "2"
     volumes:
       - /srv/games:/srv/games            # CHANGE: the hub root, read-write, the same path as [hub] root
       - ./config:/config:ro

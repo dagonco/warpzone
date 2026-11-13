@@ -274,10 +274,18 @@ def _build_parser() -> argparse.ArgumentParser:
         "process that is gone from this machine); a live lock is never taken",
     )
     inb.add_argument(
+        "--unattended",
+        action="store_true",
+        help="with --apply, run as a scheduled task does: process only the items that held "
+        "still for 5 minutes across runs, remember in catalog/inbox/state.json, exit at once "
+        "when the inbox is empty and exit non-zero only for news (not with --force-lock)",
+    )
+    inb.add_argument(
         "--notify-url",
         type=_webhook_url,
         help="with --apply, POST a JSON summary (the counts, the games placed and the items "
-        "for review) to this URL when some item went to review",
+        "for review) to this URL when some item went to review (an unattended run: when it "
+        "placed a game or has news)",
     )
     inb.add_argument(
         "--no-scrape",
@@ -760,6 +768,8 @@ def _inbox(args: argparse.Namespace, rep: Reporter) -> int:
     from warpzone import inbox, inbox_core, ra
     from warpzone.inbox_core import InboxError
 
+    if args.unattended and (not args.apply or args.force_lock):
+        raise InboxError("--unattended needs --apply and cannot be used with --force-lock")
     settings = load_inbox_settings(_config_path(args))
     root = args.root or (Path(settings.root) if settings.root else None)
     dats = args.dats or (Path(settings.dats_dir) if settings.dats_dir else None)
@@ -767,10 +777,9 @@ def _inbox(args: argparse.Namespace, rep: Reporter) -> int:
         raise InboxError(
             "no hub root: pass --root or set `root` in the [inbox] table of the config"
         )
-    if dats is None:
-        raise InboxError(
-            "no DATs: pass --dats or set `dats_dir` in the [inbox] table of the config"
-        )
+    if dats is None and not args.unattended:
+        # an unattended run reports it at its step 5, once, and only when there is work
+        raise InboxError(inbox_core.DATS_UNSET)
     work = args.work_dir or (Path(settings.work_dir) if settings.work_dir else None)
     options = inbox_core.Options(
         root=root,
@@ -778,6 +787,7 @@ def _inbox(args: argparse.Namespace, rep: Reporter) -> int:
         tools=inbox_core.find_tools(settings),
         apply=args.apply,
         force_lock=args.force_lock,
+        unattended=args.unattended,
         no_scrape=args.no_scrape,
         notify_url=args.notify_url,
         work_dir=work,
@@ -785,6 +795,11 @@ def _inbox(args: argparse.Namespace, rep: Reporter) -> int:
         ra_key=os.environ.get(ra.KEY_ENV) or None,
         settings=settings,
     )
+    if args.unattended:
+        from warpzone import inbox_unattended_run
+
+        # 0 no news, 1 news, 2 a new configuration error
+        return inbox_unattended_run.run_unattended(options, rep)
     return EXIT_RUNTIME if inbox.run_inbox(options, rep) else EXIT_OK
 
 

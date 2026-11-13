@@ -33,6 +33,7 @@ STABLE_SECONDS = 300  # an item is ready once its fingerprint has held this long
 HEARTBEAT_SECONDS = 3600  # an empty run writes `checked` at most this often
 MAX_ATTEMPTS = 2  # runs that may die on one item before it is held
 STATE_VERSION = 1
+STATE_FILE = "state.json"  # in `catalog/inbox/` of the hub: the unattended runs' memory
 STALE_WORK_SECONDS = 24 * 3600
 WORK_PREFIX = "warpzone-inbox-"
 GIB = 1024**3

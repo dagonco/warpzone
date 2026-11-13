@@ -54,6 +54,7 @@ from warpzone.dat import (
 from warpzone.inbox_core import (
     ARCHIVE_EXTENSIONS,
     CHUNK,
+    DATS_UNSET,
     INES_MAGIC,
     SIDECAR_EXTENSIONS,
     Context,
@@ -801,14 +802,17 @@ def process_item(
     result = ItemResult(f"{UNVERIFIED_DIR}/{unverified}/{item.name}" if unverified else item.name)
     work = ctx.work / f"item{number}"
     try:
-        newest = max(
-            (p.stat().st_mtime for p in [item, *item.rglob("*")] if not p.is_symlink()),
-            default=0,
-        )
-        age = ctx.opts.now() - newest
-        if age < SETTLE_SECONDS:
-            result.left = f"changed {int(max(age, 0))} s ago, still being copied? left in the inbox"
-            return result
+        if not ctx.opts.unattended:  # an unattended run judged it stable across ticks
+            newest = max(
+                (p.stat().st_mtime for p in [item, *item.rglob("*")] if not p.is_symlink()),
+                default=0,
+            )
+            age = ctx.opts.now() - newest
+            if age < SETTLE_SECONDS:
+                result.left = (
+                    f"changed {int(max(age, 0))} s ago, still being copied? left in the inbox"
+                )
+                return result
         work.mkdir(parents=True)
         _identify_and_place(ctx, item, work, result, unverified)
     except ItemFailure as exc:
@@ -1013,13 +1017,25 @@ def _describe_tools(tools: Tools) -> str:
     return ", ".join(f"{n} {'yes' if p else 'no'}" for n, p in items)
 
 
-def run_inbox(opts: Options, rep: Reporter) -> int:
-    """Process the inbox; returns how many items need attention (0 when all are placed)."""
-    inbox = opts.root / "inbox"
-    if not inbox.is_dir() or not (opts.root / "library" / "roms").is_dir():
-        raise InboxError(
-            f"{opts.root} has no inbox/ and library/roms/ folders; is --root the hub root?"
-        )
+def check_layout(root: Path) -> str | None:
+    """What is wrong with the hub root, or None: `inbox/`, `library/.stfolder` and
+    `library/roms` must all exist, so an unmounted share never looks like an empty library and
+    a share that is mounted but is not the hub root does not pass."""
+    missing = [
+        rel for rel in ("inbox", "library/.stfolder", "library/roms") if not (root / rel).is_dir()
+    ]
+    if not missing:
+        return None
+    return (
+        f"the hub root has no {', '.join(m + '/' for m in missing)}; is the share mounted and "
+        "is --root the hub root?"
+    )
+
+
+def open_library(opts: Options) -> DatLibrary:
+    """What the work needs before anything runs: the DATs and the handlers' configuration."""
+    if opts.dats_dir is None:
+        raise InboxError(DATS_UNSET)
     if not opts.dats_dir.is_dir():
         raise InboxError(f"DAT folder not found: {opts.dats_dir} (set [inbox] dats_dir or --dats)")
     for handler in kind_handlers():
@@ -1027,6 +1043,18 @@ def run_inbox(opts: Options, rep: Reporter) -> int:
     library = DatLibrary(opts.dats_dir, opts.cache_dir)
     if not library.systems():
         raise InboxError(f"no Redump or No-Intro DATs warpzone knows in {opts.dats_dir}")
+    return library
+
+
+def run_inbox(opts: Options, rep: Reporter) -> int:
+    """Process the inbox; returns how many items need attention (0 when all are placed).
+    An unattended run (`--unattended`) is `inbox_unattended_run.run_unattended`, which sits
+    above this module."""
+    problem = check_layout(opts.root)
+    if problem:
+        raise InboxError(problem)
+    inbox = opts.root / "inbox"
+    library = open_library(opts)
     if not opts.apply:  # a report reads only, so it needs no lock
         return _run(opts, rep, inbox, library)
     with inbox_lock.hold(
@@ -1035,11 +1063,11 @@ def run_inbox(opts: Options, rep: Reporter) -> int:
         return _run(opts, rep, inbox, library)
 
 
-def _run(opts: Options, rep: Reporter, inbox: Path, library: DatLibrary) -> int:
-    items = [(p, None) for p in scan(inbox)] + [(p, s) for p, s in scan_unverified(inbox)]
-    started = datetime.fromtimestamp(opts.now(), UTC)
-    mode = "apply" if opts.apply else "report only"
-    rep.out(f"inbox: {inbox} ({mode}), {len(items)} item(s)")
+def announce(
+    opts: Options, rep: Reporter, inbox: Path, library: DatLibrary, mode: str, count: int
+) -> None:
+    """The first lines of a run: the folder, the tools and DATs, what is left alone."""
+    rep.out(f"inbox: {inbox} ({mode}), {count} item(s)")
     rep.out(f"tools: {_describe_tools(opts.tools)}; DATs: {', '.join(library.systems())}")
     for name in _stray_unverified(inbox):
         rep.out(f"{UNVERIFIED_DIR}: ignored {name} (put it in {UNVERIFIED_DIR}/<system>/)")
@@ -1047,6 +1075,13 @@ def _run(opts: Options, rep: Reporter, inbox: Path, library: DatLibrary) -> int:
         rep.out("RA: not checked (set [inbox] rahasher to hash images)")
     elif not opts.ra_key:
         rep.out(f"RA: hashes only (set {ra.KEY_ENV} to look them up)")
+
+
+def _run(opts: Options, rep: Reporter, inbox: Path, library: DatLibrary) -> int:
+    items = [(p, None) for p in scan(inbox)] + [(p, s) for p, s in scan_unverified(inbox)]
+    started = datetime.fromtimestamp(opts.now(), UTC)
+    mode = "apply" if opts.apply else "report only"
+    announce(opts, rep, inbox, library, mode, len(items))
 
     if opts.work_dir:
         opts.work_dir.mkdir(parents=True, exist_ok=True)
@@ -1104,10 +1139,22 @@ def _record_run(
     review: int,
     note: ScrapeNote | None,
     purged: Sequence[str],
+    *,
+    mode: str = "attended",
+    status: int | None = None,
+    waiting: int | None = None,
+    news_found: bool = False,
+    error: str | None = None,
+    held: Sequence[str] = (),
 ) -> None:
     """Write the run record of an `--apply` that processed an item, then send the webhook when
-    the run calls for it. A failure of either is a warning: the items are filed."""
-    if all(r.left for r in results):
+    the run calls for it. A failure of either is a warning: the items are filed.
+
+    An unattended run passes its `mode`, its exit `status`, its `waiting` items and whether it
+    found news (`error` and the newly `held` names are the news that has no item in `results`).
+    With nothing processed it writes no record but still sends the webhook for news."""
+    processed = any(not r.left for r in results)
+    if not processed and mode == "attended":
         return  # nothing was processed: no record, no message
     roots = [str(opts.root), str(opts.root.resolve())]
     secrets = [x for x in (opts.ra_key, opts.notify_url) if x]
@@ -1116,32 +1163,46 @@ def _record_run(
         return inbox_unattended.build_record(
             results,
             run_id=run_id,
-            mode="attended",
+            mode=mode,
             started=started,
             finished=datetime.fromtimestamp(opts.now(), UTC),
-            status=1 if review else 0,
+            status=(1 if review else 0) if status is None else status,
             roots=roots,
             secrets=secrets,
-            waiting=sum(1 for r in results if r.left),
+            waiting=sum(1 for r in results if r.left) if waiting is None else waiting,
             scrape=note,
             purged=purged,
             warnings=rep.warnings,
         )
 
-    try:
-        record = inbox_unattended_io.write_record(opts.root, started, build)
-    except (OSError, ValueError) as exc:  # the webhook still reports what the run did
-        rep.warn(f"run record: not written ({_why(exc)})")
+    if not processed:
         record = build(inbox_unattended.record_id(started))
     else:
-        rep.out(f"run record: catalog/inbox/runs/{record['id']}.json")
         try:
-            inbox_unattended_io.purge_records(opts.root)
-        except OSError as exc:
-            rep.warn(f"run record: old records not deleted ({_why(exc)})")
-    if opts.notify_url and inbox_unattended.should_notify(record):
+            record = inbox_unattended_io.write_record(opts.root, started, build)
+        except (OSError, ValueError) as exc:  # the webhook still reports what the run did
+            rep.warn(f"run record: not written ({_why(exc)})")
+            record = build(inbox_unattended.record_id(started))
+        else:
+            rep.out(f"run record: catalog/inbox/runs/{record['id']}.json")
+            try:
+                inbox_unattended_io.purge_records(opts.root)
+            except OSError as exc:
+                rep.warn(f"run record: old records not deleted ({_why(exc)})")
+    if opts.notify_url and inbox_unattended.should_notify(record, news_found):
+        clean = inbox_unattended.clean_text
+        payload = inbox_unattended.notify_payload(
+            record, None if error is None else clean(error, roots, secrets)
+        )
+        names = [clean(n, roots, secrets) for n in held]
+        extra = [n for n in names if n not in payload["review_items"]]
+        if extra:  # held in the state, with no item in this run's results
+            payload["held"] += len(extra)
+            payload["review_items"] = (payload["review_items"] + extra)[
+                : inbox_unattended.NOTIFY_LIST_MAX
+            ]
         try:
-            notify(opts.notify_url, inbox_unattended.notify_payload(record))
+            notify(opts.notify_url, payload)
         except NotifyError as exc:
             rep.warn(str(exc))
 

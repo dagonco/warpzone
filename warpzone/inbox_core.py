@@ -267,13 +267,17 @@ def find_tools(
     )
 
 
+DATS_UNSET = "no DATs: pass --dats or set `dats_dir` in the [inbox] table of the config"
+
+
 @dataclass(frozen=True)
 class Options:
     root: Path  # the hub root as mounted here: holds library/ and inbox/
-    dats_dir: Path
+    dats_dir: Path | None  # None only for an unattended run, whose step 5 reports it
     tools: Tools
     apply: bool = False
     force_lock: bool = False  # take over a stale inbox lock (see inbox_lock)
+    unattended: bool = False  # `--unattended`: a scheduled run (see inbox_unattended_run)
     work_dir: Path | None = None
     cache_dir: Path | None = None
     ra_key: str | None = None

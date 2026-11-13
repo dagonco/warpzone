@@ -31,7 +31,10 @@ The contract:
   (`_done`, `_revisar`, `_unverified`) are never items of that scan; the only `_*` folder
   that holds items is `_unverified/<system>/` (see
   [Roms no DAT knows](#roms-no-dat-knows)). An item modified in the last 30 seconds is left
-  alone, since it may still be copying.
+  alone, since it may still be copying (an unattended run does not apply this rule: it judges
+  the same across runs, see [Unattended inbox](/warpzone/development/design/inbox-unattended/#readiness)).
+- **The hub root.** Every run, attended or not, needs `inbox/`, `library/.stfolder` and
+  `library/roms` under the root, so an unmounted share is never taken for an empty library.
 - **Report only by default.** Without `--apply` it unpacks into a local work folder,
   identifies, plans and prints, and writes nothing to the share. With `--apply` it
   converts, places and files the originals.
@@ -63,8 +66,15 @@ The contract:
   and Ctrl-C), after the heartbeat stops, and only if it still holds this run's host, pid and
   start time. It is a hidden file, so scanning skips it. A `SIGKILL` or a power cut leaves it
   behind, which is what the stale rules are for. The `mode` parameter of `inbox_lock.hold` also
-  accepts `unattended`, which judges two readings of the lock instead of one look; see the design
-  page above.
+  accepts `unattended`, which judges two readings of the lock instead of one look, and its handle
+  has `still_mine()`, which `inbox --apply --unattended` asks before each item and each move; see
+  the design page above.
+- **Unattended.** `inbox --apply --unattended` is the scheduled run of
+  [Unattended inbox](/warpzone/development/design/inbox-unattended/): `inbox_unattended_run.py`
+  decides across runs which items are ready (`catalog/inbox/state.json`), takes the lock with
+  `mode` `unattended`, processes the ready items with `process_item` as an attended run does
+  (without the 30-second rule, and with `os.nice(10)`), and exits `1` or `2` only for news. An
+  attended `--apply` reads none of that state and processes every item.
 - **Untrusted content.** Archives are unpacked only into the local work folder (`.zip`
   with `zipfile`, `.7z` and `.rar` with `bsdtar`; archives inside archives up to two
   levels). A member with an absolute path, a `..` component or a NUL byte, or a symbolic

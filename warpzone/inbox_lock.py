@@ -222,6 +222,16 @@ def _read(path: Path) -> tuple[LockInfo | None, float] | None:
         return None
 
 
+def look(inbox: Path, now: float) -> LockReading | None:
+    """One look at `inbox/.warpzone.lock`: None when there is none. It takes nothing, so a
+    caller can tell busy from free before it starts work."""
+    try:
+        held = _read(inbox / LOCK_NAME)
+    except OSError as exc:
+        raise InboxError(f"cannot read {_SHOWN}: {exc.strerror or exc}") from exc
+    return None if held is None else LockReading(held[0], held[1], now)
+
+
 def holds(path: Path, mine: LockInfo) -> bool | None:
     """Whether the lock file holds this run's host, pid and start time: True, False when it is
     gone or somebody else's, None when it could not be read (a share that hiccups)."""

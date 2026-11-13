@@ -11,6 +11,7 @@ from pathlib import Path
 
 PACKAGE = Path(__file__).resolve().parent.parent / "warpzone"
 ROOT = PACKAGE.parent
+TOP = "inbox_unattended_run"  # the scheduled run: the one module above `inbox`, called by `cli`
 
 
 def inbox_modules(package: Path = PACKAGE) -> list[str]:
@@ -82,12 +83,16 @@ class InboxImportTests(unittest.TestCase):
         graph = inbox_imports()
         self.assertIsNone(find_cycle(graph), f"import cycle between inbox modules: {graph}")
 
+    def test_nothing_imports_the_unattended_run_but_the_command_line(self) -> None:
+        for name, imports in inbox_imports().items():
+            self.assertNotIn(TOP, imports, f"{name} imports {TOP}.py")
+
     def test_the_core_imports_no_other_inbox_module(self) -> None:
         self.assertEqual(inbox_imports()["inbox_core"], set())
 
     def test_the_handlers_never_import_the_pipeline(self) -> None:
         for name, imports in inbox_imports().items():
-            if name not in ("inbox", "inbox_core"):
+            if name not in ("inbox", "inbox_core", TOP):
                 self.assertNotIn("inbox", imports, f"{name} imports inbox.py")
 
     def test_each_module_imports_on_its_own(self) -> None:

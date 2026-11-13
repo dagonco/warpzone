@@ -117,6 +117,38 @@ docker compose run --rm warpzone-inbox doctor           # checks the image's too
 
 `warpzone doctor` tells which way it is running by itself (inside a container it checks the image's tools and the mounted folders; elsewhere the tools on `PATH` or at the configured paths), so the same command is right in both places. See [the doctor guide](/warpzone/operation/doctor/).
 
+## Adding games without being there
+
+With the container set up as above, the NAS can file what you drop in `inbox/` by itself: copy a game to the share from any computer (nothing from warpzone is needed there), and within two runs of a scheduled task it is in the library and in the catalog. The task runs `inbox --apply --unattended` every 15 minutes. It only processes an item once its files have held still for 5 minutes across two runs, so a copy in progress is never touched, and with an empty inbox it exits at once and prints nothing.
+
+First try it by hand, from the folder with `compose.yaml`:
+
+```bash
+docker compose run --rm -T warpzone-inbox doctor
+docker compose run --rm -T warpzone-inbox inbox                          # report only
+docker compose run --rm -T warpzone-inbox inbox --apply --unattended     # what the task runs
+```
+
+Then, on a Synology: Control Panel, Task Scheduler, Create, Scheduled Task, User-defined script. User `root` (Docker on the NAS needs it); schedule it daily, first run at 00:00, every 15 minutes, last run at 23:45; script:
+
+```sh
+cd /path/to/the/compose/folder && /usr/local/bin/docker compose run --rm -T warpzone-inbox inbox --apply --unattended
+```
+
+The full path of `docker` is needed because the task's `PATH` is short (`which docker` over SSH shows it), and `-T` is because a scheduled task has no terminal. "Save output results" in the task's settings keeps each run's output. Other NAS systems use their scheduler or root's crontab with the same line. Add `--notify-url URL` to be told by a webhook when a game was placed or something needs you.
+
+Things to know:
+
+- **`work_dir` must be a folder on a mounted volume**, such as `/work/tmp` in the example, never the container's `/tmp`, which is memory; the run refuses a work folder on `tmpfs` and says so.
+- **It exits non-zero only for news**: an item sent to `_revisar/`, an item it holds, or a new problem. The task's email "when the script terminates abnormally" therefore arrives once per problem, not every 15 minutes. A problem that is still there is reported again only when it changes; fix it and the next run that gets past it clears it.
+- **A held item stays in `inbox/` and is not retried**: a run that died twice on it (the container was killed for memory: raise `mem_limit` or run `inbox` on a computer), an original that could not be moved after its games were placed, or a disc dropped as loose `.cue` and `.bin` files at the top of `inbox/` (put the sheet and its tracks in one folder; that is a new item). Changing, replacing or touching the item lifts the hold, and a manual `warpzone inbox --apply` processes it whatever the state says.
+- **Copying a large game over an unreliable link**: copy it into a folder whose name starts with `_` and move it into `inbox/` when the copy is done; a move within the share is instant.
+- **Not enough room**: an item waits when the hub's free space is below twice its size plus 20 GiB.
+- **A run by hand and the task never overlap**: the second finds the first's lock. A lock whose holder has been silent for 10 minutes is taken over by the task itself; one left by an older warpzone needs `--force-lock` by hand.
+- **Scraping** works as in an attended run, and a failure is a warning, not a problem to be mailed about; `--no-scrape` is allowed.
+
+The state of the task is `catalog/inbox/state.json` and what each run did is `catalog/inbox/runs/` on the hub. The contract is [Unattended inbox](/warpzone/development/design/inbox-unattended/).
+
 ## Configuration
 
 Set the `[inbox]` table of the config (see [`examples/config.example.toml`](https://github.com/dagonco/warpzone/blob/main/examples/config.example.toml)). The example below is for a computer; in the container the same keys hold paths inside it, as in [Running it in the container](#running-it-in-the-container). With `--root` and `--dats` it needs no config file.

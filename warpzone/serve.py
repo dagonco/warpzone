@@ -53,7 +53,13 @@ from warpzone import (
 from warpzone import whitelist_store as store
 from warpzone.config import Config, ServeSettings, split_listen
 from warpzone.errors import EXIT_OK, UsageError, WarpzoneError
-from warpzone.inbox_unattended import State, is_record_id, newest_record_ids, parse_state
+from warpzone.inbox_unattended import (
+    STATE_FILE,
+    State,
+    is_record_id,
+    newest_record_ids,
+    parse_state,
+)
 from warpzone.library_api import ApiError
 from warpzone.syncthing import Client, SyncthingError
 
@@ -83,7 +89,6 @@ CHUNK = 64 * 1024  # bytes of a media file read and sent at a time
 BODY_SECONDS = 4.0 * SOCKET_TIMEOUT
 MAX_DRAIN = 1024 * 1024  # bytes of a rejected request body read and thrown away before the answer
 LIBRARY_FOLDER = "wz-library"
-INBOX_STATE = "state.json"  # the unattended inbox's state file, in `catalog/inbox/`
 INBOX_LOCK_MAX = 64 * 1024  # bytes: a lock file over this is read as unreadable
 INBOX_FILE_MAX = 8 * 1024 * 1024  # bytes: a state file or run record over this is read as damaged
 CONTENT_TYPES = {
@@ -636,7 +641,7 @@ class HubFiles:
             self._inbox_checked = self.clock()
             base = inbox_unattended_io.inbox_dir(self.root)
             state: State = self._inbox_file(
-                safe_file(self.root, base, (INBOX_STATE,)), lambda text: parse_state(text)[0]
+                safe_file(self.root, base, (STATE_FILE,)), lambda text: parse_state(text)[0]
             )
             try:
                 names = [p.name.removesuffix(".json") for p in base.joinpath("runs").glob("*.json")]
@@ -646,7 +651,7 @@ class HubFiles:
             records = tuple(r for r in map(self._inbox_record, ids) if r is not None)
             if len(self._inbox_docs) > 4 * library_api.INBOX_RUNS_SHOWN:
                 keep = {inbox_unattended_io.runs_dir(self.root) / f"{i}.json" for i in ids}
-                keep.add(base / INBOX_STATE)
+                keep.add(base / STATE_FILE)
                 self._inbox_docs = {k: v for k, v in self._inbox_docs.items() if k in keep}
             self._inbox = InboxFiles(state, records, self._busy())
             return self._inbox
