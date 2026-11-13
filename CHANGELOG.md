@@ -13,6 +13,10 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 - `warpzone inbox` keeps the LibCrypt `.sbi` of a PAL PlayStation disc: the game goes in a `<game>.m3u/` folder with the CHD and `<game>.sbi`, which DuckStation and Beetle PSX need to pass the protection. Until now the CHD was placed alone and the `.sbi` went to review.
 - `warpzone inbox` places Nintendo DS games: a `.nds` rom (loose or in an archive) that matches the No-Intro `Nintendo - Nintendo DS` DAT is filed as `roms/nds/<game>.zip`. Until now it went to review as "no DAT match".
 
+### Changed
+
+- `warpzone inbox` checks the free space for a `.nsz` against the exact size of the `.nsp` that decompressing it produces, read from the file's headers, instead of the size of the `.nsz` plus 5%. The `.nsp` of a compressed game is usually much bigger than the `.nsz`, so a work folder too small for it is now caught before `nsz` starts, not when the disk fills up.
+
 ### Security
 
 - The Syncthing client without `hub.api_cert_sha256` no longer follows redirects or uses the proxies in the environment, as the pinned client already did. Before, a redirect from the API address to another host received the `X-API-Key`. A redirect is now an error that names where it points, so `api_url` can be set to that address; a Syncthing reached through an environment proxy must be reached directly.

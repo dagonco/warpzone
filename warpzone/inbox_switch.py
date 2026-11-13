@@ -15,7 +15,8 @@ the `.nsp` reaches the library. `.xci` is never converted: it goes to review.
 
 `inbox.py` registers `HANDLER` (`kind_handlers`). The decisions (`classify`,
 `base_title_id`, `normalize_text`, `dlc_display_name`, `build_names`, `parse_nsz_info`,
-`parse_pfs0`, `ids_from_filename`, `verdict`) are pure; the rest touches the disk or runs `nsz`.
+`parse_pfs0`, `nsp_size`, `ids_from_filename`, `verdict`) are pure; the rest touches the disk
+or runs `nsz`.
 The keys file is only passed to `nsz` by path: its content is never read, printed or logged.
 See development/design/inbox.md.
 """
@@ -33,7 +34,7 @@ import subprocess
 import unicodedata
 import weakref
 import zipfile
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -49,6 +50,9 @@ CHUNK = 8 * 1024 * 1024
 NAME_BYTES = 240  # a file name longer than 255 bytes does not fit on most file systems
 TITLE_BYTES = 150
 MAX_PFS0_FILES = 4096
+MAX_NCZ_SECTIONS = 64
+NCZ_SECTION_BYTES = 64
+NCA_HEADER_BYTES = 0x4000  # the part of a .ncz that nsz stores uncompressed
 SHORT_ACRONYM = 3  # all-caps words up to this long may be acronyms
 # Small words of a title: written in lower case inside it, even when the source shouts.
 SMALL_WORDS = frozenset(
@@ -295,9 +299,10 @@ def scrub(text: str) -> str:
     return "\n".join(line for line in text.splitlines() if "key" not in line.lower())
 
 
-def parse_pfs0(head: bytes, file_size: int) -> list[str]:
-    """The member names of a PFS0 container whose first bytes are `head`. Raises
-    SwitchError when the header does not describe a file of `file_size` bytes."""
+def _pfs0_members(head: bytes, file_size: int) -> list[tuple[str, int, int]]:
+    """(name, offset in the file, size) of every member of a PFS0 container whose first
+    bytes are `head`. Raises SwitchError when the header does not describe a file of
+    `file_size` bytes."""
     if len(head) < 16 or head[:4] != b"PFS0":
         raise SwitchError("not a PFS0 container (bad magic)")
     count, strings = struct.unpack("<II", head[4:12])
@@ -307,7 +312,7 @@ def parse_pfs0(head: bytes, file_size: int) -> list[str]:
     data_start = table + strings
     if data_start > file_size or len(head) < data_start:
         raise SwitchError("PFS0 header is larger than the file")
-    names: list[str] = []
+    members: list[tuple[str, int, int]] = []
     for i in range(count):
         offset, size, name_at, _ = struct.unpack("<QQII", head[16 + 24 * i : 40 + 24 * i])
         if data_start + offset + size > file_size:
@@ -315,8 +320,57 @@ def parse_pfs0(head: bytes, file_size: int) -> list[str]:
         end = head.find(b"\0", table + name_at, data_start)
         if name_at >= strings or end < 0:
             raise SwitchError("PFS0 member name is outside the string table")
-        names.append(head[table + name_at : end].decode("utf-8", errors="replace"))
-    return names
+        name = head[table + name_at : end].decode("utf-8", errors="replace")
+        members.append((name, data_start + offset, size))
+    return members
+
+
+def parse_pfs0(head: bytes, file_size: int) -> list[str]:
+    """The member names of a PFS0 container whose first bytes are `head`. Raises
+    SwitchError when the header does not describe a file of `file_size` bytes."""
+    return [name for name, _, _ in _pfs0_members(head, file_size)]
+
+
+def ncz_nca_size(section_head: bytes) -> int:
+    """The size of the NCA that `nsz -D` rebuilds from a `.ncz`, from the bytes that follow
+    the `.ncz`'s first 0x4000 (the NCA header, stored as it is): `NCZSECTN`, the section
+    count and one 64-byte record per section (offset, size, crypto type, padding, key,
+    counter). Same sum as nsz: the header plus the size of every section. A first section
+    that does not start right after the header makes nsz count a gap, so it is refused."""
+    if len(section_head) < 16 or section_head[:8] != b"NCZSECTN":
+        raise SwitchError("no NCZSECTN section table in a .ncz")
+    (count,) = struct.unpack("<Q", section_head[8:16])
+    if not 0 < count <= MAX_NCZ_SECTIONS:
+        raise SwitchError(f"NCZ section table lists {count} section(s)")
+    if len(section_head) < 16 + NCZ_SECTION_BYTES * count:
+        raise SwitchError("NCZ section table is cut short")
+    sizes: list[int] = []
+    for i in range(count):
+        at = 16 + NCZ_SECTION_BYTES * i
+        offset, size = struct.unpack("<QQ", section_head[at : at + 16])
+        if i == 0 and offset != NCA_HEADER_BYTES:
+            raise SwitchError("the first NCZ section does not follow the NCA header")
+        sizes.append(size)
+    return NCA_HEADER_BYTES + sum(sizes)
+
+
+def nsp_size(head: bytes, file_size: int, ncz_heads: Mapping[str, bytes]) -> int:
+    """The exact size of the `.nsp` that `nsz -D` (without `-F`) writes for the `.nsz`
+    whose PFS0 header is `head`. `ncz_heads` maps the name of each `.ncz` member to the
+    bytes that follow its first 0x4000 (see `ncz_nca_size`). nsz writes the new header into
+    the room the old one took (the names keep their length, `.ncz` to `.nca`), then the
+    members one after the other with no gap: the other members as they are, each `.ncz`
+    as the NCA it holds."""
+    members = _pfs0_members(head, file_size)
+    total = min(offset for _, offset, _ in members)
+    for name, _, size in members:
+        if name.endswith(".ncz"):
+            if name not in ncz_heads:
+                raise SwitchError(f"no section table read for {name}")
+            total += ncz_nca_size(ncz_heads[name])
+        else:
+            total += size
+    return total
 
 
 # ------------------------------------------------------------------ titledb
@@ -540,6 +594,32 @@ def check_pfs0_file(path: Path) -> list[str]:
     return parse_pfs0(head, size)
 
 
+def decompressed_size(source: Path) -> tuple[int, str | None]:
+    """(bytes the `.nsp` of `source` will take, None) read from the headers of the `.nsz`
+    only, never the whole file. When they cannot be read: (the size of the `.nsz`, which the
+    `.nsp` never undercuts, and the reason)."""
+    size = source.stat().st_size
+    try:
+        with source.open("rb") as f:
+            head = f.read(16)
+            if len(head) == 16 and head[:4] == b"PFS0":
+                count, strings = struct.unpack("<II", head[4:12])
+                if 0 < count <= MAX_PFS0_FILES:
+                    head += f.read(24 * count + strings)
+            tables: dict[str, bytes] = {}
+            for name, offset, length in _pfs0_members(head, size):
+                if name.endswith(".ncz"):
+                    f.seek(offset + NCA_HEADER_BYTES)
+                    first = f.read(16)
+                    count = struct.unpack("<Q", first[8:16])[0] if len(first) == 16 else 0
+                    count = min(count, MAX_NCZ_SECTIONS)
+                    wanted = max(0, min(NCZ_SECTION_BYTES * count, length - NCA_HEADER_BYTES - 16))
+                    tables[name] = first + f.read(wanted)
+            return nsp_size(head, size, tables), None
+    except (OSError, SwitchError) as exc:
+        return size, f"the headers could not be read to get the exact size: {exc}"
+
+
 def decompress(env: SwitchEnv, source: Path, scratch: Path) -> Path:
     """`nsz -D` into `scratch`, then proof that the result is sound: nsz exited cleanly and
     reported DONE, the PFS0 header parses, and `nsz -V` verifies every NCA hash. (nsz exits 0
@@ -547,14 +627,10 @@ def decompress(env: SwitchEnv, source: Path, scratch: Path) -> Path:
     assert env.nsz and env.keys
     out = scratch / "dec"
     out.mkdir(parents=True, exist_ok=True)
-    # A lower bound only: the .nsp is never smaller than the .nsz it comes from. The exact
-    # size needs the NCZ section tables, which are not read here.
-    least = source.stat().st_size
-    if shutil.disk_usage(out).free < least * 1.05:
-        raise SwitchError(
-            f"{source.name}: not enough free space in {out} to decompress "
-            f"(at least {least // 2**20} MiB)"
-        )
+    need, why = decompressed_size(source)
+    if shutil.disk_usage(out).free < need * 1.05:
+        shown = f"{need // 2**20} MiB" if why is None else f"at least {need // 2**20} MiB, {why}"
+        raise SwitchError(f"{source.name}: not enough free space in {out} to decompress ({shown})")
     code, text = run_nsz(
         [env.nsz, "-D", "--keys", str(env.keys), "-o", str(out), str(source)], env.timeout
     )
