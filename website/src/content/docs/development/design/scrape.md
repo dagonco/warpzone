@@ -380,6 +380,13 @@ How it is done (`inbox_scrape.py`, called from `inbox._run` right after `_update
   warned (`scrape: failed (...)`). The return code of the scrape only decides whether the closing
   line `scrape: not finished; run `warpzone scrape --system <systems>` later` is printed. The
   return value of `inbox` stays the number of items for review.
+- **A catalog that lacks the games.** When the catalog update failed (an exception, or a warning
+  for a system), the placed games are not in the catalog and cannot be scraped. The scrape counts
+  the placed entries of each system that no catalog game matches (also when the system has no
+  catalog file) and warns `scrape: <system>: N placed games not in the catalog; run `warpzone
+  catalog`, then `warpzone scrape --system <system>``. That counts as a failure of the run, so the
+  closing `scrape: not finished; ...` line appears; the games of the system that are in the catalog
+  are still scraped. Placement and the exit code of `inbox` are unaffected.
 - **Without Skyscraper.** `inbox_core.find_tools` locates it like the other tools: a configured path
   that does not exist is a configuration error (exit 2, before anything is placed), else
   `Skyscraper` on `PATH`. When none is found, the report says once `scrape: Skyscraper not found; N

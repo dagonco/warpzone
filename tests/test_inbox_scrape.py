@@ -10,7 +10,7 @@ from unittest import mock
 from scrape_support import FAKE_CONFIG, FAKE_CREDS, Hub
 from test_cli import run as run_cli
 from test_inbox import NES_ROM, Base
-from warpzone import artwork, inbox_core, inbox_scrape, scrape, scrape_io
+from warpzone import artwork, catalog, catalog_store, inbox_core, inbox_scrape, scrape, scrape_io
 from warpzone.config import InboxSettings
 from warpzone.inbox import run_inbox
 from warpzone.inbox_core import InboxError, ItemResult, Tools, UnitResult
@@ -175,6 +175,34 @@ class ApplyTests(ScrapeAfterInboxCase):
         self.assertEqual(code, 1, self.out)  # inbox's own count, as without a scrape
         self.assertEqual(rep.warnings, [])
         self.assertTrue(self.media("covers").is_file())
+
+    def assert_left_for_later(self, rep: Reporter) -> None:
+        self.assert_placed()
+        self.assertEqual(self.review(), [])
+        self.assertEqual([c for c in self.sky.calls() if c != ["--version"]], [])  # no request
+        self.assertFalse(self.nes_gamelist.exists())
+        message = "scrape: nes: 1 placed game not in the catalog; run `warpzone catalog`, then "
+        self.assertIn(message + "`warpzone scrape --system nes`", rep.warnings)
+        self.assertIn("scrape: not finished; run `warpzone scrape --system nes` later", self.out)
+
+    def test_a_failed_catalog_update_leaves_the_scrape_for_later(self) -> None:
+        with mock.patch.object(catalog_store, "update_after_inbox", side_effect=OSError("disk")):
+            code, rep = self.go_inbox()
+        self.assertEqual(code, 0, self.out)
+        self.assertIn("catalog: not updated", "".join(rep.warnings))
+        self.assert_left_for_later(rep)
+
+    def test_games_missing_from_an_existing_catalog_are_reported_the_same_way(self) -> None:
+        from library_support import game
+
+        target = catalog_store.system_path(self.hub, "nes")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        older = game("nes", "roms/nes/Older (USA).zip", "Older (USA)")
+        target.write_bytes(catalog.encode("nes", [older], "2026-11-13T00:00:00+00:00"))
+        with mock.patch.object(catalog_store, "update_after_inbox"):
+            code, rep = self.go_inbox()
+        self.assertEqual(code, 0, self.out)
+        self.assert_left_for_later(rep)
 
     def test_without_skyscraper_the_game_is_placed_and_a_note_says_it_was_not_scraped(self) -> None:
         code, rep = self.go_inbox(program=None)

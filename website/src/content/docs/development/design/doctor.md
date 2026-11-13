@@ -61,6 +61,15 @@ for every problem, the exact fix for this platform.
   container) or is not a mounted folder, and the missing-DATs fix says to mount a folder.
   Image tools that cannot run (a wrong architecture) are `[!!]` with "build the image
   again".
+- **Skyscraper.** With an `[inbox]` table, two lines in the inbox tools group (see
+  [Scraping](/warpzone/development/design/scrape/#doctor)): `Skyscraper` is `[ok]` with its version,
+  `[--]` when not found and not configured (`inbox` then does not scrape), `[!!]` when the
+  configured path does not exist, is not executable or does not run, and `[! ]` when the version is
+  older than 3.21.1. `ScreenScraper account` appears only when Skyscraper is found: `[ok]` when a
+  `userCreds` key is in `[screenscraper]` of its `config.ini`, `[--]` (anonymous, with the limits)
+  otherwise. The value is never read; the check is a pure function of the file's lines. In the hub
+  container Skyscraper is not in the image, so the line is `[--]` with the fix "run scrape on a
+  computer that mounts the share".
 - **Leftover folders.** On a configured device, `Leftover folders` is `[! ]` when the local
   Syncthing `config.xml` has a `wz-*` folder that none of the device's config describes (a
   group taken out of its `folders`), and says nothing otherwise. Doctor is offline, so it

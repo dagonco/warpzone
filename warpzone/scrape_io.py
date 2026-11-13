@@ -597,6 +597,20 @@ def _run_batch(
     return _merge_batch(run, sr, number, names, outcome) or ((), ())
 
 
+def _not_in_catalog(only: frozenset[str] | None, system: str, games: Sequence[Game]) -> list[str]:
+    """The placed entries of `system` (`only`, library paths) that no catalog game matches."""
+    mine = sorted(p for p in only or () if p.startswith(f"roms/{system}/"))
+    return [p for p in mine if not any(scrape.is_placed(g, [p]) for g in games)]
+
+
+def _missing_message(system: str, missing: Sequence[str]) -> str:
+    noun = "game" if len(missing) == 1 else "games"
+    return (
+        f"scrape: {system}: {len(missing)} placed {noun} not in the catalog; "
+        f"run `warpzone catalog`, then `warpzone scrape --system {system}`"
+    )
+
+
 def _scrape_system(run: Run, system: str) -> scrape.Selection | None:
     """One system. Returns what was selected (for the dry run), None when it was skipped."""
     opts, rep = run.opts, run.rep
@@ -608,6 +622,10 @@ def _scrape_system(run: Run, system: str) -> scrape.Selection | None:
         run.fail(f"scrape: {system}: cannot read the catalog ({exc.strerror or exc})")
         return None
     if doc is None:
+        missing = _not_in_catalog(opts.only, system, [])
+        if missing:  # `inbox`: the catalog update failed, so its games cannot be scraped now
+            run.fail(_missing_message(system, missing))
+            return None
         if (opts.root / "library" / "roms" / system).is_dir():
             rep.out(f"scrape: {system}: no catalog; run `warpzone catalog` first")
         elif opts.explicit:
@@ -615,6 +633,9 @@ def _scrape_system(run: Run, system: str) -> scrape.Selection | None:
         return None
     games = sorted(doc.games.values(), key=lambda g: g.gamelist)
     if opts.only is not None:
+        missing = _not_in_catalog(opts.only, system, games)
+        if missing:
+            run.fail(_missing_message(system, missing))
         games = [g for g in games if scrape.is_placed(g, opts.only)]
     try:
         hub = read_hub_gamelist(gamelist_path(opts.root, system))

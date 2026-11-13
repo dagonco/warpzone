@@ -35,7 +35,7 @@ device_id = "ZZZZZZZ-..."
 profile = "steamos-emudeck"
 folders = ["library", "tools", "saves", "frontend", "songs", "settings"]
 
-[inbox]                                      # optional, read only by `warpzone inbox`
+[inbox]                                      # optional, read only by `warpzone inbox` and `warpzone scrape`
 root = "/Volumes/hub"                      # the hub root as mounted on this machine
 dats_dir = "~/dats/libretro-database/metadat"
 work_dir = "~/tmp/warpzone"                  # optional; default: the system temp folder
@@ -48,6 +48,7 @@ fbneo_dat = "~/dats/fbneo-arcade.dat"
 mame2003plus_dat = "~/dats/mame2003-plus.xml"
 gamelist_mame = "/Volumes/hub/frontend/es-de/gamelists/mame/gamelist.xml"  # optional
 gamelist_ps3 = "/Volumes/hub/frontend/es-de/gamelists/ps3/gamelist.xml"  # optional
+skyscraper = "/usr/local/bin/Skyscraper"     # optional; PATH is searched when unset (scraping)
 tool_timeout_minutes = 240                   # optional, the default: kills a tool that hangs
 
 [serve]                                      # optional, read only by `warpzone serve`
@@ -58,7 +59,7 @@ token_file = "/config/ui.token"              # optional; else WARPZONE_UI_TOKEN
 user = "ExampleUser"                         # optional; the RA user whose progress is shown
 ```
 
-`warpzone inbox` reads only the `[inbox]` table, so a computer (or the hub container) that only files games
+`warpzone inbox` and `warpzone scrape` read only the `[inbox]` table, so a computer (or the hub container) that only files games
 needs no `[hub]` or `[devices]`. API keys are never printed, logged or included in
 error messages; the RetroAchievements key is read from `RA_API_KEY`, never from a file.
 `warpzone serve` reads `[hub]`, `[devices.*]`, `[serve]`, `[ra]` and `[inbox] rahasher`; its token
@@ -126,7 +127,8 @@ in the clear. The optional `[hub] api_cert_sha256` removes that choice:
 | `warpzone whitelist restore <device> [backup]` | where the hub root is mounted | Lists the backups of a device's whitelist, or writes one back after showing its diff against the current file and the paths it turns on and off, with a backup of the file it replaces and a re-check right before the write (see [History and restore](/warpzone/development/design/library-ui/#history-and-restore)). `--root PATH`, `--dry-run`. Exit 1 if refused. |
 | `warpzone serve` | in the hub's container | Serves the library UI and its JSON API (see [Library UI](/warpzone/development/design/library-ui/)). Writes only device whitelists, the catalog and the whitelist backups, on request. Runs until stopped; exit 2 without a token or when `[hub] root` has no `library/.stfolder`. |
 | `warpzone bios` | on a device or the hub | Reports which BIOS and firmware files a library has, lacks or has wrong (see [BIOS check](/warpzone/development/design/bios/)). Read-only. Exit 1 if a required item is missing or wrong. |
-| `warpzone inbox` | a computer that mounts the hub's share, or the hub's container | Identifies, converts and files new games dropped in `inbox/` (see [Inbox](/warpzone/development/design/inbox/)). Report only by default, `--apply` acts. Exit 1 if any item needs review. |
+| `warpzone inbox` | a computer that mounts the hub's share, or the hub's container | Identifies, converts and files new games dropped in `inbox/` (see [Inbox](/warpzone/development/design/inbox/)). Report only by default, `--apply` acts. With `--apply` it then scrapes the games it placed when Skyscraper is configured or found; `--no-scrape` skips that (see [Scraping](/warpzone/development/design/scrape/#in-inbox---apply)). Exit 1 if any item needs review; a scrape never changes it. |
+| `warpzone scrape` | a computer that mounts the hub's share | Fills the hub's ES-DE gamelists and media for the library's games that lack them, with Skyscraper (see [Scraping](/warpzone/development/design/scrape/)). Convergent: writes by default, only adds, `--dry-run` runs no Skyscraper and writes nothing. `--root PATH`, `--system NAME ...`, `--retry-not-found`, `--force-lock`. Exit 1 when the run could not finish, 2 for no Skyscraper or a held lock. |
 | `sh <clone>/warpzone/data/updater.sh install <device>` | on the device, from a fresh `git clone` | The one way to install a device: checks out the best release of the channel, makes the venv next to the clone, and runs `provision device` (see [Self-update](/warpzone/development/design/self-update/)). |
 | `warpzone self-update` | on the device | Runs one tick of the updater script's live copy (`sh ~/.local/share/warpzone/updater/updater.sh tick`), as the timer does, and exits with its code (see [Self-update](/warpzone/development/design/self-update/)); `--now` passes `--now` (`--fetch-now` to an older live copy). Needs no config. Without a live copy it says so and exits 1. `--channel stable\|rc [--dry-run]` runs no tick: it sets the device's channel in its config and in the updater's settings. |
 | `warpzone health [device]` | on the device | Checks that this version works here: loads the config and the profiles, runs `settings apply`, `play-state sync`, `links sync` and `frontend refresh` as dry runs within the 15 seconds ES-DE gives its startup scripts, and checks that the startup scripts and the units exist with an interpreter that imports warpzone (see [`warpzone health`](/warpzone/development/design/autonomous-updates/#warpzone-health)). Writes no user data, needs no DATs or tools. Exit 0 when it works, 1 when a check failed. |
@@ -194,7 +196,7 @@ The frontend's gamelists are the exception: `frontend refresh` regenerates each 
 hub's copy with the player's fields carried over, so it keeps a backup only of a gamelist that
 cannot be read (see [Frontend artwork](/warpzone/development/design/frontend-artwork/)).
 They are `provision hub`, `provision device`, `frontend refresh`, `play-state sync`,
-`links sync`, `saves convert`, `settings apply`, `settings capture` (which writes only the keys the user
+`links sync`, `saves convert`, `scrape` (which only adds gamelist entries and media files, with a backup of the gamelist before its first change), `settings apply`, `settings capture` (which writes only the keys the user
 chooses), `catalog` (which writes only `catalog/`) and `whitelist migrate` (which keeps a backup
 of each whitelist and proves the included paths unchanged) and `whitelist restore` (which keeps a backup
 of the whitelist it replaces). `--dry-run` says what they would do and writes nothing. `self-update` is the
