@@ -649,3 +649,19 @@ class SelfUpdateCommandTests(unittest.TestCase):
         code, _, err = run("self-update", "--dry-run")
         self.assertEqual(code, 2)
         self.assertIn("--dry-run", err)
+
+
+class DispatchTests(unittest.TestCase):
+    """`_run` finds a command's handler in one of three tables."""
+
+    def test_every_command_of_the_parser_has_exactly_one_handler(self) -> None:
+        import argparse
+
+        from warpzone import cli
+
+        (action,) = [
+            a for a in _build_parser()._actions if isinstance(a, argparse._SubParsersAction)
+        ]
+        tables = (cli._LOCAL_COMMANDS, cli._STANDALONE_COMMANDS, cli._CONFIG_COMMANDS)
+        handled = [name for table in tables for name in table]
+        self.assertEqual(sorted(handled), sorted(action.choices))

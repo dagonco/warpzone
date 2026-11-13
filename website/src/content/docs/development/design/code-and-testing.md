@@ -118,7 +118,18 @@ warpzone/
   saveconvert.py     save conversion: the `.dsv` footer, size rules, the three-way decision (pure)
   saveconvert_device.py  save conversion on a device: files, state, backups, the running emulator
   tomlw.py           TOML scalar and key writer (tomllib only reads)
-  doctor.py          machine checklist (`warpzone doctor`): checks, install hints, renderer
+  doctor.py          the name the commands import: `CHECKS` (the list, in report order), `run_checks`, the renderer, exit code; re-exports the checks
+  doctor_core.py     what every check shares: statuses, groups, `Result`, `ConfigState`, `Context`, device lookup in the local Syncthing config
+  doctor_probes.py   `Probes`: what a check reads from the machine (tools, files, clock, HTTP), the platform family
+  doctor_hints.py    install hints per platform family and `hint_for`
+  doctor_config.py   Python and warpzone, the config file and `load_config_state`, the hub API line
+  doctor_syncthing.py  the local Syncthing: REST API, Game Mode, unit, flatpak access, leftover folders
+  doctor_saves.py    save-sync settings in an emulator's own files: Flycast VMUs, Vita3K user
+  doctor_settings.py  emulator settings layers, ES-DE scripts, last `settings apply`, play state
+  doctor_frontend.py  frontend: system list, RetroArch, shadPS4, Cemu, title links, artwork, save conversion
+  doctor_updates.py  update timer, updater, the prune guard's refusal
+  doctor_tools.py    the external tools `inbox` runs: `ToolSpec`, `TOOLS`, `check_tool`
+  doctor_inbox.py    checks for the machine that runs `inbox`: DATs, Switch, hub folder, where inbox runs, RA key
   health.py          `warpzone health`: the dry runs and file checks that say a version works (decisions pure)
   ra.py              RetroAchievements: RAHasher wrapper, game list lookup and parsing (ids, points)
   catalog.py         catalog index: derivation of games and parts, system roots, title keys,
