@@ -512,6 +512,15 @@ with the genres, developer and year it shares with X; each is hidden when empty)
   and a "Queued" mark on the tiles and search rows of queued games, all from
   `GET /api/v1/queue`; see [Play queue](/warpzone/development/design/play-queue/#what-the-page-shows).
 - **Consoles:** the state of each console and what it holds.
+- **Inbox:** reached from the header, where a dot shows when the newest run record is newer than
+  the last one this browser opened (its id is kept in `localStorage`, read and written inside
+  `try`/`catch`, and also in memory: where storage is blocked the dot clears for the visit). From
+  `GET /api/v1/inbox`: the time of the last check and any error, the newest run (its placed games
+  link to their game pages, where the usual switches turn them on for a console; a game the
+  catalog does not have yet is plain text), the whitelist lines as text, the items for review with
+  their reasons and where the original is, the held and waiting items, and the older runs, each
+  opened with `GET /api/v1/inbox/runs/{id}`. The page polls the answer once a minute. It only
+  reads; see [the unattended inbox](/warpzone/development/design/inbox-unattended/#page).
 
 What the API does not provide is not drawn, not even as a placeholder (no high-score table, no
 attract mode), and a piece whose data is missing is left out rather than shown empty. Long system names are shortened to a code
@@ -904,6 +913,8 @@ outside the home goes through the user's own reverse proxy with TLS, which is ou
 | `GET /api/v1/devices/{device}/backups/{name}` | one backup: its diff against the current file, the paths and games a restore turns on and off |
 | `POST /api/v1/devices/{device}/restore` | writes a backup over the device's whitelist |
 | `POST /api/v1/changes` | turns games and systems on and off |
+| `GET /api/v1/inbox` | the state of the [unattended inbox](/warpzone/development/design/inbox-unattended/#api) and its newest run records, the newest in full |
+| `GET /api/v1/inbox/runs/{id}` | one run record in full, or `404 not-found` |
 | `GET /api/v1/queue?history=N` | the [play queue](/warpzone/development/design/play-queue/#get-apiv1queue), resolved against the catalog, the whitelists, the play totals and the RA progress |
 | `POST /api/v1/queue` | applies a list of [queue operations](/warpzone/development/design/play-queue/#post-apiv1queue), with the whitelist changes they imply, in one request |
 | `POST /api/v1/catalog/refresh` | starts a `catalog` run now (`202`; `409` while one runs) |
@@ -1205,6 +1216,18 @@ Syncthing to scan the new file (the file is written anyway and the hub's watcher
 With `"dry_run": true` the server validates and computes the effect and writes nothing; the page
 uses it to show what a change does before the user confirms it.
 
+### The inbox
+
+`serve` reads `catalog/inbox/state.json`, the newest records of `catalog/inbox/runs/` and the
+lock `inbox/.warpzone.lock` like the other hub files (kept in memory, read again when size or
+mtime changed, checked at most every 5 seconds) and writes none of them. A record is served only
+under an id of the form `20261113T101500Z` or `20261113T101500Z-2` (anything else is
+`404 not-found` without touching the disk). Files are opened without following a final link and
+without waiting on a named pipe: a state file or record that is a link or not a regular file is
+no file, and one over 8 MiB, not JSON or (for a record) whose `id` is not its file name is damaged.
+A lock that is a link, not a regular file, over 64 KiB or unreadable still makes the inbox busy,
+with mode `unknown`. The JSON is in [the unattended inbox](/warpzone/development/design/inbox-unattended/#api).
+
 ### Media and byte ranges
 
 The media endpoint answers `200` with `Content-Type` by extension (`image/png`, `image/jpeg`,
@@ -1457,7 +1480,8 @@ network:
   comparison of two files, the diff, what a restore refuses and warns about); `queue` (the play queue's schema,
   inferred states and `plan`); `library_api.plan_changes` and every
   response builder (the play statistics included: `game_play`, `attach_play`, `recent_response`);
-  `saves_index.build_index`, `match_game` and `saves_response`; `progress.state`; `prune.guard`;
+  `saves_index.build_index`, `match_game` and `saves_response`; `library_api.parse_record`,
+  `inbox_busy`, `inbox_response` and `run_response` (the unattended inbox's answers); `progress.state`; `prune.guard`;
   `diskstatus` (`measure`, `should_write`, `render`, `parse`, `stale`, `api_disk`).
 - **I/O:** `catalog_store` (the walk, hashing, RAHasher and the RA download through `ra.py`, the
   guarded writes), `diskstatus_io` (the disk report's write on a console and read on the hub),

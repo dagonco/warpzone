@@ -11,7 +11,7 @@
  *   store.js       the data, the progress poll and the writes
  *   components.js  art, tiles, slots, levers, system cards, console status
  *   queue.js       the play queue: the Up next section, the game's queue panel and their dialogs
- *   views.js       the pages
+ *   views.js       the pages (the Inbox view reads the unattended runs; the header dot is here)
  *   app.js         this file: the frame (header, rail, bottom bar), router, dialogs, keyboard
  *                  and gamepad navigation, login, boot
  *
@@ -42,6 +42,13 @@
   function renderLeds() {
     $('#leds').replaceChildren(...S.devices.map(ui.led));
     ui.paintProgress();
+  }
+
+  // The dot of the Inbox link: the newest run is newer than the last one this browser opened.
+  function paintInboxDot() {
+    const news = store.inboxNews();
+    $('#inbox-dot').hidden = !news;
+    $('#inbox-link').setAttribute('aria-label', news ? 'Inbox, a new run' : 'Inbox');
   }
 
   function railItem(href, nav, ic, label, kbd) {
@@ -115,6 +122,7 @@
     if (m) return { name: 'search', q: decodeURIComponent(m[1] || '') };
     if (path === '/systems') return { name: 'systems' };
     if (path === '/consoles') return { name: 'consoles' };
+    if (path === '/inbox') return { name: 'inbox' };
     return { name: 'home' };
   }
 
@@ -145,6 +153,7 @@
       case 'system': V.view = views.viewSystem(route.system); break;
       case 'systems': V.view = views.viewSystems(); break;
       case 'consoles': V.view = views.viewConsoles(); break;
+      case 'inbox': V.view = views.viewInbox(); break;
       case 'search':
         V.q = route.q.trim();
         S.searchResult = null;
@@ -575,6 +584,7 @@
     V.route = parseRoute();
     renderRoute();
     store.pollProgress();
+    store.watchInbox(0);
     store.loadQueue();
     store.preloadLists();
     store.watchCatalog(S.catalog && S.catalog.running ? 1500 : 60000);
@@ -586,6 +596,10 @@
       devicesChanged() { renderLeds(); },
       listsChanged() { if (V.view && V.view.listsChanged) V.view.listsChanged(); },
       progressChanged() { ui.paintProgress(); },
+      inboxChanged() {
+        paintInboxDot();
+        if (V.view && V.view.inboxChanged) V.view.inboxChanged();
+      },
       detailChanged(id) { if (V.view && V.view.kind === 'game' && V.view.id === id && V.view.reload) V.view.reload(); },
       confirmSystem,
       openHistory,
@@ -601,7 +615,7 @@
     window.addEventListener('popstate', () => { V.pop = true; });
     window.addEventListener('hashchange', renderRoute);
     document.addEventListener('keydown', onKey);
-    document.addEventListener('visibilitychange', () => { if (!document.hidden && S.devices.length) { store.schedulePoll(200); store.ensureQueue(30000); } });
+    document.addEventListener('visibilitychange', () => { if (!document.hidden && S.devices.length) { store.schedulePoll(200); store.ensureQueue(30000); store.watchInbox(200); } });
     for (const b of $$('[data-crt]')) b.addEventListener('click', () => setCrt(!document.body.classList.contains('crt'), true));
     setCrt(!/(?:^|;\s*)wz_crt=0/.test(document.cookie), false);
     renderBnav();

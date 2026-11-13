@@ -35,6 +35,8 @@
     queueById: new Map(),   // game id -> its active entry
     queueEnded: new Map(),  // game id -> its latest ended entry (of the history loaded)
     detail: null,           // {id, data}: the game page being shown
+    inbox: null,            // the unattended inbox (/inbox), or null until it loaded
+    inboxError: false,      // the last load of the inbox failed
     busy: false,
   };
 
@@ -49,6 +51,7 @@
     openHistory(deviceName) {}, // the backups of a console's whitelist, with a restore
     reset() {},             // the whole catalog was loaded again: drop what was derived from it
     queueChanged() {},      // the queue loaded or changed
+    inboxChanged() {},      // the inbox loaded, changed or was marked seen
   };
 
   const ensureArray = (x, key) => (Array.isArray(x) ? x : x && Array.isArray(x[key]) ? x[key] : []);
@@ -221,6 +224,71 @@
 
   // The queue can be changed only when its file is readable (a damaged or newer file is never overwritten).
   const queueUsable = () => !!S.queue && (S.queue.state === 'ok' || S.queue.state === 'absent');
+
+  // ===== the unattended inbox ==============================================================
+
+  // The inbox is read only. The one thing the page remembers about it is the id of the newest run
+  // this browser has opened, in localStorage (a convenience: where it is blocked, the dot clears
+  // for the visit and shows again the next one).
+  const INBOX_SEEN_KEY = 'wz_inbox_seen';
+  // The same id is kept in memory, so blocked browser storage cannot make the page loop.
+  let seenMemo = null;
+
+  function inboxSeen() {
+    if (seenMemo === null) {
+      try { seenMemo = localStorage.getItem(INBOX_SEEN_KEY) || ''; } catch (_) { seenMemo = ''; }
+    }
+    return seenMemo;
+  }
+
+  function setInboxSeen(id) {
+    seenMemo = id;
+    try { localStorage.setItem(INBOX_SEEN_KEY, id); } catch (_) { /* blocked: the dot shows again next visit */ }
+  }
+
+  // Run ids are UTC stamps with an optional "-N" for a second shared by several runs.
+  function runOrder(a, b) {
+    const [pa, na] = String(a).split('-');
+    const [pb, nb] = String(b).split('-');
+    if (pa !== pb) return pa < pb ? -1 : 1;
+    return (parseInt(na || '1', 10) || 1) - (parseInt(nb || '1', 10) || 1);
+  }
+
+  const newestRun = () => (S.inbox && Array.isArray(S.inbox.runs) && S.inbox.runs.length ? S.inbox.runs[0].id : null);
+
+  // True when the newest run is newer than the last one this browser opened.
+  function inboxNews() {
+    const id = newestRun();
+    if (!id) return false;
+    const seen = inboxSeen();
+    return !seen || runOrder(id, seen) > 0;
+  }
+
+  function markInboxSeen() {
+    const id = newestRun();
+    if (!id || inboxSeen() === id) return;
+    setInboxSeen(id);
+    hooks.inboxChanged();
+  }
+
+  async function loadInbox() {
+    try {
+      const data = await api.inbox();
+      S.inbox = data && typeof data === 'object' ? data : null;
+      S.inboxError = !S.inbox;
+    } catch (err) {
+      if (err.code === 'unauthorized') return;
+      S.inboxError = true;
+    }
+    hooks.inboxChanged();
+  }
+
+  let inboxTimer = null;
+
+  function watchInbox(ms) {
+    clearTimeout(inboxTimer);
+    inboxTimer = setTimeout(async () => { await loadInbox(); watchInbox(60000); }, ms);
+  }
 
   // ===== what the data says ================================================================
 
@@ -519,5 +587,6 @@
     schedulePoll, pollProgress, progressSoon,
     loadQueue, ensureQueue, queueUsable, queueDry, queueRun, skippedNote,
     changeGame, changeSystem, restoreBackup, watchCatalog, refreshCatalog, plural,
+    loadInbox, watchInbox, inboxNews, markInboxSeen,
   };
 })();

@@ -123,8 +123,23 @@ class UiFilesTest(unittest.TestCase):
     def test_token_is_not_stored(self):
         for name in SCRIPTS:
             text = read(name)
-            self.assertNotIn("localStorage", text, name)
+            if name != "store.js":
+                self.assertNotIn("localStorage", text, name)
             self.assertNotIn("sessionStorage", text, name)
+
+    def test_the_only_thing_kept_in_the_browser_is_the_last_inbox_run_seen(self):
+        # `localStorage` is used by store.js alone, for the id of the newest inbox run the
+        # browser has opened (the header dot), always inside try/catch; never the token.
+        text = read("store.js")
+        calls = re.findall(r"localStorage\.(\w+)\(([^)]*)\)", text)
+        self.assertEqual(
+            sorted(calls), [("getItem", "INBOX_SEEN_KEY"), ("setItem", "INBOX_SEEN_KEY, id")]
+        )
+        self.assertIn("const INBOX_SEEN_KEY = 'wz_inbox_seen';", text)
+        for line in text.splitlines():
+            if "localStorage" in line and not line.lstrip().startswith("//"):
+                self.assertRegex(line, r"try \{.*\} catch", line)
+        self.assertNotRegex(text, r"setInboxSeen\([^)]*token", "no token in storage")
 
     def test_no_html_injection(self):
         # The page builds nodes; it never parses strings that carry catalog or scrape text.
