@@ -370,16 +370,21 @@ class ClassifyTest(unittest.TestCase):
 
     def test_too_busy(self):
         self.assertEqual(scrape.classify_output(BUSY).stop, scrape.Stop.BUSY)
-        self.assertEqual(scrape.classify_output(BUSY + BUSY + NOT_FOUND).stop, scrape.Stop.BUSY)
+        self.assertEqual(scrape.classify_output(BUSY + BUSY).stop, scrape.Stop.BUSY)
 
     def test_busy_that_cleared_is_not_a_stop(self):
         text = BUSY + FOUND + NOT_FOUND
         self.assertIsNone(scrape.classify_output(text).stop)
 
     def test_no_network(self):
-        out = scrape.classify_output(RETRY + RETRY + NOT_FOUND)
-        self.assertEqual(out.stop, scrape.Stop.NETWORK)
-        self.assertEqual(out.not_found, ("Example Homebrew (World)",))
+        out = scrape.classify_output(RETRY + RETRY)
+        self.assertEqual(out, scrape.Outcome(scrape.Stop.NETWORK, ()))
+
+    def test_a_retry_among_answered_games_is_not_a_stop(self):
+        for retry in (RETRY, BUSY):
+            out = scrape.classify_output(NOT_FOUND + retry + TOO_LOW)
+            self.assertIsNone(out.stop)
+            self.assertEqual(out.not_found, ("Example Homebrew (World)", "Kirby's Fun Pak (USA)"))
 
     def test_a_retry_that_worked_is_not_a_stop(self):
         self.assertIsNone(scrape.classify_output(RETRY + FOUND).stop)

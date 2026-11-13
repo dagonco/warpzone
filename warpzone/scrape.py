@@ -294,8 +294,8 @@ _HARD_STOPS: tuple[tuple[Stop, str], ...] = (
     (Stop.BLACKLISTED, "Skyscraper has apparently been blacklisted at ScreenScraper"),
     (Stop.CLOSED, "The ScreenScraper API is currently closed"),
 )
-# These lines are printed on every try of a request, so they stop the run only when no game
-# was found in the output.
+# These lines are printed on every try of a request, so they stop the run only when the output
+# has no sign that ScreenScraper answered: no game found and none reported as not found.
 _SOFT_STOPS: tuple[tuple[Stop, str], ...] = (
     (Stop.BUSY, "too busy to handle requests from unregistered and inactive users"),
     (Stop.NETWORK, "Retrying request with timeout of"),
@@ -312,7 +312,8 @@ def classify_output(text: str) -> Outcome:
     lines = [_ANSI.sub("", line).strip() for line in text.splitlines()]
     joined = "\n".join(lines)
     stop: Stop | None = next((s for s, needle in _HARD_STOPS if needle in joined), None)
-    if stop is None and not any(_FOUND.match(line) for line in lines):
-        stop = next((s for s, needle in _SOFT_STOPS if needle in joined), None)
     names = tuple(m["name"] for line in lines if (m := _NOT_FOUND.match(line)))
+    answered = bool(names) or any(_FOUND.match(line) for line in lines)
+    if stop is None and not answered:
+        stop = next((s for s, needle in _SOFT_STOPS if needle in joined), None)
     return Outcome(stop, names)
