@@ -78,7 +78,7 @@ warpzone/
   inbox_core.py      what the inbox pipeline and its handlers share: errors, options, results, staging
   inbox_lock.py      the `inbox/.warpzone.lock` file that keeps two `--apply` runs apart
   inbox_unattended.py  the pure decisions of the unattended inbox: fingerprint, readiness, the state file and its changes, space, news and exit code; the run record, the records to purge and the webhook payload
-  inbox_unattended_io.py  the disk side of it: the walk of an item, the state file (read-modify-write), the work folder, the free space, and the run records under `catalog/inbox/runs/`
+  inbox_unattended_io.py  the disk side of it: the walk of an item, the state file (read-modify-write), the work folder, the free space, and the run records under `catalog/inbox/runs/`; the record writer, the purge and the state's read-modify-write take the folder or a `StateFile`, so the nightly scrape reuses them
   inbox_unattended_run.py  `inbox --apply --unattended`: one tick of the scheduled run, step by step (above `inbox.py`; only `cli.py` calls it)
   inbox_scrape.py    the scrape at the end of `inbox`: which placed games, the report lines, failures as warnings
   inbox.py           unpack, identify, convert, place, file the originals
@@ -120,7 +120,7 @@ warpzone/
                      presence check, the report (pure)
   scrape_io.py       `warpzone scrape`: stages the games, runs Skyscraper through `run_tool`, reads its
                      output, writes media and gamelist entries to the hub (never over a file)
-  scrape_unattended.py  the nightly scrape's plan: the four tiers, the cap, what the memories skip (pure)
+  scrape_unattended.py  the nightly scrape's pure side: the plan (four tiers, the cap, what the memories skip), the outcome and trouble of a night, the state file and its changes, news and exit code, the run record and the webhook payload
   playstate.py       play state: ledgers, merge rules, times, its tags in a gamelist (pure)
   playstate_device.py  play state on a device: files, ES-DE gamelists, generated gamelists
   diskstatus.py      the disk a console reports to the hub: when to write, format, staleness (pure)
