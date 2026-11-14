@@ -110,6 +110,8 @@ INBOX_KEYS = (
 TOOL_TIMEOUT_KEY = "tool_timeout_minutes"
 # The threads chdman may use (`--numprocessors`); unset leaves it to chdman.
 CHDMAN_THREADS_KEY = "chdman_threads"
+# Whether `createcd` keeps chdman's FLAC codec for CD audio (default true); see inbox_core.Tools.
+CHDMAN_FLAC_KEY = "chdman_flac"
 DEFAULT_TOOL_TIMEOUT_MINUTES = 240
 
 
@@ -123,7 +125,9 @@ class InboxSettings:
     zRIF keys of `vita_zrif`, a file the user keeps. `skyscraper` is the Skyscraper program that
     `warpzone scrape` runs (`Skyscraper` on PATH when unset). `tool_timeout_minutes` is how long any
     one call of an external tool may run before it is killed and its item goes to review.
-    `chdman_threads` caps the threads of each chdman conversion (chdman's own count when unset)."""
+    `chdman_threads` caps the threads of each chdman conversion (chdman's own count when unset).
+    `chdman_flac = false` makes `createcd` leave FLAC out of its codecs: FLAC makes chdman use
+    memory larger than the image (see development/design/inbox.md)."""
 
     root: str | None = None
     dats_dir: str | None = None
@@ -146,6 +150,7 @@ class InboxSettings:
     skyscraper: str | None = None
     tool_timeout_minutes: int = DEFAULT_TOOL_TIMEOUT_MINUTES
     chdman_threads: int | None = None
+    chdman_flac: bool = True
 
 
 SERVE_KEYS = ("listen", "token_file")
@@ -317,7 +322,9 @@ def parse_inbox(raw: object, errors: list[str]) -> InboxSettings:
     if not isinstance(raw, dict):
         errors.append("[inbox]: must be a table")
         return InboxSettings()
-    _check_keys(raw, {*INBOX_KEYS, TOOL_TIMEOUT_KEY, CHDMAN_THREADS_KEY}, "inbox", errors)
+    _check_keys(
+        raw, {*INBOX_KEYS, TOOL_TIMEOUT_KEY, CHDMAN_THREADS_KEY, CHDMAN_FLAC_KEY}, "inbox", errors
+    )
     minutes = DEFAULT_TOOL_TIMEOUT_MINUTES
     if TOOL_TIMEOUT_KEY in raw:
         given = raw[TOOL_TIMEOUT_KEY]
@@ -336,6 +343,12 @@ def parse_inbox(raw: object, errors: list[str]) -> InboxSettings:
             )
         else:
             values[CHDMAN_THREADS_KEY] = threads
+    if CHDMAN_FLAC_KEY in raw:
+        flac = raw[CHDMAN_FLAC_KEY]
+        if not isinstance(flac, bool):
+            errors.append(f"inbox.{CHDMAN_FLAC_KEY}: must be true or false")
+        else:
+            values[CHDMAN_FLAC_KEY] = flac
     for key in INBOX_KEYS:
         if key not in raw:
             continue

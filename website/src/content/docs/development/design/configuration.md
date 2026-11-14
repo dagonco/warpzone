@@ -51,6 +51,7 @@ gamelist_ps3 = "/Volumes/hub/frontend/es-de/gamelists/ps3/gamelist.xml"  # optio
 skyscraper = "/usr/local/bin/Skyscraper"     # optional; PATH is searched when unset (scraping)
 tool_timeout_minutes = 240                   # optional, the default: kills a tool that hangs
 chdman_threads = 2                           # optional; chdman's --numprocessors (unset: chdman's own count)
+chdman_flac = true                           # optional, the default; false: `createcd` without FLAC (less memory)
 
 [serve]                                      # optional, read only by `warpzone serve`
 listen = "0.0.0.0:8780"                      # optional, the default

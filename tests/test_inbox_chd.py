@@ -169,6 +169,32 @@ class ExtractionTests(ChdCase):
         self.assertEqual(self.done(), [item.name])
         self.assertEqual(os.listdir(self.tmp / "work"), [])
 
+    def test_createdvd_uses_the_codecs_without_flac(self) -> None:
+        self.chd(f"{NARUTO}.chd", "CHT2", [("MODE1", PS2_ISO)])
+        self.assertEqual(self.go(), 0, self.out)
+        create = [c for c in self.calls() if c.startswith("createdvd ")]
+        self.assertEqual(len(create), 1, self.calls())
+        self.assertIn(" -c lzma,zlib,huff", create[0])
+
+    def test_createdvd_never_uses_flac_whatever_the_setting(self) -> None:
+        for flac in (True, False):
+            self.log.unlink(missing_ok=True)
+            self.chd(f"{NARUTO}.chd", "CHT2", [("MODE1", PS2_ISO)])
+            tools = Tools(chdman=self.chdman, rahasher=self.rahasher, chdman_flac=flac)
+            self.assertEqual(self.go(tools=tools), 0, self.out)
+            create = [c for c in self.calls() if c.startswith("createdvd ")]
+            self.assertEqual(len(create), 1, self.calls())
+            self.assertIn(" -c lzma,zlib,huff", create[0])
+            (self.roms / "ps2" / f"{NARUTO}.chd").unlink()
+
+    def test_createcd_without_flac_leaves_flac_out_of_a_rebuilt_chd(self) -> None:
+        self.chd("whatever.chd", "CHT2", [("MODE2_RAW", PSX_BIN)])
+        tools = Tools(chdman=self.chdman, rahasher=self.rahasher, chdman_flac=False)
+        self.assertEqual(self.go(tools=tools), 0, self.out)
+        create = [c for c in self.calls() if c.startswith("createcd ")]
+        self.assertEqual(len(create), 1, self.calls())
+        self.assertIn(" -c cdlz,cdzl", create[0])
+
     def test_a_ps2_chd_in_dvd_mode_is_extracted_with_extractdvd(self) -> None:
         self.chd("naruto.chd", "DVD ", [("DVD", PS2_ISO)])
         self.assertEqual(self.go(), 0, self.out)

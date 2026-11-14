@@ -100,6 +100,7 @@ root = "/srv/games"                          # the hub root as mounted in the co
 dats_dir = "/dats/libretro-database/metadat"  # redump/ and no-intro/ inside
 work_dir = "/work/tmp"
 chdman_threads = 2                            # the service's cpus: chdman counts the host's cores, not the limit
+chdman_flac = false                           # chdman's FLAC needs more memory than the disc image: 1.96 GB against 37 MB for a CD
 rahasher = "/usr/local/bin/RAHasher"          # optional
 titledb_dir = "/dats/titledb"                 # optional: Switch names (a clone of blawar/titledb)
 switch_keys = "/keys/prod.keys"               # Switch .nsp and .nsz: nsz reads it, warpzone only passes the path

@@ -153,6 +153,12 @@ dats_dir = "~/dats/libretro-database/metadat"
 # its CPU limit. Each thread holds its own compressor, so it also bounds memory.
 # chdman_threads = 2
 
+# Optional. true or false (default true). chdman's FLAC codecs need memory larger than the disc
+# image (a 1.9 GB image took 1.96 GB with them and 37 MB without), enough to be killed in a
+# small container. false makes CD conversions skip FLAC (a CD's audio tracks come out a bit
+# bigger); DVD conversions never use it. Set it to false in the hub container.
+# chdman_flac = false
+
 # Optional Switch support. A local clone of blawar/titledb names the games
 # (git clone --depth 1 https://github.com/blawar/titledb; git pull updates it). nsz needs
 # your console's keys file to read the CNMT inside a Switch file; warpzone only passes the

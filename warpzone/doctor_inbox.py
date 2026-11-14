@@ -402,6 +402,40 @@ def check_inbox_way(ctx: Context) -> list[Result]:
     return results
 
 
+SMALL_MEMORY = 8 * GIB  # below this, chdman's FLAC codecs can run a conversion out of memory
+FLAC_FIX = (
+    "set chdman_flac = false in the [inbox] table: CDs are converted without FLAC, which uses a "
+    "few tens of MiB instead of more than the image (a DVD never uses it)"
+)
+
+
+def judge_chdman_flac(flac: bool, in_container: bool, memory: int | None) -> str | None:
+    """The warning for `chdman_flac = true` where memory is short (the hub container, or a
+    memory limit below `SMALL_MEMORY`), None when there is nothing to say. Pure."""
+    if not flac:
+        return None
+    if in_container:
+        return (
+            "chdman_flac is on in the hub container: chdman's FLAC codecs need more memory than "
+            "the disc image, and the container's limit can kill the conversion"
+        )
+    if memory is not None and memory < SMALL_MEMORY:
+        return (
+            f"chdman_flac is on with a memory limit of {memory / GIB:.1f} GiB: chdman's FLAC "
+            "codecs need more memory than the disc image"
+        )
+    return None
+
+
+def check_chdman_flac(ctx: Context) -> list[Result]:
+    """One line, only with an [inbox] table and only when `judge_chdman_flac` has a warning."""
+    if not ctx.inbox_configured:
+        return []
+    p = ctx.probes
+    warning = judge_chdman_flac(ctx.config.settings.chdman_flac, p.in_container(), p.memory_limit())
+    return [Result("chdman memory", G_WAY, WARN, warning, FLAC_FIX)] if warning else []
+
+
 def check_ra(ctx: Context) -> list[Result]:
     # The value is never read into a result: only whether it is there.
     if ctx.probes.env.get(ra.KEY_ENV):

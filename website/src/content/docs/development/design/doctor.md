@@ -62,7 +62,13 @@ for every problem, the exact fix for this platform.
   the folder itself, so a missing leaf under a mounted parent is `[ok]` with "created on the
   first run"), and the missing-DATs fix says to mount a folder.
   Image tools that cannot run (a wrong architecture) are `[!!]` with "build the image
-  again".
+  again". `chdman memory` (`check_chdman_flac`, one line in the same group, with an `[inbox]`
+  table) is `[! ]` with the fix `chdman_flac = false` when `[inbox] chdman_flac` is `true` (the
+  default) and inbox runs in the container or the memory available to it is below 8 GiB;
+  otherwise there is no line. The memory is the cgroup limit of the process, read through
+  `Probes.memory_limit` (`/sys/fs/cgroup/memory.max`, else the v1
+  `memory/memory.limit_in_bytes`; `max` or a huge number is no limit, `parse_memory_limit` is
+  pure), and `judge_chdman_flac` is the pure judge. See [Inbox](/warpzone/development/design/inbox/).
 - **Skyscraper.** With an `[inbox]` table, two lines in the inbox tools group (see
   [Scraping](/warpzone/development/design/scrape/#doctor)): `Skyscraper` is `[ok]` with its version,
   `[--]` when not found and not configured (`inbox` then does not scrape), `[!!]` when the

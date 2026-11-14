@@ -114,7 +114,10 @@ services:
     # number in `[inbox] chdman_threads` of the config. Some Synology kernels have no CFS quota
     # and refuse `cpus` ("NanoCPUs can not be set"); there, replace the line with
     # `cpu_shares: 512` (a relative weight: SMB and Syncthing win when the CPU is busy, no hard
-    # cap), and on a 2-core NAS use `chdman_threads = 1`.
+    # cap), and on a 2-core NAS use `chdman_threads = 1`. Also put `chdman_flac = false` in
+    # `[inbox]`: chdman's FLAC codecs need more memory than the disc image (a 1.9 GB DVD
+    # image was killed at this `mem_limit`; a CD conversion took 1.96 GB, against 37 MB without),
+    # which is why `warpzone doctor` warns when it is left on here.
     cpus: "2"
     volumes:
       - /srv/games:/srv/games            # CHANGE: the hub root, read-write, the same path as [hub] root

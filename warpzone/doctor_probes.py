@@ -155,6 +155,37 @@ def _disk_free(path: Path) -> tuple[int, int]:
     return usage.total, usage.free
 
 
+# Memory a machine needs to convert a DVD with chdman's FLAC codecs on: the peak was 1.7 times
+# the image (3.2 GB for a 1.9 GB ISO), and a DVD is up to 8.5 GB.
+MEMORY_LIMIT_FILES = (
+    "/sys/fs/cgroup/memory.max",  # cgroup v2
+    "/sys/fs/cgroup/memory/memory.limit_in_bytes",  # cgroup v1
+)
+NO_LIMIT_BYTES = 1 << 60  # cgroup v1 writes a number near 2**63 for "no limit"
+
+
+def parse_memory_limit(text: str) -> int | None:
+    """The bytes a cgroup memory file limits to, or None for `max`, a number so large that it
+    means no limit, or anything that is not a number. Pure."""
+    value = text.strip()
+    if not value.isdigit():
+        return None
+    limit = int(value)
+    return limit if 0 < limit < NO_LIMIT_BYTES else None
+
+
+def _memory_limit() -> int | None:
+    """The memory this process may use (its cgroup's limit), or None when there is none or it
+    cannot be read."""
+    for name in MEMORY_LIMIT_FILES:
+        try:
+            with open(name, encoding="ascii") as f:
+                return parse_memory_limit(f.read())
+        except OSError:
+            continue
+    return None
+
+
 @dataclass
 class Probes:
     """Everything a check reads from the machine. The defaults are the real thing."""
@@ -181,6 +212,7 @@ class Probes:
     list_tree: Callable[[Path], list[str]] = _list_tree
     disk_free: Callable[[Path], tuple[int, int]] = _disk_free
     in_container: Callable[[], bool] = _in_container
+    memory_limit: Callable[[], int | None] = _memory_limit
 
     @property
     def family(self) -> str:

@@ -363,6 +363,10 @@ def identify(
 # ------------------------------------------------------------------ conversion
 
 
+DVD_CODECS = "lzma,zlib,huff"  # chdman's default minus flac: 49 MB instead of 3.2 GB of memory
+CD_CODECS_NO_FLAC = "cdlz,cdzl"  # chdman's default CD codecs minus cdfl
+
+
 def make_chd(
     chdman: str,
     kind: str,
@@ -370,11 +374,17 @@ def make_chd(
     out: Path,
     timeout: float,
     threads: int | None = None,
+    flac: bool = True,
 ) -> None:
     """Convert a disc image to a CHD and verify it. `threads` is chdman's `--numprocessors`
-    (None leaves chdman to count the cores)."""
+    (None leaves chdman to count the cores). chdman's FLAC codecs make it use memory larger than
+    the image, so a DVD never gets them (it has no audio) and a CD gets them only when `flac`."""
     command = [chdman, "createdvd" if kind == "dvd" else "createcd", "-i", str(source)]
     command += ["-o", str(out)]
+    if kind == "dvd":
+        command += ["-c", DVD_CODECS]
+    elif not flac:
+        command += ["-c", CD_CODECS_NO_FLAC]
     if threads is not None:
         command += ["--numprocessors", str(threads)]
     code, text = run(command, timeout)
@@ -708,6 +718,7 @@ def _produce(ctx: Context, p: Prepared, m: GameMatch, out_dir: Path) -> Path:
             out,
             ctx.tools.timeout,
             ctx.tools.chdman_threads,
+            ctx.tools.chdman_flac,
         )
         return out
     if p.kind == "zip":

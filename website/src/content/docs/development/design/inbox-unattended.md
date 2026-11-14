@@ -428,7 +428,9 @@ lock and exits as busy, costing one container start.
   thread holds its own compressor. The optional key `[inbox] chdman_threads` (a whole number, at
   least 1; implemented) passes `--numprocessors N` to `chdman createcd` and `createdvd`
   (`inbox.make_chd`; unset passes nothing and chdman counts the cores, `verify` and `info` get
-  nothing); the container guide sets it to the service's `cpus`.
+  nothing); the container guide sets it to the service's `cpus`. The container guide also sets
+  `[inbox] chdman_flac = false`, since chdman's FLAC codecs need more memory than the disc image
+  (see [Inbox](/warpzone/development/design/inbox/)); `createdvd` never uses them.
 - **Memory.** `mem_limit: 2g`, as the guide has it. A run killed for memory exits `137` in the
   task's output; [The memory](#the-memory) turns a second death on the same item into a hold with
   the reason, so the timer never loops on it.
