@@ -727,7 +727,7 @@ pass it); nothing implies it.
   run left are picked up by it, and by nothing else: the next ticks scrape only the games they
   place themselves, and never retry an earlier run's. Scraping the games the inbox did not place, once a night
   from a second scheduled task of the same container service (it takes the same lock), is the
-  planned [unattended scrape](/warpzone/development/design/scrape-unattended/); it is not part of
+  [unattended scrape](/warpzone/development/design/scrape-unattended/); it is not part of
   this page.
 - **Resources.** Skyscraper runs under the run's `os.nice(10)` like the other tools, one call at
   a time, within `mem_limit` (a gather holds little) and the `tool_timeout_minutes` of `[inbox]`.
