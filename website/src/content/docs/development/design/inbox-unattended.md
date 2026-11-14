@@ -723,9 +723,10 @@ pass it); nothing implies it.
 - **What a person does.** `warpzone scrape` (or `docker compose run --rm warpzone-inbox scrape`)
   scrapes everything in the library that lacks an entry or media, so the games a limited or failed
   run left are picked up by it, and by nothing else: the next ticks scrape only the games they
-  place themselves, and never retry an earlier run's. A second scheduled task that runs `scrape`
-  once a day, for the day's quota, is possible with the same container service (it takes the same
-  lock) and is not part of this design.
+  place themselves, and never retry an earlier run's. Scraping the games the inbox did not place, once a night
+  from a second scheduled task of the same container service (it takes the same lock), is the
+  planned [unattended scrape](/warpzone/development/design/scrape-unattended/); it is not part of
+  this page.
 - **Resources.** Skyscraper runs under the run's `os.nice(10)` like the other tools, one call at
   a time, within `mem_limit` (a gather holds little) and the `tool_timeout_minutes` of `[inbox]`.
   Its staged folders and logs go to `scrape/` inside `work_dir` (not to a `warpzone-inbox-*`

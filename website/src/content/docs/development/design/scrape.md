@@ -46,6 +46,8 @@ closes that gap on the machine that files the game, in the layout ES-DE and the 
   only for what that run placed; a scrape failure is a warning and never blocks or undoes a
   placement. And on demand with `warpzone scrape` for games already in the library. A "Scrape"
   button in the library UI can come later on top of the same code.
+  A nightly run from a scheduled task, `warpzone scrape --unattended`, is planned: see
+  [Unattended scrape](/warpzone/development/design/scrape-unattended/).
 - **Only adds.** An existing `<game>` entry's text is never changed: consoles write play data
   into it and the user may have edited it. A game without an entry gets one; a game with an
   entry only gets the media files it lacks. ES-DE's `<nomultiscrape>` is respected. No media file
@@ -344,6 +346,13 @@ counts them (`skipped 4 not found in the last 30 days`). `warpzone scrape --retr
 them all now. A game that is found later, or whose file changes size (a new dump under the same
 name), drops its record. A file that cannot be read or parsed counts as empty and is rewritten.
 
+**Games that stay incomplete (planned).** A game ScreenScraper knows but has no video or back
+cover for is in Skyscraper's cache, so it is never asked for again, yet `select` keeps finding it
+"missing media". The planned [unattended scrape](/warpzone/development/design/scrape-unattended/#the-incomplete-memory)
+adds an "incomplete" record next to the not-found one, in the same file, written by every scrape
+and skipped only by the nightly run. An attended `warpzone scrape` ignores it and does the full
+pass.
+
 A game is recorded only when Skyscraper itself said "not found" for it (a game it never got to,
 after the quota, says nothing) and that answer did not come after a retry line. If ScreenScraper
 is down, Skyscraper retries each request and then reports every game as not found, which
@@ -448,6 +457,10 @@ the catalog: a system without a catalog file is skipped with the hint to run `wa
 It takes the inbox lock (`inbox/.warpzone.lock`, with its heartbeat, its stale rules and
 `--force-lock`, see `development/design/inbox.md`), so it never runs while `inbox --apply`
 places games or edits gamelists.
+
+A planned `--unattended` option runs it once a night from a scheduled task, with a budget of
+games and minutes, a lock wait and exit codes that report only news; it is specified in
+[Unattended scrape](/warpzone/development/design/scrape-unattended/#the-command).
 
 `--dry-run` runs no Skyscraper (no request, no change to the cache), writes nothing and takes no
 lock. It prints,
