@@ -854,6 +854,43 @@ class ReportTest(unittest.TestCase):
         self.assertIn("  added      Game.zip: covers", text)
 
 
+class SummaryTest(unittest.TestCase):
+    def test_the_counts_are_the_ones_the_report_prints(self):
+        merges = ReportTest().merges()
+        dropped = (scrape.Dropped("covers/x.png", "appeared meanwhile; kept as it is"),)
+        report = scrape.Report("snes", merges, dropped, skipped_not_found=2)
+        found = scrape.summarize_system(report, skipped_incomplete=3)
+        self.assertEqual(
+            found,
+            scrape.SystemSummary(
+                "snes",
+                added=1,
+                filled=1,
+                unchanged=1,
+                not_found=1,
+                skipped_not_found=2,
+                skipped_incomplete=3,
+                added_paths=("Kirby Super Star (USA).zip",),
+                filled_paths=("Chrono Trigger (USA).zip",),
+                warnings=("covers/x.png: appeared meanwhile; kept as it is",),
+            ),
+        )
+
+    def test_a_stop_maps_to_its_reason(self):
+        for stop in scrape.Stop:
+            self.assertEqual(scrape.StopReason.of(stop).value, stop.value)
+
+    def test_the_budget_and_the_exit_code(self):
+        self.assertTrue(scrape.Summary(stop=scrape.StopReason.DEADLINE).budget_spent)
+        self.assertFalse(scrape.Summary(stop=scrape.StopReason.QUOTA).budget_spent)
+        self.assertEqual(scrape.Summary().exit_code, 0)
+        self.assertEqual(scrape.Summary(failed=True).exit_code, 1)
+
+    def test_the_messages_count_the_games(self):
+        self.assertEqual(scrape.budget_message(1), "scrape: time budget spent; 1 game not tried")
+        self.assertIn("2 games not tried", scrape.lock_lost_message(2))
+
+
 class FailureMessageTest(unittest.TestCase):
     def test_quota(self):
         self.assertEqual(

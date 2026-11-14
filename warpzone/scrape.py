@@ -98,6 +98,14 @@ NOT_FOUND_DAYS = 30
 NO_MULTISCRAPE = "nomultiscrape"
 # Games per Skyscraper call.
 BATCH_SIZE = 100
+# What a game is assumed to cost in a time budget (see "Quota and time budget" in
+# development/design/scrape-unattended.md).
+EST_SECONDS_PER_GAME = 10
+
+
+def batch_fits(now: float, deadline: float, games: int) -> bool:
+    """Whether a batch of `games` is expected to end by `deadline` (the same clock as `now`)."""
+    return now + games * EST_SECONDS_PER_GAME <= deadline
 
 
 def choose_systems(requested: Sequence[str] | None) -> list[str]:
@@ -757,6 +765,96 @@ def gamelist_message(system: str, reason: str) -> str:
     """The line for a hub gamelist that cannot be written (it changed three times during the
     write, or cannot be read): the entries wait for the next run."""
     return f"{system}: {reason}; the entries are left for the next run"
+
+
+# ------------------------------------------------------------------ the summary of a run
+
+
+class StopReason(Enum):
+    """Why a run ended before every selected game was tried: a condition of ScreenScraper (the
+    `Stop`s), the time budget, or a lock that is no longer the run's."""
+
+    QUOTA = "quota"
+    CLOSED = "closed"
+    BLACKLISTED = "blacklisted"
+    BUSY = "busy"
+    NETWORK = "network"
+    DEADLINE = "deadline"
+    LOCK_LOST = "lock lost"
+
+    @classmethod
+    def of(cls, stop: Stop) -> StopReason:
+        return cls(stop.value)
+
+
+@dataclass(frozen=True)
+class SystemSummary:
+    """One system's run, as `render_report` counts it. The paths are the games' gamelist paths
+    relative to the system's folder (`./` and the leading slash dropped)."""
+
+    system: str
+    added: int = 0
+    filled: int = 0
+    unchanged: int = 0
+    not_found: int = 0
+    skipped_not_found: int = 0  # left out because ScreenScraper did not know them recently
+    skipped_incomplete: int = 0  # left out by the caller's `skip_incomplete`
+    added_paths: tuple[str, ...] = ()
+    filled_paths: tuple[str, ...] = ()
+    warnings: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class Summary:
+    """What a run did, for the caller to record: the systems it reached, why it stopped early
+    (None when it did not), how many selected games it did not try, the systems with a failed
+    batch or gamelist, and whether the run counts as failed (what makes the attended command
+    exit 1)."""
+
+    systems: tuple[SystemSummary, ...] = ()
+    stop: StopReason | None = None
+    not_tried: int = 0
+    failed_systems: tuple[str, ...] = ()
+    failed: bool = False
+
+    @property
+    def budget_spent(self) -> bool:
+        return self.stop is StopReason.DEADLINE
+
+    @property
+    def exit_code(self) -> int:
+        return 1 if self.failed else 0
+
+
+def summarize_system(report: Report, skipped_incomplete: int = 0) -> SystemSummary:
+    """The counts of a system's `Report`, the same ones it prints."""
+    by_result: dict[Result, list[str]] = {result: [] for result in Result}
+    for merge in report.merges:
+        by_result[merge.result].append(_label(merge))
+    return SystemSummary(
+        report.system,
+        added=len(by_result[Result.ADDED]),
+        filled=len(by_result[Result.FILLED]),
+        unchanged=len(by_result[Result.UNCHANGED]),
+        not_found=len(by_result[Result.NOT_FOUND]),
+        skipped_not_found=report.skipped_not_found,
+        skipped_incomplete=skipped_incomplete,
+        added_paths=tuple(by_result[Result.ADDED]),
+        filled_paths=tuple(by_result[Result.FILLED]),
+        warnings=tuple(f"{d.what}: {d.reason}" for d in report.dropped),
+    )
+
+
+def budget_message(not_tried: int) -> str:
+    """The line for a run that stopped because the next batch would not fit the time budget."""
+    noun = "game" if not_tried == 1 else "games"
+    return f"scrape: time budget spent; {not_tried} {noun} not tried"
+
+
+def lock_lost_message(not_tried: int) -> str:
+    """The line for a run that stopped because the lock is no longer its own."""
+    noun = "game" if not_tried == 1 else "games"
+    return f"scrape: the lock is no longer held by this run; stopped, {not_tried} {noun} not tried"
 
 
 # ------------------------------------------------------------------ the not-found memory
