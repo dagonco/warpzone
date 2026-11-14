@@ -435,14 +435,41 @@ class Run:
     version: str | None
     account: bool
     memory: dict[str, scrape.NotFoundRecords]
+    deadline: float | None = None  # absolute time on `opts.now` after which no batch is started
+    still_mine: Callable[[], bool] | None = None  # asked before each batch
+    skip_incomplete: Callable[[scrape.Pick], bool] | None = None
     stopped: scrape.Stop | None = None
+    halt: scrape.StopReason | None = None  # the deadline or the lost lock
     failed: bool = False
     not_tried: int = 0
+    batches: int = 0  # batches started so far (the first of a run is always allowed)
+    failed_systems: list[str] = field(default_factory=list)
+    summaries: list[scrape.SystemSummary] = field(default_factory=list)
     backed_up: set[Path] = field(default_factory=set)
 
-    def fail(self, message: str) -> None:
+    def fail(self, message: str, system: str | None = None) -> None:
         self.failed = True
+        if system is not None and system not in self.failed_systems:
+            self.failed_systems.append(system)
         (self.rep.warn if self.opts.as_warning else self.rep.out)(message)
+
+    def halts_before(self, games: int, later: int) -> bool:
+        """Whether the run stops before a batch of `games` (with `later` games after it): the lock
+        is no longer its own, or the batch would not fit the time budget. Sets `halt` and counts
+        the games not tried."""
+        if self.still_mine is not None and not self.still_mine():
+            self.halt = scrape.StopReason.LOCK_LOST
+        elif (
+            self.deadline is not None
+            and self.batches > 0
+            and not scrape.batch_fits(self.opts.now(), self.deadline, games)
+        ):
+            self.halt = scrape.StopReason.DEADLINE
+        else:
+            self.batches += 1
+            return False
+        self.not_tried += games + later
+        return True
 
     @property
     def memory_path(self) -> Path:
@@ -522,17 +549,17 @@ def _merge_batch(
         )
         ok, _ = _call(run, sr, f"{step} {number}", args)
         if not ok:
-            run.fail(scrape.failed_message(sr.system, str(sr.log)))
+            run.fail(scrape.failed_message(sr.system, str(sr.log)), sr.system)
             return None
     try:
         sky_entries = read_skyscraper_gamelist(folders[scrape.MAIN][0])
         hub = read_hub_gamelist(gamelist_path(opts.root, sr.system))
         hub_media = list_hub_media(media_path(opts.root, sr.system))
     except (artwork.ArtworkError, OSError) as exc:
-        run.fail(scrape.failed_message(sr.system, str(sr.log)) + f": {exc}")
+        run.fail(scrape.failed_message(sr.system, str(sr.log)) + f": {exc}", sr.system)
         return None
     except HubError as exc:
-        run.fail(scrape.gamelist_message(sr.system, str(exc)))
+        run.fail(scrape.gamelist_message(sr.system, str(exc)), sr.system)
         return None
     plan = scrape.plan_merge(
         {name: sr.staged[name] for name in names},
@@ -545,7 +572,7 @@ def _merge_batch(
     )
     done = write_plan(run, sr.system, plan, {s: media for s, (_, media) in folders.items()})
     if done.gamelist_error:
-        run.fail(scrape.gamelist_message(sr.system, done.gamelist_error))
+        run.fail(scrape.gamelist_message(sr.system, done.gamelist_error), sr.system)
     merges = settle(plan, done)
     records = scrape.remember_not_found(
         run.memory.get(sr.system, {}),
@@ -569,7 +596,9 @@ def _scrape_batch(
     try:
         return _run_batch(run, sr, number, names, later)
     except OSError as exc:
-        run.fail(scrape.failed_message(sr.system, str(sr.log)) + f": {exc.strerror or exc}")
+        run.fail(
+            scrape.failed_message(sr.system, str(sr.log)) + f": {exc.strerror or exc}", sr.system
+        )
         return (), ()
     finally:
         shutil.rmtree(sr.folder / f"out-{number}", ignore_errors=True)
@@ -592,7 +621,7 @@ def _run_batch(
         # What the cache holds is still generated and merged; the rest waits for tomorrow.
         run.not_tried += max(0, len(names) - outcome.answered) + later
     elif not ok:
-        run.fail(scrape.failed_message(sr.system, str(sr.log)))
+        run.fail(scrape.failed_message(sr.system, str(sr.log)), sr.system)
         return (), ()
     return _merge_batch(run, sr, number, names, outcome) or ((), ())
 
@@ -619,12 +648,12 @@ def _scrape_system(run: Run, system: str) -> scrape.Selection | None:
     try:
         doc, _ = catalog_store.read_state(catalog_store.system_path(opts.root, system))
     except OSError as exc:
-        run.fail(f"scrape: {system}: cannot read the catalog ({exc.strerror or exc})")
+        run.fail(f"scrape: {system}: cannot read the catalog ({exc.strerror or exc})", system)
         return None
     if doc is None:
         missing = _not_in_catalog(opts.only, system, [])
         if missing:  # `inbox`: the catalog update failed, so its games cannot be scraped now
-            run.fail(_missing_message(system, missing))
+            run.fail(_missing_message(system, missing), system)
             return None
         if (opts.root / "library" / "roms" / system).is_dir():
             rep.out(f"scrape: {system}: no catalog; run `warpzone catalog` first")
@@ -635,12 +664,12 @@ def _scrape_system(run: Run, system: str) -> scrape.Selection | None:
     if opts.only is not None:
         missing = _not_in_catalog(opts.only, system, games)
         if missing:
-            run.fail(_missing_message(system, missing))
+            run.fail(_missing_message(system, missing), system)
         games = [g for g in games if scrape.is_placed(g, opts.only)]
     try:
         hub = read_hub_gamelist(gamelist_path(opts.root, system))
     except HubError as exc:
-        run.fail(scrape.gamelist_message(system, str(exc)))
+        run.fail(scrape.gamelist_message(system, str(exc)), system)
         return None
     selection = scrape.select(
         games,
@@ -650,11 +679,18 @@ def _scrape_system(run: Run, system: str) -> scrape.Selection | None:
         today=opts.today(),
         retry_not_found=opts.retry_not_found,
     )
+    skipped_incomplete = 0
+    if run.skip_incomplete is not None:
+        kept = tuple(p for p in selection.picks if not run.skip_incomplete(p))
+        skipped_incomplete = len(selection.picks) - len(kept)
+        selection = replace(selection, picks=kept)
     if opts.dry_run:
         rep.out(scrape.render_dry_run(system, selection))
         return selection
-    if run.stopped is not None:  # the quota is spent: count what is left for tomorrow
+    if run.stopped is not None or run.halt is not None:  # count what is left for tomorrow
         run.not_tried += len(selection.picks)
+        report = scrape.Report(system, (), (), selection.skipped_not_found)
+        run.summaries.append(scrape.summarize_system(report, skipped_incomplete))
         return selection
     merges: list[scrape.GameMerge] = []
     dropped: list[scrape.Dropped] = []
@@ -677,6 +713,8 @@ def _scrape_system(run: Run, system: str) -> scrape.Selection | None:
             batches = _chunks(list(sr.staged), scrape.BATCH_SIZE)
             for number, names in enumerate(batches, 1):
                 later = sum(len(b) for b in batches[number:])
+                if run.halts_before(len(names), later):
+                    break
                 got, warned = _scrape_batch(run, sr, number, names, later)
                 merges += got
                 dropped += warned
@@ -684,18 +722,16 @@ def _scrape_system(run: Run, system: str) -> scrape.Selection | None:
                     break  # `later` was counted with the batch that hit the limit
         finally:  # also on Ctrl-C: nothing staged or temporary stays behind
             shutil.rmtree(sr.folder, ignore_errors=True)
-    rep.out(
-        scrape.render_report(
-            scrape.Report(
-                system,
-                tuple(merges),
-                tuple(dropped),
-                selection.skipped_not_found,
-                run.version,
-                run.account,
-            )
-        )
+    report = scrape.Report(
+        system,
+        tuple(merges),
+        tuple(dropped),
+        selection.skipped_not_found,
+        run.version,
+        run.account,
     )
+    rep.out(scrape.render_report(report))
+    run.summaries.append(scrape.summarize_system(report, skipped_incomplete))
     return selection
 
 
@@ -710,7 +746,7 @@ def run_scrape(opts: Options, rep: Reporter) -> int:
             f"{root} has no inbox/ and library/roms/ folders; is --root the hub root?"
         )
     if opts.dry_run:  # it reads only, so it needs no lock
-        return _run(opts, rep)
+        return _run(opts, rep).exit_code
     with inbox_lock.hold(
         root / "inbox",
         force=opts.force_lock,
@@ -719,19 +755,56 @@ def run_scrape(opts: Options, rep: Reporter) -> int:
         mode=inbox_lock.ATTENDED,
         task=inbox_lock.SCRAPE,
     ):
-        return _run(opts, rep)
+        return _run(opts, rep).exit_code
 
 
 def run_placed(opts: Options, rep: Reporter) -> int:
     """`inbox --apply`: scrape the games of `opts.only`, with the inbox lock the caller already
     holds (taking it again would fail). The same flow and exit code as `run_scrape`."""
-    return _run(opts, rep)
+    return _run(opts, rep).exit_code
 
 
-def _run(opts: Options, rep: Reporter) -> int:
+def run_held(
+    opts: Options,
+    rep: Reporter,
+    *,
+    deadline: float | None = None,
+    still_mine: Callable[[], bool] | None = None,
+    skip_incomplete: Callable[[scrape.Pick], bool] | None = None,
+) -> scrape.Summary:
+    """The scrape with the lock already held by the caller, which gets a summary of the run
+    instead of an exit code (`Summary.exit_code` is the attended command's).
+
+    `deadline` is an absolute time on `opts.now`: a batch that `scrape.batch_fits` says will not
+    end by then is not started (the first batch of the run always is). `still_mine` is asked
+    before each batch, and a false answer ends the run. `skip_incomplete` is applied to the
+    selection of each system: the picks it accepts are not scraped, only counted. `opts.only`
+    restricts the selection to the games under those library paths."""
+    return _run(
+        opts, rep, deadline=deadline, still_mine=still_mine, skip_incomplete=skip_incomplete
+    )
+
+
+def _run(
+    opts: Options,
+    rep: Reporter,
+    *,
+    deadline: float | None = None,
+    still_mine: Callable[[], bool] | None = None,
+    skip_incomplete: Callable[[scrape.Pick], bool] | None = None,
+) -> scrape.Summary:
     memory = scrape.parse_not_found(safefile.read_json_cache(opts.cache / NOT_FOUND_FILE))
     version = None if opts.dry_run else skyscraper_version(opts.skyscraper)
-    run = Run(opts, rep, version, credentials_set(opts.config_ini), memory)
+    run = Run(
+        opts,
+        rep,
+        version,
+        credentials_set(opts.config_ini),
+        memory,
+        deadline=deadline,
+        still_mine=still_mine,
+        skip_incomplete=skip_incomplete,
+    )
     selections: dict[str, scrape.Selection] = {}
     for system in opts.systems:
         picked = _scrape_system(run, system)
@@ -739,7 +812,14 @@ def _run(opts: Options, rep: Reporter) -> int:
             selections[system] = picked
     if opts.dry_run:
         rep.out(scrape.render_dry_totals(selections))
-        return 0
+        return scrape.Summary()
     if run.stopped is not None:
         run.fail(scrape.stop_message(run.stopped, not_tried=run.not_tried, account=run.account))
-    return 1 if run.failed else 0
+    elif run.halt is scrape.StopReason.DEADLINE:
+        rep.out(scrape.budget_message(run.not_tried))
+    elif run.halt is scrape.StopReason.LOCK_LOST:
+        run.fail(scrape.lock_lost_message(run.not_tried))
+    stop = run.halt or (scrape.StopReason.of(run.stopped) if run.stopped is not None else None)
+    return scrape.Summary(
+        tuple(run.summaries), stop, run.not_tried, tuple(run.failed_systems), run.failed
+    )

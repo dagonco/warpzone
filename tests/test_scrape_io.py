@@ -677,3 +677,180 @@ class FindAndConfigTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RunHeldCase(HubCase):
+    """Three games, `run_held` and an injected clock."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        library(self.hub, KIRBY, CHRONO, HOMEBREW)
+        self.hub.canned({"known": ["Kirby Super Star (USA)", "Chrono Trigger (USA)"]})
+        self.clock = time.time() + 86400
+
+    def summary(self, options=None, **inputs) -> tuple[scrape.Summary, list[str]]:
+        lines: list[str] = []
+        opts = self.hub.options(now=lambda: self.clock, **(options or {}))
+        found = scrape_io.run_held(opts, Reporter(lines.append), **inputs)
+        return found, [line for chunk in lines for line in chunk.splitlines()]
+
+
+class SummaryTest(RunHeldCase):
+    """`run_held` returns what the run did: the counts per system, why it stopped, what it did not
+    try. The printed report and the exit code are the attended command's, unchanged."""
+
+    def test_the_counts_match_the_printed_report(self):
+        found, out = self.summary()
+        (snes,) = found.systems
+        self.assertEqual(snes.system, "snes")
+        self.assertEqual((snes.added, snes.filled, snes.unchanged, snes.not_found), (2, 0, 0, 1))
+        self.assertEqual(out[-1], "scrape: snes: 2 added, 1 not found")
+        self.assertEqual(
+            snes.added_paths, ("Chrono Trigger (USA).zip", "Kirby Super Star (USA).zip")
+        )
+
+    def test_a_normal_run_with_each_verdict(self):
+        self.hub.write_gamelist(HUB_GAMELIST)
+        for kind in ("covers", "screenshots", "miximages", "marquees", "backcovers"):
+            self.hub.put_media(kind, "Chrono Trigger (USA)", b"mine")
+        found, out = self.summary()
+        (snes,) = found.systems
+        self.assertEqual((snes.added, snes.filled, snes.not_found), (1, 1, 1))
+        self.assertEqual(snes.added_paths, ("Kirby Super Star (USA).zip",))
+        self.assertEqual(snes.filled_paths, ("Chrono Trigger (USA).zip",))
+        self.assertEqual(out[-1], "scrape: snes: 1 added, 1 filled, 1 not found")
+        self.assertIsNone(found.stop)
+        self.assertEqual((found.not_tried, found.failed_systems, found.failed), (0, (), False))
+        self.assertFalse(found.budget_spent)
+        self.assertEqual(found.exit_code, 0)
+
+    def test_the_skipped_not_found_are_counted(self):
+        self.summary()
+        found, out = self.summary()
+        self.assertEqual(found.systems[0].skipped_not_found, 1)
+        self.assertIn("skipped 1 not found", out[-1])
+
+    def test_the_printed_report_is_the_attended_one(self):
+        _, out = self.summary()
+        self.assertEqual(
+            [line for line in out if not line.startswith("  added")],
+            [
+                "scrape: snes: 3 games (Skyscraper 3.21.1, ScreenScraper account: anonymous)",
+                "  not found  Example Homebrew (World).zip",
+                "scrape: snes: 2 added, 1 not found",
+            ],
+        )
+
+    def test_the_attended_command_still_returns_the_exit_code(self):
+        code, _, _ = self.hub.run()
+        self.assertEqual(code, 0)
+
+    def test_the_quota_is_the_stop_reason(self):
+        self.hub.canned({"known": ["Chrono Trigger (USA)"], "quota_after": 1})
+        found, _ = self.summary()
+        self.assertIs(found.stop, scrape.StopReason.QUOTA)
+        self.assertEqual(found.not_tried, 2)
+        self.assertTrue(found.failed)
+        self.assertEqual(found.exit_code, 1)
+
+    def test_a_system_whose_batches_failed_is_named(self):
+        with mock.patch.object(scrape_io, "list_output", side_effect=OSError(28, "No space")):
+            found, _ = self.summary()
+        self.assertEqual(found.failed_systems, ("snes",))
+        self.assertEqual(found.exit_code, 1)
+
+    def test_a_dry_run_summary_has_no_systems(self):
+        found, _ = self.summary({"dry_run": True})
+        self.assertEqual((found.systems, found.stop, found.exit_code), ((), None, 0))
+
+
+class RunInputsTest(RunHeldCase):
+    """The deadline, `still_mine`, `skip_incomplete` and `only` of the nightly run. Three games
+    in batches of two, so there is a second batch to stop before."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        patch = mock.patch.object(scrape, "BATCH_SIZE", 2)
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def test_without_the_inputs_both_batches_run(self):
+        found, _ = self.summary()
+        self.assertEqual(len(self.hub.gathers()), 2)
+        self.assertEqual(found.systems[0].added, 2)
+
+    def test_the_deadline_stops_before_the_second_batch(self):
+        # One game still to do needs 10 seconds and only 5 are left.
+        found, out = self.summary(deadline=self.clock + 5)
+        self.assertEqual(len(self.hub.gathers()), 1)
+        self.assertIs(found.stop, scrape.StopReason.DEADLINE)
+        self.assertTrue(found.budget_spent)
+        self.assertEqual(found.not_tried, 1)
+        self.assertEqual(found.systems[0].added, 1)
+        self.assertEqual(found.exit_code, 0)
+        self.assertIn("scrape: time budget spent; 1 game not tried", out)
+
+    def test_a_deadline_that_fits_stops_nothing(self):
+        found, _ = self.summary(deadline=self.clock + 10)
+        self.assertEqual(len(self.hub.gathers()), 2)
+        self.assertIsNone(found.stop)
+        self.assertFalse(found.budget_spent)
+
+    def test_the_first_batch_is_allowed_even_past_the_deadline(self):
+        found, _ = self.summary(deadline=self.clock - 100)
+        self.assertEqual(len(self.hub.gathers()), 1)
+        self.assertIs(found.stop, scrape.StopReason.DEADLINE)
+        self.assertEqual(found.not_tried, 1)
+
+    def test_the_deadline_leaves_the_next_systems_untried(self):
+        self.hub.add_game("Mario.zip", system="nes")
+        found, _ = self.summary({"systems": ("snes", "nes")}, deadline=self.clock + 5)
+        self.assertEqual(found.not_tried, 2)  # the third snes game and the nes one
+        self.assertEqual(len(self.hub.gathers()), 1)
+        self.assertEqual([s.system for s in found.systems], ["snes", "nes"])
+
+    def test_a_false_still_mine_stops_before_the_next_batch(self):
+        answers = iter([True, False])
+        found, out = self.summary(still_mine=lambda: next(answers))
+        self.assertEqual(len(self.hub.gathers()), 1)
+        self.assertIs(found.stop, scrape.StopReason.LOCK_LOST)
+        self.assertEqual(found.not_tried, 1)
+        self.assertEqual(found.exit_code, 1)
+        self.assertTrue(any("lock" in line for line in out), out)
+
+    def test_still_mine_is_asked_before_each_batch_and_a_true_changes_nothing(self):
+        calls: list[int] = []
+        found, _ = self.summary(still_mine=lambda: calls.append(1) or True)
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(found.systems[0].added, 2)
+
+    def test_skip_incomplete_excludes_picks_and_counts_them(self):
+        found, out = self.summary(skip_incomplete=lambda pick: pick.game.title.startswith("Kirby"))
+        (snes,) = found.systems
+        self.assertEqual(snes.skipped_incomplete, 1)
+        self.assertEqual(snes.added, 1)
+        self.assertEqual(snes.not_found, 1)
+        self.assertEqual(out[0].split(": ")[2].split()[0], "2")  # two games went to the tool
+        (seen,) = self.hub.gathers()
+        self.assertNotIn(KIRBY, seen["targets"])
+
+    def test_only_restricts_the_selection(self):
+        found, _ = self.summary({"only": frozenset({f"roms/snes/{CHRONO}"})})
+        (snes,) = found.systems
+        self.assertEqual(snes.added, 1)
+        (seen,) = self.hub.gathers()
+        self.assertEqual(list(seen["targets"]), [CHRONO])
+
+
+class BatchFitsTest(unittest.TestCase):
+    def test_the_estimate_is_ten_seconds_a_game(self):
+        self.assertEqual(scrape.EST_SECONDS_PER_GAME, 10)
+
+    def test_a_batch_that_ends_at_the_deadline_fits(self):
+        self.assertTrue(scrape.batch_fits(100.0, 150.0, 5))
+
+    def test_a_batch_that_ends_after_it_does_not(self):
+        self.assertFalse(scrape.batch_fits(100.0, 149.9, 5))
+
+    def test_a_past_deadline_fits_nothing(self):
+        self.assertFalse(scrape.batch_fits(100.0, 99.0, 1))

@@ -426,6 +426,13 @@ How it is done (`inbox_scrape.py`, called from `inbox._run` right after `_update
   so `select` sees nothing else of the library.
 - **The lock.** `inbox` already holds `inbox/.warpzone.lock`, so it calls `scrape_io.run_placed`,
   which is `run_scrape` without taking the lock. `warpzone scrape` is the only caller that takes it.
+- **The summary.** `scrape_io.run_held` is the same run with the lock held by the caller, and it
+  returns a `scrape.Summary` instead of an exit code: per system the counts of the report (and the
+  paths added and filled), why the run stopped early, how many games it did not try and which
+  systems failed. `run_scrape` and `run_placed` return `Summary.exit_code`, so what `warpzone
+  scrape` prints and its exit codes are the same. `run_held` also takes a `deadline`, a
+  `still_mine` check and a `skip_incomplete` predicate for the unattended run (see
+  [Unattended scrape](/warpzone/development/design/scrape-unattended/)).
 - **Failures are warnings.** `Options.as_warning` sends the failure rows of the table below to
   `Reporter.warn` instead of the plain report, and any exception of the scrape is caught and
   warned (`scrape: failed (...)`). The return code of the scrape only decides whether the closing
