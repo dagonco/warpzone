@@ -813,6 +813,39 @@ def read_memory(
     return scrape.parse_not_found(data), scrape.parse_incomplete(data)
 
 
+def select_all(
+    opts: Options, not_found: Mapping[str, scrape.NotFoundRecords]
+) -> tuple[dict[str, scrape.Selection], list[str]]:
+    """What `scrape.select` finds for each of `opts.systems`, with nothing written and no lock:
+    the catalog, the hub gamelist and the media present are read, and the not-found memory given
+    is applied. A system with no catalog is left out (a run says so); one whose catalog or
+    gamelist cannot be read is left out too, with the reason as one of the problems returned."""
+    found: dict[str, scrape.Selection] = {}
+    problems: list[str] = []
+    for system in opts.systems:
+        try:
+            doc, _ = catalog_store.read_state(catalog_store.system_path(opts.root, system))
+        except OSError as exc:
+            problems.append(f"scrape: {system}: cannot read the catalog ({exc.strerror or exc})")
+            continue
+        if doc is None:
+            continue
+        try:
+            hub = read_hub_gamelist(gamelist_path(opts.root, system))
+        except HubError as exc:
+            problems.append(scrape.gamelist_message(system, str(exc)))
+            continue
+        found[system] = scrape.select(
+            sorted(doc.games.values(), key=lambda g: g.gamelist),
+            hub.entries,
+            list_hub_media(media_path(opts.root, system)),
+            not_found=not_found.get(system, {}),
+            today=opts.today(),
+            retry_not_found=opts.retry_not_found,
+        )
+    return found, problems
+
+
 def _run(
     opts: Options,
     rep: Reporter,

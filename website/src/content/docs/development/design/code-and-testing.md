@@ -121,6 +121,7 @@ warpzone/
   scrape_io.py       `warpzone scrape`: stages the games, runs Skyscraper through `run_tool`, reads its
                      output, writes media and gamelist entries to the hub (never over a file)
   scrape_unattended.py  the nightly scrape's pure side: the plan (four tiers, the cap, what the memories skip), the outcome and trouble of a night, the state file and its changes, news and exit code, the run record and the webhook payload
+  scrape_unattended_run.py  `scrape --unattended`: one night of the scheduled scrape, step by step (above `scrape_io.py`; only `cli.py` calls it)
   playstate.py       play state: ledgers, merge rules, times, its tags in a gamelist (pure)
   playstate_device.py  play state on a device: files, ES-DE gamelists, generated gamelists
   diskstatus.py      the disk a console reports to the hub: when to write, format, staleness (pure)
