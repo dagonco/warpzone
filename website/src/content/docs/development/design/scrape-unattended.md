@@ -2,11 +2,11 @@
 title: "Unattended scrape"
 ---
 
-**Status: implemented, except the guides.**
+**Status: implemented.**
 `warpzone scrape --unattended` runs the steps below (`scrape_unattended_run`) and doctor shows its
-`Nightly scrape` line (`doctor_scrape.judge_nightly`). Still to come: the setup guides
-([Scraping](/warpzone/setup/scrape/), [The hub container](/warpzone/setup/hub-container/)) that
-tell how to schedule it.
+`Nightly scrape` line (`doctor_scrape.judge_nightly`). The guide that tells how to schedule it is
+[Filling art every night](/warpzone/setup/scrape/#filling-art-every-night). Only the manual check
+on the NAS (see [Code and testing](#code-and-testing)) is still to be recorded.
 This page is
 the contract for running `warpzone scrape` on the hub by itself, once a night, from a scheduled
 task, with nobody watching. The pages it touches when it is implemented ([Scraping](/warpzone/development/design/scrape/),
@@ -390,7 +390,8 @@ cd /path/to/the/compose/folder && /usr/local/bin/docker compose run --rm -T warp
 ```
 
 `--notify-url URL` is optional. The task uses the same compose service as the inbox's (`/skyscraper`,
-the work volume, `mem_limit: 2g`, `cpus`), so there is nothing new to configure beyond the line.
+the work volume, `mem_limit: 2g`, `cpus`, or `cpu_shares: 512` where the Synology kernel refuses `cpus`, as in
+[The hub container](/warpzone/setup/hub-container/)), so there is nothing new to configure beyond the line.
 The DSM mail on an abnormal end arrives once per problem, since the run exits non-zero only for
 news. Other NAS systems use their own scheduler or root's crontab with the same line.
 

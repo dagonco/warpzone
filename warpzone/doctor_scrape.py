@@ -153,8 +153,7 @@ NIGHTLY = "Nightly scrape"
 STALE_NIGHTLY = timedelta(hours=36)  # one run a day, and a day and a half before it is late
 NIGHTLY_FIX = (
     "schedule `warpzone scrape --unattended` once a night on the hub (see "
-    "https://dagonco.github.io/warpzone/development/design/scrape-unattended/"
-    "#the-scheduled-task)"
+    "https://dagonco.github.io/warpzone/setup/scrape/#filling-art-every-night)"
 )
 SCRAPED = ("added", "filled", "not_found", "unchanged")  # the games Skyscraper was asked about
 CAPPED = ("done", "budget")  # the outcomes of a night that ended on its cap or its time budget

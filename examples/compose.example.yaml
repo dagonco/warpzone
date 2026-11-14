@@ -89,6 +89,9 @@ services:
   # Skyscraper, which scrapes what it places), so nothing has to be installed on the NAS. A profile
   # keeps `docker compose up -d` from starting it; run it with
   # `docker compose run --rm warpzone-inbox inbox` (a report) and `... inbox --apply`.
+  # The same service runs the nightly scrape (`scrape --unattended`, a second scheduled task; see
+  # https://dagonco.github.io/warpzone/setup/scrape/#filling-art-every-night), so there is no
+  # service to add.
   # It repeats the mounts and limits above and adds folders the image does not hold: three of keys
   # and big data, which come from the NAS read-only and never go into the image, and Skyscraper's.
   warpzone-inbox:

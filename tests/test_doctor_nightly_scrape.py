@@ -90,7 +90,7 @@ class JudgeTests(unittest.TestCase):
         self.assertEqual(status, OPTIONAL)
         self.assertEqual(detail, "no nightly scrape has recorded anything")
         self.assertIn("warpzone scrape --unattended", fix)
-        self.assertIn("scrape-unattended/#the-scheduled-task", fix)
+        self.assertIn("setup/scrape/#filling-art-every-night", fix)
 
     def test_a_run_level_error_is_a_problem(self) -> None:
         error = RunError("[inbox] skyscraper is missing", 2, ago(hours=30), count=2)

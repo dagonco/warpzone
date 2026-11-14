@@ -126,3 +126,35 @@ Exit code `0` when every selected game was handled (a game ScreenScraper does no
 To fix a wrong match, edit the entry on a console, or delete the entry and its media files and run `warpzone scrape` again. To get media ScreenScraper added later for a game that was already scraped, purge that game from Skyscraper's cache (`Skyscraper -p <platform> --cache purge:...`) and run `warpzone scrape`.
 
 If ES-DE is open on a console, it keeps its gamelist in memory and may write it back without the new entries. When a gamelist was written in the last 10 minutes warpzone warns about it: quit ES-DE on every console and run `warpzone scrape` again if the entries do not stick (the media are already there, and the entries come back from the cache with no request).
+
+## Filling art every night
+
+A game that reaches the library without going through `inbox` (copied by hand, placed with `--no-scrape`, or left behind when a run hit ScreenScraper's daily limit) stays without art until someone runs `warpzone scrape`. On the hub you can leave that to a scheduled task that runs `warpzone scrape --unattended` once a night, with nobody watching.
+
+What a night does:
+
+- **It picks what is worth it.** New games with no entry go first, then games with an entry but no cover, screenshot or miximage, then games ScreenScraper did not know whose 30 days have passed, and last games that only lack a video, back cover, 3D box or logo. It takes at most `--max-games` of them (default 500) and stops before a batch that would end after `--max-minutes` (default 180). What is left is picked up the next night, so a big library fills over several nights.
+- **It does nothing when there is nothing to do.** It exits at once, with no lock and no Skyscraper, so an up-to-date library costs nothing.
+- **It skips games that cannot improve.** When ScreenScraper has no video or back cover for a game, the game would be "missing media" for ever. Every scrape remembers such games (per machine, next to the list of games ScreenScraper did not know) and the nightly run does not ask for them again; they come back when their file changes size or a media file they had goes missing.
+- **It takes the inbox lock.** If an `inbox` tick or a scrape by hand holds it, the run waits up to 30 minutes (a lock silent for 10 minutes is taken over). The inbox's own ticks during the run exit as busy and try again at the next one, so a game dropped at 03:30 is filed when the run ends, at most `--max-minutes` later.
+- **It runs at low priority** and uses the same Skyscraper, cache and account as the rest.
+
+On a Synology, in Control Panel, Task Scheduler, Create, Scheduled Task, User-defined script: user `root`, daily at 03:00 (ScreenScraper's daily limit has reset by then), script:
+
+```sh
+cd /path/to/the/compose/folder && /usr/local/bin/docker compose run --rm -T warpzone-inbox scrape --unattended
+```
+
+It is the same `warpzone-inbox` service as the [inbox task](/warpzone/setup/inbox/#adding-games-without-being-there), with its `/skyscraper` volume, work folder and memory and CPU limits; there is nothing new to configure. Try it by hand once from the compose folder, and use `--dry-run` of the attended command to see what it would find (the nightly run itself refuses `--dry-run`, `--force-lock` and `--retry-not-found`). Other NAS systems use their scheduler or root's crontab with the same line.
+
+Exit codes follow the inbox's rule: the run exits non-zero only for news, so DSM's email "when the script terminates abnormally" arrives once per problem, not every night.
+
+- `0`: nothing to report. That covers nothing to do, the time budget spent, ScreenScraper's daily limit reached, a first busy night, and a problem already reported.
+- `1`: a trouble that lasted its number of nights (ScreenScraper blacklisting the client on the first night; network trouble, ScreenScraper too busy, a system whose batches failed, the lock busy all night, or a run that died, on the second night in a row; maintenance on the third), or a new runtime error.
+- `2`: a new configuration problem (no Skyscraper, `/skyscraper` not mounted, a scratch folder on memory, an `inbox/` or `catalog/` folder missing, a lock left by an older warpzone) or a usage error.
+
+Add `--notify-url URL` to the task line to be told by a webhook (a JSON post, with no URL, path or key in it) when there is news; a night that only added art sends nothing.
+
+To see how it is going, run `warpzone doctor` (in the container: `docker compose run --rm -T warpzone-inbox doctor`). The `Nightly scrape` line is optional until the first run, then says when it last ran, what it added and filled, and how much is left, with about how many nights that takes. It warns when the task has not checked in for 36 hours (is it enabled?), when a trouble has lasted as many nights as it takes to be news, and when the daily limit was reached 3 nights in a row: the library is larger than the account covers in a night, so it fills over more nights (a [ScreenScraper account](#screenscraper-account-optional) helps). What each run did is in `catalog/scrape/runs/` on the hub (the newest 50), and the state in `catalog/scrape/state.json`.
+
+To force a full pass by hand, run `warpzone scrape` (in the container: `docker compose run --rm warpzone-inbox scrape`). An attended scrape ignores the memory of games that cannot improve and has no cap, which is also what to run after purging Skyscraper's cache. The contract is [Unattended scrape](/warpzone/development/design/scrape-unattended/).
