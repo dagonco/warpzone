@@ -116,10 +116,11 @@ warpzone/
   artwork.py         frontend artwork: ES-DE gamelist -> the frontend's gamelist, scope ignores,
                      system names (pure; the reads are passed in)
   scrape.py          scraping with Skyscraper: platform table, which games to scrape, command lines,
-                     what its output says, the merge plan, the not-found memory, the account
+                     what its output says, the merge plan, the not-found and incomplete memories, the account
                      presence check, the report (pure)
   scrape_io.py       `warpzone scrape`: stages the games, runs Skyscraper through `run_tool`, reads its
                      output, writes media and gamelist entries to the hub (never over a file)
+  scrape_unattended.py  the nightly scrape's plan: the four tiers, the cap, what the memories skip (pure)
   playstate.py       play state: ledgers, merge rules, times, its tags in a gamelist (pure)
   playstate_device.py  play state on a device: files, ES-DE gamelists, generated gamelists
   diskstatus.py      the disk a console reports to the hub: when to write, format, staleness (pure)

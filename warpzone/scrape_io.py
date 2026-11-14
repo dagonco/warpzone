@@ -438,6 +438,7 @@ class Run:
     deadline: float | None = None  # absolute time on `opts.now` after which no batch is started
     still_mine: Callable[[], bool] | None = None  # asked before each batch
     skip_incomplete: Callable[[scrape.Pick], bool] | None = None
+    incomplete: dict[str, scrape.IncompleteRecords] = field(default_factory=dict)
     stopped: scrape.Stop | None = None
     halt: scrape.StopReason | None = None  # the deadline or the lost lock
     failed: bool = False
@@ -475,6 +476,12 @@ class Run:
     def memory_path(self) -> Path:
         return self.opts.cache / NOT_FOUND_FILE
 
+    def save_memory(self) -> None:
+        """Write both memories (not found, incomplete) to their one file."""
+        safefile.write_json_cache(
+            self.memory_path, scrape.render_memory(self.memory, self.incomplete)
+        )
+
 
 @dataclass
 class SystemRun:
@@ -485,6 +492,7 @@ class SystemRun:
     folder: Path  # <scratch>/<system>: staged input and the batches' output
     log: Path
     staged: dict[str, Game]
+    picks: dict[str, scrape.Pick] = field(default_factory=dict)  # by gamelist path
 
     @property
     def input(self) -> Path:
@@ -581,9 +589,19 @@ def _merge_batch(
         set(outcome.retried),
         opts.today(),
     )
-    if records != run.memory.get(sr.system, {}):
+    lost = {m.game.gamelist for m in plan.games if not set(m.copies) <= done.copies}
+    kept = scrape.remember_incomplete(
+        run.incomplete.get(sr.system, {}),
+        merges,
+        sr.picks,
+        done.gamelist_error is None,
+        opts.today(),
+        lost,
+    )
+    if records != run.memory.get(sr.system, {}) or kept != run.incomplete.get(sr.system, {}):
         run.memory[sr.system] = records
-        safefile.write_json_cache(run.memory_path, scrape.render_not_found(run.memory))
+        run.incomplete[sr.system] = kept
+        run.save_memory()
     return merges, plan.dropped + done.dropped
 
 
@@ -709,6 +727,7 @@ def _scrape_system(run: Run, system: str) -> scrape.Selection | None:
             sr.staged, unstaged = stage(
                 opts.root / "library", sr.input, [p.game for p in selection.picks]
             )
+            sr.picks = {p.game.gamelist: p for p in selection.picks}
             dropped += unstaged
             batches = _chunks(list(sr.staged), scrape.BATCH_SIZE)
             for number, names in enumerate(batches, 1):
@@ -785,6 +804,15 @@ def run_held(
     )
 
 
+def read_memory(
+    opts: Options,
+) -> tuple[dict[str, scrape.NotFoundRecords], dict[str, scrape.IncompleteRecords]]:
+    """The two memories of the machine, from their one file: the not-found records and the
+    incomplete records, each by system. A file that is missing or cannot be read is empty."""
+    data = safefile.read_json_cache(opts.cache / NOT_FOUND_FILE)
+    return scrape.parse_not_found(data), scrape.parse_incomplete(data)
+
+
 def _run(
     opts: Options,
     rep: Reporter,
@@ -793,7 +821,7 @@ def _run(
     still_mine: Callable[[], bool] | None = None,
     skip_incomplete: Callable[[scrape.Pick], bool] | None = None,
 ) -> scrape.Summary:
-    memory = scrape.parse_not_found(safefile.read_json_cache(opts.cache / NOT_FOUND_FILE))
+    memory, incomplete = read_memory(opts)
     version = None if opts.dry_run else skyscraper_version(opts.skyscraper)
     run = Run(
         opts,
@@ -804,6 +832,7 @@ def _run(
         deadline=deadline,
         still_mine=still_mine,
         skip_incomplete=skip_incomplete,
+        incomplete=incomplete,
     )
     selections: dict[str, scrape.Selection] = {}
     for system in opts.systems:
