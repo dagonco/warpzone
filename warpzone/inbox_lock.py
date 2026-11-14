@@ -1,7 +1,8 @@
 """The lock that keeps two `warpzone inbox --apply` runs off the same hub inbox.
 
 `inbox/.warpzone.lock` is created atomically (O_CREAT | O_EXCL) and holds the host name, the pid,
-the start time, the heartbeat interval (`beat`) and the mode of the run. While a run holds it, a
+the start time, the heartbeat interval (`beat`), the mode of the run and, when the run is not the
+inbox itself, its `task` (`scrape`). While a run holds it, a
 `Heartbeat` thread touches the file's modification time every `BEAT_SECONDS`, and only while the
 file still holds this run's identity.
 
@@ -37,6 +38,8 @@ STOP_WAIT_SECONDS = 5  # how long releasing the lock waits for a heartbeat stuck
 STALE_BEAT_SECONDS = 10 * 60  # silence after which a lock with a heartbeat is stale
 ATTENDED = "attended"
 UNATTENDED = "unattended"
+SCRAPE = "scrape"  # the task of a scrape run; a lock with no task is the inbox's own
+TASKS = (SCRAPE,)
 _SHOWN = f"inbox/{LOCK_NAME}"  # what messages call it: never a path outside the hub
 
 # The verdicts of `judge`.
@@ -53,6 +56,7 @@ class LockInfo:
     started: float
     beat: int | None = None  # heartbeat interval in seconds; None for a lock of an older warpzone
     mode: str | None = None  # ATTENDED or UNATTENDED; None for a lock of an older warpzone
+    task: str | None = None  # SCRAPE when a scrape holds it; None for the inbox's own run
 
 
 @dataclass(frozen=True)
@@ -114,6 +118,8 @@ def render(info: LockInfo) -> str:
     if info.beat is not None:  # a lock of an older warpzone has neither key
         data["beat"] = info.beat
         data["mode"] = info.mode or ATTENDED
+    if info.task is not None:
+        data["task"] = info.task
     return json.dumps(data) + "\n"
 
 
@@ -134,7 +140,10 @@ def parse(text: str) -> LockInfo | None:
     mode = data.get("mode")
     if mode not in (None, ATTENDED, UNATTENDED):
         mode = None
-    return LockInfo(host, pid, float(started), beat, mode)
+    task = data.get("task")
+    if task not in TASKS:  # a task of a newer warpzone, or junk: the lock is still a lock
+        task = None
+    return LockInfo(host, pid, float(started), beat, mode, task)
 
 
 def same_run(a: LockInfo | None, b: LockInfo | None) -> bool:
@@ -208,6 +217,11 @@ def describe(info: LockInfo | None, mtime: float, now: float) -> str:
     ago = f"{minutes // 60} h {minutes % 60} min" if minutes >= 60 else f"{minutes} min"
     if info is None:
         return f"held by an unknown run since {since} ({ago} ago)"
+    if info.task == SCRAPE:
+        if info.mode == UNATTENDED:
+            return f"held by the nightly scrape on the hub since {since} ({ago} ago)"
+        who = f"{info.host} (pid {info.pid})"
+        return f"held by a scrape run by hand on {who} since {since} ({ago} ago)"
     if info.mode == UNATTENDED:
         return f"held by the unattended inbox on the hub since {since} ({ago} ago)"
     return f"held by {info.host} (pid {info.pid}) since {since} ({ago} ago)"
@@ -454,12 +468,14 @@ def hold(
     now: Callable[[], float],
     out: Callable[[str], None],
     mode: str = ATTENDED,
+    task: str | None = None,
     previous: LockReading | None = None,
     interval: float = BEAT_SECONDS,
 ) -> Iterator[Held]:
     """Hold `inbox/.warpzone.lock` for the body, with a heartbeat; it is released on any exit.
 
-    `mode` is ATTENDED or UNATTENDED. An unattended run takes over a silent lock by itself
+    `mode` is ATTENDED or UNATTENDED; `task` is SCRAPE for a scrape run and None for the inbox
+    itself. An unattended run takes over a silent lock by itself
     (judged against `previous`, the reading of an earlier run) and cannot be forced. A lock
     held by someone else raises `LockBusy`; a stale one it may not take, `LockStale`."""
     if mode not in (ATTENDED, UNATTENDED):
@@ -467,7 +483,7 @@ def hold(
     if force and mode == UNATTENDED:
         raise ValueError("an unattended run never forces a lock")
     path = inbox / LOCK_NAME
-    mine = LockInfo(hostname(), os.getpid(), now(), BEAT_SECONDS, mode)
+    mine = LockInfo(hostname(), os.getpid(), now(), BEAT_SECONDS, mode, task)
     _acquire(path, mine, force=force, now=now, out=out, previous=previous)
     heartbeat: Heartbeat | None = None
     try:

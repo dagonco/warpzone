@@ -318,7 +318,7 @@ class InboxFiles:
 
     state: State
     records: tuple[dict[str, Any], ...]
-    busy: dict[str, str] | None
+    busy: dict[str, str | None] | None
 
 
 class HubFiles:
@@ -663,7 +663,7 @@ class HubFiles:
         with self._lock:
             return self._inbox_record(run_id)
 
-    def _busy(self) -> dict[str, str] | None:
+    def _busy(self) -> dict[str, str | None] | None:
         """`busy`: null without a lock file. A lock that is a link, not a regular file, too big
         or unreadable is busy with an unknown mode: it is never followed or waited on (a named
         pipe in its place must not block the server)."""

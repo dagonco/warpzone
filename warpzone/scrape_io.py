@@ -717,6 +717,7 @@ def run_scrape(opts: Options, rep: Reporter) -> int:
         now=opts.now,
         out=rep.out,
         mode=inbox_lock.ATTENDED,
+        task=inbox_lock.SCRAPE,
     ):
         return _run(opts, rep)
 

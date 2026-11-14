@@ -128,6 +128,19 @@ class FlowTest(HubCase):
         self.assertEqual(backups[0].read_text(), HUB_GAMELIST)
         self.assertFalse((self.hub.root / "inbox" / ".warpzone.lock").exists())
 
+    def test_the_lock_it_holds_names_the_scrape_as_its_task(self):
+        seen = []
+        real = scrape_io._run
+
+        def look(opts, rep):
+            lock = self.hub.root / "inbox" / ".warpzone.lock"
+            seen.append(inbox_lock.parse(lock.read_text()))
+            return real(opts, rep)
+
+        with mock.patch.object(scrape_io, "_run", look):
+            self.hub.run()
+        self.assertEqual([(i.mode, i.task) for i in seen], [("attended", "scrape")])
+
     def test_a_second_run_changes_nothing(self):
         self.hub.run()
         first = self.hub.snapshot()

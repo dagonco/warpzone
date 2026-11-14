@@ -362,7 +362,9 @@ finds the other's lock. What a container changes is how a dead holder is recogni
 own, so the "pid not alive on the same host" rule never applies, and a lock left by a container
 killed for memory would block every tick for 12 hours.
 
-- **Heartbeat.** The lock's JSON gains `"beat": 60` and `"mode": "unattended"` or `"attended"`.
+- **Heartbeat.** The lock's JSON gains `"beat": 60` and `"mode": "unattended"` or `"attended"`
+  (and, for a scrape, the optional `"task": "scrape"`; see
+  [Locking with the inbox](/warpzone/development/design/scrape-unattended/#locking-with-the-inbox)).
   While it holds the lock, every run (attended too) touches the file's modification time every 60
   seconds from a thread (`inbox_lock.Heartbeat`), and only while the file still holds this run's
   host, pid and start time.
@@ -390,7 +392,7 @@ killed for memory would block every tick for 12 hours.
   "already in the library".
 - `warpzone scrape`, which takes the same lock, gets the heartbeat with it.
 
-Implemented in `inbox_lock.py`: `hold(inbox, force=, now=, out=, mode="attended" | "unattended",
+Implemented in `inbox_lock.py`: `hold(inbox, force=, now=, out=, mode="attended" | "unattended", task=,
 previous=)` yields a handle with `still_mine()`. `judge(reading, here, alive, unattended=,
 previous=)` returns `live`, `stale`, `unknown` (an unattended run with one reading, or two too close
 together, or a clock gone back: busy) or `legacy` (stale by the old rules, which an unattended run
@@ -540,9 +542,9 @@ join the [endpoints](/warpzone/development/design/library-ui/#endpoints):
  "last": {"...": "the newest record in full, each placed game with its catalog id"}}
 ```
 
-`busy` is `{"since", "mode"}` while `inbox/.warpzone.lock` exists, else `null` (`since` is the
-lock's own start, `mode` is `attended`, `unattended`, or `unknown` for a lock that cannot be
-read). `error` is `{"message", "since", "count", "config"}` from the state's error, else `null`.
+`busy` is `{"since", "mode", "task"}` while `inbox/.warpzone.lock` exists, else `null` (`since`
+is the lock's own start, `mode` is `attended`, `unattended`, or `unknown` for a lock that cannot
+be read, and `task` is `scrape` when a scrape holds the lock, else `null`). `error` is `{"message", "since", "count", "config"}` from the state's error, else `null`.
 `held` lists the held entries of the state (`since` is when it was held) and `waiting` the others
 (`since` is `first`). `why` is `settling` or `space`; the state does not record which, so it is
 `space` when no run is working and the last check (`checked`) found the item's fingerprint
