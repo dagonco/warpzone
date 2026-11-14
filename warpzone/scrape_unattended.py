@@ -57,19 +57,34 @@ class Ranked:
 
 
 @dataclass(frozen=True)
+class Wave:
+    """The chosen games of one tier across systems: one pass of the run. `systems` are the
+    systems with a game in it, in name order, and `only` the primary library paths of the games."""
+
+    tier: int
+    systems: tuple[str, ...]
+    only: frozenset[str]
+
+
+@dataclass(frozen=True)
 class Night:
     """What `plan_night` decided.
 
-    `systems` are the systems with a chosen game, in name order (the order a run goes through
-    them). `chosen` maps each to the primary paths (library paths, `roms/<system>/<name>`) of its
-    chosen games. `deferred` counts, per system, the picks the cap left for another night;
-    `backlog` is their total. `skipped_incomplete` counts the picks the incomplete memory
-    covers: they are never chosen and do not use the cap."""
+    `systems` are the systems with a chosen game, in name order. `chosen` maps each to the
+    primary paths (library paths, `roms/<system>/<name>`) of its chosen games. `waves` are the
+    chosen games by tier, in the order a run takes them: the run goes through one wave after the
+    other, so a night cut short has done the first tiers of every system before the later ones
+    of any. `deferred` counts, per system, the picks the cap left for another night; `backlog` is
+    their total. `skipped_not_found` and `skipped_incomplete` count, per system (only those with
+    some), the picks `select` left out because ScreenScraper did not know them recently and the
+    ones the incomplete memory covers: neither is ever chosen or uses the cap."""
 
     systems: tuple[str, ...] = ()
     chosen: Mapping[str, frozenset[str]] = field(default_factory=dict)
+    waves: tuple[Wave, ...] = ()
     deferred: Mapping[str, int] = field(default_factory=dict)
-    skipped_incomplete: int = 0
+    skipped_not_found: Mapping[str, int] = field(default_factory=dict)
+    skipped_incomplete: Mapping[str, int] = field(default_factory=dict)
     backlog: int = 0
 
     @property
@@ -135,7 +150,7 @@ def plan_night(
 
     `selections` are the result of `scrape.select` per system, `incomplete` and `not_found` the
     two memories by system and gamelist path."""
-    skipped = 0
+    skipped: dict[str, int] = {}
     kept: dict[str, scrape.Selection] = {}
     for system, selection in selections.items():
         records = incomplete.get(system, {})
@@ -144,21 +159,34 @@ def plan_night(
             for p in selection.picks
             if not scrape.skip_incomplete(p, records.get(p.game.gamelist))
         )
-        skipped += len(selection.picks) - len(picks)
+        if len(picks) < len(selection.picks):
+            skipped[system] = len(selection.picks) - len(picks)
         kept[system] = scrape.Selection(picks, selection.skipped_not_found)
     ranked = rank_picks(kept, not_found, today=today)
     taken, left = ranked[: max(0, max_games)], ranked[max(0, max_games) :]
     chosen: dict[str, set[str]] = {}
+    by_tier: dict[int, dict[str, set[str]]] = {}
     for item in taken:
         chosen.setdefault(item.system, set()).add(item.pick.game.primary)
+        by_tier.setdefault(item.tier, {}).setdefault(item.system, set()).add(item.pick.game.primary)
     deferred: dict[str, int] = {}
     for item in left:
         deferred[item.system] = deferred.get(item.system, 0) + 1
+    waves = tuple(
+        Wave(
+            tier,
+            tuple(sorted(paths)),
+            frozenset(path for group in paths.values() for path in group),
+        )
+        for tier, paths in sorted(by_tier.items())
+    )
     return Night(
         tuple(sorted(chosen)),
         {system: frozenset(paths) for system, paths in sorted(chosen.items())},
+        waves,
         dict(sorted(deferred.items())),
-        skipped,
+        {s: n.skipped_not_found for s, n in sorted(selections.items()) if n.skipped_not_found},
+        dict(sorted(skipped.items())),
         len(left),
     )
 
@@ -646,12 +674,16 @@ def build_record(
     outcome: str,
     status: int,
     deferred: Mapping[str, int] | None = None,
+    skipped_not_found: Mapping[str, int] | None = None,
+    skipped_incomplete: Mapping[str, int] | None = None,
     notified: bool = False,
     warnings: Sequence[str] = (),
     roots: Sequence[str] = (),
     secrets: Sequence[str] = (),
 ) -> dict[str, Any]:
-    """The run record, from the run's `Summary` and what the night deferred per system. Pure.
+    """The run record, from the run's `Summary` and what the night's plan deferred and skipped
+    per system (the run only sees the games the plan chose, so it cannot count those). A system
+    that only has deferred or skipped games is in the record with zero counts. Pure.
     The paths of the added and filled games are library paths below the hub root
     (`library/roms/<system>/<name>`), `PATHS_MAX` of each; the warnings are the systems' and the
     `warnings` given, `WARNINGS_MAX` of them. Every text goes through `clean_text`, so the
@@ -661,6 +693,8 @@ def build_record(
         return clean_text(text, roots, secrets)
 
     left = dict(deferred or {})
+    missing = dict(skipped_not_found or {})
+    covered = dict(skipped_incomplete or {})
     systems: dict[str, dict[str, int]] = {}
     added: list[str] = []
     filled: list[str] = []
@@ -671,15 +705,19 @@ def build_record(
             "filled": item.filled,
             "not_found": item.not_found,
             "unchanged": item.unchanged,
-            "skipped_not_found": item.skipped_not_found,
-            "skipped_incomplete": item.skipped_incomplete,
+            "skipped_not_found": missing.pop(item.system, 0),
+            "skipped_incomplete": covered.pop(item.system, 0),
             "deferred": left.pop(item.system, 0),
         }
         added += [clean(_library_path(item.system, p)) for p in item.added_paths]
         filled += [clean(_library_path(item.system, p)) for p in item.filled_paths]
         notes += [clean(w) for w in item.warnings]
-    for name, count in left.items():  # deferred past the cap, never reached
-        systems[name] = {key: 0 for key in _COUNTS} | {"deferred": count}
+    for name in {*left, *missing, *covered}:  # deferred or skipped in the plan, never reached
+        systems[name] = {key: 0 for key in _COUNTS} | {
+            "skipped_not_found": missing.get(name, 0),
+            "skipped_incomplete": covered.get(name, 0),
+            "deferred": left.get(name, 0),
+        }
     notes += [clean(w) for w in warnings]
     return {
         "v": RECORD_VERSION,
@@ -771,12 +809,12 @@ def should_notify(found: Sequence[NewsItem]) -> bool:
 
 
 def notify_payload(
-    record: Mapping[str, Any], found: Sequence[NewsItem], left: int
+    record: Mapping[str, Any], found: Sequence[NewsItem], left: int | None
 ) -> dict[str, Any]:
-    """The JSON the webhook gets: the run, the counts over every system, what is `left` and the
-    `problem`, which is the kind of the first streak in the news, or `error` for a run-level
-    error. It is built from the record and the news kinds, so it holds no URL, key or path (the
-    text of an error is not in it)."""
+    """The JSON the webhook gets: the run, the counts over every system, what is `left` (None
+    when no night has counted it yet) and the `problem`, which is the kind of the first streak in
+    the news, or `error` for a run-level error. It is built from the record and the news kinds,
+    so it holds no URL, key or path (the text of an error is not in it)."""
     totals = {
         key: sum(counts[key] for counts in record["systems"].values())
         for key in ("added", "filled", "not_found")

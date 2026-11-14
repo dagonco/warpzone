@@ -137,6 +137,7 @@ class _Night:
         self.state = State()  # the state as this night last wrote it
         self.night = Night()
         self.options: scrape_io.Options | None = None
+        self.announced: list[NewsItem] = []  # news sent when the run started, not again at its end
         self.roots = [str(self.root), str(self.root.resolve())]
         self.secrets = [setup.notify_url] if setup.notify_url else []
 
@@ -161,40 +162,61 @@ class _Night:
         message = self.clean(message)
         self.rep.warn(f"scrape: {message}")
         now = self.clock()
-        return self.conclude(with_checked(now), with_error(message, step, now, config))
+        return self.conclude(
+            with_checked(now), with_error(message, step, now, config), left=self.known_left()
+        )
+
+    def known_left(self) -> int | None:
+        """What is left for the next nights as far as this night knows: its own plan once it has
+        made one, else the backlog the state holds (None when no night has counted it)."""
+        if not self.night.empty:
+            return self.night.backlog
+        backlog = self.state.backlog
+        return None if backlog is None else backlog.left
+
+    def record(
+        self,
+        summary: scrape.Summary | None,
+        run_id: str,
+        outcome: str,
+        status: int,
+        notified: bool,
+    ) -> dict[str, Any]:
+        return build_record(
+            summary or scrape.Summary(),
+            run_id=run_id,
+            started=self.started,
+            finished=self.clock(),
+            outcome=outcome,
+            status=status,
+            deferred=self.night.deferred,
+            skipped_not_found=self.night.skipped_not_found,
+            skipped_incomplete=self.night.skipped_incomplete,
+            notified=notified,
+            warnings=self.rep.warnings,
+            roots=self.roots,
+            secrets=self.secrets,
+        )
 
     def conclude(
         self,
         *changes: Change,
         summary: scrape.Summary | None = None,
         outcome: str = FAILED,
-        left: int = 0,
+        left: int | None = 0,
         ran: bool = False,
     ) -> int:
         """Finish the night: the news and the exit code, the webhook, the record (when Skyscraper
         started or there is news), then the state. A record or a webhook that fails is a warning."""
         found = news(self.before, update(self.state, *changes))
-        code = exit_code(found)
-        finished = self.clock()
+        code = exit_code([*self.announced, *found])
 
         def build(run_id: str, notified: bool) -> dict[str, Any]:
-            return build_record(
-                summary or scrape.Summary(),
-                run_id=run_id,
-                started=self.started,
-                finished=finished,
-                outcome=outcome,
-                status=code,
-                deferred=self.night.deferred,
-                notified=notified,
-                warnings=self.rep.warnings,
-                roots=self.roots,
-                secrets=self.secrets,
-            )
+            return self.record(summary, run_id, outcome, code, notified)
 
         sent = self.send(found, build(self.run_id, False), left)
         if ran or found:
-            self.write(lambda run_id: build(run_id, sent))
+            self.write(lambda run_id: build(run_id, sent or bool(self.announced)))
         extra: list[Change] = []
         if any(item.source == "trouble" for item in found):
             extra.append(with_notified())  # reported, whether or not a webhook was sent
@@ -204,7 +226,7 @@ class _Night:
             self.rep.warn(str(exc))
         return code
 
-    def send(self, found: list[NewsItem], record: dict[str, Any], left: int) -> bool:
+    def send(self, found: list[NewsItem], record: dict[str, Any], left: int | None) -> bool:
         url = self.setup.notify_url
         if not url or not should_notify(found):
             return False
@@ -324,8 +346,8 @@ class _Night:
         while True:
             try:
                 reading = inbox_lock.look(inbox_dir, setup.now())
-            except InboxError as exc:
-                return self.fail(str(exc), STEP_LOCK)
+            except InboxError as exc:  # a lock that cannot be read is trouble of the run
+                return self.fail(str(exc), STEP_LOCK, config=False)
             if reading is not None:
                 verdict = inbox_lock.judge(
                     reading,
@@ -357,7 +379,7 @@ class _Night:
                 )
             except inbox_lock.LockBusy as exc:  # made between the look and taking it
                 if exc.reading is None:
-                    return self.fail(str(exc), STEP_LOCK)
+                    return self.fail(str(exc), STEP_LOCK, config=False)
                 previous = self.noting(previous, exc.reading)
                 first = exc.reading.looked if first is None else first
                 if self.waited(first, exc.reading):
@@ -401,6 +423,7 @@ class _Night:
             with_error_cleared(STEP_LOCK),
             with_night(self.run_id, now, judged.outcome, judged.kind),
             outcome=judged.outcome,
+            left=self.night.backlog,
         )
 
     # ------------------------------------------------------------ steps 6 and 7
@@ -420,6 +443,7 @@ class _Night:
             )
         except InboxError as exc:  # without `running` a run that dies is not noticed: say so
             rep.warn(str(exc))
+        self.announce_died()
         failure = lower_priority()
         if failure:
             rep.warn(f"could not lower the CPU priority: {failure}")
@@ -427,18 +451,18 @@ class _Night:
         failed: str | None = None
         try:
             _, incomplete = scrape_io.read_memory(options)
-            summary = scrape_io.run_held(
-                replace(
-                    options,
-                    systems=self.night.systems,
-                    explicit=False,
-                    only=self.night.only(),
-                ),
-                rep,
-                deadline=self.deadline,
-                still_mine=held.still_mine,
-                skip_incomplete=incomplete_skipper(incomplete),
-            )
+            for wave in self.night.waves:  # tier by tier, each across the systems
+                part = scrape_io.run_held(
+                    replace(options, systems=wave.systems, explicit=False, only=wave.only),
+                    rep,
+                    deadline=self.deadline,
+                    still_mine=held.still_mine,
+                    skip_incomplete=incomplete_skipper(incomplete),
+                    batches=0 if summary is None else summary.batches,
+                )
+                summary = part if summary is None else scrape.merge_summaries(summary, part)
+                if part.stop is not None:  # the quota, the budget, a lost lock ...: no more waves
+                    break
         except Exception as exc:  # a failure of the run, not of a game
             failed = self.clean(f"unexpected failure: {type(exc).__name__}: {_why(exc)}")
             rep.warn(f"scrape: {failed}")
@@ -446,6 +470,23 @@ class _Night:
             failed is None and not held.still_mine()
         )
         return self.finish(summary, failed, lost, died)
+
+    def announce_died(self) -> None:
+        """Send a `died` streak that has just become news now, and mark it reported, so that a run
+        that dies as well has still told it. Only with a webhook: without one the exit code at the
+        end of the run is the only report, and a run that dies has none to give."""
+        if not self.setup.notify_url:
+            return
+        found = [item for item in news(self.before, self.state) if item.source == "trouble"]
+        if not found:
+            return
+        record = self.record(None, self.run_id, FAILED, exit_code(found), False)
+        self.send(found, record, self.known_left())
+        self.announced = found
+        try:
+            self.commit(with_notified())
+        except InboxError as exc:
+            self.rep.warn(str(exc))
 
     def finish(
         self, summary: scrape.Summary | None, failed: str | None, lost: bool, died: bool

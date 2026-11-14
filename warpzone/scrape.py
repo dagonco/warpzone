@@ -809,13 +809,14 @@ class Summary:
     """What a run did, for the caller to record: the systems it reached, why it stopped early
     (None when it did not), how many selected games it did not try, the systems with a failed
     batch or gamelist, and whether the run counts as failed (what makes the attended command
-    exit 1)."""
+    exit 1). `batches` is how many batches the run started."""
 
     systems: tuple[SystemSummary, ...] = ()
     stop: StopReason | None = None
     not_tried: int = 0
     failed_systems: tuple[str, ...] = ()
     failed: bool = False
+    batches: int = 0
 
     @property
     def budget_spent(self) -> bool:
@@ -824,6 +825,37 @@ class Summary:
     @property
     def exit_code(self) -> int:
         return 1 if self.failed else 0
+
+
+def merge_summaries(first: Summary, then: Summary) -> Summary:
+    """The summary of two runs one after the other, for a caller that scrapes in several passes.
+    A system in both has its counts and lists added (it stays where it was first); the stop is
+    the first one."""
+    by_system = {item.system: item for item in first.systems}
+    for item in then.systems:
+        old = by_system.get(item.system)
+        if old is not None:
+            item = SystemSummary(
+                item.system,
+                added=old.added + item.added,
+                filled=old.filled + item.filled,
+                unchanged=old.unchanged + item.unchanged,
+                not_found=old.not_found + item.not_found,
+                skipped_not_found=old.skipped_not_found + item.skipped_not_found,
+                skipped_incomplete=old.skipped_incomplete + item.skipped_incomplete,
+                added_paths=old.added_paths + item.added_paths,
+                filled_paths=old.filled_paths + item.filled_paths,
+                warnings=old.warnings + item.warnings,
+            )
+        by_system[item.system] = item
+    return Summary(
+        tuple(by_system.values()),
+        first.stop or then.stop,
+        first.not_tried + then.not_tried,
+        tuple(dict.fromkeys((*first.failed_systems, *then.failed_systems))),
+        first.failed or then.failed,
+        first.batches + then.batches,
+    )
 
 
 def summarize_system(report: Report, skipped_incomplete: int = 0) -> SystemSummary:

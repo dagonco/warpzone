@@ -442,8 +442,6 @@ def summary_with_games() -> Summary:
                 filled=1,
                 unchanged=5,
                 not_found=1,
-                skipped_not_found=3,
-                skipped_incomplete=4,
                 added_paths=("A (USA).zip", "B (Europe).zip"),
                 filled_paths=("C (Japan).zip",),
                 warnings=("a.zip: dropped",),
@@ -463,6 +461,8 @@ def build(**kw):
         outcome="budget",
         status=0,
         deferred={"snes": 6, "psx": 4},
+        skipped_not_found={"snes": 3, "gba": 2},
+        skipped_incomplete={"snes": 4},
     )
     args.update(kw)
     summary = args.pop("summary", summary_with_games())
@@ -492,6 +492,12 @@ class RecordTests(unittest.TestCase):
         self.assertEqual(record["systems"]["nes"]["deferred"], 0)
         self.assertEqual(record["systems"]["psx"]["deferred"], 4)  # deferred, never reached
         self.assertEqual(record["systems"]["psx"]["added"], 0)
+        # skipped in planning, never reached: still in the record
+        self.assertEqual(
+            record["systems"]["gba"],
+            {key: 0 for key in record["systems"]["psx"]} | {"skipped_not_found": 2},
+        )
+        self.assertEqual(record["systems"]["nes"]["skipped_incomplete"], 0)
         self.assertEqual((record["stop"], record["budget_spent"]), ("deadline", True))
         self.assertEqual((record["exit"], record["notified"]), (0, False))
         self.assertEqual(record["warnings"], ["a.zip: dropped"])

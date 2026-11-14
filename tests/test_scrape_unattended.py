@@ -88,7 +88,7 @@ class TierTest(unittest.TestCase):
         self.assertEqual(plan.chosen["snes"], frozenset({"roms/snes/S0.zip", "roms/snes/S1.zip"}))
         self.assertEqual(plan.deferred, {"snes": 1})
         self.assertEqual(plan.backlog, 1)
-        self.assertEqual(plan.skipped_incomplete, 0)
+        self.assertEqual(plan.skipped_incomplete, {})
 
     def test_a_system_with_nothing_chosen_is_not_listed(self):
         picks = {
@@ -119,6 +119,49 @@ class TierTest(unittest.TestCase):
         self.assertEqual(night(picks).only(), frozenset({"roms/nes/N.zip", "roms/snes/S.zip"}))
 
 
+class WaveTest(unittest.TestCase):
+    """A night works tier by tier across systems, so a night cut short has done the most
+    important games of every system before the least important ones of any."""
+
+    def test_the_waves_are_the_tiers_each_across_systems(self):
+        picks = {
+            "nes": sel(pick("nes", "N.zip", ("covers",)), pick("nes", "E.zip", EXTRA)),
+            "snes": sel(pick("snes", "S.zip", has_entry=False), pick("snes", "T.zip", ("covers",))),
+        }
+        plan = night(picks)
+        self.assertEqual(
+            [(w.tier, w.systems, sorted(w.only)) for w in plan.waves],
+            [
+                (1, ("snes",), ["roms/snes/S.zip"]),
+                (2, ("nes", "snes"), ["roms/nes/N.zip", "roms/snes/T.zip"]),
+                (4, ("nes",), ["roms/nes/E.zip"]),
+            ],
+        )
+
+    def test_the_waves_hold_what_the_cap_chose_and_no_more(self):
+        picks = {
+            "nes": sel(pick("nes", "N.zip", ("covers",))),
+            "snes": sel(pick("snes", "S.zip", has_entry=False), pick("snes", "T.zip", EXTRA)),
+        }
+        plan = night(picks, max_games=2)
+        self.assertEqual([w.tier for w in plan.waves], [1, 2])
+        self.assertEqual(frozenset().union(*(w.only for w in plan.waves)), plan.only())
+
+    def test_a_night_with_nothing_has_no_waves(self):
+        self.assertEqual(night({"snes": sel()}).waves, ())
+
+
+class SkippedTest(unittest.TestCase):
+    def test_not_found_games_are_counted_per_system_from_the_selections(self):
+        picks = {
+            "nes": scrape.Selection((), skipped_not_found=2),
+            "snes": scrape.Selection((pick("snes", "A.zip"),), skipped_not_found=1),
+        }
+        plan = night(picks)
+        self.assertEqual(plan.skipped_not_found, {"nes": 2, "snes": 1})
+        self.assertEqual(plan.systems, ("snes",))  # only a system with a game to scrape is listed
+
+
 class IncompleteTest(unittest.TestCase):
     def record(self, size=100, *missing):
         return scrape.Incomplete(size, missing, TODAY - timedelta(days=5))
@@ -129,7 +172,7 @@ class IncompleteTest(unittest.TestCase):
         inc = {"snes": {"./A.zip": self.record(100, "videos", "backcovers", "marquees")}}
         plan = night({"snes": sel(a, b)}, incomplete=inc)
         self.assertEqual(plan.chosen, {"snes": frozenset({"roms/snes/B.zip"})})
-        self.assertEqual(plan.skipped_incomplete, 1)
+        self.assertEqual(plan.skipped_incomplete, {"snes": 1})
         self.assertEqual((plan.deferred, plan.backlog), ({}, 0))
 
     def test_skipped_picks_do_not_use_the_cap(self):
@@ -138,14 +181,14 @@ class IncompleteTest(unittest.TestCase):
         inc = {"snes": {"./A.zip": self.record(100, "videos")}}
         plan = night({"snes": sel(a, b)}, incomplete=inc, max_games=1)
         self.assertEqual(plan.chosen, {"snes": frozenset({"roms/snes/B.zip"})})
-        self.assertEqual((plan.skipped_incomplete, plan.backlog), (1, 0))
+        self.assertEqual((plan.skipped_incomplete, plan.backlog), ({"snes": 1}, 0))
 
     def test_a_new_missing_kind_picks_the_game_again(self):
         a = pick("snes", "A.zip", ("covers", "videos"))
         inc = {"snes": {"./A.zip": self.record(100, "videos")}}
         plan = night({"snes": sel(a)}, incomplete=inc)
         self.assertEqual(plan.chosen, {"snes": frozenset({"roms/snes/A.zip"})})
-        self.assertEqual(plan.skipped_incomplete, 0)
+        self.assertEqual(plan.skipped_incomplete, {})
 
     def test_a_size_change_picks_the_game_again(self):
         a = pick("snes", "A.zip", ("videos",), size=101)
@@ -156,7 +199,7 @@ class IncompleteTest(unittest.TestCase):
     def test_a_record_of_another_system_does_not_apply(self):
         a = pick("snes", "A.zip", ("videos",))
         inc = {"nes": {"./A.zip": self.record(100, "videos")}}
-        self.assertEqual(night({"snes": sel(a)}, incomplete=inc).skipped_incomplete, 0)
+        self.assertEqual(night({"snes": sel(a)}, incomplete=inc).skipped_incomplete, {})
 
     def test_the_skipper_for_a_run_uses_the_same_rule(self):
         inc = {"snes": {"./A.zip": self.record(100, "videos")}}
