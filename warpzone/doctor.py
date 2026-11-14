@@ -103,7 +103,7 @@ from warpzone.doctor_saves import (
     judge_vita3k_user,
     vita3k_user_id,
 )
-from warpzone.doctor_scrape import check_skyscraper
+from warpzone.doctor_scrape import check_nightly_scrape, check_skyscraper, judge_nightly
 from warpzone.doctor_settings import (
     check_play_state,
     check_settings,
@@ -188,6 +188,7 @@ __all__ = [
     "check_hub",
     "check_hub_api",
     "check_inbox_way",
+    "check_nightly_scrape",
     "check_play_state",
     "check_prune_guard",
     "check_ra",
@@ -215,6 +216,7 @@ __all__ = [
     "judge_game_mode",
     "judge_hub_api",
     "judge_last_apply",
+    "judge_nightly",
     "judge_play_state",
     "judge_prune_guard",
     "judge_retroarch_paths",
@@ -270,6 +272,7 @@ CHECKS: tuple[Callable[[Context], list[Result]], ...] = (
     check_chdman_flac,
     check_tools,
     check_skyscraper,
+    check_nightly_scrape,
     check_switch,
     check_dats,
     check_arcade_dats,

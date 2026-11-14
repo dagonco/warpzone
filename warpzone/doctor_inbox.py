@@ -587,16 +587,24 @@ def _lock_since(ctx: Context, root: Path) -> datetime | None:
     return datetime.fromtimestamp(started, UTC)
 
 
+def unattended_root(ctx: Context) -> Path | None:
+    """The hub root the unattended runs keep their state under: with an [inbox] table and a hub
+    root that can be read (`[inbox] root`, else `[hub] root`), else None (`Hub folder` says so)."""
+    if not ctx.inbox_configured:
+        return None
+    root_text = ctx.config.settings.root or ctx.config.hub_root
+    if not root_text or not ctx.probes.is_dir(Path(root_text)):
+        return None
+    return Path(root_text)
+
+
 def check_unattended_inbox(ctx: Context) -> list[Result]:
     """The `Unattended inbox` line: with an [inbox] table and a readable hub root (the state is on
     the share, so a computer sees it as the container does)."""
-    if not ctx.inbox_configured:
+    root = unattended_root(ctx)
+    if root is None:
         return []
     p = ctx.probes
-    root_text = ctx.config.settings.root or ctx.config.hub_root
-    if not root_text or not p.is_dir(Path(root_text)):
-        return []  # `Hub folder` says so
-    root = Path(root_text)
     state_path = inbox_dir(root) / STATE_FILE
     state = parse_state(p.read_text(state_path))[0] if p.is_file(state_path) else None
     status, detail, fix = judge_unattended_inbox(

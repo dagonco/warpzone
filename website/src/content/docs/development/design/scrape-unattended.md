@@ -2,10 +2,11 @@
 title: "Unattended scrape"
 ---
 
-**Status: implemented, except doctor's `Nightly scrape` line and the guides.**
-`warpzone scrape --unattended` runs the steps below (`scrape_unattended_run`). Still to come:
-`doctor_scrape.judge_nightly` and its line, and the setup guides ([Scraping](/warpzone/setup/scrape/),
-[The hub container](/warpzone/setup/hub-container/)) that tell how to schedule it.
+**Status: implemented, except the guides.**
+`warpzone scrape --unattended` runs the steps below (`scrape_unattended_run`) and doctor shows its
+`Nightly scrape` line (`doctor_scrape.judge_nightly`). Still to come: the setup guides
+([Scraping](/warpzone/setup/scrape/), [The hub container](/warpzone/setup/hub-container/)) that
+tell how to schedule it.
 This page is
 the contract for running `warpzone scrape` on the hub by itself, once a night, from a scheduled
 task, with nobody watching. The pages it touches when it is implemented ([Scraping](/warpzone/development/design/scrape/),
@@ -352,6 +353,25 @@ the [unattended inbox's](/warpzone/development/design/inbox-unattended/#doctor):
   nights or more (the quota is not news, but a quota reached every night means the library is
   larger than the account can cover).
 - `[ok]` "last run <date>: added X, filled Y, not found Z; N left (about D nights at M a night)".
+
+Details the code settles:
+
+- The line is shown in the inbox tools group, right after `Skyscraper`, under the conditions of
+  the unattended inbox's line (an `[inbox]` table and a hub root that can be read).
+- The thresholds are those of `NEWS_AFTER` and `QUOTA_WARN_NIGHTS`; a streak is shown while it
+  lasts, whether or not it was already reported.
+- `M` is not stored anywhere (the flags are on the task line), so it is the size of the last
+  night: the games Skyscraper was asked about, the `added`, `filled`, `not_found` and `unchanged`
+  of the newest run record, over every system. `N` is the state's `backlog.left`. The estimate is
+  `ceil(N / M)` and is shown only when the last run ended on its cap or its time budget
+  (outcome `done` or `budget`) and `M` is not zero; after a stop (the quota, a failure) a night
+  did not show what it can do, so only `N left` is printed. With nothing left it says "nothing
+  left", and with no backlog in the state it leaves the part out.
+- With no run record (empty nights write none, and the newest 50 are kept) the line dates the run
+  from the state's `last.finished` and says "no record kept"; with no run at all yet it says so.
+- A state file the parser could not read whole (it reads as empty, or a part is dropped) adds
+  the parser's warning to the line as a `[! ]` finding. A run record that cannot be parsed is no
+  record.
 
 ## Interface
 
