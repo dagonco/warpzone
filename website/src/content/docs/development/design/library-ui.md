@@ -1226,7 +1226,9 @@ under an id of the form `20261113T101500Z` or `20261113T101500Z-2` (anything els
 without waiting on a named pipe: a state file or record that is a link or not a regular file is
 no file, and one over 8 MiB, not JSON or (for a record) whose `id` is not its file name is damaged.
 A lock that is a link, not a regular file, over 64 KiB or unreadable still makes the inbox busy,
-with mode `unknown`. The JSON is in [the unattended inbox](/warpzone/development/design/inbox-unattended/#api).
+with mode `unknown`. `busy` is `{"since", "mode", "task"}`, where `task` is `scrape` when a
+scrape holds the lock and `null` otherwise; the Inbox view says "A scrape" instead of "A run".
+The JSON is in [the unattended inbox](/warpzone/development/design/inbox-unattended/#api).
 
 ### Media and byte ranges
 

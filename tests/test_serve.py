@@ -912,7 +912,11 @@ class InboxTests(ServeCase):
         (lock / ".warpzone.lock").write_text(json.dumps(info))
         busy = self.get("/api/v1/inbox").json["busy"]
         self.assertEqual(busy["mode"], "unattended")
+        self.assertIsNone(busy["task"])
         self.assertRegex(busy["since"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
+        info["task"] = "scrape"
+        (lock / ".warpzone.lock").write_text(json.dumps(info))
+        self.assertEqual(self.get("/api/v1/inbox").json["busy"]["task"], "scrape")
         (lock / ".warpzone.lock").unlink()
         self.assertIsNone(self.get("/api/v1/inbox").json["busy"])
 

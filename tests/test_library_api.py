@@ -876,23 +876,41 @@ class InboxBusyTests(unittest.TestCase):
             {"host": "h", "pid": 4, "started": NOW.timestamp(), "beat": 60, "mode": "unattended"}
         )
         self.assertEqual(
-            inbox_busy(text, 0.0), {"since": "2026-11-13T10:30:00Z", "mode": "unattended"}
+            inbox_busy(text, 0.0),
+            {"since": "2026-11-13T10:30:00Z", "mode": "unattended", "task": None},
+        )
+
+    def test_the_lock_names_its_task(self) -> None:
+        text = json.dumps(
+            {
+                "host": "h",
+                "pid": 4,
+                "started": NOW.timestamp(),
+                "beat": 60,
+                "mode": "unattended",
+                "task": "scrape",
+            }
+        )
+        self.assertEqual(
+            inbox_busy(text, 0.0),
+            {"since": "2026-11-13T10:30:00Z", "mode": "unattended", "task": "scrape"},
         )
 
     def test_a_lock_of_an_older_warpzone_is_attended(self) -> None:
         text = json.dumps({"host": "h", "pid": 4, "started": NOW.timestamp()})
         self.assertEqual(
-            inbox_busy(text, 0.0), {"since": "2026-11-13T10:30:00Z", "mode": "attended"}
+            inbox_busy(text, 0.0),
+            {"since": "2026-11-13T10:30:00Z", "mode": "attended", "task": None},
         )
 
     def test_an_unreadable_lock_is_busy_with_the_file_time(self) -> None:
         self.assertEqual(
             inbox_busy("junk", NOW.timestamp()),
-            {"since": "2026-11-13T10:30:00Z", "mode": "unknown"},
+            {"since": "2026-11-13T10:30:00Z", "mode": "unknown", "task": None},
         )
         self.assertEqual(
             inbox_busy(None, NOW.timestamp()),
-            {"since": "2026-11-13T10:30:00Z", "mode": "unknown"},
+            {"since": "2026-11-13T10:30:00Z", "mode": "unknown", "task": None},
         )
 
 

@@ -42,7 +42,9 @@ The contract:
   (`inbox_lock.py`) after the layout checks and before it scans: created with
   `O_CREAT | O_EXCL`, holding JSON with the host name, pid, start time, `beat` (the heartbeat
   interval, 60) and `mode` (`attended` here; `unattended` is for the design in
-  [Unattended inbox](/warpzone/development/design/inbox-unattended/#locking)). While the run
+  [Unattended inbox](/warpzone/development/design/inbox-unattended/#locking)). A scrape
+  (`warpzone scrape`) takes the same lock and adds `task` (`scrape`); a lock without the key is
+  the inbox's own, and an unknown value is ignored, so older warpzones read it as before. While the run
   holds it, a thread (`inbox_lock.Heartbeat`) touches the file's modification time every 60
   seconds, and only while the file still holds this run's host, pid and start time
   (`inbox_lock.still_mine`); it ends with the lock. Another run that finds the lock exits with

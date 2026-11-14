@@ -720,7 +720,7 @@
           h('p', null, d.checked
             ? ['Last check ', h('b', { title: formatMoment(d.checked) }, timeAgo(d.checked)), '.']
             : 'No unattended run has recorded a check yet.'),
-          d.busy ? h('p', null, `A run (${d.busy.mode}) has been working since `,
+          d.busy ? h('p', null, `A ${d.busy.task === 'scrape' ? 'scrape' : 'run'} (${d.busy.mode}) has been working since `,
             h('b', { title: formatMoment(d.busy.since) }, timeAgo(d.busy.since)), '.') : null,
           err ? h('div', { class: 'note warn', role: 'alert' },
             h('b', null, err.message),

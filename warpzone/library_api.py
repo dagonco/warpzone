@@ -1457,10 +1457,10 @@ def parse_record(text: str | None, expected_id: str) -> dict[str, Any] | None:
     return record
 
 
-def inbox_busy(lock_text: str | None, mtime: float | None) -> dict[str, str] | None:
+def inbox_busy(lock_text: str | None, mtime: float | None) -> dict[str, str | None] | None:
     """`busy` of the inbox answer: null without a lock file (`mtime` None); else when the run
     began (the lock's own start, or the file's time when it cannot be read) and its mode
-    (`unknown` when the lock says nothing)."""
+    (`unknown` when the lock says nothing) and its task (`scrape`, else null)."""
     if mtime is None:
         return None
     info = inbox_lock.parse(lock_text) if lock_text is not None else None
@@ -1470,7 +1470,7 @@ def inbox_busy(lock_text: str | None, mtime: float | None) -> dict[str, str] | N
         since = _iso(datetime.fromtimestamp(started, UTC))
     except (OverflowError, OSError, ValueError):
         return None
-    return {"since": since, "mode": mode}
+    return {"since": since, "mode": mode, "task": info.task if info is not None else None}
 
 
 def _with_ids(record: Mapping[str, Any], lib: Library) -> dict[str, Any]:
@@ -1518,7 +1518,7 @@ def _stamp_of(when: datetime) -> str:
     return _iso(when.astimezone(UTC))
 
 
-def _waiting_why(entry: Entry, state: State, busy: Mapping[str, str] | None) -> str:
+def _waiting_why(entry: Entry, state: State, busy: Mapping[str, str | None] | None) -> str:
     """`space` for an item that had been stable for the time the last check judged it and is
     still there with no run working (a ready item is processed unless there is no room);
     `settling` otherwise."""
@@ -1532,7 +1532,7 @@ def inbox_response(
     state: State,
     records: Sequence[Mapping[str, Any]],
     lib: Library,
-    busy: Mapping[str, str] | None = None,
+    busy: Mapping[str, str | None] | None = None,
 ) -> dict[str, Any]:
     """`GET /api/v1/inbox`: the unattended runs' state and the newest records (parsed ones,
     newest first). A missing or damaged file is no state or no record, never an error."""

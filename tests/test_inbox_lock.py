@@ -192,6 +192,54 @@ class JudgeTests(unittest.TestCase):
         text = '{"host": "h", "pid": 7, "started": 5.0, "beat": 60, "mode": "robot"}'
         self.assertEqual(inbox_lock.parse(text), LockInfo("h", 7, 5.0, 60, None))
 
+    def test_the_task_round_trips_and_is_rendered_only_when_set(self) -> None:
+        info = replace(beating(mode="unattended"), task="scrape")
+        self.assertEqual(inbox_lock.parse(inbox_lock.render(info)), info)
+        self.assertIn('"task": "scrape"', inbox_lock.render(info))
+        self.assertNotIn("task", inbox_lock.render(beating()))
+        plain = inbox_lock.parse(inbox_lock.render(beating()))
+        assert plain is not None
+        self.assertIsNone(plain.task)
+
+    def test_an_unknown_task_is_read_as_none_and_the_rest_still_parses(self) -> None:
+        text = (
+            '{"host": "h", "pid": 7, "started": 5.0, "beat": 60, "mode": "attended", "task": "x"}'
+        )
+        self.assertEqual(inbox_lock.parse(text), LockInfo("h", 7, 5.0, 60, "attended"))
+        text = '{"host": "h", "pid": 7, "started": 5.0, "beat": 60, "mode": "robot", "task": 3}'
+        self.assertEqual(inbox_lock.parse(text), LockInfo("h", 7, 5.0, 60, None))
+
+    def test_a_task_with_an_unknown_mode_keeps_the_task(self) -> None:
+        text = (
+            '{"host": "h", "pid": 7, "started": 5.0, "beat": 60, "mode": "robot", "task": "scrape"}'
+        )
+        self.assertEqual(inbox_lock.parse(text), LockInfo("h", 7, 5.0, 60, None, "scrape"))
+
+    def test_describe_names_the_scrape_by_its_task(self) -> None:
+        nightly = replace(beating(host="abc123", mode="unattended"), task="scrape")
+        text = inbox_lock.describe(nightly, NOW, NOW)
+        self.assertIn("held by the nightly scrape on the hub since", text)
+        self.assertNotIn("abc123", text)
+        by_hand = inbox_lock.describe(replace(beating(host="abc123"), task="scrape"), NOW, NOW)
+        self.assertIn("held by a scrape run by hand on abc123 (pid 42) since", by_hand)
+
+    def test_describe_without_a_task_is_what_it_was(self) -> None:
+        self.assertIn(
+            "held by the unattended inbox on the hub since",
+            inbox_lock.describe(beating(mode="unattended"), NOW, NOW),
+        )
+        self.assertIn("held by desktop-a (pid 42) since", inbox_lock.describe(beating(), NOW, NOW))
+
+    def test_hold_writes_the_task_it_is_given(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            inbox_dir = Path(tmp)
+            with inbox_lock.hold(
+                inbox_dir, force=False, now=lambda: NOW, out=lambda _: None, task="scrape"
+            ):
+                held = inbox_lock.parse((inbox_dir / LOCK_NAME).read_text())
+            assert held is not None
+            self.assertEqual((held.mode, held.task), ("attended", "scrape"))
+
     def test_describe_names_the_unattended_inbox_by_its_mode(self) -> None:
         text = inbox_lock.describe(beating(host="abc123", mode="unattended"), NOW, NOW)
         self.assertIn("unattended inbox on the hub", text)
