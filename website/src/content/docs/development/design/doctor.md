@@ -79,6 +79,20 @@ for every problem, the exact fix for this platform.
   container Skyscraper is in the image and is checked like anywhere else, with its `config.ini` on the
   volume `WARPZONE_SKYSCRAPER_DIR` names (`/skyscraper`); without that volume the line is `[--]`
   ("nothing is mounted at /skyscraper") with the fix to mount it, and Skyscraper is not run.
+- **Nightly scrape.** In the same inbox tools group, right after `Skyscraper` (and its account
+  line), under the same conditions as `Unattended inbox`: an `[inbox]` table and a hub root that
+  can be read, on a computer as well as in the container, because the state is on the share.
+  `judge_nightly` (pure, in `doctor_scrape.py` and re-exported by `doctor.py`) judges the state
+  file `catalog/scrape/state.json` and the newest run record under `catalog/scrape/runs/`,
+  against the clock; the check only reads them through the probes. No state file is `[--]` with
+  the fix that schedules `warpzone scrape --unattended`; a run-level error is `[!!]`; `[! ]` for a
+  last check more than 36 hours old, a trouble streak at or above its threshold and a quota streak
+  of 3 nights or more; `[ok]` with the last run, its counts and what is left, with the nights that
+  takes when the last run ended on its cap or its time budget (the run's size is the games
+  Skyscraper was asked about, from the record). A state file the parser could not read whole
+  shows the parser's warning on the line. Findings share the line, the worst status first. The
+  rules are in [Unattended scrape](/warpzone/development/design/scrape-unattended/#doctor).
+  `health` does not read it.
 - **Leftover folders.** On a configured device, `Leftover folders` is `[! ]` when the local
   Syncthing `config.xml` has a `wz-*` folder that none of the device's config describes (a
   group taken out of its `folders`), and says nothing otherwise. Doctor is offline, so it
