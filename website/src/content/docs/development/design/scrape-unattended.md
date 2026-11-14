@@ -2,10 +2,12 @@
 title: "Unattended scrape"
 ---
 
-**Status: planned.** `warpzone scrape --unattended` does not exist yet, and neither do the state
-and run records or doctor's `Nightly scrape` line. Some pieces are in the code: the lock's `task`
-key, the run summary with the `deadline`, `still_mine` and `skip_incomplete` inputs of `scrape_io`,
-the incomplete memory (written by every scrape) and `scrape_unattended.plan_night`. This page is
+**Status: planned.** `warpzone scrape --unattended` does not exist yet, and neither does doctor's
+`Nightly scrape` line. Some pieces are in the code: the lock's `task` key, the run summary with
+the `deadline`, `still_mine` and `skip_incomplete` inputs of `scrape_io`, the incomplete memory
+(written by every scrape), `scrape_unattended.plan_night` and the pure side of the state, the run
+record, the news and the webhook payload (`scrape_unattended`, with no run that writes them yet).
+This page is
 the contract for running `warpzone scrape` on the hub by itself, once a night, from a scheduled
 task, with nobody watching. The pages it touches when it is implemented ([Scraping](/warpzone/development/design/scrape/),
 [Unattended inbox](/warpzone/development/design/inbox-unattended/),
@@ -182,30 +184,81 @@ Both live on the hub next to `catalog/inbox/`, outside every Syncthing folder, a
  "trouble": null}
 ```
 
-- `last.outcome` is `done`, `budget`, `quota`, `busy`, `stopped`, `failed` or `nothing`.
+- `last.outcome` is `done`, `budget`, `quota`, `busy`, `stopped`, `failed` or `nothing` (see
+  [Outcome and trouble of a night](#outcome-and-trouble-of-a-night)).
 - `running` is set when the lock is taken and cleared at the end. A later night that finds it
-  still set knows the earlier run died (the trouble `died`).
+  still set knows the earlier run died (the trouble `died`, see below).
+- `backlog` is what the last night that planned left for the next ones (`Night.backlog`); a night
+  that did not plan (a busy lock) keeps it.
 - `error` is `{message, step, first, count, config}` and `trouble` is `{kind, systems, first,
   count, notified}` (see [News and exit codes](#news-and-exit-codes)).
+- A part that cannot be parsed (a wrong type, an unknown `outcome` or `kind`, a `count` below 1)
+  is dropped with a warning and the rest is kept. A file that is not JSON or has another `v`
+  reads as empty with a warning.
 - The state is updated by read-modify-write with pure `Change`s, the same pattern as
   [the inbox's state](/warpzone/development/design/inbox-unattended/#the-memory): a change is a
   function from a state to a state, applied again to what was read again when the write finds the
   file changed. A file that cannot be parsed reads as empty with a warning.
 
+### Outcome and trouble of a night
+
+`scrape_unattended.judge_night(summary, lock)` is pure and maps what the run left (its
+`scrape.Summary`, or none when no Skyscraper ran, and whether the wait for the lock ended with the
+lock taken or still busy) to the outcome and to the kind of trouble the night adds to a streak:
+
+| The run | Outcome | Trouble |
+|---|---|---|
+| The lock was still live after the wait | `busy` | `lock` |
+| No summary: nothing to do | `nothing` | none |
+| Stop reason `quota` | `quota` | `quota` |
+| Stop reason `blacklisted`, `closed`, `busy` or `network` | `stopped` | the same name |
+| Stop reason `lock lost` | `stopped` | `lock` |
+| No such stop, but a system's batches failed (or the run counts as failed), including a night that also ran out of time | `failed` | `failed`, with the systems |
+| Stop reason `deadline`, nothing failed | `budget` | none |
+| No stop, nothing failed | `done` | none |
+
+A stop wins over failed systems (the failures are most likely its effect), and the quota wins
+over every other stop. `stopped` is therefore a night that ended early on a condition other than
+the budget and the quota, and the trouble says which one; `failed` is a night that went through
+its games with systems that did not work. A lost lock is also a runtime error in the run
+(see [Locking](#locking-with-the-inbox)); the run records it with `with_error` when it does.
+
+The streak of the kind keeps the nights in a row in `trouble`. A night of the same kind raises
+`count` and keeps `first` and `notified`; a night of another kind starts a new streak, so it
+replaces the old one; a night with no trouble (`done`, `budget`, `nothing`) clears it. The quota
+night is a trouble of its own so that the streak can be counted: `trouble.kind` is `quota`,
+`notified` is never set (`NEWS_AFTER` has no night for it), and doctor reads a `quota` trouble
+with `count` 3 or more as its "quota 3 nights" warning (`QUOTA_WARN_NIGHTS`). That a quota night
+replaces another streak is what "a night with the outcome `quota` clears the streak" means for
+the other kinds.
+
+`died` is found at the start of a run: `with_started` finds `running` still set, counts the night
+as `died` (a streak of its own) and sets `running` for the new run. The end of that run keeps
+the `died` count it just made even when the night itself is clean (`with_night(..., died=True)`),
+so two runs in a row that die reach the threshold, and a night after that with no trouble clears
+it. The end of a run clears `running` only when it is that run's own.
+
 **`catalog/scrape/runs/<id>.json`**, the newest 50 kept:
 
 - Written for runs that started Skyscraper or had news.
-- It holds the counts per system (`added`, `filled`, `not_found`, `unchanged`,
-  `skipped_not_found`, `skipped_incomplete`, `deferred`), the paths of the added and filled games
-  (capped at 200), the stop reason, the budget spent, the warnings (capped), the exit code and
-  whether the webhook was sent (`notified`).
-- Paths are relative to the hub root; no absolute path, host name, key or URL is written.
+- It holds `v`, `id`, `started`, `finished`, the `outcome`, the counts per system (`added`,
+  `filled`, `not_found`, `unchanged`, `skipped_not_found`, `skipped_incomplete`, `deferred`; a
+  system that was deferred and never reached has zeros and its `deferred`), the paths of the
+  added and filled games (`added`, `filled`, 200 each at most), `failed_systems`, the `stop`
+  reason (or null), `budget_spent` (true when the time budget ended the run), the `warnings` (20
+  at most), the `exit` code and whether the webhook was sent (`notified`).
+- Paths are library paths below the hub root (`library/roms/<system>/<name>`); no absolute path,
+  host name, key or URL is written (`clean_text` runs over every text).
 
 The record id, the purge to 50, the newest-record lookup and the text cleaning
 (`record_id`, `select_records_purge`, `newest_record` and `clean_text` of `inbox_unattended`) are
-reused. `write_record`, `purge_records` and `update_state_checked` of `inbox_unattended_io` take
-the folder and the parse and render functions as parameters, rather than adding a new shared
-module.
+reused. `write_record` and `purge_records` of `inbox_unattended_io` take the folder (and, for
+`write_record`, the render function) as keyword arguments, and the read-modify-write of the state
+takes a `StateFile` (its path, its parse and render functions, the name shown in messages) as
+`update_file_checked` and `read_file`; the inbox's `update_state_checked` and `read_state` are
+those calls with the inbox's `StateFile`. No new shared module. The folders are
+`scrape_unattended.state_path(root)` and `runs_dir(root)` (`catalog/scrape/state.json` and
+`catalog/scrape/runs/`).
 
 ## News and exit codes
 
@@ -221,8 +274,10 @@ using streak thresholds `NEWS_AFTER`, counted in nights:
 
 - A new run-level `error` is news the first time, with the inbox's rules: kept by message and
   step, the `count` goes up on repeats, and a run that gets past the step clears it.
-- `trouble.notified` makes each streak be reported once. A night with the outcome `done`,
-  `budget`, `quota` or `nothing` clears the streak.
+- `trouble.notified` makes each streak be reported once: the run marks it (`with_notified`) when
+  it reports the news, whether or not a webhook was sent, and the streak is news only while it
+  is not marked. A night with the outcome `done`, `budget` or `nothing` clears the streak, and
+  one with the outcome `quota` replaces it with the quota's own streak, which is never news.
 - **Exit codes:**
   - `0`: no news. This covers nothing to do, the budget spent, the quota reached, the first busy
     night, and repeats of a known problem.
@@ -239,7 +294,9 @@ using streak thresholds `NEWS_AFTER`, counted in nights:
    "added": 120, "filled": 30, "not_found": 4, "left": 1240, "problem": "network"}
   ```
 
-  `notify_payload` builds it and `should_notify` decides when. The URL never appears in output
+  `notify_payload(record, news, left)` builds it (`problem` is the kind of the first streak in
+  the news, `error` for a run-level error, and the error's text is not in it) and
+  `should_notify(news)` decides when. The URL never appears in output
   or records (`clean_text`, kept out of `repr`), a failed send is a warning, and no key or path
   outside the hub is in the payload.
 
@@ -324,11 +381,12 @@ news. Other NAS systems use their own scheduler or root's crontab with the same 
 
 ## Code and testing
 
-- `scrape_unattended.py` (pure): `plan_night`, `batch_fits`, the state and record parse and
-  render, the pure changes, `news`, `exit_code`, `notify_payload` and `should_notify`.
+- `scrape_unattended.py` (pure): `plan_night`, `judge_night`, the state and record
+  parse and render, the pure changes, `news` (a list of `NewsItem`), `exit_code`,
+  `build_record`, `notify_payload` and `should_notify`.
 - `scrape_unattended_run.py`: the run, step by step.
 - `scrape.py`: the incomplete memory (`remember_incomplete`, `skip_incomplete` and the section of
-  the memory file). `scrape_io.py`: the summary and the `deadline`, `still_mine` and
+  the memory file) and `batch_fits`. `scrape_io.py`: the summary and the `deadline`, `still_mine` and
   `skip_incomplete` inputs. `inbox_lock.py`: the `task` key. `doctor_scrape.py`: `judge_nightly`.
 - The modules are added to the
   [code layout](/warpzone/development/design/code-and-testing/#code-layout).

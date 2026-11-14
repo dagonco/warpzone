@@ -1,6 +1,11 @@
 """The disk side of the unattended inbox: the walk of an item, the state file, the run records
 under `catalog/inbox/runs/`, the work folder and the free space.
 
+The record writer, the purge and the state's read-modify-write take the folder, or a `StateFile`
+(its path, its parse and render functions), so the nightly scrape reuses them for
+`catalog/scrape/state.json` and `catalog/scrape/runs/`; with no such argument they are the
+inbox's.
+
 A record is written atomically (a name that exists is never replaced: the id gets `-2`, `-3`),
 mode 0644, and the writer then deletes the records beyond the newest 50. The state file is
 changed by read, modify, write: the changes are pure functions (`inbox_unattended.update`), and
@@ -17,9 +22,10 @@ import shutil
 import stat
 import time
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Generic, TypeVar
 
 from warpzone import safefile
 from warpzone.inbox_core import InboxError
@@ -37,7 +43,6 @@ from warpzone.inbox_unattended import (
     render_state,
     select_records_purge,
     stale_work_dirs,
-    update,
 )
 
 CATALOG_DIR = "catalog"
@@ -60,33 +65,39 @@ def runs_dir(root: Path) -> Path:
 
 
 def write_record(
-    root: Path, started: datetime, build: Callable[[str], Mapping[str, Any]]
+    root: Path,
+    started: datetime,
+    build: Callable[[str], Mapping[str, Any]],
+    *,
+    folder: Path | None = None,
+    render: Callable[[Mapping[str, Any]], str] = render_record,
 ) -> Mapping[str, Any]:
-    """Write `catalog/inbox/runs/<id>.json` and return the record written. `build` gets the id
-    (the start in UTC, with `-2`, `-3` when a record of that second exists) and returns the
-    record, which holds it."""
-    folder = runs_dir(root)
+    """Write `catalog/inbox/runs/<id>.json` (or `<id>.json` in `folder`, text from `render`) and
+    return the record written. `build` gets the id (the start in UTC, with `-2`, `-3` when a
+    record of that second exists) and returns the record, which holds it."""
+    target_dir = runs_dir(root) if folder is None else folder
     for n in range(1, MAX_SAME_SECOND):
         record = build(record_id(started, n))
-        target = folder / f"{record['id']}.json"
+        target = target_dir / f"{record['id']}.json"
         # A name that is not valid text (undecodable bytes) holds a lone surrogate: it is
         # written as the JSON escape `\\udcff`, which parses back to the same name.
-        data = render_record(record).encode("utf-8", errors="backslashreplace")
+        data = render(record).encode("utf-8", errors="backslashreplace")
         if safefile.atomic_write(target, data, expect=None):
             return record
     raise OSError(f"no free record name in {RUNS_DIR}/ for {record_id(started)}")
 
 
-def purge_records(root: Path, keep: int = RECORDS_KEPT) -> list[str]:
+def purge_records(root: Path, keep: int = RECORDS_KEPT, *, folder: Path | None = None) -> list[str]:
     """Delete the records older than the newest `keep`; returns the names deleted. A record
-    that cannot be deleted stays (the next run tries again)."""
-    folder = runs_dir(root)
-    if not folder.is_dir():
+    that cannot be deleted stays (the next run tries again). `folder` is `catalog/inbox/runs/`
+    unless given."""
+    target_dir = runs_dir(root) if folder is None else folder
+    if not target_dir.is_dir():
         return []
     gone = []
-    for name in select_records_purge((p.name for p in folder.iterdir()), keep):
+    for name in select_records_purge((p.name for p in target_dir.iterdir()), keep):
         try:
-            (folder / name).unlink()
+            (target_dir / name).unlink()
         except OSError:
             continue
         gone.append(name)
@@ -96,8 +107,27 @@ def purge_records(root: Path, keep: int = RECORDS_KEPT) -> list[str]:
 # ------------------------------------------------------------------ the state file
 
 
+S = TypeVar("S")
+
+
+@dataclass(frozen=True)
+class StateFile(Generic[S]):
+    """A state file and how to read and write it: where it is below the hub root, the parse
+    function (text or None for a missing file, to the state and a warning) and the render
+    function, and the name shown in messages."""
+
+    path: Callable[[Path], Path]
+    parse: Callable[[str | None], tuple[S, str | None]]
+    render: Callable[[S], str]
+    shown: str
+
+
 def state_path(root: Path) -> Path:
     return inbox_dir(root) / STATE_FILE
+
+
+_SHOWN = f"{CATALOG_DIR}/{INBOX_DIR}/{STATE_FILE}"
+INBOX_STATE: StateFile[State] = StateFile(state_path, parse_state, render_state, _SHOWN)
 
 
 def _read_with_stamp(path: Path) -> tuple[str | None, safefile.FileStamp | None]:
@@ -112,14 +142,19 @@ def _read_with_stamp(path: Path) -> tuple[str | None, safefile.FileStamp | None]
     return data.decode("utf-8", errors="replace"), stamp
 
 
-def read_state(root: Path) -> tuple[State, str | None]:
-    """The state and a warning (a file that cannot be parsed, a damaged part), or an empty state
-    when there is no file."""
+def read_file(root: Path, store: StateFile[S]) -> tuple[S, str | None]:
+    """The state in `store`'s file and a warning (a file that cannot be parsed, a damaged
+    part), or an empty state when there is no file."""
     try:
-        text, _ = _read_with_stamp(state_path(root))
+        text, _ = _read_with_stamp(store.path(root))
     except OSError as exc:
-        raise InboxError(f"cannot read {_SHOWN}: {exc.strerror or exc}") from exc
-    return parse_state(text)
+        raise InboxError(f"cannot read {store.shown}: {exc.strerror or exc}") from exc
+    return store.parse(text)
+
+
+def read_state(root: Path) -> tuple[State, str | None]:
+    """The inbox's state and a warning, or an empty state when there is no file."""
+    return read_file(root, INBOX_STATE)
 
 
 def update_state(root: Path, *changes: Change) -> tuple[State, list[str]]:
@@ -132,13 +167,20 @@ def update_state(root: Path, *changes: Change) -> tuple[State, list[str]]:
 
 
 def update_state_checked(root: Path, *changes: Change) -> tuple[State, list[str], bool]:
-    """`update_state` that also says whether the file was written. Concurrent writers share the
-    temporary name of `safefile.atomic_write`, so a collision on it (the file exists, or was
-    taken from under this writer) is retried like a changed file; any other OSError, or a
-    collision on the last try, is an `InboxError`."""
-    path = state_path(root)
+    """`update_state` that also says whether the file was written."""
+    return update_file_checked(root, INBOX_STATE, *changes)
+
+
+def update_file_checked(
+    root: Path, store: StateFile[S], *changes: Callable[[S], S]
+) -> tuple[S, list[str], bool]:
+    """The read-modify-write of `store`'s file, saying whether it was written. Concurrent
+    writers share the temporary name of `safefile.atomic_write`, so a collision on it (the file
+    exists, or was taken from under this writer) is retried like a changed file; any other
+    OSError, or a collision on the last try, is an `InboxError`."""
+    path = store.path(root)
     warnings: list[str] = []
-    new = State()
+    new = store.parse(None)[0]
     collision: OSError | None = None
     for attempt in range(STATE_TRIES):
         if attempt:
@@ -146,23 +188,21 @@ def update_state_checked(root: Path, *changes: Change) -> tuple[State, list[str]
         collision = None
         try:
             text, stamp = _read_with_stamp(path)
-            old, warning = parse_state(text)
-            new = update(old, *changes)
+            new, warning = store.parse(text)
+            for change in changes:
+                new = change(new)
             if warning and warning not in warnings:
                 warnings.append(warning)
-            if safefile.atomic_write(path, render_state(new).encode("utf-8"), expect=stamp):
+            if safefile.atomic_write(path, store.render(new).encode("utf-8"), expect=stamp):
                 return new, warnings, True
         except (FileNotFoundError, FileExistsError) as exc:
             collision = exc
         except OSError as exc:
-            raise InboxError(f"cannot write {_SHOWN}: {exc.strerror or exc}") from exc
+            raise InboxError(f"cannot write {store.shown}: {exc.strerror or exc}") from exc
     if collision is not None:
-        raise InboxError(f"cannot write {_SHOWN}: {collision.strerror or collision}")
-    warnings.append(f"{_SHOWN} was not written: it kept changing")
+        raise InboxError(f"cannot write {store.shown}: {collision.strerror or collision}")
+    warnings.append(f"{store.shown} was not written: it kept changing")
     return new, warnings, False
-
-
-_SHOWN = f"{CATALOG_DIR}/{INBOX_DIR}/{STATE_FILE}"
 
 
 # ------------------------------------------------------------------ the walk

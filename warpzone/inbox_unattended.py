@@ -328,20 +328,18 @@ def loose_sheets(top_names: Sequence[str], refs: Mapping[str, Sequence[str]]) ->
 # ------------------------------------------------------------------ the state file
 
 
-def _stamp(moment: datetime) -> str:
+def stamp(moment: datetime) -> str:
     return moment.astimezone(UTC).strftime(_TIME_FORMAT)
 
 
 def _item_json(entry: Entry) -> dict[str, object]:
-    held = (
-        None if entry.held is None else {"reason": entry.held.reason, "at": _stamp(entry.held.at)}
-    )
+    held = None if entry.held is None else {"reason": entry.held.reason, "at": stamp(entry.held.at)}
     return {
         "fingerprint": entry.fingerprint,
         "files": entry.files,
         "bytes": entry.bytes,
-        "first": _stamp(entry.first),
-        "seen": _stamp(entry.seen),
+        "first": stamp(entry.first),
+        "seen": stamp(entry.seen),
         "attempts": entry.attempts,
         "held": held,
     }
@@ -352,15 +350,15 @@ def render_state(state: State) -> str:
     lock = state.lock_seen
     doc: dict[str, object] = {
         "v": STATE_VERSION,
-        "checked": None if state.checked is None else _stamp(state.checked),
+        "checked": None if state.checked is None else stamp(state.checked),
         "items": {name: _item_json(e) for name, e in sorted(state.items.items())},
-        "lock_seen": None if lock is None else {"mtime_ns": lock.mtime_ns, "at": _stamp(lock.at)},
+        "lock_seen": None if lock is None else {"mtime_ns": lock.mtime_ns, "at": stamp(lock.at)},
         "error": None
         if error is None
         else {
             "message": error.message,
             "step": error.step,
-            "first": _stamp(error.first),
+            "first": stamp(error.first),
             "count": error.count,
             "config": error.config,
         },
@@ -368,7 +366,7 @@ def render_state(state: State) -> str:
     return json.dumps(doc, indent=2, sort_keys=True) + "\n"
 
 
-def _time(value: object) -> datetime | None:
+def parse_time(value: object) -> datetime | None:
     if not isinstance(value, str):
         return None
     try:
@@ -377,7 +375,7 @@ def _time(value: object) -> datetime | None:
         return None
 
 
-def _count(value: object, minimum: int = 0) -> int | None:
+def parse_count(value: object, minimum: int = 0) -> int | None:
     if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
         return None
     return value
@@ -387,11 +385,11 @@ def _parse_entry(raw: object) -> Entry | None:
     if not isinstance(raw, dict):
         return None
     fp = raw.get("fingerprint")
-    files = _count(raw.get("files"))
-    size = _count(raw.get("bytes"))
-    seen = _time(raw.get("seen"))
-    first = _time(raw.get("first")) or seen
-    attempts = _count(raw.get("attempts", 0))
+    files = parse_count(raw.get("files"))
+    size = parse_count(raw.get("bytes"))
+    seen = parse_time(raw.get("seen"))
+    first = parse_time(raw.get("first")) or seen
+    attempts = parse_count(raw.get("attempts", 0))
     if not isinstance(fp, str) or not fp or None in (files, size, seen, first, attempts):
         return None
     held = None
@@ -399,7 +397,7 @@ def _parse_entry(raw: object) -> Entry | None:
     if raw_held is not None:
         if not isinstance(raw_held, dict):
             return None
-        reason, at = raw_held.get("reason"), _time(raw_held.get("at"))
+        reason, at = raw_held.get("reason"), parse_time(raw_held.get("at"))
         if not isinstance(reason, str) or at is None:
             return None
         held = Held(reason, at)
@@ -408,11 +406,11 @@ def _parse_entry(raw: object) -> Entry | None:
     return Entry(fp, files, size, first, seen, attempts, held)
 
 
-def _parse_error(raw: object) -> RunError | None:
+def parse_error(raw: object) -> RunError | None:
     if not isinstance(raw, dict):
         return None
-    message, step = raw.get("message"), _count(raw.get("step"), 1)
-    first, count = _time(raw.get("first")), _count(raw.get("count", 1), 1)
+    message, step = raw.get("message"), parse_count(raw.get("step"), 1)
+    first, count = parse_time(raw.get("first")), parse_count(raw.get("count", 1), 1)
     config = raw.get("config", True)
     if not isinstance(message, str) or step is None or first is None or count is None:
         return None
@@ -424,7 +422,7 @@ def _parse_error(raw: object) -> RunError | None:
 def _parse_lock_seen(raw: object) -> LockSeen | None:
     if not isinstance(raw, dict):
         return None
-    mtime, at = _count(raw.get("mtime_ns")), _time(raw.get("at"))
+    mtime, at = parse_count(raw.get("mtime_ns")), parse_time(raw.get("at"))
     if mtime is None or at is None:
         return None
     return LockSeen(mtime, at)
@@ -458,7 +456,7 @@ def parse_state(text: str | None) -> tuple[State, str | None]:
             items[name] = entry
     checked = None
     if doc.get("checked") is not None:
-        checked = _time(doc["checked"])
+        checked = parse_time(doc["checked"])
         if checked is None:
             damaged.append("checked")
     lock_seen = None
@@ -468,7 +466,7 @@ def parse_state(text: str | None) -> tuple[State, str | None]:
             damaged.append("lock_seen")
     error = None
     if doc.get("error") is not None:
-        error = _parse_error(doc["error"])
+        error = parse_error(doc["error"])
         if error is None:
             damaged.append("error")
     warning = None
@@ -738,8 +736,8 @@ def build_record(
         "v": RECORD_VERSION,
         "id": run_id,
         "mode": mode,
-        "started": _stamp(started),
-        "finished": _stamp(finished),
+        "started": stamp(started),
+        "finished": stamp(finished),
         "exit": status,
         "items": items,
         "counts": {
