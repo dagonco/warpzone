@@ -38,6 +38,7 @@ from warpzone.doctor import (
     ToolSpec,
     check_arcade_dats,
     check_base,
+    check_chdman_flac,
     check_config,
     check_dats,
     check_flatpak_access,
@@ -59,6 +60,7 @@ from warpzone.doctor import (
     collapse_inbox,
     exit_code,
     hint_for,
+    judge_chdman_flac,
     judge_esde_script,
     judge_event_scripts,
     judge_flycast_vmus,
@@ -130,6 +132,7 @@ def make_probes(
         "disk_free": lambda path: (500 * GIB, 400 * GIB),
         # The machine running the tests may itself be a container.
         "in_container": lambda: False,
+        "memory_limit": lambda: None,
     }
     values.update(overrides)
     return Probes(**values)
@@ -1028,6 +1031,49 @@ class HubContainerTests(TmpCase):
         r = check_hub(context(self.tmp, cfg, **self.IN_CONTAINER))[0]
         self.assertEqual(r.status, WARN)
         self.assertIn("mounted in this container", r.fix)
+
+
+class ChdmanFlacTests(TmpCase):
+    """chdman's FLAC codecs need memory larger than the image: warn where memory is short."""
+
+    IN_CONTAINER: ClassVar[dict] = {"in_container": lambda: True}
+    FLAC_ON = '[inbox]\nroot = "/mnt/hub"\n'
+    FLAC_OFF = '[inbox]\nroot = "/mnt/hub"\nchdman_flac = false\n'
+
+    def test_the_judge_warns_in_the_container_or_with_small_memory_only_while_flac_is_on(
+        self,
+    ) -> None:
+        self.assertIsNotNone(judge_chdman_flac(True, True, None))
+        self.assertIsNotNone(judge_chdman_flac(True, False, 2 * GIB))
+        self.assertIsNotNone(judge_chdman_flac(True, True, 64 * GIB))
+        self.assertIsNone(judge_chdman_flac(True, False, None))
+        self.assertIsNone(judge_chdman_flac(True, False, 64 * GIB))
+        self.assertIsNone(judge_chdman_flac(False, True, 2 * GIB))
+
+    def test_in_the_container_with_flac_on_it_warns_and_names_the_fix(self) -> None:
+        results = check_chdman_flac(context(self.tmp, self.FLAC_ON, **self.IN_CONTAINER))
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].status, WARN)
+        self.assertIn("chdman_flac = false", results[0].fix)
+
+    def test_a_small_memory_limit_on_a_computer_warns_too(self) -> None:
+        ctx = context(self.tmp, self.FLAC_ON, memory_limit=lambda: 4 * GIB)
+        self.assertEqual(check_chdman_flac(ctx)[0].status, WARN)
+
+    def test_flac_off_or_plenty_of_memory_or_no_inbox_table_says_nothing(self) -> None:
+        self.assertEqual(
+            check_chdman_flac(context(self.tmp, self.FLAC_OFF, **self.IN_CONTAINER)), []
+        )
+        self.assertEqual(check_chdman_flac(context(self.tmp, self.FLAC_ON)), [])
+        self.assertEqual(check_chdman_flac(context(self.tmp, "", **self.IN_CONTAINER)), [])
+
+    def test_the_cgroup_limit_is_read_from_v2_or_v1_and_unlimited_is_none(self) -> None:
+        parse = doctor_probes.parse_memory_limit
+        self.assertEqual(parse("2147483648\n"), 2 * GIB)
+        self.assertIsNone(parse("max\n"))
+        self.assertIsNone(parse("9223372036854771712\n"))
+        self.assertIsNone(parse(""))
+        self.assertIsNone(parse("garbage"))
 
 
 class RaTests(TmpCase):

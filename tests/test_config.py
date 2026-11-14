@@ -404,6 +404,18 @@ class InboxSettingsTests(unittest.TestCase):
                 str(ctx.exception),
             )
 
+    def test_chdman_flac_is_optional_defaults_to_true_and_must_be_a_boolean(self) -> None:
+        self.assertTrue(parse_config(config_data()).inbox.chdman_flac)
+        data = config_data()
+        for value in (True, False):
+            data["inbox"] = {"chdman_flac": value}
+            self.assertEqual(parse_config(data).inbox.chdman_flac, value)
+        for bad in (0, 1, "false", "yes", 1.5, None):
+            data["inbox"] = {"chdman_flac": bad}
+            with self.assertRaises(ConfigError, msg=repr(bad)) as ctx:
+                parse_config(data)
+            self.assertIn("inbox.chdman_flac: must be true or false", str(ctx.exception))
+
     def test_only_the_inbox_table_is_needed_to_run_inbox(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "config.toml"

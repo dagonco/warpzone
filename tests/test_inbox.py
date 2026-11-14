@@ -1477,6 +1477,23 @@ class DiscTests(Base):
         self.assertTrue(any(c.startswith("createcd ") for c in calls), calls)
         self.assertFalse(any("--numprocessors" in c for c in calls), calls)
 
+    def test_createcd_gets_no_codec_list_by_default(self) -> None:
+        calls = self.chdman_calls()
+        create = [c for c in calls if c.startswith("createcd ")]
+        self.assertEqual(len(create), 1, calls)
+        self.assertNotIn(" -c ", create[0])
+
+    def test_without_flac_createcd_gets_the_codecs_without_flac(self) -> None:
+        calls = self.chdman_calls(chdman_flac=False)
+        create = [c for c in calls if c.startswith("createcd ")]
+        self.assertEqual(len(create), 1, calls)
+        self.assertIn(" -c cdlz,cdzl", create[0])
+
+    def test_find_tools_takes_chdman_flac_from_the_settings(self) -> None:
+        self.assertTrue(find_tools(InboxSettings(), which=lambda name: None).chdman_flac)
+        off = find_tools(InboxSettings(chdman_flac=False), which=lambda name: None)
+        self.assertFalse(off.chdman_flac)
+
     def test_verify_failure_places_nothing_and_leaves_no_part_file(self) -> None:
         self.crash_dump()
         os.environ["STUB_CHDMAN_FAIL"] = "verify"

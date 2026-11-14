@@ -205,6 +205,16 @@ The contract:
   `createdvd`; without it chdman counts the cores of the host, which in a container is more than
   its CPU limit. `verify` and `info` run as before. See
   [Resource limits](/warpzone/development/design/inbox-unattended/#resource-limits).
+- **chdman's codecs.** chdman's FLAC codecs make a conversion use memory larger than the image,
+  even for data with no audio: on the hub (2 cores, a 2 GiB container) `createdvd` of a 1.9 GB PS2 ISO with chdman's default codecs was killed for lack of memory at 51%; on a Mac the same ISO peaked at 3.2 GB with the defaults, 49 MB with `lzma,zlib,huff`, and the CD conversion of a 1.9 GB image at 1.96 GB with the defaults against 37 MB with `cdlz,cdzl`. The
+  DVD CHD is 1.6% bigger without FLAC. So `make_chd` always adds `-c lzma,zlib,huff` to
+  `createdvd` (a DVD has no audio), and adds `-c cdlz,cdzl` to `createcd` when
+  `[inbox] chdman_flac` is `false` (`Tools.chdman_flac`, default `true`: chdman's own codecs, which
+  keep FLAC for CD audio tracks, where it saves size). The container guide sets it to `false`, and
+  `doctor` warns when it is `true` where memory is short (see [Doctor](/warpzone/development/design/doctor/)).
+  Nothing compares CHDs by their bytes: "already in the library" compares chdman's data SHA1
+  (`chd_data_sha1`), which does not depend on the codecs, so a CHD made with other codecs is the
+  same game.
 - **Time limit of the tools.** Every call of an external tool (`chdman`, `bsdtar`, `RAHasher`,
   `dolphin-tool`, `nsz`, `orbis-pkg-util`, the listing and info calls as much as the
   conversions) may run for `[inbox] tool_timeout_minutes` (a whole number, at least 1,

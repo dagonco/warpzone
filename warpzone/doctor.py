@@ -80,6 +80,7 @@ from warpzone.doctor_hints import (
 from warpzone.doctor_inbox import (
     GIB,
     check_arcade_dats,
+    check_chdman_flac,
     check_dats,
     check_hub,
     check_inbox_way,
@@ -87,6 +88,7 @@ from warpzone.doctor_inbox import (
     check_switch,
     check_unattended_inbox,
     collapse_inbox,
+    judge_chdman_flac,
     judge_unattended_inbox,
 )
 from warpzone.doctor_probes import (
@@ -176,6 +178,7 @@ __all__ = [
     "ToolSpec",
     "check_arcade_dats",
     "check_base",
+    "check_chdman_flac",
     "check_config",
     "check_dats",
     "check_flatpak_access",
@@ -205,6 +208,7 @@ __all__ = [
     "hint_for",
     "judge_artwork",
     "judge_cemu_paths",
+    "judge_chdman_flac",
     "judge_esde_script",
     "judge_event_scripts",
     "judge_flycast_vmus",
@@ -263,6 +267,7 @@ CHECKS: tuple[Callable[[Context], list[Result]], ...] = (
     check_updater,
     check_prune_guard,
     check_inbox_way,
+    check_chdman_flac,
     check_tools,
     check_skyscraper,
     check_switch,
