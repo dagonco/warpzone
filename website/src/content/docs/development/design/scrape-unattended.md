@@ -2,11 +2,10 @@
 title: "Unattended scrape"
 ---
 
-**Status: planned.** `warpzone scrape --unattended` does not exist yet, and neither does doctor's
-`Nightly scrape` line. Some pieces are in the code: the lock's `task` key, the run summary with
-the `deadline`, `still_mine` and `skip_incomplete` inputs of `scrape_io`, the incomplete memory
-(written by every scrape), `scrape_unattended.plan_night` and the pure side of the state, the run
-record, the news and the webhook payload (`scrape_unattended`, with no run that writes them yet).
+**Status: implemented, except doctor's `Nightly scrape` line and the guides.**
+`warpzone scrape --unattended` runs the steps below (`scrape_unattended_run`). Still to come:
+`doctor_scrape.judge_nightly` and its line, and the setup guides ([Scraping](/warpzone/setup/scrape/),
+[The hub container](/warpzone/setup/hub-container/)) that tell how to schedule it.
 This page is
 the contract for running `warpzone scrape` on the hub by itself, once a night, from a scheduled
 task, with nobody watching. The pages it touches when it is implemented ([Scraping](/warpzone/development/design/scrape/),
@@ -314,15 +313,23 @@ stops at the first that says so:
 3. **Read the state.** Check that Skyscraper is found, that the `WARPZONE_SKYSCRAPER_DIR` folder is
    a directory, and that the scratch folder (`<work_dir>/scrape`, or `/work/cache`) is not on a
    memory filesystem (`memory_fs`).
-4. **Plan without the lock** (`plan_night`). With nothing to do, write `checked`, exit `0`, take no
-   lock and start no Skyscraper. An empty night is cheap.
-5. **Take the lock** with the wait loop of [Locking](#locking-with-the-inbox), then lower the
-   run's priority with `os.nice(10)`.
+4. **Plan without the lock** (`plan_night`, over `scrape_io.select_all`). With nothing to do,
+   write `checked`, exit `0`, take no lock and start no Skyscraper. An empty night is cheap, and it
+   writes nothing else: no `last`, no record. It only clears what the night got past (an error of
+   an earlier step, a trouble streak, a backlog that is now zero). A system whose catalog or
+   gamelist cannot be read is left out of the plan with a warning.
+5. **Take the lock** with the wait loop of [Locking](#locking-with-the-inbox), then note the run in
+   the state (`with_started`, which is how a run that died is found) and lower the run's priority
+   with `os.nice(10)`, a failure of which is a warning. The time budget counts from the start of
+   the run, so a night that waited for the lock has that much less to work.
 6. **Run `scrape_io`** with `only=chosen`, the deadline, `still_mine` and `skip_incomplete`. It
    selects again under the lock, which is the re-check right before acting, so a game the inbox
-   scraped meanwhile is not repeated.
-7. **Finish**: write the record, update the state, send the webhook if there is news, release the
-   lock and exit.
+   scraped meanwhile is not repeated. A failure of the run that is not a game's (an exception)
+   is a runtime error recorded with its step, with the paths and the URL cut out of its text.
+7. **Finish**: send the webhook if there is news, write the record (the webhook first, so the
+   record says whether it was sent), update the state, release the lock and exit. The `left` of
+   the state, the record and the webhook is `Night.backlog`: the games the cap deferred. Games a
+   stop left untried are chosen again by the next night, not counted there.
 
 To make the record possible, `scrape_io` returns a summary of the run (the merges per system, the
 stop reason, the games not tried, the systems whose batches failed, the budget spent); today the

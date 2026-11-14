@@ -66,6 +66,9 @@ if "-s" in args:  # the gather
     with open(here / "gather.jsonl", "a") as log:
         entry = {{"input": opt("-i"), "targets": targets, "siblings": siblings}}
         log.write(json.dumps(entry) + "\n")
+    if canned.get("unreachable"):  # ScreenScraper cannot be reached: retries and no answer
+        print("\033[1;33mRetrying request with timeout of 60s...\033[0m\n")
+        sys.exit(canned.get("gather_exit", 0))
     known = set(canned.get("known", []))
     for n, path in enumerate(staged):
         if canned.get("quota_after") is not None and n >= canned["quota_after"]:

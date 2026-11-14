@@ -51,6 +51,16 @@ def _webhook_url(value: str) -> str:
     return value
 
 
+def _positive_int(value: str) -> int:
+    try:
+        number = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"{value!r} is not a whole number") from None
+    if number < 1:
+        raise argparse.ArgumentTypeError("must be at least 1")
+    return number
+
+
 def _build_parser() -> argparse.ArgumentParser:
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument(
@@ -334,6 +344,28 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="take over a stale inbox lock (older than 12 hours, or held by a process that is "
         "gone from this machine); a live lock is never taken",
+    )
+    scr.add_argument(
+        "--unattended",
+        action="store_true",
+        help="run as the scheduled task does, once a night: take the games a night is worth "
+        "(--max-games), wait for the inbox lock, stop at the time budget (--max-minutes) and "
+        "exit non-zero only for news (not with --dry-run, --force-lock or --retry-not-found)",
+    )
+    scr.add_argument(
+        "--max-games",
+        type=_positive_int,
+        help="with --unattended, the most games one night scrapes (default: 500)",
+    )
+    scr.add_argument(
+        "--max-minutes",
+        type=_positive_int,
+        help="with --unattended, the time budget of a night, in minutes (default: 180)",
+    )
+    scr.add_argument(
+        "--notify-url",
+        type=_webhook_url,
+        help="with --unattended, POST a JSON summary to this URL when the night has news",
     )
 
     cat = sub.add_parser(
@@ -803,10 +835,25 @@ def _inbox(args: argparse.Namespace, rep: Reporter) -> int:
     return EXIT_RUNTIME if inbox.run_inbox(options, rep) else EXIT_OK
 
 
+def _check_nightly_flags(args: argparse.Namespace) -> None:
+    """The usage errors of `scrape`'s nightly flags, before anything is read."""
+    if args.unattended:
+        for flag, given in (
+            ("--dry-run", args.dry_run),
+            ("--force-lock", args.force_lock),
+            ("--retry-not-found", args.retry_not_found),
+        ):
+            if given:
+                raise UsageError(f"scrape --unattended cannot be used with {flag}")
+    elif args.max_games is not None or args.max_minutes is not None or args.notify_url is not None:
+        raise UsageError("--max-games, --max-minutes and --notify-url need --unattended")
+
+
 def _scrape(args: argparse.Namespace, rep: Reporter) -> int:
     from warpzone import scrape, scrape_io
     from warpzone.inbox_core import InboxError
 
+    _check_nightly_flags(args)
     settings = load_inbox_settings(_config_path(args))
     root = args.root or (Path(settings.root) if settings.root else None)
     if root is None:
@@ -814,6 +861,24 @@ def _scrape(args: argparse.Namespace, rep: Reporter) -> int:
             "no hub root: pass --root or set `root` in the [inbox] table of the config"
         )
     systems = scrape.choose_systems(args.system)
+    if args.unattended:
+        from warpzone import scrape_unattended_run as nightly
+
+        setup = nightly.Setup(
+            root=root,
+            systems=tuple(systems),
+            explicit=bool(args.system),
+            skyscraper=settings.skyscraper,
+            timeout=settings.tool_timeout_minutes * 60.0,
+            work_dir=Path(settings.work_dir) if settings.work_dir else None,
+            config_ini=scrape.config_ini_path(os.environ, Path.home(), Path.exists),
+            skyscraper_dir=scrape.skyscraper_dir(os.environ),
+            notify_url=args.notify_url,
+            max_games=args.max_games or nightly.DEFAULT_MAX_GAMES,
+            max_minutes=args.max_minutes or nightly.DEFAULT_MAX_MINUTES,
+        )
+        # 0 no news, 1 news, 2 a new configuration error
+        return nightly.run_unattended(setup, rep)
     program = scrape_io.find_skyscraper(settings.skyscraper)
     if program is None:
         raise scrape_io.ScrapeError(
