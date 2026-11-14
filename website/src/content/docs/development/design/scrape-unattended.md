@@ -72,10 +72,12 @@ entry and its art on the NAS by the next morning, with nothing run by hand.
 `scrape_unattended.plan_night` is pure: from the selections of every system (what
 `scrape.select` returns for the catalog, the gamelists and the media present), the incomplete
 memory and the not-found memory (it needs the records' ages for tier 3), it returns a `Night`:
-the ordered systems, the chosen games per system (as primary library paths, which
-`Night.only()` flattens into the `only` option of `scrape_io`), how many were deferred past the
-cap per system, how many were skipped as incomplete, and the backlog (their total, what is left
-after the cap). Picks are grouped into four tiers and, inside a tier, ordered by system and path:
+the systems, the chosen games per system (as primary library paths, which
+`Night.only()` flattens into the `only` option of `scrape_io`), the same games grouped in waves by
+tier (see below), how many were deferred past the cap per system, how many were skipped per
+system (as not found recently, which `select` decided, and as incomplete), and the backlog (their
+total, what is left after the cap). Picks are grouped into four tiers and, inside a tier, ordered
+by system and path:
 
 1. games with no gamelist entry;
 2. games with an entry but missing a core kind (`covers`, `screenshots` or `miximages`);
@@ -85,6 +87,16 @@ after the cap). Picks are grouped into four tiers and, inside a tier, ordered by
 
 The cap `--max-games` is global across systems, so a night's work is the first N of that order.
 The next night starts again from what `select` finds, so the backlog drains by itself.
+
+The run goes through that order one tier at a time: a **wave** is the chosen games of one tier
+across every system, and the run calls `scrape_io` once per wave, with the one deadline, the one
+`still_mine` and the one count of batches already started (so the first-batch rule holds for the
+night, not for each wave). A night that stops early (the time budget, the quota, the network, a
+lost lock) has therefore done the new games of every system before the games of any system that
+only lack art, instead of whatever came first by system name. The first stop ends the run: the
+waves after it are not started, and their games are chosen again by the next night. The summaries
+of the waves are merged into one. A wave scrapes a system only for the games of its tier, so a
+system with games in several tiers is staged and gathered once per tier.
 
 ### The incomplete memory
 
@@ -242,8 +254,9 @@ it. The end of a run clears `running` only when it is that run's own.
 
 - Written for runs that started Skyscraper or had news.
 - It holds `v`, `id`, `started`, `finished`, the `outcome`, the counts per system (`added`,
-  `filled`, `not_found`, `unchanged`, `skipped_not_found`, `skipped_incomplete`, `deferred`; a
-  system that was deferred and never reached has zeros and its `deferred`), the paths of the
+  `filled`, `not_found`, `unchanged`, `skipped_not_found`, `skipped_incomplete`, `deferred`; the
+  last three come from the plan, since the run only sees the games the plan chose; a system that
+  was deferred, skipped or never reached has zeros and its own counts), the paths of the
   added and filled games (`added`, `filled`, 200 each at most), `failed_systems`, the `stop`
   reason (or null), `budget_spent` (true when the time budget ended the run), the `warnings` (20
   at most), the `exit` code and whether the webhook was sent (`notified`).
@@ -281,11 +294,16 @@ using streak thresholds `NEWS_AFTER`, counted in nights:
 - **Exit codes:**
   - `0`: no news. This covers nothing to do, the budget spent, the quota reached, the first busy
     night, and repeats of a known problem.
-  - `1`: runtime news.
+  - `1`: runtime news (a lock that cannot be read is one: it is not a setting to fix).
   - `2`: new configuration news (no Skyscraper, `/skyscraper` not a directory, the scratch folder
     on `tmpfs`, the hub layout, a legacy lock) and every usage error. An error met before the hub
     root is known, or with no `catalog/` folder, exits `2` on every run, as in the inbox.
   - A run with news of several kinds exits `2` if one is a configuration error, else `1`.
+- **A `died` streak is sent when the run starts.** The run that finds it (`with_started`) sends the
+  webhook and marks the streak notified right then, before it works, so it is reported once even
+  if this run dies too and every run after it. That run still exits `1` at its end if it finishes
+  (it had news), and its record says `notified`. Without `--notify-url` nothing is marked at the
+  start, and the exit code at the end is the report, as before.
 - **Webhook.** `--notify-url` posts through `notify.notify`, only for news, never for a night that
   only added art:
 
@@ -296,9 +314,11 @@ using streak thresholds `NEWS_AFTER`, counted in nights:
 
   `notify_payload(record, news, left)` builds it (`problem` is the kind of the first streak in
   the news, `error` for a run-level error, and the error's text is not in it) and
-  `should_notify(news)` decides when. The URL never appears in output
-  or records (`clean_text`, kept out of `repr`), a failed send is a warning, and no key or path
-  outside the hub is in the payload.
+  `should_notify(news)` decides when. `left` is the plan's backlog on a night that planned (busy
+  nights and lock errors included), else the state's backlog, and `null` while no night has
+  counted one; a known backlog in the state is never overwritten by a night that did not plan.
+  The URL never appears in output or records (`clean_text`, kept out of `repr`), a failed send is
+  a warning, and no key or path outside the hub is in the payload.
 
 The point is the same as in the inbox: a scheduler that mails on an abnormal end mails once per
 problem, and what persists stays in the state, where doctor shows it on every look.
@@ -323,7 +343,8 @@ stops at the first that says so:
    the state (`with_started`, which is how a run that died is found) and lower the run's priority
    with `os.nice(10)`, a failure of which is a warning. The time budget counts from the start of
    the run, so a night that waited for the lock has that much less to work.
-6. **Run `scrape_io`** with `only=chosen`, the deadline, `still_mine` and `skip_incomplete`. It
+6. **Run `scrape_io`**, one wave (tier) at a time, with `only` set to the wave's games, the
+   deadline, `still_mine` and `skip_incomplete`, until a wave stops the run. It
    selects again under the lock, which is the re-check right before acting, so a game the inbox
    scraped meanwhile is not repeated. A failure of the run that is not a game's (an exception)
    is a runtime error recorded with its step, with the paths and the URL cut out of its text.

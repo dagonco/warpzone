@@ -17,6 +17,7 @@ from test_cli import run as run_cli
 from warpzone import inbox_lock, scrape, scrape_io, scrape_unattended
 from warpzone import scrape_unattended_run as nightly
 from warpzone.errors import UsageError
+from warpzone.inbox_core import InboxError
 from warpzone.report import Reporter
 from warpzone.scrape_unattended import State, render_state
 
@@ -344,6 +345,103 @@ class RunTest(NightCase):
         self.assertEqual(self.night(), 0)
         self.assertIsNone(self.state()["error"])
 
+    def test_the_webhook_of_an_error_night_keeps_the_backlog_it_knew(self) -> None:
+        self.games(KIRBY, CHRONO, HOMEBREW)
+        self.hub.canned({"known": KNOWN3})
+        self.assertEqual(self.night(max_games=1), 0, self.out + self.err)
+        self.assertEqual(self.state()["backlog"]["left"], 2)
+        self.next_day()
+        with Receiver() as hook:
+            self.assertEqual(self.night(skyscraper=None, notify_url=hook.url), 2)
+            (body,) = hook.bodies
+        self.assertEqual((body["problem"], body["left"]), ("error", 2))
+        self.assertEqual(self.state()["backlog"]["left"], 2)  # not overwritten
+
+    def test_an_error_before_any_backlog_is_known_says_so(self) -> None:
+        self.games(KIRBY)
+        with Receiver() as hook:
+            self.assertEqual(self.night(skyscraper=None, notify_url=hook.url), 2)
+            (body,) = hook.bodies
+        self.assertIsNone(body["left"])
+        self.assertIsNone(self.state()["backlog"])
+
+
+NES_ENTRY = (
+    '<?xml version="1.0"?>\n<gameList>\n\t<game>\n\t\t<path>./{name}</path>\n'
+    "\t\t<name>x</name>\n\t</game>\n</gameList>\n"
+)
+
+
+class TierOrderTest(NightCase):
+    def setUp(self) -> None:
+        super().setUp()
+        # `nes` comes before `snes` by name, but its game only lacks art (tier 2) ...
+        self.hub.add_game(KIRBY, "nes")
+        self.hub.write_gamelist(NES_ENTRY.format(name=KIRBY), system="nes")
+        self.games(CHRONO)  # ... and a new game of `snes` is tier 1
+        self.hub.canned({"known": KNOWN3})
+
+    def test_a_night_cut_short_has_done_tier_one_of_every_system_first(self) -> None:
+        real = scrape_io._scrape_batch
+
+        def slow(*args: Any, **kw: Any) -> Any:
+            got = real(*args, **kw)
+            self.clock.t += 55  # one batch that left too little of the minute for another
+            return got
+
+        with mock.patch.object(scrape_io, "_scrape_batch", slow):
+            code = self.night(systems=("nes", "snes"), max_minutes=1)
+        self.assertEqual(code, 0, self.out + self.err)
+        (seen,) = self.hub.gathers()
+        self.assertEqual(set(seen["targets"]), {CHRONO})
+        (record,) = self.records()
+        self.assertEqual((record["outcome"], record["stop"]), ("budget", "deadline"))
+        self.assertEqual(record["systems"]["snes"]["added"], 1)
+        self.assertNotIn(f"library/roms/nes/{KIRBY}", record["added"] + record["filled"])
+
+    def test_the_tiers_still_cover_every_system_when_the_night_is_not_cut_short(self) -> None:
+        self.assertEqual(self.night(systems=("nes", "snes")), 0, self.out + self.err)
+        (record,) = self.records()
+        self.assertEqual(record["outcome"], "done")
+        self.assertEqual(record["systems"]["snes"]["added"], 1)
+        self.assertEqual(record["systems"]["nes"]["filled"], 1)
+        self.assertEqual(len(self.hub.gathers()), 2)
+
+    def test_the_quota_stops_the_later_tiers_too(self) -> None:
+        self.games(HOMEBREW)  # two new games of `snes`: the quota hits inside its tier one
+        self.hub.canned({"known": KNOWN3, "quota_after": 1})
+        self.assertEqual(self.night(systems=("nes", "snes")), 0, self.out + self.err)
+        (record,) = self.records()
+        self.assertEqual(record["stop"], "quota")
+        self.assertEqual(len(self.hub.gathers()), 1)  # tier 2 of `nes` was never asked for
+
+
+class RecordSkipsTest(NightCase):
+    def test_the_record_counts_what_planning_skipped(self) -> None:
+        self.games(KIRBY, CHRONO, HOMEBREW)
+        self.hub.canned({"known": KNOWN3[1:2], "kinds": NO_VIDEOS})
+        self.hub.run()  # Chrono: found, without videos (incomplete); the others: not found
+        self.games(ZELDA)
+        self.hub.canned({"known": KNOWN4, "kinds": NO_VIDEOS})
+        self.next_day()
+        self.assertEqual(self.night(), 0, self.out + self.err)
+        (record,) = self.records()
+        counts = record["systems"]["snes"]
+        self.assertEqual(counts["added"], 1)
+        self.assertEqual(counts["skipped_not_found"], 2)
+        self.assertEqual(counts["skipped_incomplete"], 1)
+
+    def test_a_system_whose_games_were_all_skipped_is_in_the_record(self) -> None:
+        self.hub.add_game(KIRBY, "nes")
+        self.hub.canned({"known": []})
+        self.hub.run(systems=("nes",))  # Kirby is not found: remembered
+        self.games(CHRONO)
+        self.hub.canned({"known": KNOWN3})
+        self.assertEqual(self.night(systems=("nes", "snes")), 0, self.out + self.err)
+        (record,) = self.records()
+        self.assertEqual(record["systems"]["nes"]["skipped_not_found"], 1)
+        self.assertEqual(record["systems"]["nes"]["added"], 0)
+
 
 class LockTest(NightCase):
     def setUp(self) -> None:
@@ -442,6 +540,32 @@ class LockTest(NightCase):
             self.assertEqual(self.night(), 0, self.out + self.err)
         self.assertEqual(self.state()["last"]["outcome"], "busy")
 
+    def test_the_webhook_of_a_busy_night_says_what_is_left(self) -> None:
+        self.games(CHRONO, HOMEBREW)
+        self.write_lock()
+        self.beating_sleep()
+        with Receiver() as hook:
+            self.night(notify_url=hook.url, max_games=1)
+            self.next_day()
+            self.assertEqual(self.night(notify_url=hook.url, max_games=1), 1)
+            (body,) = hook.bodies
+        self.assertEqual((body["problem"], body["left"]), ("lock", 2))
+
+    def test_a_lock_that_cannot_be_read_is_a_runtime_error_not_a_configuration_one(self) -> None:
+        with mock.patch.object(inbox_lock, "look", side_effect=InboxError("cannot read it")):
+            self.assertEqual(self.night(), 1, self.out + self.err)
+        error = self.state()["error"]
+        self.assertEqual(error["step"], nightly.STEP_LOCK)
+        self.assertFalse(error["config"])
+
+    def test_a_busy_lock_with_no_reading_is_a_runtime_error_not_a_configuration_one(self) -> None:
+        busy = inbox_lock.LockBusy("the lock is busy", None)
+        with mock.patch.object(inbox_lock, "hold", side_effect=busy):
+            self.assertEqual(self.night(), 1, self.out + self.err)
+        error = self.state()["error"]
+        self.assertEqual(error["step"], nightly.STEP_LOCK)
+        self.assertFalse(error["config"])
+
 
 class LostLockTest(NightCase):
     def test_a_lost_lock_stops_the_run_with_exit_1_and_leaves_the_other_lock(self) -> None:
@@ -480,6 +604,10 @@ class LostLockTest(NightCase):
         self.assertEqual(body["added"], 2)
 
 
+class Killed(BaseException):
+    """A run that dies: nothing in the night catches it, as with a kill or a power cut."""
+
+
 class DiedTest(NightCase):
     def leave_running(self) -> None:
         """What a run that died leaves: `running` still set, next to whatever else was there."""
@@ -508,6 +636,45 @@ class DiedTest(NightCase):
         self.next_day()
         self.assertEqual(self.night(max_games=1), 0)  # a night after that is clean
         self.assertIsNone(self.state()["trouble"])
+
+    def test_runs_that_all_die_are_reported_once_by_the_run_that_finds_the_streak(self) -> None:
+        self.games(KIRBY)
+        self.hub.canned({"known": KNOWN3})
+        with Receiver() as hook:
+            with mock.patch.object(scrape_io, "run_held", side_effect=Killed()):
+                for _ in range(3):  # the third finds two earlier deaths and dies as well
+                    with self.assertRaises(Killed):
+                        self.night(notify_url=hook.url)
+                    self.next_day()
+            (body,) = hook.bodies
+            self.assertEqual(body["problem"], "died")
+            self.assertEqual(self.state()["trouble"]["count"], 2)
+            self.assertTrue(self.state()["trouble"]["notified"])
+            self.assertEqual(self.night(notify_url=hook.url), 0, self.out + self.err)
+            self.assertEqual(len(hook.bodies), 1)  # once, not again
+
+    def test_a_died_streak_that_is_news_is_sent_when_the_run_starts_not_when_it_ends(self) -> None:
+        self.games(KIRBY, CHRONO, HOMEBREW)
+        self.hub.canned({"known": KNOWN3})
+        self.leave_running()
+        self.night(max_games=1)
+        self.next_day()
+        self.leave_running()
+        seen: list[int] = []
+        real = scrape_io.run_held
+
+        with Receiver() as hook:
+
+            def look(opts: Any, rep: Any, **kw: Any) -> Any:
+                seen.append(len(hook.bodies))
+                return real(opts, rep, **kw)
+
+            with mock.patch.object(scrape_io, "run_held", look):
+                code = self.night(notify_url=hook.url, max_games=1)
+            self.assertEqual(code, 1)  # the run that found the news still exits on it
+            self.assertEqual(seen, [1])
+            self.assertEqual(len(hook.bodies), 1)
+        self.assertTrue(self.records()[-1]["notified"])
 
 
 class ChecksTest(NightCase):

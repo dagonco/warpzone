@@ -876,6 +876,40 @@ class SummaryTest(unittest.TestCase):
             ),
         )
 
+    def test_two_runs_one_after_the_other_merge_into_one_summary(self):
+        first = scrape.Summary(
+            (
+                scrape.SystemSummary("nes", added=1, added_paths=("A.zip",)),
+                scrape.SystemSummary("snes", filled=2, filled_paths=("B.zip", "C.zip")),
+            ),
+            not_tried=1,
+            failed_systems=("nes",),
+            batches=2,
+        )
+        then = scrape.Summary(
+            (
+                scrape.SystemSummary("snes", added=1, not_found=1, added_paths=("D.zip",)),
+                scrape.SystemSummary("gba", unchanged=3),
+            ),
+            stop=scrape.StopReason.DEADLINE,
+            not_tried=4,
+            failed_systems=("nes", "gba"),
+            failed=True,
+            batches=1,
+        )
+        merged = scrape.merge_summaries(first, then)
+        self.assertEqual([s.system for s in merged.systems], ["nes", "snes", "gba"])
+        snes = merged.systems[1]
+        self.assertEqual((snes.added, snes.filled, snes.not_found), (1, 2, 1))
+        self.assertEqual((snes.added_paths, snes.filled_paths), (("D.zip",), ("B.zip", "C.zip")))
+        self.assertEqual(merged.stop, scrape.StopReason.DEADLINE)
+        self.assertEqual((merged.not_tried, merged.batches, merged.failed), (5, 3, True))
+        self.assertEqual(merged.failed_systems, ("nes", "gba"))
+        first_stop = scrape.merge_summaries(
+            scrape.Summary(stop=scrape.StopReason.QUOTA), scrape.Summary(stop=then.stop)
+        )
+        self.assertEqual(first_stop.stop, scrape.StopReason.QUOTA)
+
     def test_a_stop_maps_to_its_reason(self):
         for stop in scrape.Stop:
             self.assertEqual(scrape.StopReason.of(stop).value, stop.value)

@@ -790,17 +790,25 @@ def run_held(
     deadline: float | None = None,
     still_mine: Callable[[], bool] | None = None,
     skip_incomplete: Callable[[scrape.Pick], bool] | None = None,
+    batches: int = 0,
 ) -> scrape.Summary:
     """The scrape with the lock already held by the caller, which gets a summary of the run
     instead of an exit code (`Summary.exit_code` is the attended command's).
 
     `deadline` is an absolute time on `opts.now`: a batch that `scrape.batch_fits` says will not
-    end by then is not started (the first batch of the run always is). `still_mine` is asked
-    before each batch, and a false answer ends the run. `skip_incomplete` is applied to the
-    selection of each system: the picks it accepts are not scraped, only counted. `opts.only`
-    restricts the selection to the games under those library paths."""
+    end by then is not started (the first batch of the run always is, unless `batches` says this
+    call continues a run that already started that many; `Summary.batches` is what a call
+    started). `still_mine` is asked before each batch, and a false answer ends the run.
+    `skip_incomplete` is applied to the selection of each system: the picks it accepts are not
+    scraped, only counted. `opts.only` restricts the selection to the games under those library
+    paths."""
     return _run(
-        opts, rep, deadline=deadline, still_mine=still_mine, skip_incomplete=skip_incomplete
+        opts,
+        rep,
+        deadline=deadline,
+        still_mine=still_mine,
+        skip_incomplete=skip_incomplete,
+        batches=batches,
     )
 
 
@@ -853,6 +861,7 @@ def _run(
     deadline: float | None = None,
     still_mine: Callable[[], bool] | None = None,
     skip_incomplete: Callable[[scrape.Pick], bool] | None = None,
+    batches: int = 0,
 ) -> scrape.Summary:
     memory, incomplete = read_memory(opts)
     version = None if opts.dry_run else skyscraper_version(opts.skyscraper)
@@ -866,6 +875,7 @@ def _run(
         still_mine=still_mine,
         skip_incomplete=skip_incomplete,
         incomplete=incomplete,
+        batches=batches,
     )
     selections: dict[str, scrape.Selection] = {}
     for system in opts.systems:
@@ -883,5 +893,10 @@ def _run(
         run.fail(scrape.lock_lost_message(run.not_tried))
     stop = run.halt or (scrape.StopReason.of(run.stopped) if run.stopped is not None else None)
     return scrape.Summary(
-        tuple(run.summaries), stop, run.not_tried, tuple(run.failed_systems), run.failed
+        tuple(run.summaries),
+        stop,
+        run.not_tried,
+        tuple(run.failed_systems),
+        run.failed,
+        run.batches,
     )
