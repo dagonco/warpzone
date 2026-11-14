@@ -346,12 +346,18 @@ counts them (`skipped 4 not found in the last 30 days`). `warpzone scrape --retr
 them all now. A game that is found later, or whose file changes size (a new dump under the same
 name), drops its record. A file that cannot be read or parsed counts as empty and is rewritten.
 
-**Games that stay incomplete (planned).** A game ScreenScraper knows but has no video or back
-cover for is in Skyscraper's cache, so it is never asked for again, yet `select` keeps finding it
-"missing media". The planned [unattended scrape](/warpzone/development/design/scrape-unattended/#the-incomplete-memory)
-adds an "incomplete" record next to the not-found one, in the same file, written by every scrape
-and skipped only by the nightly run. An attended `warpzone scrape` ignores it and does the full
-pass.
+**Games that stay incomplete.** A game ScreenScraper knows but has no video or back cover for is
+in Skyscraper's cache, so it is never asked for again, yet `select` keeps finding it "missing
+media". So every scrape (attended, or the one at the end of `inbox`) also records, in the same file
+under the key `"incomplete"`, the games it left incomplete: per system and gamelist path, `{size,
+missing: [kinds], tried}`. A game is recorded only when its merge ended `added`, `filled` or
+`unchanged`, the hub has an entry for it, none of its copies was dropped and the gamelist write
+succeeded; `missing` is the kinds the hub still lacks after the merge, and a game that lacks nothing
+loses its record. `scrape.skip_incomplete` is true when the size matches and the kinds a game lacks
+now are among the recorded ones. Nothing in `select` reads the records: an attended `warpzone
+scrape` ignores them and does the full pass, and only the
+[nightly run](/warpzone/development/design/scrape-unattended/#the-incomplete-memory) skips on them.
+An old file without the key still reads, and a record that cannot be read is dropped.
 
 A game is recorded only when Skyscraper itself said "not found" for it (a game it never got to,
 after the quota, says nothing) and that answer did not come after a retry line. If ScreenScraper

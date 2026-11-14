@@ -2,11 +2,12 @@
 title: "Unattended scrape"
 ---
 
-**Status: planned.** Nothing of this page is in the code yet: `warpzone scrape --unattended` does
-not exist, and neither do the incomplete memory, the state and run records, the lock's `task`
-key or doctor's `Nightly scrape` line. This page is the contract for running `warpzone scrape`
-on the hub by itself, once a night, from a scheduled task, with nobody watching. The pages it
-touches when it is implemented ([Scraping](/warpzone/development/design/scrape/),
+**Status: planned.** `warpzone scrape --unattended` does not exist yet, and neither do the state
+and run records or doctor's `Nightly scrape` line. Some pieces are in the code: the lock's `task`
+key, the run summary with the `deadline`, `still_mine` and `skip_incomplete` inputs of `scrape_io`,
+the incomplete memory (written by every scrape) and `scrape_unattended.plan_night`. This page is
+the contract for running `warpzone scrape` on the hub by itself, once a night, from a scheduled
+task, with nobody watching. The pages it touches when it is implemented ([Scraping](/warpzone/development/design/scrape/),
 [Unattended inbox](/warpzone/development/design/inbox-unattended/),
 [Inbox](/warpzone/development/design/inbox/),
 [Configuration and command line](/warpzone/development/design/configuration/),
@@ -67,10 +68,12 @@ entry and its art on the NAS by the next morning, with nothing run by hand.
 ## What gets picked each night
 
 `scrape_unattended.plan_night` is pure: from the selections of every system (what
-`scrape.select` returns for the catalog, the gamelists and the media present) and the incomplete
-memory, it returns a `Night`: the ordered systems, the chosen games per system, how many were
-deferred past the cap, how many were skipped as incomplete, and the backlog (what is left after
-the cap). Picks are grouped into four tiers and, inside a tier, ordered by system and path:
+`scrape.select` returns for the catalog, the gamelists and the media present), the incomplete
+memory and the not-found memory (it needs the records' ages for tier 3), it returns a `Night`:
+the ordered systems, the chosen games per system (as primary library paths, which
+`Night.only()` flattens into the `only` option of `scrape_io`), how many were deferred past the
+cap per system, how many were skipped as incomplete, and the backlog (their total, what is left
+after the cap). Picks are grouped into four tiers and, inside a tier, ordered by system and path:
 
 1. games with no gamelist entry;
 2. games with an entry but missing a core kind (`covers`, `screenshots` or `miximages`);
@@ -97,11 +100,14 @@ under a new key `"incomplete"`: for each system and gamelist path, `{size, missi
 tried}`. Old files without the key still parse.
 
 - **Written by every scrape on the machine,** attended or not, through
-  `remember_incomplete(records, merges, picks, written)`. A record is written only for a game
-  whose verdict is `added`, `filled` or `unchanged`, with no dropped copy, and only when the
-  gamelist write succeeded.
-- **Read only by the nightly run.** `skip_incomplete(pick, record)` is true when the size matches
-  and the kinds the game lacks now are a subset of the recorded ones. There is no time limit.
+  `remember_incomplete(records, merges, picks, written, today, lost)`. A record is written only for
+  a game whose verdict is `added`, `filled` or `unchanged`, that has an entry in the hub after the
+  merge, with no dropped copy (`lost`), and only when the gamelist write succeeded (`written`).
+  `missing` is what the pick lacked minus the kinds the merge added; a game that lacks nothing
+  loses its record.
+- **Read only by the nightly run.** `skip_incomplete(pick, record)` is true when the game has an
+  entry, the size matches and the kinds the game lacks now are a subset of the recorded ones.
+  There is no time limit.
 - **A game comes back** when its file's size changes, or when a file it had goes missing (a kind
   that is missing now and was not recorded). Deleting the entry and its media and scraping again
   also works, since the record is rewritten by that scrape.

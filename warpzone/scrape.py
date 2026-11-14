@@ -6,7 +6,7 @@ module holds the parts that need no filesystem and no subprocess: which systems 
 and under which Skyscraper platform (`PLATFORMS`, `UNSCRAPED`), which games need a scrape
 (`select`), the command lines (`skyscraper_args`), what Skyscraper's output says
 (`classify_output`), what to merge into the hub (`plan_merge`, `add_entries`), what is
-remembered about the not-found memory, the presence check of the account in
+remembered about the not-found and incomplete memories, the presence check of the account in
 Skyscraper's config, and what the run prints (`render_report`, `stop_message`). The disk and
 the tool are in `scrape_io`. See development/design/scrape.md.
 """
@@ -927,6 +927,123 @@ def remember_not_found(
         stem = posixpath.splitext(posixpath.basename(artwork.relative(key) or key))[0]
         if stem in asked_not_found and stem not in retried:
             result[key] = NotFound(merge.game.size, today)
+    return result
+
+
+# ------------------------------------------------------------------ the incomplete memory
+
+
+@dataclass(frozen=True)
+class Incomplete:
+    """A record of the `"incomplete"` section of `scrape-not-found.json`: a game ScreenScraper
+    knows but that still lacks `missing` kinds after a scrape, the size its file had and the day
+    the scrape was."""
+
+    size: int
+    missing: tuple[str, ...]
+    tried: date
+
+
+IncompleteRecords = dict[str, Incomplete]  # gamelist path -> the record, for one system
+
+
+def parse_incomplete(data: object) -> dict[str, IncompleteRecords]:
+    """The incomplete memory by system, from the value of `scrape-not-found.json`. A file
+    without the `"incomplete"` key, anything that is not the expected shape and every record
+    that cannot be read count as empty: such a game is simply scraped again."""
+    memory: dict[str, IncompleteRecords] = {}
+    systems = data.get("incomplete") if isinstance(data, dict) else None
+    if not isinstance(systems, dict):
+        return memory
+    for system, rows in systems.items():
+        if not isinstance(system, str) or not isinstance(rows, dict):
+            continue
+        records: IncompleteRecords = {}
+        for path, row in rows.items():
+            if not isinstance(path, str) or not isinstance(row, dict):
+                continue
+            size, missing, tried = row.get("size"), row.get("missing"), row.get("tried")
+            if not isinstance(size, int) or isinstance(size, bool) or not isinstance(tried, str):
+                continue
+            if not isinstance(missing, list) or not missing:
+                continue
+            if any(kind not in MEDIA_KINDS for kind in missing):
+                continue
+            try:
+                day = date.fromisoformat(tried)
+            except ValueError:
+                continue
+            records[path] = Incomplete(size, tuple(missing), day)
+        memory[system] = records
+    return memory
+
+
+def render_memory(
+    not_found: Mapping[str, Mapping[str, NotFound]],
+    incomplete: Mapping[str, Mapping[str, Incomplete]],
+) -> dict[str, Any]:
+    """The JSON value of the whole memory file: the not-found records as `render_not_found`
+    renders them, plus the `"incomplete"` key when there is a record in it."""
+    data = render_not_found(not_found)
+    rows = {
+        system: {
+            path: {"size": rec.size, "missing": list(rec.missing), "tried": rec.tried.isoformat()}
+            for path, rec in sorted(records.items())
+        }
+        for system, records in sorted(incomplete.items())
+        if records
+    }
+    if rows:
+        data["incomplete"] = rows
+    return data
+
+
+def skip_incomplete(pick: Pick, record: Incomplete | None) -> bool:
+    """Whether the nightly run leaves a pick alone: it has an entry, its file has the size the
+    record was made for and every kind it lacks now was lacking then. A game with no entry is
+    never skipped (an entry that was deleted is a new game again). There is no time limit."""
+    return (
+        record is not None
+        and pick.has_entry
+        and record.size == pick.game.size
+        and set(pick.missing) <= set(record.missing)
+    )
+
+
+def remember_incomplete(
+    records: Mapping[str, Incomplete],
+    merges: Sequence[GameMerge],
+    picks: Mapping[str, Pick],
+    written: bool,
+    today: date,
+    lost: Collection[str] = (),
+) -> IncompleteRecords:
+    """The records of a system after a batch was merged.
+
+    `picks` are the batch's picks by gamelist path, `written` whether the gamelist write
+    succeeded (when it did not, the records stay as they were) and `lost` the gamelist paths of
+    games with a copy that was planned and did not land. A game is recorded only when the verdict
+    is `ADDED`, `FILLED` or `UNCHANGED`, the hub has an entry for it after the merge and none of
+    its copies was lost: `missing` is the kinds of its pick that the merge did not add
+    (`Pick.missing` is what the hub lacked when the game was selected, and the merge's copies are
+    what it added since). A game that lacks nothing now loses its record. Any other game keeps
+    the record it has, if any."""
+    if not written:
+        return dict(records)
+    result = dict(records)
+    for merge in merges:
+        key = merge.game.gamelist
+        pick = picks.get(key)
+        if pick is None or merge.result is Result.NOT_FOUND or key in lost:
+            continue
+        if not (merge.had_entry or merge.entry is not None):
+            continue
+        added = set(merge.kinds)
+        missing = tuple(k for k in pick.missing if k not in added)
+        if missing:
+            result[key] = Incomplete(merge.game.size, missing, today)
+        else:
+            result.pop(key, None)
     return result
 
 
