@@ -147,6 +147,8 @@ cd /path/to/the/compose/folder && /usr/local/bin/docker compose run --rm -T warp
 
 It is the same `warpzone-inbox` service as the [inbox task](/warpzone/setup/inbox/#adding-games-without-being-there), with its `/skyscraper` volume, work folder and memory and CPU limits; there is nothing new to configure. Try it by hand once from the compose folder, and use `--dry-run` of the attended command to see what it would find (the nightly run itself refuses `--dry-run`, `--force-lock` and `--retry-not-found`). Other NAS systems use their scheduler or root's crontab with the same line.
 
+To stop a run that is going in the container, send the signal to the container itself: find it with `docker ps` and run `docker kill -s INT <container>`. `timeout` or Ctrl-C on a `docker compose run -T` client stops only the client; the scrape keeps running in the container and keeps the inbox lock. Stopped with the signal, `scrape` exits `130`, releases the lock, and the next run carries on from Skyscraper's cache.
+
 Exit codes follow the inbox's rule: the run exits non-zero only for news, so DSM's email "when the script terminates abnormally" arrives once per problem, not every night.
 
 - `0`: nothing to report. That covers nothing to do, the time budget spent, ScreenScraper's daily limit reached, a first busy night, and a problem already reported.

@@ -181,6 +181,12 @@ class JudgeTests(unittest.TestCase):
         state = healthy(backlog=Backlog(1001, ago(hours=8)))
         self.assertIn("1001 left (about 3 nights at 500 a night)", judge(state)[1])
 
+    def test_one_night_is_singular(self) -> None:
+        state = healthy(backlog=Backlog(300, ago(hours=8)))
+        detail = judge(state)[1]
+        self.assertIn("300 left (about 1 night at 500 a night)", detail)
+        self.assertNotIn("1 nights", detail)
+
     def test_nothing_left_has_no_estimate(self) -> None:
         state = healthy(backlog=Backlog(0, ago(hours=8)))
         detail = judge(state)[1]

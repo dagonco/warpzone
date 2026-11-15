@@ -260,7 +260,8 @@ def _last_night(state: State, record: Mapping[str, Any] | None, now: datetime) -
     text += f"; {left} left"
     per_night = sum(_total(systems, k) for k in SCRAPED)
     if last is not None and last.outcome in CAPPED and per_night > 0:
-        text += f" (about {-(-left // per_night)} nights at {per_night} a night)"
+        nights = -(-left // per_night)
+        text += f" (about {nights} {'night' if nights == 1 else 'nights'} at {per_night} a night)"
     return text
 
 
