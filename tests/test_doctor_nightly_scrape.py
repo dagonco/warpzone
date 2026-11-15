@@ -172,7 +172,7 @@ class JudgeTests(unittest.TestCase):
         self.assertEqual(status, OK)
         self.assertEqual(
             detail,
-            "last run 2026-11-14 03:00 UTC: added 120, filled 30, not found 4; "
+            "last run 2026-11-14 04:00 UTC: added 120, filled 30, not found 4; "
             "700 left (about 2 nights at 500 a night)",
         )
         self.assertEqual(fix, "")
@@ -202,13 +202,38 @@ class JudgeTests(unittest.TestCase):
 
     def test_no_backlog_leaves_it_out(self) -> None:
         detail = judge(healthy(backlog=None))[1]
-        self.assertEqual(detail, "last run 2026-11-14 03:00 UTC: added 120, filled 30, not found 4")
+        self.assertEqual(detail, "last run 2026-11-14 04:00 UTC: added 120, filled 30, not found 4")
 
     def test_no_record_still_dates_the_run_from_the_state(self) -> None:
         detail = judge(healthy(), None)[1]
-        self.assertTrue(
-            detail.startswith("last run 2026-11-14 04:00 UTC: no record kept; 700 left"), detail
+        self.assertTrue(detail.startswith("last run 2026-11-14 04:00 UTC: done; 700 left"), detail)
+
+    def test_the_date_is_the_states_and_the_counts_are_the_records_only_for_the_same_run(
+        self,
+    ) -> None:
+        # the newest record is the night before: a busy night wrote `last` but no record
+        busy = Last("20261114T070000Z", ago(hours=4), "busy")
+        detail = judge(healthy(last=busy))[1]
+        self.assertEqual(detail, "last run 2026-11-14 08:00 UTC: lock busy, nothing run; 700 left")
+        self.assertNotIn("added", detail)
+
+    def test_a_night_with_nothing_to_do_says_so_in_words(self) -> None:
+        state = healthy(
+            last=Last("20261114T070000Z", ago(hours=4), "nothing"),
+            backlog=Backlog(0, ago(hours=4)),
         )
+        self.assertEqual(
+            judge(state)[1], "last run 2026-11-14 08:00 UTC: nothing to do; nothing left"
+        )
+
+    def test_a_record_of_another_run_gives_no_estimate_even_after_a_capped_outcome(self) -> None:
+        later = Last("20261114T070000Z", ago(hours=4), "done")  # its record is gone
+        detail = judge(healthy(last=later))[1]
+        self.assertEqual(detail, "last run 2026-11-14 08:00 UTC: done; 700 left")
+
+    def test_the_date_of_the_same_run_is_when_it_finished(self) -> None:
+        detail = judge(healthy())[1]  # the record started at 03:00:02 and the state says 04:00
+        self.assertTrue(detail.startswith("last run 2026-11-14 04:00 UTC: added 120"), detail)
 
     def test_a_night_that_never_scraped_says_so(self) -> None:
         detail = judge(State(checked=ago(hours=2)), None)[1]
@@ -260,7 +285,7 @@ class CheckTests(TmpCase):
         self.assertEqual(result.status, OK)
         self.assertEqual(
             result.detail,
-            "last run 2026-11-14 03:00 UTC: added 120, filled 30, not found 4; "
+            "last run 2026-11-14 04:00 UTC: added 120, filled 30, not found 4; "
             "700 left (about 2 nights at 500 a night)",
         )
 
@@ -271,7 +296,7 @@ class CheckTests(TmpCase):
         (runs / "20261114T030000Z.json").write_text("{not json")
         (result,) = self.line()
         self.assertEqual(result.status, OK)
-        self.assertIn("no record kept", result.detail)
+        self.assertIn("UTC: done; 700 left", result.detail)
 
     def test_a_state_that_does_not_parse_is_a_warning_with_the_parsers_text(self) -> None:
         self.scrape.mkdir(parents=True)

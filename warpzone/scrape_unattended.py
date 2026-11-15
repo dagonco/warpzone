@@ -471,12 +471,15 @@ def with_error(message: str, step: int, now: datetime, config: bool = True) -> C
     return change
 
 
-def with_error_cleared(reached: int) -> Change:
+def with_error_cleared(reached: int, *, nothing_left: bool = False) -> Change:
     """Clear a stored error when this run got past its step (`reached` is the last step the run
-    started, so an error of step `n` is cleared when `reached > n`)."""
+    started, so an error of step `n` is cleared when `reached > n`). A night with `nothing_left`
+    to do also clears a runtime error of any step: nothing is left for that step to fail on, so
+    the problem is gone for now. A configuration error stays until a run gets past its step."""
 
     def change(state: State) -> State:
-        if state.error is not None and reached > state.error.step:
+        err = state.error
+        if err is not None and (reached > err.step or (nothing_left and not err.config)):
             return replace(state, error=None)
         return state
 

@@ -289,6 +289,13 @@ using streak thresholds `NEWS_AFTER`, counted in nights:
 
 - A new run-level `error` is news the first time, with the inbox's rules: kept by message and
   step, the `count` goes up on repeats, and a run that gets past the step clears it.
+- **An empty night clears more than the steps below planning.** It proves that steps 2 to 4 work
+  but cannot prove that the lock or the run work, so a configuration error (`config`) of step 5
+  or later stays until a run gets past its step. A runtime error (`config: false`, such as a
+  lock that cannot be read or an unexpected failure of the run) is cleared by an empty night,
+  because nothing is left for its step to fail on. Otherwise a fixed problem would stay `[!!]` in
+  doctor for as long as the library is complete, which is when most nights are empty. If the
+  problem is still there, the next night with work meets it again and records it as new news.
 - `trouble.notified` makes each streak be reported once: the run marks it (`with_notified`) when
   it reports the news, whether or not a webhook was sent, and the streak is news only while it
   is not marked. A night with the outcome `done`, `budget` or `nothing` clears the streak, and
@@ -339,7 +346,8 @@ stops at the first that says so:
 4. **Plan without the lock** (`plan_night`, over `scrape_io.select_all`). With nothing to do,
    write `checked`, exit `0`, take no lock and start no Skyscraper. An empty night is cheap, and it
    writes nothing else: no `last`, no record. It only clears what the night got past (an error of
-   an earlier step, a trouble streak, a backlog that is now zero). A system whose catalog or
+   an earlier step, a runtime error of any step as in [News and exit codes](#news-and-exit-codes),
+   a trouble streak, a backlog that is now zero). A system whose catalog or
    gamelist cannot be read is left out of the plan with a warning.
 5. **Take the lock** with the wait loop of [Locking](#locking-with-the-inbox), then note the run in
    the state (`with_started`, which is how a run that died is found) and lower the run's priority
@@ -348,7 +356,10 @@ stops at the first that says so:
 6. **Run `scrape_io`**, one wave (tier) at a time, with `only` set to the wave's games, the
    deadline, `still_mine` and `skip_incomplete`, until a wave stops the run. It
    selects again under the lock, which is the re-check right before acting, so a game the inbox
-   scraped meanwhile is not repeated. A failure of the run that is not a game's (an exception)
+   scraped meanwhile is not repeated. A system with games in several tiers is staged and gathered
+   once per wave, so each wave writes its own log, `<scratch>/<system>.t<tier>.log`, and a failure
+   message always points at a log that still holds that failure (the attended command keeps
+   `<system>.log`). A failure of the run that is not a game's (an exception)
    is a runtime error recorded with its step, with the paths and the URL cut out of its text.
 7. **Finish**: send the webhook if there is news, write the record (the webhook first, so the
    record says whether it was sent), update the state, release the lock and exit. The `left` of
@@ -376,6 +387,9 @@ the [unattended inbox's](/warpzone/development/design/inbox-unattended/#doctor):
   nights or more (the quota is not news, but a quota reached every night means the library is
   larger than the account can cover).
 - `[ok]` "last run <date>: added X, filled Y, not found Z; N left (about D nights at M a night)".
+  When the newest record is not the state's last run (a busy night writes `last` but no record),
+  the counts are left out and the outcome is told in words: "last run <date>: lock busy, nothing
+  run; N left".
 
 Details the code settles:
 
@@ -390,8 +404,13 @@ Details the code settles:
   (outcome `done` or `budget`) and `M` is not zero; after a stop (the quota, a failure) a night
   did not show what it can do, so only `N left` is printed. With nothing left it says "nothing
   left", and with no backlog in the state it leaves the part out.
-- With no run record (empty nights write none, and the newest 50 are kept) the line dates the run
-  from the state's `last.finished` and says "no record kept"; with no run at all yet it says so.
+- `<date>` is always the state's `last.finished`, never the record's, because busy nights write
+  `last` but no record and the newest record may be an older night's. The counts and `M` are the
+  newest record's only when its `id` is `last.run`; otherwise (no record, or another run's) the
+  line says the outcome in words (`done`, `time budget spent`, `ScreenScraper's quota reached`,
+  `lock busy, nothing run`, `stopped early`, `failed`, `nothing to do`) and gives no estimate.
+  With no `last` in the state the newest record is shown with its own date; with no run at all yet
+  the line says so.
 - A state file the parser could not read whole (it reads as empty, or a part is dropped) adds
   the parser's warning to the line as a `[! ]` finding. A run record that cannot be parsed is no
   record.

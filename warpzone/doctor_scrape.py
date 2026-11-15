@@ -216,23 +216,42 @@ def _total(systems: Mapping[str, Mapping[str, int]], key: str) -> int:
     return sum(counts.get(key, 0) for counts in systems.values())
 
 
+OUTCOME_WORDS: Mapping[str, str] = {
+    "done": "done",
+    "budget": "time budget spent",
+    "quota": "ScreenScraper's quota reached",
+    "busy": "lock busy, nothing run",
+    "stopped": "stopped early",
+    "failed": "failed",
+    "nothing": "nothing to do",
+}
+
+
 def _last_night(state: State, record: Mapping[str, Any] | None, now: datetime) -> str:
-    """The ok text: when the last run was, what it did and what is left. The nights it still
-    takes come from the size of the last night (the games Skyscraper was asked about, which the
-    record holds) and only when that night ended on its cap or its time budget: a night ended by
-    a stop does not show what a night can do. Pure."""
+    """The ok text: when the last run was, what it did and what is left. The date is the state's
+    (the last run that wrote its end); the counts are the record's only when the record is that
+    same run, since busy and empty nights write no record and the newest one may be an older
+    night's: otherwise the outcome is told in words. The nights it still takes come from the size
+    of the last night (the games Skyscraper was asked about) and only when that night ended on its
+    cap or its time budget: a night ended by a stop does not show what a night can do. Pure."""
     if record is None and state.last is None:
         ago = f"last check {_ago(now - state.checked)} ago; " if state.checked else ""
         return f"{ago}no night has scraped anything yet"
-    systems: Mapping[str, Mapping[str, int]] = record["systems"] if record else {}
-    if record is not None:
+    last = state.last
+    mine = record is not None and (last is None or record.get("id") == last.run)
+    systems: Mapping[str, Mapping[str, int]] = record["systems"] if record and mine else {}
+    if last is not None:
+        when = last.finished.astimezone(UTC).strftime("%Y-%m-%d %H:%M")
+    else:  # no state to date it: the record's own date
+        assert record is not None
         when = str(record["started"])[:16].replace("T", " ")
+    if record is not None and mine:
         added, filled, missing = (_total(systems, k) for k in ("added", "filled", "not_found"))
         text = f"last run {when} UTC: added {added}, filled {filled}, not found {missing}"
     else:
-        assert state.last is not None
-        when = state.last.finished.astimezone(UTC).strftime("%Y-%m-%d %H:%M")
-        text = f"last run {when} UTC: no record kept"
+        assert last is not None
+        what = OUTCOME_WORDS.get(last.outcome, last.outcome)
+        text = f"last run {when} UTC: {what}"
     if state.backlog is None:
         return text
     left = state.backlog.left
@@ -240,7 +259,7 @@ def _last_night(state: State, record: Mapping[str, Any] | None, now: datetime) -
         return f"{text}; nothing left"
     text += f"; {left} left"
     per_night = sum(_total(systems, k) for k in SCRAPED)
-    if state.last is not None and state.last.outcome in CAPPED and per_night > 0:
+    if last is not None and last.outcome in CAPPED and per_night > 0:
         text += f" (about {-(-left // per_night)} nights at {per_night} a night)"
     return text
 
@@ -269,7 +288,7 @@ def judge_nightly(
         else:
             fix = (
                 "read the scheduled task's output on the hub for the cause; the next run that "
-                f"gets past step {err.step} clears it"
+                f"gets past step {err.step}, or a night with nothing to do, clears it"
             )
         parts.append((FAIL, f"{err.message} (since {since} UTC, {err.count} run(s))", fix))
     if state.checked is None:
