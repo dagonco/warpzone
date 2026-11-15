@@ -135,7 +135,8 @@ dats_dir = "~/dats/libretro-database/metadat"
 #              (cargo install orbis-pkg-util). Without it the .pkg is filed as it is.
 # vita3k       installs PS Vita .pkg games: Vita3K.app on macOS, a plain binary (not the
 #              AppImage) on Linux. Default: /Applications/Vita3K.app on macOS, vita3k on
-#              PATH elsewhere.
+#              PATH elsewhere. The hub container image has it on x86_64 only, on PATH
+#              (no setting needed there).
 # chdman = "/opt/homebrew/bin/chdman"
 # bsdtar = "/usr/bin/bsdtar"
 # rahasher = "~/tools/RAHasher"

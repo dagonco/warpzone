@@ -1,6 +1,6 @@
 # The hub's container: `warpzone serve` (the library UI) and `warpzone catalog`, with the tools of
-# `warpzone inbox` and `warpzone scrape`: RAHasher, dolphin-tool, nsz, orbis-pkg-util, chdman, bsdtar
-# and Skyscraper.
+# `warpzone inbox` and `warpzone scrape`: RAHasher, dolphin-tool, nsz, orbis-pkg-util, chdman, bsdtar,
+# Skyscraper and (on x86_64 only) Vita3K.
 # See website/src/content/docs/development/design/library-ui.md ("The container") and
 # website/src/content/docs/setup/hub-container.md.
 #
@@ -26,6 +26,10 @@
 #       that Debian trixie packages, whose version the Debian release fixes)
 #   rust:1.99.1-slim-trixie     sha256:f6c4a35d21dbb3c89d7a8d056c193e94fc09037f2b58dd858b09c39a47dd02d7
 #       (the digest of the multi-platform index; only the orbis-pkg-util build uses it)
+#   Vita3K build 4334           AppImage SHA-256 2eec184be0cff068d1237cd442a7179a83ee8d5ab50fea65b27b156acc9546cd
+#       (https://github.com/Vita3K/Vita3K-builds/releases/tag/4334, whose notes name Vita3K commit
+#       95b465a52f885d52d297e09b10232da935647755; the file is Vita3K-x86_64.AppImage, and the
+#       release lists the same SHA-256 for it)
 # Every stage but the Rust one uses the same Debian release, so what is built links against the glibc
 # it runs on; the Rust one builds for the same Debian release (trixie) too.
 
@@ -177,7 +181,44 @@ RUN git clone --branch "${SKYSCRAPER_TAG}" --depth 1 https://github.com/Gemba/sk
  && HOME=/tmp/sky-home /out/Skyscraper --version
 
 
-# Stage 6: warpzone from this checkout, as a wheel. It has no dependencies of its own.
+# Stage 6: Vita3K (GPL-2.0), which `warpzone inbox` runs to install PS Vita .pkg games. The
+# download is the x86_64 AppImage of a numbered build of Vita3K-builds and must have the pinned
+# SHA-256. It is unpacked here, not kept as an AppImage: `warpzone inbox` refuses an AppImage (its
+# runtime overwrites the variable that tells Vita3K where to install), and the unpacked bundle is
+# what `bin/Vita3K` starts. The bundle is self-contained (a sharun bundle: its own glibc loader, Qt 6,
+# Mesa and the rest), so the last stage installs no package for it. The build is x86_64 only (an
+# aarch64 AppImage exists but is not tested here), so on any other machine the stage leaves the
+# folder empty and the image has no Vita3K: `warpzone doctor` shows `[--]` for it there. Only the
+# unpacked folder leaves this stage.
+FROM python:3.14.10-slim-trixie@sha256:af8a5aa14780025dbfbcfbc81bd8a91ebd87711dd5b0f48ed71090949dd7cb1d AS vita3k
+
+ARG VITA3K_BUILD=4334
+ARG VITA3K_COMMIT=95b465a52f885d52d297e09b10232da935647755
+ARG VITA3K_SHA256=2eec184be0cff068d1237cd442a7179a83ee8d5ab50fea65b27b156acc9546cd
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends curl ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src
+# The build number is only a name: the download must be the pinned bytes. VITA3K_COMMIT is the
+# commit the release's notes name, kept as a label (the SHA-256 is what is checked).
+RUN mkdir /out-vita3k \
+ && if [ "$(uname -m)" = x86_64 ]; then \
+        curl -fsSL -o Vita3K.AppImage \
+            "https://github.com/Vita3K/Vita3K-builds/releases/download/${VITA3K_BUILD}/Vita3K-x86_64.AppImage" \
+     && echo "${VITA3K_SHA256}  Vita3K.AppImage" | sha256sum -c - \
+     && chmod +x Vita3K.AppImage \
+     && ./Vita3K.AppImage --appimage-extract > /tmp/extract.log \
+     && rm -rf /out-vita3k \
+     && mv "$(readlink -f squashfs-root)" /out-vita3k \
+     && test -e /out-vita3k/bin/Vita3K; \
+    else \
+        echo "Vita3K: no build for $(uname -m); the image gets none"; \
+    fi
+
+
+# Stage 7: warpzone from this checkout, as a wheel. It has no dependencies of its own.
 FROM python:3.14.10-slim-trixie@sha256:af8a5aa14780025dbfbcfbc81bd8a91ebd87711dd5b0f48ed71090949dd7cb1d AS wheel
 
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1
@@ -187,13 +228,13 @@ COPY warpzone ./warpzone
 RUN pip wheel --no-cache-dir --no-deps --wheel-dir /wheels .
 
 
-# Stage 7: what runs. No compiler and no git; one process. The only packages it installs are the
+# Stage 8: what runs. No compiler and no git; one process. The only packages it installs are the
 # tools `warpzone inbox` needs that Debian packages, with the apt lists removed in the same layer;
 # the others come from the stages above.
 FROM python:3.14.10-slim-trixie@sha256:af8a5aa14780025dbfbcfbc81bd8a91ebd87711dd5b0f48ed71090949dd7cb1d
 
 LABEL org.opencontainers.image.title="warpzone hub" \
-      org.opencontainers.image.description="warpzone serve and warpzone catalog, with the tools of warpzone inbox (RAHasher, chdman, bsdtar, dolphin-tool, nsz, orbis-pkg-util) and warpzone scrape (Skyscraper)" \
+      org.opencontainers.image.description="warpzone serve and warpzone catalog, with the tools of warpzone inbox (RAHasher, chdman, bsdtar, dolphin-tool, nsz, orbis-pkg-util, and Vita3K on x86_64) and warpzone scrape (Skyscraper)" \
       org.opencontainers.image.source="https://github.com/dagonco/warpzone" \
       org.opencontainers.image.licenses="MIT"
 
@@ -205,7 +246,7 @@ RUN pip install --no-cache-dir --no-index --no-deps /wheels/warpzone-*.whl \
 # The tools `warpzone inbox` runs in the container, as Debian packages (they land in /usr/bin, on
 # PATH): chdman, from mame-tools, converts discs to CHD; bsdtar, from libarchive-tools, unpacks
 # .7z and .rar. The others are built or installed in the stages above (dolphin-tool, nsz,
-# orbis-pkg-util, RAHasher, Skyscraper). Vita3K is not in the image; see
+# orbis-pkg-util, RAHasher, Skyscraper, Vita3K). Vita3K is in the image on x86_64 only; see
 # website/src/content/docs/setup/inbox.md ("Where inbox runs").
 # Skyscraper links Qt 6: its Core, Gui (images only), Network, Xml and Sql modules are the
 # libqt6* packages, and libqt6sql6-sqlite is the SQL driver it loads at run time.
@@ -242,6 +283,23 @@ RUN printf '%s\n' '#!/bin/sh' 'HOME=/opt/skyscraper-home; export HOME' 'exec /op
 COPY --from=nsz /opt/nsz /opt/nsz
 RUN ln -s /opt/nsz/bin/nsz /usr/local/bin/nsz
 
+# Vita3K (GPL-2.0) is its unpacked bundle, in /opt/vita3k, and /usr/local/bin/Vita3K is a link to
+# its launcher: it must be started as `bin/Vita3K` (the name decides what the sharun launcher
+# runs), and it is a link, not a wrapper script, because warpzone runs only an ELF it can resolve
+# (`vita3k_problem`). On a machine that is not x86_64 the stage left the folder empty, so there is
+# no Vita3K and no link. The build 4334 binary looks for its data and its libraries at two fixed
+# names in /tmp (a memory file system in the container, so they cannot be made here): the
+# entrypoint makes them at each start. Look for the names again when VITA3K_BUILD moves (the CI
+# `image` job runs `Vita3K --version` the way `inbox` does, and fails without them).
+COPY --from=vita3k /out-vita3k /opt/vita3k
+RUN if [ -e /opt/vita3k/bin/Vita3K ]; then ln -s /opt/vita3k/bin/Vita3K /usr/local/bin/Vita3K; \
+    else rmdir /opt/vita3k; fi
+
+# The entrypoint runs warpzone with the arguments of the command, after getting /tmp ready for
+# Vita3K when it is in the image (see docker/entrypoint.sh).
+COPY docker/entrypoint.sh /usr/local/bin/warpzone-entrypoint
+RUN chmod 0755 /usr/local/bin/warpzone-entrypoint
+
 # The config folder is mounted at /config; `[inbox] rahasher = "/usr/local/bin/RAHasher"` there.
 # HOME is a place any uid can write to (the compose file mounts a tmpfs on it).
 ENV WARPZONE_CONFIG=/config/config.toml \
@@ -258,5 +316,5 @@ EXPOSE 8780
 HEALTHCHECK --interval=60s --timeout=5s --start-period=30s --retries=3 \
     CMD ["python", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8780/healthz', timeout=3).read()"]
 
-ENTRYPOINT ["warpzone"]
+ENTRYPOINT ["/usr/local/bin/warpzone-entrypoint"]
 CMD ["serve"]

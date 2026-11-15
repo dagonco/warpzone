@@ -19,6 +19,7 @@ from warpzone.doctor_hints import (
     CHDMAN_HINTS,
     DOLPHIN_HINTS,
     IMAGE_MISSING_TOOL,
+    IMAGE_TOOL_HINTS,
     NSZ_HINTS,
     ORBIS_PKG_UTIL_HINTS,
     RAHASHER_HINTS,
@@ -161,7 +162,11 @@ def check_tool(ctx: Context, spec: ToolSpec) -> Result:
     required = spec.required_for_inbox and inbox
     missing = FAIL if required else OPTIONAL
     container = p.in_container()
-    hint = IMAGE_MISSING_TOOL if container else hint_for(spec.hints, p.family)
+    hint = (
+        IMAGE_TOOL_HINTS.get(spec.key, IMAGE_MISSING_TOOL)
+        if container
+        else hint_for(spec.hints, p.family)
+    )
     where = "required by inbox" if required else spec.purpose
     configured = _configured_path(spec, ctx.config.settings)
     program = spec.executable or (lambda path: path)

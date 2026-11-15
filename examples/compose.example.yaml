@@ -128,7 +128,8 @@ services:
       # libretro-database's metadat/redump and metadat/no-intro, and, if you use them, titledb
       # (Switch names) and the arcade DATs. warpzone never downloads them.
       - ./dats:/dats:ro
-      # Your Switch keys file (prod.keys, which nsz reads) and your PS Vita zRIF file.
+      # Your Switch keys file (prod.keys, which nsz reads) and your PS Vita zRIF file (inbox
+      # hands the key of each .pkg to Vita3K, which is in the image on x86_64).
       # Keep this folder out of the share and out of Syncthing; only inbox reads it.
       - ./keys:/keys:ro
       # Unpacked archives and conversions: room for a few GiB. The container's /tmp is memory.
@@ -153,9 +154,9 @@ services:
     #   rahasher = "/usr/local/bin/RAHasher"                 # optional
     #   titledb_dir = "/dats/titledb"                        # optional: Switch names
     #   switch_keys = "/keys/prod.keys"                      # Switch .nsp / .nsz
-    #   vita_zrif = "/keys/PSV_GAMES.tsv"                    # PS Vita .pkg (needs Vita3K, see the docs)
+    #   vita_zrif = "/keys/PSV_GAMES.tsv"                    # PS Vita .pkg: Vita3K is in the image (x86_64 only)
     #   mame_dat = "/dats/mame0282lx.zip"                    # optional: arcade
     #   fbneo_dat = "/dats/fbneo-arcade.dat"
     #   mame2003plus_dat = "/dats/mame2003-plus.xml"
-    # dolphin-tool, nsz, orbis-pkg-util and Skyscraper are on PATH in the image, so they need no
-    # setting.
+    # dolphin-tool, nsz, orbis-pkg-util, Skyscraper and Vita3K (x86_64 only) are on PATH in the image,
+    # so they need no setting.

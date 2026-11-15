@@ -53,9 +53,9 @@ Which tools exist in each place:
 | `nsz` | Switch metadata, `.nsz` decompression | `uv tool install nsz` | `/usr/local/bin/nsz` (on `PATH`), in its own virtual environment |
 | `orbis-pkg-util` | PS4 `.pkg` games | `cargo install orbis-pkg-util` | `/usr/local/bin/orbis-pkg-util` (on `PATH`), built from its crate |
 | `Skyscraper` | scraping what `inbox --apply` places and `warpzone scrape` | see [Scraping](/warpzone/setup/scrape/#install-skyscraper) | `/usr/local/bin/Skyscraper` (on `PATH`), built from the Gemba fork; its `config.ini` and cache live on the volume mounted at `/skyscraper` |
-| `vita3k` | PS Vita `.pkg` games | install it | not in the image |
+| `vita3k` | PS Vita `.pkg` games | install it ([Vita3K](https://vita3k.org/): `Vita3K.app` on macOS, a plain binary on Linux) | `/usr/local/bin/Vita3K` (on `PATH`), the unpacked build 4334 bundle in `/opt/vita3k`; on x86_64 only, an arm64 image has none |
 
-An item that needs a tool the place lacks goes to `inbox/_revisar/` with the reason "missing tool"; the other items are filed. In the container that is a PS Vita `.pkg`: Vita3K is not in the image (see [PS Vita packages](/warpzone/development/design/inbox/#ps-vita-packages-in-the-container)), so run those on a computer. `chdman`, `bsdtar`, `dolphin-tool`, `nsz`, `orbis-pkg-util` and `Skyscraper` need no `[inbox]` setting in the container: inbox finds them on `PATH`. When the image gains a tool it is on the image's `PATH`, and this table is the place that says so.
+An item that needs a tool the place lacks goes to `inbox/_revisar/` with the reason "missing tool"; the other items are filed. In the container that happens only to a PS Vita `.pkg` on an arm64 image, which has no Vita3K (see [PS Vita packages](/warpzone/development/design/inbox/#ps-vita-packages-in-the-container)): run those on a computer. `chdman`, `bsdtar`, `dolphin-tool`, `nsz`, `orbis-pkg-util`, `Skyscraper` and (on x86_64) `Vita3K` need no `[inbox]` setting in the container: inbox finds them on `PATH`. For a `.pkg` the container also needs your zRIF file (`vita_zrif`, below): it holds the game keys, so it is a file you mount read-only, never part of the image. When the image gains a tool it is on the image's `PATH`, and this table is the place that says so.
 
 What a tool needs besides itself never goes into the image. The Switch keys file (`switch_keys`), the PS Vita zRIF file (`vita_zrif`), `titledb_dir` and the arcade DATs are folders or files you mount from the NAS, read-only, and name in `[inbox]`.
 
@@ -104,7 +104,7 @@ chdman_flac = false                           # chdman's FLAC needs more memory 
 rahasher = "/usr/local/bin/RAHasher"          # optional
 titledb_dir = "/dats/titledb"                 # optional: Switch names (a clone of blawar/titledb)
 switch_keys = "/keys/prod.keys"               # Switch .nsp and .nsz: nsz reads it, warpzone only passes the path
-vita_zrif = "/keys/PSV_GAMES.tsv"             # PS Vita .pkg: needs Vita3K, which the image lacks
+vita_zrif = "/keys/PSV_GAMES.tsv"             # PS Vita .pkg: Vita3K is in the image (x86_64 only), the zRIF file is yours
 mame_dat = "/dats/mame0282lx.zip"             # optional: arcade (see "Arcade sets")
 ```
 

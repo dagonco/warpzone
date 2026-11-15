@@ -52,6 +52,14 @@ IMAGE_MISSING_TOOL = (
     "hub's share (install the tool there), or build the image with it "
     "(https://dagonco.github.io/warpzone/setup/inbox/#where-inbox-runs)"
 )
+# The same for the one tool the image has only on some machines: Vita3K is built for x86_64, so an
+# image built on arm64 has none (and so does one built before Vita3K was added), by `ToolSpec.key`.
+IMAGE_TOOL_HINTS = {
+    "Vita3K": "this image has no Vita3K: the image ships it on x86_64 only (build it again on an "
+    "x86_64 machine, or pull a newer one if it is an old image), or run `warpzone inbox` on a "
+    "computer that mounts the hub's share "
+    "(https://dagonco.github.io/warpzone/setup/inbox/#where-inbox-runs)"
+}
 
 CHDMAN_HINTS: HintTable = {
     "macos": "brew install rom-tools",

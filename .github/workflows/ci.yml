@@ -254,7 +254,7 @@ jobs:
           docker image inspect --format 'image size: {{.Size}} bytes' warpzone:ci
           echo "layers, uncompressed: $(docker history --human=false --format '{{.Size}}' warpzone:ci | awk '{ s += $1 } END { print s }') bytes"
           docker history --no-trunc --format '{{.Size}}\t{{.CreatedBy}}' warpzone:ci | cut -c1-160
-      # The entrypoint is `warpzone` and the user is 65534, so the version check passes only
+      # The entrypoint runs `warpzone` and the user is 65534, so the version check passes only
       # its argument; the tools are looked up with the entrypoint replaced by `sh`.
       - name: Check the version and the tools
         run: |
@@ -274,6 +274,7 @@ jobs:
             command -v nsz
             command -v orbis-pkg-util
             command -v Skyscraper
+            command -v Vita3K
             bsdtar --version
             # Each tool starts. dolphin-tool prints its usage and exits 1 when given no command.
             RAHasher 2>&1 | head -n 1
@@ -305,6 +306,17 @@ jobs:
             -v "$RUNNER_TEMP/gc:/data:ro" --entrypoint dolphin-tool warpzone:ci \
             header -i /data/check.iso | tee "$RUNNER_TEMP/header.txt"
           grep -q "GTSE01" "$RUNNER_TEMP/header.txt"
+      # Vita3K (x86_64 only, which is what runs here) starts under the limits of the compose file
+      # (not root, a read-only root file system, memory for /tmp, no capabilities), through the
+      # entrypoint: it makes the two links in /tmp and the runtime folder Vita3K needs, and then
+      # runs the program of an absolute path it is given. `warpzone inbox` runs it the same way
+      # (its `--version` first), so this fails when a new build wants other paths.
+      - name: Run Vita3K through the entrypoint
+        run: |
+          set -euo pipefail
+          docker run --rm --read-only --tmpfs /tmp --user 65534:65534 --cap-drop ALL \
+            warpzone:ci /usr/local/bin/Vita3K --version | tee "$RUNNER_TEMP/vita3k.txt"
+          test -s "$RUNNER_TEMP/vita3k.txt"
       # Skyscraper runs under the limits of the compose file (not root, a read-only root file
       # system, memory for /tmp, no capabilities) with a folder mounted at /skyscraper, where it
       # makes its cache and import folders. Without the folder it stops, which is what doctor then
@@ -325,8 +337,9 @@ jobs:
           fi
       # `doctor` in the container must find every tool the image ships, on PATH or at the path it
       # is told, from the config it would read in /config, and Skyscraper with its volume (and the
-      # account in the config.ini there, a fake one). Vita3K is not in the image, so its line is
-      # not checked. The output is shown whatever doctor's exit code is.
+      # account in the config.ini there, a fake one). Vita3K is found on PATH, with no setting, as
+      # it is on x86_64 only (an arm64 image has none and shows `[--]`; CI runs amd64). The output
+      # is shown whatever doctor's exit code is.
       - name: Check that doctor finds the tools
         run: |
           set -euo pipefail
@@ -340,7 +353,7 @@ jobs:
           docker run --rm -v "$RUNNER_TEMP/doctor-config:/config:ro" \
             -v "$RUNNER_TEMP/skyscraper:/skyscraper" warpzone:ci doctor \
             | tee "$RUNNER_TEMP/doctor.txt" || true
-          for tool in chdman bsdtar RAHasher dolphin-tool nsz orbis-pkg-util Skyscraper; do
+          for tool in chdman bsdtar RAHasher dolphin-tool nsz orbis-pkg-util Skyscraper Vita3K; do
             grep -E "^ +\[ok\] $tool " "$RUNNER_TEMP/doctor.txt" \
               || { echo "doctor does not find $tool"; exit 1; }
           done

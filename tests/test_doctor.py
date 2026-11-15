@@ -928,6 +928,14 @@ class HubContainerTests(TmpCase):
         self.assertIn("does not ship it", r.fix)
         self.assertNotIn("apt", r.fix)
 
+    def test_vita3k_missing_in_the_container_says_the_image_has_it_on_x86_64_only(self) -> None:
+        vita3k = next(t for t in doctor.TOOLS if t.key == "Vita3K")
+        ctx = context(self.tmp, INBOX_ONLY, system="Linux", os_release=DEBIAN, **self.IN_CONTAINER)
+        r = check_tool(ctx, vita3k)
+        self.assertEqual(r.status, OPTIONAL)
+        self.assertIn("ships it on x86_64 only", r.fix)
+        self.assertNotIn("does not ship it", r.fix)
+
     def test_a_tool_on_the_image_path_is_found_by_path(self) -> None:
         ctx = context(
             self.tmp, INBOX_ONLY, tools={"chdman": "/usr/bin/chdman"}, **self.IN_CONTAINER

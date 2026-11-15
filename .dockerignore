@@ -8,5 +8,6 @@
 !LICENSE
 !warpzone
 !docker/nsz-requirements.txt
+!docker/entrypoint.sh
 **/__pycache__
 **/*.pyc
