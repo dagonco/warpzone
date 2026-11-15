@@ -325,7 +325,10 @@ class _Night:
         if not self.night.empty:
             return self.take_lock(options)
         now = self.clock()
-        changes: list[Change] = [with_checked(now), with_error_cleared(STEP_PLAN)]
+        changes: list[Change] = [
+            with_checked(now),
+            with_error_cleared(STEP_PLAN, nothing_left=True),
+        ]
         state = self.state
         if state.trouble is not None:  # a night with nothing to do is a night with no trouble
             changes.append(lambda s: replace(s, trouble=None))
@@ -453,7 +456,13 @@ class _Night:
             _, incomplete = scrape_io.read_memory(options)
             for wave in self.night.waves:  # tier by tier, each across the systems
                 part = scrape_io.run_held(
-                    replace(options, systems=wave.systems, explicit=False, only=wave.only),
+                    replace(
+                        options,
+                        systems=wave.systems,
+                        explicit=False,
+                        only=wave.only,
+                        wave=wave.tier,
+                    ),
                     rep,
                     deadline=self.deadline,
                     still_mine=held.still_mine,
