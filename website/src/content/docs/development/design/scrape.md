@@ -323,8 +323,8 @@ the user's artwork file; it passes its own, shipped in `warpzone/data/skyscraper
   does for the usual aspect ratios) in a rounded frame 12 px wide, made by a first, larger
   `screenshot` layer with the `rounded` and `stroke` effects whose colour Skyscraper takes from the
   layer, as ES-DE takes the frame colour from the screenshot; the plain screenshot goes on top.
-  The wheel sits at the top right (it fits a 580x380 box, so a wide logo is wide and a tall one
-  is tall, as in ES-DE), the 3D box at the bottom left (the cover in a 560x600 box with the
+  The wheel sits at the top right (it fits a 640x290 box, so a wide logo is wide and a tall one
+  is tall, as in ES-DE), the 3D box at the bottom left (the cover in a 760x600 box with the
   `gamebox` effect, `side="wheel"`, as in the 3D box pass) and the physical media, which Skyscraper
   calls the `texture` resource (ScreenScraper's `support-2D`, a cartridge or disc), at the bottom
   next to the box. The wheel, box and media have a soft shadow. A layer whose resource the game
@@ -334,11 +334,16 @@ the user's artwork file; it passes its own, shipped in `warpzone/data/skyscraper
 
   What differs from ES-DE, because Skyscraper's artwork format cannot express it: the physical
   media has a fixed place (ES-DE puts it 32 px right of the box, whatever the box's width), the
-  box is the cover with the `gamebox` effect and not ScreenScraper's own 3D box, the sizes of the
-  box and the wheel are fixed boxes (ES-DE trims transparent padding and sizes the wheel by area),
-  a screenshot is always stretched to the frame (ES-DE crops one wider than 16:10 or taller than
-  1:1) and black bars in a screenshot are kept (ES-DE removes letterboxes and pillarboxes). The
-  shadows fall down and to the right, not all around.
+  box is the cover with the `gamebox` effect and not ScreenScraper's own 3D box, the wheel fits a
+  fixed box and ES-DE sizes it by its area (`calculateMarqueeSize`; Skyscraper trims a logo's
+  transparent padding too, so both start from the logo's own shape). For the shapes that matter
+  the box is close: a logo 4:1 comes out 640x160 (ES-DE: 682x170), one 1.5:1 comes out 444x290
+  (ES-DE: 456x297), while a square one is 290x290 (ES-DE: 405x405) and a 2:1 one 580x290 (ES-DE:
+  502x251). A square or tall cover gives a box about 430x598 (ES-DE's 3D box: 463x600), a landscape
+  one about 505x555 (ES-DE's: up to 620 wide). A screenshot is always stretched to the frame
+  (ES-DE crops one wider than 16:10 or taller than 1:1) and black bars in a screenshot are kept
+  (ES-DE removes letterboxes and pillarboxes). The shadows fall down and to the right, not all
+  around.
 - `artwork-3dbox.xml`: one `cover` output with the `gamebox` effect (`side="wheel"`), on a fixed
   600 by 600 transparent canvas (without a width the box comes out off centre and cropped).
 

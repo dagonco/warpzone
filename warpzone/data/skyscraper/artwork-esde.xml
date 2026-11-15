@@ -26,16 +26,16 @@
     </layer>
     <layer resource="screenshot" x="150" y="80" width="1060" height="800"/>
     <!-- The wheel fits a box at the top right (ES-DE sizes it by its shape). -->
-    <layer resource="wheel" width="580" height="380" aspect="keep" align="right" valign="top">
+    <layer resource="wheel" width="640" height="290" aspect="keep" align="right" valign="top">
       <shadow distance="6" softness="10" opacity="60"/>
     </layer>
-    <layer resource="cover" width="560" height="600" aspect="keep" valign="bottom">
+    <layer resource="cover" width="760" height="600" aspect="keep" valign="bottom">
       <gamebox side="wheel" rotate="90"/>
       <shadow distance="6" softness="10" opacity="60"/>
     </layer>
     <!-- ES-DE puts the media right of the box with a 32 px gap. Skyscraper cannot place a
          layer relative to another, so the media has a fixed place. -->
-    <layer resource="texture" x="590" width="300" height="240" aspect="keep" valign="bottom">
+    <layer resource="texture" x="540" width="300" height="240" aspect="keep" valign="bottom">
       <shadow distance="6" softness="10" opacity="60"/>
     </layer>
   </output>
