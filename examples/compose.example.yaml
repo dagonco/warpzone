@@ -160,3 +160,28 @@ services:
     #   mame2003plus_dat = "/dats/mame2003-plus.xml"
     # dolphin-tool, nsz, orbis-pkg-util, Skyscraper and Vita3K (x86_64 only) are on PATH in the image,
     # so they need no setting.
+
+  # Optional: reach the UI from outside the home through a Cloudflare Tunnel with Cloudflare Access
+  # in front, without opening a port on the router. Only for a hub with no tunnel yet: if you
+  # already run one, add a route to it instead. Do the steps, in this order, of
+  # https://dagonco.github.io/warpzone/setup/hub-container/#opening-the-ui-from-outside-the-home
+  # first (the Access application BEFORE the public hostname route), then uncomment this service.
+  # tunnel.env holds one line with the tunnel's token (TUNNEL_TOKEN=<the token from the dashboard>).
+  # Make it chmod 600 and never commit or print it. The tunnel's route points at
+  # http://warpzone:8780, the service above, which this service reaches on Compose's network.
+  # The image is pinned to an exact release, not `latest`; see the guide for updating it.
+  #
+  # cloudflared:
+  #   image: cloudflare/cloudflared:2026.11.0
+  #   container_name: warpzone-cloudflared
+  #   restart: unless-stopped
+  #   command: tunnel --no-autoupdate run
+  #   env_file:
+  #     - ./tunnel.env
+  #   depends_on:
+  #     - warpzone
+  #   read_only: true
+  #   cap_drop:
+  #     - ALL
+  #   security_opt:
+  #     - no-new-privileges:true

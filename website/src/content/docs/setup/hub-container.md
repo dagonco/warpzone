@@ -125,7 +125,7 @@ The server also updates the catalog by itself at start and every 6 hours, so gam
 
 Open `http://<the NAS's address>:8780/` in a browser on the home network, on a phone, a desktop or a handheld. The page asks for the token (the line in `config/ui.token`) once and keeps a cookie for 30 days. Change the token and every browser is asked again.
 
-The traffic is plain HTTP and the token is one shared secret, so keep the port inside the home network. For access from outside, put your own reverse proxy with TLS in front of it. See [Authentication](/warpzone/development/design/library-ui/#authentication).
+The traffic is plain HTTP and the token is one shared secret, so keep the port inside the home network and never forward it on the router. To reach the UI from outside the home, use a tunnel with a login in front of it; [Opening the UI from outside the home](#opening-the-ui-from-outside-the-home) shows one. See [Authentication](/warpzone/development/design/library-ui/#authentication).
 
 ## Adding games from the container
 
@@ -148,6 +148,61 @@ Without an account nothing more is needed: Skyscraper works anonymously, with Sc
 - **The cache is on disk, not in memory.** `skyscraper/cache/` grows by about 2.6 MB per game (a library of 1,000 games is about 2.6 GB); it is what lets a run that ScreenScraper's daily limit stopped go on the next day without asking again. Keep `./skyscraper` on the NAS's disk. The staged files and logs of a scrape go to `[inbox] work_dir` (`/work/tmp`), as before, and the list of games ScreenScraper did not know to `XDG_CACHE_HOME` (`/work/cache`).
 - **Without the volume** Skyscraper stops when it starts: `inbox` places the games and warns that the scrape failed, and `docker compose run --rm warpzone-inbox doctor` shows `[--] Skyscraper` with "nothing is mounted at /skyscraper".
 - `docker compose run --rm warpzone-inbox doctor` shows the version and whether the account is set. Updating Skyscraper is a change to `docker/Dockerfile`: it comes with a new warpzone version.
+
+## Opening the UI from outside the home
+
+`warpzone serve` speaks plain HTTP and does no TLS, so it never faces the internet by itself. This is one worked example of a way to reach it from a phone or a laptop away from home with nothing opened on the router: a [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/) with [Cloudflare Access](https://developers.cloudflare.com/cloudflare-one/access-controls/) in front. You can use any other reverse proxy with TLS instead; the UI only needs what [Authentication](/warpzone/development/design/library-ui/#authentication) lists. It is optional, and the UI works the same without it.
+
+It gives you:
+
+- HTTPS from anywhere, with Cloudflare's certificate.
+- A login (Access) before any request reaches the hub: a visitor who is not on your list never gets to the UI's page, let alone its token prompt.
+- No open port and no port forwarding. A `cloudflared` connector on your network dials out to Cloudflare, and Cloudflare sends the requests down that connection.
+
+The UI's own token stays as a second layer, so a visit asks for two things: the Cloudflare login, then the token.
+
+You need a domain whose DNS is on Cloudflare (a free account is enough) and a Zero Trust account (the free plan covers a few users). The example uses `ui.example.com` for the address, `<team-name>` for your Zero Trust team name, `<hub-lan-address>` for the hub's address on the home network and `you@example.com` for your e-mail. Use your own, and keep them out of anything you commit.
+
+**Order matters.** Make sure an Access application covers the hostname (steps 1 and 2) before the tunnel gets a public route for it (step 4). A published hostname with no Access application in front of it is open to the whole internet until you add one, so do it in this order and the UI is never public, not even for a minute.
+
+1. **Pick a way to log in.** If Access already works for your other services, you have one: skip to step 2. Otherwise, in the Cloudflare dashboard open Zero Trust, then Integrations, then Identity providers. The zero-setup choice is the built-in **One-time PIN**: Cloudflare e-mails a code to the address that tries to log in, and only the addresses your policy allows get one. To use Google instead, follow [Cloudflare's Google guide](https://developers.cloudflare.com/cloudflare-one/integrations/identity-providers/google/): make an OAuth client of type Web application in the Google Cloud console with the authorized redirect URI `https://<team-name>.cloudflareaccess.com/cdn-cgi/access/callback`, then add Google under Identity providers with the client ID and secret. Your team name is under Zero Trust, Settings, Team name and domain.
+2. **Have an Access application cover the hostname.** Under Zero Trust, Access controls, Applications, check first whether one already does. A wildcard application on the zone (a hostname such as `*.example.com`) covers a new subdomain such as `ui.example.com` by itself, with whatever policy it has: read that policy and make sure it lets in only the people you want to see the library. If none covers it, choose **Create new application**, then **Self-hosted and private**, add the public hostname `ui.example.com` and an Access policy with the action **Allow** and the rule **Include**, selector **Emails**, value `you@example.com` (add the e-mail of anyone else who may use the UI; nobody else is let in, because Access denies by default). Select your identity provider and choose a session duration. See [Cloudflare's guide](https://developers.cloudflare.com/cloudflare-one/access-controls/applications/http-apps/self-hosted-public-app/). Until the route of step 4 exists, the hostname answers nothing.
+3. **Choose the tunnel.**
+
+   - **You already run a tunnel that reaches the hub or the home network** (for other services). Add no service. The connector of that tunnel only has to reach the hub's port 8780 on the LAN, so the route of step 4 points at `http://<hub-lan-address>:8780`. Go to step 4.
+   - **You have no tunnel yet.** Under Networking, Tunnels, choose **Create a tunnel**, type **Cloudflared**, give it a name such as `warpzone`, and copy only the token from the install command it shows (the long string after `--token`, or the value of `TUNNEL_TOKEN`). Do not run the command it shows; the container does that. Put the token in a file next to `compose.yaml`, mode 600, and never commit, paste or print it:
+
+     ```bash
+     cd /path/to/the/compose/folder
+     ( umask 077; read -r -s -p "Tunnel token: " token && printf 'TUNNEL_TOKEN=%s\n' "$token" > tunnel.env )
+     ```
+
+     This keeps the token out of your shell history and out of the process list. Anyone who holds it can run a tunnel to your hostname, so treat it like the API key. If it leaks, delete the tunnel in the dashboard and make another. Then uncomment the `cloudflared` service at the end of [`compose.yaml`](https://github.com/dagonco/warpzone/blob/main/examples/compose.example.yaml) and start it:
+
+     ```bash
+     docker compose up -d cloudflared
+     docker compose logs cloudflared      # "Registered tunnel connection" a few times
+     ```
+
+     It is in the same project as the `warpzone` service, so it reaches the UI on Compose's own network as `http://warpzone:8780`. (If you run the `warpzone` service with `network_mode: host`, that name does not resolve: use `http://localhost:8780` and run `cloudflared` on the host network too.)
+4. **Add the public hostname route.** Open the tunnel, then the **Routes** tab, **Add route**, **Published application**: subdomain `ui`, your domain, and the service URL: `http://<hub-lan-address>:8780` for a tunnel you already had, `http://warpzone:8780` for the one above. Cloudflare makes the DNS record for `ui.example.com` by itself.
+5. **Check that Access is in front.** From a computer that is on your home network or a VPN, a name can resolve to a private address and look open without the internet ever seeing it, so force the public edge. Look up an address of Cloudflare's edge for the hostname with a public resolver (`dig +short ui.example.com @1.1.1.1`), and ask for the page through it:
+
+   ```bash
+   curl -sI --resolve ui.example.com:443:<cloudflare-edge-ip> https://ui.example.com/
+   ```
+
+   The answer must be a redirect (`302`) whose `location` is on `<team-name>.cloudflareaccess.com`. A `200` or a page from the UI means no application covers the hostname: remove the route and go back to step 2.
+6. **Test it from outside.** On a phone off the home Wi-Fi (mobile data), open `https://ui.example.com`. You should get Cloudflare's login first, then, after you log in with the allowed e-mail, the UI's token prompt. Enter the token from `config/ui.token`. Try an address that is not on the list: it must be refused at the login, before the UI.
+
+A few things to know:
+
+- **Host and scheme.** `cloudflared` sends the request to the UI with the `Host` header the browser used (`ui.example.com`), unless you set an HTTP Host Header override on the route; leave that empty. The UI's check that a write comes from its own page compares the `Origin` with that `Host`, so an override makes every change you make fail with a `bad-origin` error. The UI also marks its cookie `Secure` when the request carries `X-Forwarded-Proto: https`, which Cloudflare's edge sets on the requests it forwards; if you do not see `Secure` on the `wz_session` cookie in the browser's developer tools, nothing breaks: the cookie is just not restricted to HTTPS (it is still sent only to your HTTPS address). See [Authentication](/warpzone/development/design/library-ui/#authentication).
+- **The login can expire.** When the Access session ends, a request the page makes may get Cloudflare's login page instead of JSON, and the UI shows an error. Reload the page and log in again.
+- **Consoles keep the LAN address.** A client that is not a browser, such as the Decky plugin with its bearer token, cannot pass Access's login, so consoles keep using the hub's LAN address, not the public hostname.
+- **The LAN port stays.** `8780` still answers on the home network as before. Only the tunnel reaches the UI from outside.
+- **Updating `cloudflared`.** The example pins an exact version, not `latest`, so an update is a change you make on purpose. Look up the newest release on the [`cloudflared` releases page](https://github.com/cloudflare/cloudflared/releases), change the tag in `compose.yaml`, and run `docker compose pull cloudflared && docker compose up -d cloudflared`. Cloudflare drops very old versions, so update it every few months. A tunnel you already had is updated the way you already update it.
+- **Taking it down.** Delete the route in the dashboard (and, for the example's tunnel, run `docker compose stop cloudflared`); the hostname then answers nothing.
 
 ## Updating
 

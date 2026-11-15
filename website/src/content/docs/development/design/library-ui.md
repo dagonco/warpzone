@@ -888,8 +888,15 @@ that remains. When it runs out the server stops reading, logs `body not received
 the connection without an answer, as for a body that stalls. A client that sends 1 MiB at
 18 KiB/s or faster is not affected.
 
-The traffic is plain HTTP, so anyone who can read the LAN can read the token. Access from
-outside the home goes through the user's own reverse proxy with TLS, which is out of scope.
+The traffic is plain HTTP, so anyone who can read the LAN can read the token. warpzone itself
+does no TLS: access from outside the home goes through a reverse proxy or tunnel with TLS that
+the user runs, and that proxy is not part of warpzone. One worked example, a Cloudflare Tunnel
+with Cloudflare Access in front, is in [Opening the UI from outside the
+home](/warpzone/setup/hub-container/#opening-the-ui-from-outside-the-home). What the UI needs
+from any such proxy is the two things above: it keeps the `Host` header the browser used (so
+the `Origin` check passes) and it sets `X-Forwarded-Proto: https` (so the cookie is `Secure`).
+A client that is not a browser, such as the Decky plugin, cannot pass an identity provider's
+login, so it keeps using the LAN address.
 
 ### Endpoints
 
@@ -1521,7 +1528,9 @@ damaged files). The e2e test adds the matcher check above and the completion che
 - Arcade dependencies: a MAME game whose parent or BIOS set is another zip does not list that zip
   as a part. Turning on the whole system is the safe way for arcade systems.
 - Per-game progress, unless the completion check above calls for it.
-- Users and roles, TLS, and access from outside the LAN.
+- Users and roles, and TLS: the server is plain HTTP. Access from outside the LAN is the
+  user's own proxy or tunnel in front of it, with a worked example in the hub container guide
+  (see [Authentication](#authentication)); warpzone ships and runs none.
 - The Decky plugin itself; only the API above is kept for it.
 - Editing a whitelist by hand once it is managed (it is refused until migrated again, and the
   migration takes it only after its `// Folders` section is deleted, since the hand-file parser
