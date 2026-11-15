@@ -780,7 +780,7 @@ class RunInputsTest(RunHeldCase):
         self.assertEqual(found.systems[0].added, 2)
 
     def test_the_deadline_stops_before_the_second_batch(self):
-        # One game still to do needs 10 seconds and only 5 are left.
+        # One game still to do needs 18 seconds and only 5 are left.
         found, out = self.summary(deadline=self.clock + 5)
         self.assertEqual(len(self.hub.gathers()), 1)
         self.assertIs(found.stop, scrape.StopReason.DEADLINE)
@@ -791,7 +791,7 @@ class RunInputsTest(RunHeldCase):
         self.assertIn("scrape: time budget spent; 1 game not tried", out)
 
     def test_a_deadline_that_fits_stops_nothing(self):
-        found, _ = self.summary(deadline=self.clock + 10)
+        found, _ = self.summary(deadline=self.clock + scrape.EST_SECONDS_PER_GAME)
         self.assertEqual(len(self.hub.gathers()), 2)
         self.assertIsNone(found.stop)
         self.assertFalse(found.budget_spent)
@@ -843,14 +843,14 @@ class RunInputsTest(RunHeldCase):
 
 
 class BatchFitsTest(unittest.TestCase):
-    def test_the_estimate_is_ten_seconds_a_game(self):
-        self.assertEqual(scrape.EST_SECONDS_PER_GAME, 10)
+    def test_the_estimate_is_eighteen_seconds_a_game(self):
+        self.assertEqual(scrape.EST_SECONDS_PER_GAME, 18)
 
     def test_a_batch_that_ends_at_the_deadline_fits(self):
-        self.assertTrue(scrape.batch_fits(100.0, 150.0, 5))
+        self.assertTrue(scrape.batch_fits(100.0, 100.0 + 5 * scrape.EST_SECONDS_PER_GAME, 5))
 
     def test_a_batch_that_ends_after_it_does_not(self):
-        self.assertFalse(scrape.batch_fits(100.0, 149.9, 5))
+        self.assertFalse(scrape.batch_fits(100.0, 99.9 + 5 * scrape.EST_SECONDS_PER_GAME, 5))
 
     def test_a_past_deadline_fits_nothing(self):
         self.assertFalse(scrape.batch_fits(100.0, 99.0, 1))

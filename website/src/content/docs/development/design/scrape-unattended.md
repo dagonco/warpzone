@@ -139,17 +139,19 @@ option.
 ## Quota and time budget
 
 ScreenScraper counts its API calls and media downloads against a daily quota (see
-[Credentials](/warpzone/development/design/scrape/#credentials)). The requests per new game are
-estimated at 1 to 10; **this is not verified and is to be measured** in the manual check on the
-NAS. On that estimate, an anonymous account (10,000 a day) covers about 1,000 games. A night of
-500 games uses about half, leaving the rest for the day's inbox scrapes, and takes about 83
-minutes at 10 seconds a game.
+[Credentials](/warpzone/development/design/scrape/#credentials)). The requests per new game were
+estimated at 1 to 10; warpzone does not count them. Measured on the NAS with a ScreenScraper
+account, the first night scraped 500 games (491 added, 9 not found, every media kind) in 148
+minutes, about 18 seconds a game, without reaching the account's quota. So the defaults fit:
+500 games take about two and a half hours, inside the 180-minute budget, and leave quota for the
+day's inbox scrapes. An anonymous account has a lower quota; there a night may end on `quota`,
+which is not news.
 
 - **The quota is hit.** The existing behaviour stands: the gather stops for every system and what
   is cached is still generated and merged. In an unattended run this is the outcome `quota` and
   not a failure.
 - **The time budget runs out.** `batch_fits(now, deadline, games)` is true when
-  `now + games * EST_SECONDS_PER_GAME <= deadline`, with the estimate at 10 seconds. The run
+  `now + games * EST_SECONDS_PER_GAME <= deadline`, with the estimate at 18 seconds (the measured pace above). The run
   checks it before each batch and stops when the next one would not fit. The first batch of a run
   is always allowed. That is the outcome `budget`, not a failure.
 - **Neither is news.** What is left shows as `Night.backlog` in the state, the run record and
