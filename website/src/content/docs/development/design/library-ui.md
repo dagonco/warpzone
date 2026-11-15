@@ -1434,19 +1434,25 @@ only the result reaches the last stage, all on `PATH` in `/usr/local/bin`:
 - **`orbis-pkg-util`** is built with Cargo from the crate on crates.io: the download must match a
   pinned SHA-256 and the build uses the `Cargo.lock` packaged in the crate (`--locked`). The
   stage's base image (`rust`, slim, trixie) is pinned by digest.
+- **Vita3K** is not built: its own stage downloads the x86_64 AppImage of a numbered build
+  of `Vita3K/Vita3K-builds` (build 4334), checks the pinned SHA-256 and unpacks it with
+  `--appimage-extract`; the bundle is copied to `/opt/vita3k` and `/usr/local/bin/Vita3K` is a
+  link to its `bin/Vita3K`. On any other CPU the stage leaves the folder empty and the image
+  has no Vita3K. The link and the entrypoint are explained in
+  [PS Vita packages in the container](/warpzone/development/design/inbox/#ps-vita-packages-in-the-container).
 
 Each is licensed apart from warpzone's MIT: RAHasher GPL-3.0, `dolphin-tool` GPL-2.0-or-later,
+Vita3K GPL-2.0 (its bundle also carries Qt 6, Mesa and others under their own licences),
 `nsz` MIT, `orbis-pkg-util` MIT or Apache-2.0, and the Debian packages as Debian says. Only the
-Dockerfile and the requirements file are in the repository, never the sources or the binaries:
-the image is built by whoever runs it, from the pinned upstream tags.
-Vita3K is the one tool of `inbox` not in the image (see
-[PS Vita packages in the container](/warpzone/development/design/inbox/#ps-vita-packages-in-the-container)),
-and keys and big data (`switch_keys`, `vita_zrif`, `titledb_dir`, the DATs) are mounted, never
+Dockerfile, the entrypoint script and the requirements file are in the repository, never the
+sources or the binaries: the image is built by whoever runs it, from the pinned upstream tags and
+checksums.
+Keys and big data (`switch_keys`, `vita_zrif`, `titledb_dir`, the DATs) are mounted, never
 copied into it (see [where inbox runs](/warpzone/setup/inbox/#where-inbox-runs)).
 The CI `image` job (weekly and manual runs; it builds the image, checks every tool and runs
-`warpzone doctor` inside it) is what shows that a pin or a base image change still builds.
-The entry point is `warpzone` and the default
-command `serve`, so `docker compose run --rm warpzone catalog ...` runs the other commands. The
+`warpzone doctor` inside it, and runs Vita3K the way `inbox` does) is what shows that a pin or a base image change still builds.
+The entry point is `docker/entrypoint.sh` (installed as `/usr/local/bin/warpzone-entrypoint`), which runs
+`warpzone` and the default command is `serve`, so `docker compose run --rm warpzone catalog ...` runs the other commands. The
 image runs as a non-root user and the Compose file sets `user:` to the uid and gid that own the
 games share. An example Compose file is `examples/compose.example.yaml`, and the steps are in
 [the hub container guide](/warpzone/setup/hub-container/).

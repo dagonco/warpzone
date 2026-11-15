@@ -48,14 +48,15 @@ for every problem, the exact fix for this platform.
   `/usr/local/bin/RAHasher`; `known_tool_paths` is pure), and `RAHasher` found there with
   no `[inbox] rahasher` is `[! ]` with the line to set. A missing tool has the fix "this hub
   image does not ship it" (run inbox on a computer, or build the image with it) instead of
-  an install command, since the root of a container is read-only and rebuilt from the
+  an install command (`IMAGE_MISSING_TOOL`; a tool with an entry in `IMAGE_TOOL_HINTS` has its own), since the root of a container is read-only and rebuilt from the
   image; `chdman` and `bsdtar` stay `[!!]` there as on a computer, so an image without them
   fails (the image ships both from Debian packages, in `/usr/bin`, so `PATH` finds them and
   `IMAGE_TOOL_PATHS` lists only the tools outside `PATH`). `dolphin-tool`, `nsz` and
   `orbis-pkg-util` are in `/usr/local/bin`, also on `PATH`, so they are `[ok]` with no setting;
-  Vita3K is the one tool the image lacks, so it is the one line of the tools table that is
-  `[--]` there with the "does not ship it" fix. The CI `image` job runs `doctor` in the built
-  image and fails when a tool of the image is not `[ok]`. `Hub root for inbox` is `[! ]` when `[inbox] root` is unset but `[hub] root` is
+  Vita3K is in `/usr/local/bin` on x86_64 only (the image built on another CPU has none), so it is `[ok]` there
+  with no setting, and `[--]` on an arm64 image with the fix of `IMAGE_TOOL_HINTS`: the image ships it on
+  x86_64 only. The CI `image` job (amd64) runs `doctor` in the built
+  image and fails when a tool of the image, Vita3K included, is not `[ok]`. `Hub root for inbox` is `[! ]` when `[inbox] root` is unset but `[hub] root` is
   there, because `inbox` needs its own `root` (the same path as `[hub] root` in the
   container). `Work folder` is `[! ]` when `work_dir` is unset (`/tmp` is memory in the
   container), or when it does not exist and its parent is not a writable folder (`inbox` creates

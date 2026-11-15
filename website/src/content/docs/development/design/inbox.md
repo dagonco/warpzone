@@ -13,7 +13,7 @@ runs in one of two places, with the same code and the same contract:
   [the container](/warpzone/development/design/library-ui/#the-container)). The tools are the
   image's: `chdman`, `bsdtar`, `dolphin-tool`, `nsz` and `orbis-pkg-util` on its `PATH`, and
   RAHasher at `/usr/local/bin/RAHasher` (used only when `[inbox] rahasher` is set, as
-  everywhere). Vita3K is the one tool the image lacks (see
+  everywhere) and, on x86_64 only, Vita3K (see
   [PS Vita packages in the container](#ps-vita-packages-in-the-container)). The hub root is
   mounted at the same path as `[hub] root`, so `--root` is that path. The DATs, the keys
   (`switch_keys`, `vita_zrif`), `titledb_dir`, the arcade DATs and a work folder are
@@ -932,29 +932,50 @@ packages or keys.
 
 ### PS Vita packages in the container
 
-Vita3K is not in the hub image, so in the container a PS Vita `.pkg` goes to review with the
-reason "missing tool" and `doctor` lists Vita3K as optional and not found. This is a known gap,
-and `inbox` for those packages runs on a computer with Vita3K. What was looked at, on
-2026-11-13:
+The hub image ships Vita3K on x86_64, so `inbox` installs a PS Vita `.pkg` in the container with
+nothing installed on the NAS. What was decided, and why (checked on 2026-11-15):
 
-- **Vita3K itself.** GPL-2.0. It has one release, the rolling `continuous` one, whose files are
-  named `*-latest` and replaced on every build, so no download can be pinned by hash for long, and
-  there is no versioned tag to build from. Its `--pkg` mode opens no window, but the program is
-  one executable whose source includes the Qt 6 main window and initialises SDL 3 (`vita3k/main.cpp`),
-  so a binary needs those libraries in the image, and a build from a pinned commit needs them
-  and about 28 submodules. Neither is a sound, pinned and small option, so neither is in the
-  image.
-- **`pkg2zip`** (mmozeiko/pkg2zip). Unlicense, a small C program with no dependencies, tagged
-  (v1.8, commit 086284d), and it takes a zRIF on the command line (`pkg2zip -x <pkg> <zRIF>`). But
-  the repository is archived (last change in 2024), and its output is made for a real Vita
-  (VitaShell and NoNpDrm: a `work.bin` licence in the game folder), not the layout Vita3K's own
-  installer writes and `judge_installed` checks (`ux0/license/<TITLEID>/<CONTENT_ID>.rif`). Using
-  it needs a second install path in `inbox_vita_pkg` (what it writes, where the licence goes, how
-  the result is judged) that can only be checked against real packages, which is work of its
-  own and not part of the image. If it is done, the Dockerfile gains one small build stage like
-  the `orbis-pkg-util` one.
-- **Anything else.** No other command line tool that installs a package in Vita3K's layout was
-  found.
+- **Which Vita3K.** GPL-2.0. Its `Vita3K/Vita3K-builds` repository publishes a numbered release for
+  every build (`4334`; its notes name the Vita3K commit), each with the x86_64 AppImage and the
+  digest of the file, so a build can be pinned by tag and by SHA-256 (`VITA3K_BUILD`,
+  `VITA3K_COMMIT` as a label and `VITA3K_SHA256` in `docker/Dockerfile`). Building Vita3K from
+  source was the other option, and it needs Qt 6, SDL 3 and about 28 submodules; the AppImage is
+  one download that is checked. An aarch64 AppImage exists, but it was not tried, so the image
+  has Vita3K on x86_64 only: on any other machine the Dockerfile's stage leaves its folder empty
+  (it decides by `uname -m`, so building under emulation counts as the target CPU), the image
+  builds, `/opt/vita3k` and the link are not made, and `doctor` shows `[--] Vita3K` with the
+  fix that says so (`IMAGE_TOOL_HINTS`). On such an image a `.pkg` goes to review with the
+  reason "missing tool", and `inbox` for those packages runs on a computer with Vita3K.
+- **An unpacked AppImage, not an AppImage.** `vita3k_problem` refuses an AppImage, because its
+  runtime overwrites `APPIMAGE`, which is how `inbox` tells Vita3K where to install. The build
+  stage runs `--appimage-extract`, and the last stage keeps the result in `/opt/vita3k` (a sharun
+  bundle: its own glibc loader, Qt 6 and Mesa, so the image installs no library for it).
+  `/usr/local/bin/Vita3K` is a symbolic link to `/opt/vita3k/bin/Vita3K`: that is the launcher,
+  and the name it is started under matters, so it cannot be a wrapper script (which is not an ELF
+  either, so `vita3k_problem` would refuse it). `resolve_tool` resolves the link, finds an ELF
+  that is not an AppImage and accepts it; `doctor` finds it on `PATH`, so `[inbox] vita3k` needs
+  no setting in the container.
+- **The entrypoint.** The build 4334 binary has two paths built in, in `/tmp`, where it expects
+  its data and its libraries, and Qt needs a private runtime folder. The container's `/tmp` is
+  memory and its root is read-only, so nothing can be made at build time: `docker/entrypoint.sh`
+  (the image's `ENTRYPOINT`, which then runs `warpzone` with the arguments of the command, so
+  `CMD ["serve"]` and every `docker compose run ... <command>` work as before) makes at each
+  start, when `/opt/vita3k` exists, the two links (`/tmp/lWRUi` to `/opt/vita3k/share` and
+  `/tmp/CMR` to `/opt/vita3k/lib`) and a mode 700 `XDG_RUNTIME_DIR` under `/tmp` (the uid's own,
+  unless one is set). Everything it makes is under `/tmp`, so it works as the non-root uid with a
+  read-only root. A failure there is a warning, never a reason for `warpzone` not to start. A
+  first argument that is an absolute path runs that program instead, after the same preparation
+  (`docker run ... warpzone:ci /usr/local/bin/Vita3K --version`), which is how the CI `image` job
+  checks Vita3K the way `inbox` runs it. The two names belong to the build: look for them again
+  when the pin moves (the CI step fails if Vita3K cannot start without them). No
+  `QT_QPA_PLATFORM` or other setting was needed: `--pkg` opens no window.
+- **What it reads.** Only the zRIF file (`[inbox] vita_zrif`), which is yours and is mounted
+  read-only like the other keys (`./keys:/keys:ro`); it is never in the image.
+- **Size.** About 121 MB more in the compressed image.
+
+A test image of this kind, run on a NAS under the limits of the compose service (not root,
+read-only root, memory for `/tmp`), installed a package as 326 files, identical to the install the
+same package gets on a Mac.
 
 ## Arcade sets
 

@@ -2,6 +2,7 @@
 free of secrets. The image itself is not built here (the weekly `image` job of CI builds it); these
 tests read the files."""
 
+import os
 import re
 import unittest
 from pathlib import Path
@@ -11,6 +12,7 @@ DOCKERFILE = ROOT / "docker" / "Dockerfile"
 DOCKERIGNORE = ROOT / ".dockerignore"
 COMPOSE = ROOT / "examples" / "compose.example.yaml"
 NSZ_REQUIREMENTS = ROOT / "docker" / "nsz-requirements.txt"
+ENTRYPOINT = ROOT / "docker" / "entrypoint.sh"
 
 DIGEST = re.compile(r"@sha256:[0-9a-f]{64}$")
 
@@ -89,6 +91,34 @@ class DockerfileTest(unittest.TestCase):
         self.assertIn("BUNDLE_QRC=1 qmake6", self.text)
         self.assertNotIn("make install", self.text)
 
+    def test_vita3k_is_pinned_by_checksum_unpacked_and_only_built_for_x86_64(self):
+        self.assertRegex(self.text, r"(?m)^ARG VITA3K_BUILD=\d+$")
+        self.assertRegex(self.text, r"(?m)^ARG VITA3K_COMMIT=[0-9a-f]{40}$")
+        self.assertRegex(self.text, r"(?m)^ARG VITA3K_SHA256=[0-9a-f]{64}$")
+        self.assertIn('echo "${VITA3K_SHA256}  Vita3K.AppImage" | sha256sum -c -', self.text)
+        self.assertIn("--appimage-extract", self.text)
+        # Another architecture gets an empty stage, so the image still builds there.
+        self.assertIn('"$(uname -m)" = x86_64', self.text)
+        final = "\n".join(stages(self.text)[-1])
+        self.assertIn("COPY --from=vita3k /out-vita3k /opt/vita3k", final)
+        # A link, not a wrapper script: inbox runs only an ELF it can resolve.
+        self.assertIn("ln -s /opt/vita3k/bin/Vita3K /usr/local/bin/Vita3K", final)
+
+    def test_the_entrypoint_prepares_tmp_for_vita3k_and_runs_warpzone(self):
+        script = ENTRYPOINT.read_text(encoding="utf-8")
+        self.assertTrue(script.startswith("#!/bin/sh\n"))
+        self.assertTrue(os.access(ENTRYPOINT, os.X_OK))
+        self.assertIn('ln -sfn "$vita3k/share" /tmp/lWRUi', script)
+        self.assertIn('ln -sfn "$vita3k/lib" /tmp/CMR', script)
+        self.assertIn("XDG_RUNTIME_DIR", script)
+        self.assertIn('exec warpzone "$@"', script)
+        # Everything it makes is under /tmp: the root of the container is read-only.
+        for path in re.findall(r"(?:ln -sfn \S+|mkdir -p) (/\S+)", script):
+            self.assertTrue(path.startswith("/tmp/"), path)
+        final = stages(self.text)[-1]
+        self.assertIn("COPY docker/entrypoint.sh /usr/local/bin/warpzone-entrypoint", final)
+        self.assertIn("RUN chmod 0755 /usr/local/bin/warpzone-entrypoint", final)
+
     def test_skyscraper_keeps_its_home_on_the_volume(self):
         final = "\n".join(stages(self.text)[-1])
         self.assertIn("COPY --from=skyscraper /out/Skyscraper /opt/skyscraper/Skyscraper", final)
@@ -164,7 +194,7 @@ class DockerfileTest(unittest.TestCase):
         self.assertIn("COPY --from=nsz /opt/nsz /opt/nsz", joined)
         self.assertIn("ln -s /opt/nsz/bin/nsz /usr/local/bin/nsz", joined)
         self.assertEqual(final[-1], 'CMD ["serve"]')
-        self.assertIn('ENTRYPOINT ["warpzone"]', final)
+        self.assertIn('ENTRYPOINT ["/usr/local/bin/warpzone-entrypoint"]', final)
 
     def test_final_stage_installs_only_the_inbox_tools_and_cleans_apt(self):
         final = stages(self.text)[-1]
@@ -208,7 +238,14 @@ class DockerignoreTest(unittest.TestCase):
         included = {line[1:] for line in lines if line.startswith("!")}
         self.assertEqual(
             included,
-            {"pyproject.toml", "README.md", "LICENSE", "warpzone", "docker/nsz-requirements.txt"},
+            {
+                "pyproject.toml",
+                "README.md",
+                "LICENSE",
+                "warpzone",
+                "docker/nsz-requirements.txt",
+                "docker/entrypoint.sh",
+            },
         )
         for name in ("website", "tests", "node_modules", ".git"):
             self.assertNotIn(name, included)
