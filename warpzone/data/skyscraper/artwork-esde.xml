@@ -16,27 +16,33 @@
   <output type="cover" resource="cover"/>
   <output type="marquee" resource="wheel"/>
   <output type="screenshot" width="1280" height="960">
-    <!-- The frame: the screenshot again, 12 px larger on every side, rounded, with a stroke
-         as wide as the frame. The stroke is drawn inside the layer, in the layer's average
-         colour (ES-DE also takes the frame colour from the screenshot), and the screenshot
-         layer below covers everything but the frame. -->
-    <layer resource="screenshot" x="138" y="68" width="1084" height="824">
-      <rounded radius="16"/>
+    <!-- The frame: the screenshot again, with a stroke 12 px wide, which Skyscraper draws
+         outside the layer in the layer's average colour (ES-DE also takes the frame colour
+         from the screenshot). The layer is placed 12 px up and left of the screenshot, so
+         the ring lands around it, and the screenshot layer below covers the inner part
+         (and the rounded inner corners). Both screenshot layers use transform="fast",
+         which scales without smoothing like ES-DE's default "sharp" screenshot scaling;
+         the default would blur a small pixel-art screen. -->
+    <layer resource="screenshot" x="138" y="68" width="1060" height="800" transform="fast">
+      <rounded radius="4"/>
       <stroke width="12"/>
     </layer>
-    <layer resource="screenshot" x="150" y="80" width="1060" height="800"/>
-    <!-- The wheel fits a box at the top right (ES-DE sizes it by its shape). -->
-    <layer resource="wheel" width="640" height="290" aspect="keep" align="right" valign="top">
-      <shadow distance="6" softness="10" opacity="60"/>
+    <layer resource="screenshot" x="150" y="80" width="1060" height="800" transform="fast"/>
+    <!-- The wheel fits a box at the top right (ES-DE sizes it by its shape). The x, y and
+         shadows below were measured against a miximage ES-DE made: its logo, box and media
+         include their shadow (12 px down and right) when they are placed, so their content
+         sits that far in from the edge, which a negative x or y reproduces. -->
+    <layer resource="wheel" x="-28" width="680" height="290" aspect="keep" align="right" valign="top">
+      <shadow distance="12" softness="12" opacity="100"/>
     </layer>
-    <layer resource="cover" width="760" height="600" aspect="keep" valign="bottom">
+    <layer resource="cover" y="-31" width="760" height="600" aspect="keep" valign="bottom">
       <gamebox side="wheel" rotate="90"/>
-      <shadow distance="6" softness="10" opacity="60"/>
+      <shadow distance="12" softness="12" opacity="100"/>
     </layer>
     <!-- ES-DE puts the media right of the box with a 32 px gap. Skyscraper cannot place a
          layer relative to another, so the media has a fixed place. -->
-    <layer resource="texture" x="540" width="300" height="240" aspect="keep" valign="bottom">
-      <shadow distance="6" softness="10" opacity="60"/>
+    <layer resource="texture" x="517" y="-30" width="295" height="236" aspect="keep" valign="bottom">
+      <shadow distance="12" softness="12" opacity="100"/>
     </layer>
   </output>
 </artwork>

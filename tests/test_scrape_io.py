@@ -672,8 +672,10 @@ class FindAndConfigTest(unittest.TestCase):
             [shot.get(k) for k in ["x", "y", "width", "height"]], ["150", "80", "1060", "800"]
         )
         self.assertEqual(frame.find("stroke").get("width"), "12")
+        # ES-DE scales the screenshot "sharp" (no smoothing); Skyscraper calls that "fast".
+        self.assertEqual((frame.get("transform"), shot.get("transform")), ("fast", "fast"))
         self.assertEqual(
-            [frame.get(k) for k in ["x", "y", "width", "height"]], ["138", "68", "1084", "824"]
+            [frame.get(k) for k in ["x", "y", "width", "height"]], ["138", "68", "1060", "800"]
         )
         self.assertEqual((wheel.get("align"), wheel.get("valign")), ("right", "top"))
         self.assertEqual(box_art.find("gamebox").get("side"), "wheel")

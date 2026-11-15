@@ -320,30 +320,40 @@ the user's artwork file; it passes its own, shipped in `warpzone/data/skyscraper
   `screenshot` output that is the miximage, laid out like the one ES-DE makes with its default
   settings (`MiximageGenerator.cpp`: 1280x960, include marquee, box and physical media). The
   canvas is transparent, as ES-DE's. The screenshot is inset 1060x800 at 150,80 (stretched, as ES-DE
-  does for the usual aspect ratios) in a rounded frame 12 px wide, made by a first, larger
-  `screenshot` layer with the `rounded` and `stroke` effects whose colour Skyscraper takes from the
-  layer, as ES-DE takes the frame colour from the screenshot; the plain screenshot goes on top.
-  The wheel sits at the top right (it fits a 640x290 box, so a wide logo is wide and a tall one
+  does for the usual aspect ratios) and scaled without smoothing (`transform="fast"`, Skyscraper's
+  name for what ES-DE's default `MiximageScreenshotScaling` "sharp" does; Skyscraper's default
+  smoothing blurs a 240x160 screen). Its frame is 12 px wide with rounded outer corners: a first
+  `screenshot` layer, with the `rounded` and `stroke` effects, placed 12 px up and left of the
+  screenshot, because Skyscraper draws a stroke outside the layer, in the layer's average colour,
+  as ES-DE takes the frame colour from the screenshot; the plain screenshot goes on top.
+  The wheel sits at the top right (it fits a 680x290 box, so a wide logo is wide and a tall one
   is tall, as in ES-DE), the 3D box at the bottom left (the cover in a 760x600 box with the
   `gamebox` effect, `side="wheel"`, as in the 3D box pass) and the physical media, which Skyscraper
   calls the `texture` resource (ScreenScraper's `support-2D`, a cartridge or disc), at the bottom
-  next to the box. The wheel, box and media have a soft shadow. A layer whose resource the game
-  lacks is skipped, so a game without a wheel, box or physical media still gets its miximage.
-  With `--flags miximages` this output goes to `miximages/` and the plain screenshot to
-  `screenshots/`.
+  next to the box. ES-DE adds the shadow (12 px down and to the right, blurred) to each image
+  before it places it, so the content sits about 28 px in from the right edge for the wheel and
+  about 30 px up from the bottom for the box and the media; the layers have the same shadow
+  and the same negative `x` and `y`. A layer whose resource the game lacks is skipped, so a game
+  without a wheel, box or physical media still gets its miximage. With `--flags miximages` this
+  output goes to `miximages/` and the plain screenshot to `screenshots/`.
+
+  Measured against a miximage ES-DE made for a GBA game (Tiny Toon Adventures; 1280x960, pixels),
+  the frame is the same (138,68 to 1222,892), the logo's content runs from x 572 in both and
+  ends at 1239 (ES-DE) and 1240, the box runs from y 341 to 924 (ES-DE) and 340 to 924, and the
+  media from x 527 to 807 (both) with its bottom at 930 (both).
 
   What differs from ES-DE, because Skyscraper's artwork format cannot express it: the physical
-  media has a fixed place (ES-DE puts it 32 px right of the box, whatever the box's width), the
-  box is the cover with the `gamebox` effect and not ScreenScraper's own 3D box, the wheel fits a
-  fixed box and ES-DE sizes it by its area (`calculateMarqueeSize`; Skyscraper trims a logo's
-  transparent padding too, so both start from the logo's own shape). For the shapes that matter
-  the box is close: a logo 4:1 comes out 640x160 (ES-DE: 682x170), one 1.5:1 comes out 444x290
-  (ES-DE: 456x297), while a square one is 290x290 (ES-DE: 405x405) and a 2:1 one 580x290 (ES-DE:
-  502x251). A square or tall cover gives a box about 430x598 (ES-DE's 3D box: 463x600), a landscape
-  one about 505x555 (ES-DE's: up to 620 wide). A screenshot is always stretched to the frame
-  (ES-DE crops one wider than 16:10 or taller than 1:1) and black bars in a screenshot are kept
-  (ES-DE removes letterboxes and pillarboxes). The shadows fall down and to the right, not all
-  around.
+  media has a fixed place (ES-DE puts it 32 px right of the box's image, whatever its width; the
+  fixed x is the one ES-DE gives for a portrait GBA box, and it clears a landscape SNES box),
+  the box is the cover with the `gamebox` effect and not ScreenScraper's own 3D box, the wheel
+  fits a fixed box and ES-DE sizes it by its area (`calculateMarqueeSize`; Skyscraper trims a
+  logo's transparent padding too, so both start from the logo's own shape). For the shapes that
+  matter the box is close: a logo 4:1 comes out 680x170 (ES-DE: 682x170), one 1.5:1 comes out
+  444x290 (ES-DE: 456x297), while a square one is 290x290 (ES-DE: 405x405) and a 2:1 one
+  580x290 (ES-DE: 502x251). A square or tall cover gives a box about 430x598 (ES-DE's 3D box:
+  463x600), a landscape one about 505x555 (ES-DE's: up to 620 wide). A screenshot is always
+  stretched to the frame (ES-DE crops one wider than 16:10 or taller than 1:1) and black bars in
+  a screenshot are kept (ES-DE removes letterboxes and pillarboxes).
 - `artwork-3dbox.xml`: one `cover` output with the `gamebox` effect (`side="wheel"`), on a fixed
   600 by 600 transparent canvas (without a width the box comes out off centre and cropped).
 
