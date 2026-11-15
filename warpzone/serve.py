@@ -972,13 +972,16 @@ class App:
 
     def _authenticated(self, request: Request) -> str | None:
         """`access` when the request carries a valid Cloudflare Access token, else `bearer` or
-        `cookie` when it carries the UI token in one of the two ways."""
-        if self._access_valid(request):
-            return "access"
+        `cookie` when it carries the UI token in one of the two ways. A valid Access token next
+        to the right bearer is the bearer (a client that is not a browser keeps its exemption
+        from the `Origin` check); next to a wrong one it is just the Access token, with no wait,
+        because the token already answered."""
         auth = request.headers.get("authorization", "")
         scheme, _, given = auth.partition(" ")
         given = given.strip()
         bearer = scheme.lower() == "bearer" and bool(given)
+        if self._access_valid(request):
+            return "bearer" if bearer and _same(given, self._token) else "access"
         if not bearer:
             return "cookie" if self._cookie_valid(request) else None
         who: list[str] = []

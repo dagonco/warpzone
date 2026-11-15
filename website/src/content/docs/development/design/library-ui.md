@@ -883,8 +883,8 @@ did not pass Access (the LAN address, a console, a port that is reachable some o
 - **Keys.** `access_team_domain` is the team's host (`<team-name>.cloudflareaccess.com`, a bare
   host: no scheme, path or port) and `access_aud` is the application's AUD tag (Zero Trust,
   Access controls, Applications, Edit the application, Additional settings, "Application
-  Audience (AUD) Tag"). They are set together or not at all, and `serve` refuses to start on a
-  config with one of them. The optional `access_emails` lists the e-mails allowed in; it needs
+  Audience (AUD) Tag"). They are set together or not at all: a config with one of them is an
+  error, so every command that loads the config fails, not only `serve`. The optional `access_emails` lists the e-mails allowed in; it needs
   both of the others. Nothing else changes when they are absent.
 - **Which token.** The `Cf-Access-Jwt-Assertion` header, which `cloudflared` forwards. The
   `CF_Authorization` cookie is never read: Cloudflare does not promise to pass it, and a cookie
@@ -914,11 +914,19 @@ did not pass Access (the LAN address, a console, a port that is reachable some o
   failures (the kind of failure, never a token), and again when it recovers. Keys already
   fetched keep working for up to 24 hours when later fetches fail.
 - **In the request.** Before the cookie and bearer checks, a request with that header that
-  verifies is authenticated as `access`, for reads and writes alike, with no wait. A header that
+  verifies is authenticated as `access`, for reads and writes alike, with no wait. If it
+  comes with the right `Authorization: Bearer` (a client that is not a browser, passing Access
+  with a service token), the request is a `bearer` one and keeps the bearer's exemption from the
+  `Origin` check; the comparison is a plain `compare_digest`, with no wait. A header that
   is absent, does not verify or arrives while Access is not set up counts as no credential at
   all: it costs no wait and takes no place in the queue of failures, because it is not a guess
   at the UI token, and the request is judged by its cookie and bearer as if the header were not
-  there. A valid token next to a wrong bearer is accepted.
+  there. A valid token next to a wrong bearer is accepted
+  (as `access`).
+- **Why a token was refused.** The reason of a refusal (the wrong audience or issuer, an
+  expired token, an unknown key, and so on; never the token) is logged once per reason until a
+  token is accepted, so a wrong `access_aud` or team domain, or a clock that is off, shows up in
+  the log.
 - **The page.** It needs no change. It asks for the token only after an `/api/` answer of `401`;
   with a valid Access token the first calls (`devices`, `systems`, the catalog) are answered,
   so the prompt never opens. If the Access login ends while the page is open, the next call
@@ -928,8 +936,12 @@ did not pass Access (the LAN address, a console, a port that is reachable some o
   bearer credential it works for whoever holds it until its `exp` (the session duration set
   in Access), so a token copied out of a logged-in browser is as good as that session. The
   server does not check that the request really came from the tunnel: publishing the port only to
-  the tunnel's host keeps every other route to the UI shut, and the UI token still guards the
-  rest.
+  the tunnel's host keeps the home network away from the UI (a container on the same Compose
+  network can still reach it), and the UI token still guards the rest. The sign-in is an
+  ambient credential, like a `SameSite=Lax` cookie: Cloudflare adds it to every request the
+  browser makes to the hostname, so another site can make a browser send a cross-site
+  top-level `GET`, which is read-only and whose answer that site cannot read. A write still
+  needs an `Origin` equal to the `Host`, which another site cannot give.
 
 The server also bounds what a stranger can hold. A connection that sends nothing for 15
 seconds, also in the middle of a body, is closed; at most 64 connections are served at once and
@@ -962,7 +974,9 @@ home](/warpzone/setup/hub-container/#opening-the-ui-from-outside-the-home). What
 from any such proxy is the two things above: it keeps the `Host` header the browser used (so
 the `Origin` check passes) and it sets `X-Forwarded-Proto: https` (so the cookie is `Secure`).
 A client that is not a browser, such as the Decky plugin, cannot pass an identity provider's
-login, so it keeps using the LAN address.
+login, so it keeps using the LAN address (the port stays published to the LAN). Publishing
+the port to the loopback only cuts such a client off, unless it goes through Access with a
+service token and sends its bearer next to it.
 
 ### Endpoints
 

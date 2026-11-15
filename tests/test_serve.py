@@ -2057,6 +2057,16 @@ class AccessSignInTests(ServeCase):
             self.assertEqual(self.get("/api/v1/devices", headers=headers, auth=False).status, 200)
         sleep.assert_not_called()
 
+    def test_the_right_bearer_next_to_a_valid_token_keeps_its_origin_exemption(self) -> None:
+        body = {"changes": [{"device": "deck", "system": "gba", "on": False}], "dry_run": True}
+        body["expect"] = {"deck": self.etags()["deck"]}
+        both = {**self.jwt(), **BEARER}
+        self.assertEqual(self.call("POST", "/api/v1/changes", body, both, auth=False).status, 200)
+        # a wrong bearer next to the token is only the token: it needs the Origin
+        wrong = {**self.jwt(), "Authorization": "Bearer wrong"}
+        reply = self.call("POST", "/api/v1/changes", body, wrong, auth=False)
+        self.assertEqual((reply.status, self.error(reply)["code"]), (403, "bad-origin"))
+
     def test_the_cf_authorization_cookie_alone_is_not_trusted(self) -> None:
         cookie = {"Cookie": f"CF_Authorization={access_support.make_token()}"}
         self.assertEqual(self.get("/api/v1/devices", headers=cookie, auth=False).status, 401)

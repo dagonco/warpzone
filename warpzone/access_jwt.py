@@ -126,7 +126,10 @@ def _time(claims: dict[str, Any], name: str) -> float | None:
     value = claims.get(name)
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
-    return float(value) if math.isfinite(value) else None
+    try:
+        return float(value) if math.isfinite(value) else None
+    except OverflowError:  # an integer too big for a float
+        return None
 
 
 def verify_token(

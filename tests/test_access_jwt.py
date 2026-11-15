@@ -100,6 +100,11 @@ class RefusedTokenTests(unittest.TestCase):
         self.refused(sup.make_token(sup.claims(exp=True)), "expired")
         self.refused(sup.make_token(sup.claims(exp=float("inf"))), "expired")
 
+    def test_a_number_too_big_for_a_float_is_refused_not_raised(self) -> None:
+        self.refused(sup.make_token(sup.claims(exp=10**400)), "expired")
+        self.refused(sup.make_token(sup.claims(nbf=10**400)), "nbf")
+        self.refused(sup.make_token(sup.claims(iat=-(10**400))), "iat")
+
     def test_nbf_or_iat_in_the_future(self) -> None:
         late = sup.NOW + access_jwt.LEEWAY + 1
         self.refused(sup.make_token(sup.claims(nbf=late)), "nbf")

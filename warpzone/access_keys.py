@@ -97,6 +97,7 @@ class AccessGate:
         self._fetched: float | None = None  # when the keys were last fetched
         self._attempted: float | None = None  # when a fetch was last tried
         self._failing = False
+        self._refused: set[str] = set()  # the reasons logged since the last token accepted
 
     def check(self, token: str, now: float) -> Verdict:
         """The verdict on `token` at `now` (Unix seconds). Never raises."""
@@ -104,10 +105,24 @@ class AccessGate:
             verdict = self._verify(token, self._current_keys(), now)
             if verdict.reason == access_jwt.UNKNOWN_KID and self._refresh_for_unknown_key():
                 verdict = self._verify(token, self._current_keys(), now)
+            self._note(verdict)
             return verdict
         except Exception as exc:  # a bug here must not become a 500 or an acceptance
             self._log(f"access: internal error: {type(exc).__name__}")
             return Verdict(False, "internal error")
+
+    def _note(self, verdict: Verdict) -> None:
+        """Log why a token was refused, once per reason until a token is accepted, so a wrong
+        `access_aud` or team domain or a clock that is off shows in the log. The reason never
+        holds the token."""
+        with self._lock:
+            if verdict.ok:
+                self._refused.clear()
+                return
+            if verdict.reason in self._refused:
+                return
+            self._refused.add(verdict.reason)
+        self._log(f"access: a token was refused: {verdict.reason}")
 
     def _verify(self, token: str, keys: dict[str, RsaKey], now: float) -> Verdict:
         return access_jwt.verify_token(

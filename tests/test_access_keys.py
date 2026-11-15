@@ -84,22 +84,25 @@ class FetchTests(GateCase):
         self.assertTrue(self.check(gate))
 
     def test_a_failed_fetch_grants_nothing_and_is_logged_once_per_streak(self) -> None:
+        def fetch_logs() -> list[str]:
+            return [line for line in self.logs if "signing keys" in line]
+
         self.fetch.answer = urllib.error.URLError(OSError("no route"))
         gate = self.gate()
         for _ in range(4):
             self.assertFalse(self.check(gate))
             self.time += access_keys.RETRY_SECONDS
         self.assertEqual(len(self.fetch.calls), 4)
-        self.assertEqual(len(self.logs), 1)
-        self.assertIn("cannot fetch the signing keys", self.logs[0])
-        self.assertNotIn("no route", self.logs[0])
+        self.assertEqual(len(fetch_logs()), 1)
+        self.assertIn("cannot fetch the signing keys", fetch_logs()[0])
+        self.assertNotIn("no route", fetch_logs()[0])
         self.fetch.answer = sup.jwks()
         self.assertTrue(self.check(gate))
-        self.assertIn("fetched again", self.logs[-1])
+        self.assertIn("fetched again", fetch_logs()[-1])
         self.fetch.answer = ValueError("broken")
         self.time += access_keys.REFRESH_SECONDS
         self.assertTrue(self.check(gate))  # the old keys serve while the fetch fails
-        self.assertEqual(len(self.logs), 3)
+        self.assertEqual(len(fetch_logs()), 3)
 
     def test_an_answer_with_no_usable_key_is_a_failure(self) -> None:
         for answer in ({"keys": []}, "text", None, {"keys": [{"kid": "x", "kty": "RSA"}]}):
@@ -137,6 +140,22 @@ class VerdictTests(GateCase):
         self.assertFalse(self.check(self.gate(("other@example.com",))))
         self.assertFalse(self.check(self.gate(), sup.make_token(sup.claims(aud=["nope"]))))
         self.assertFalse(self.check(self.gate(), sup.make_token(sup.claims(exp=sup.NOW - 5))))
+
+    def test_a_refusal_is_logged_once_per_reason_until_a_token_is_accepted(self) -> None:
+        gate = self.gate()
+        wrong_aud = sup.make_token(sup.claims(aud=["nope"]))
+        expired = sup.make_token(sup.claims(exp=sup.NOW - 5))
+        for token in (wrong_aud, wrong_aud, expired, wrong_aud, expired):
+            self.assertFalse(self.check(gate, token))
+        refusals = [line for line in self.logs if "was refused" in line]
+        self.assertEqual(len(refusals), 2)
+        self.assertIn("audience", refusals[0])
+        self.assertIn("expired", refusals[1])
+        self.assertTrue(self.check(gate))  # an accepted token ends the streak
+        self.assertFalse(self.check(gate, wrong_aud))
+        self.assertEqual(len([line for line in self.logs if "was refused" in line]), 3)
+        for token in (wrong_aud, expired):
+            self.assertNotIn(token, "\n".join(self.logs))
 
     def test_it_does_not_raise_on_garbage(self) -> None:
         gate = self.gate()
