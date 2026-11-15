@@ -33,6 +33,7 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ### Changed
 
+- The [Scraping](https://dagonco.github.io/warpzone/setup/scrape/#filling-art-every-night) guide says how to stop a scrape that runs in the hub container: `docker kill -s INT <container>`, since `timeout` or Ctrl-C on `docker compose run -T` stops only the client and leaves the scrape holding the inbox lock.
 - `warpzone inbox` now always gives `chdman createdvd` the codecs `-c lzma,zlib,huff`, without FLAC, which a DVD has no use for: with chdman's default codecs a 1.9 GB PS2 ISO peaked at 3.2 GB of memory (49 MB without FLAC) and was killed in the hub container, and the CHD comes out 1.6% bigger. A CHD made earlier is the same game ("already in the library" compares chdman's data SHA1, not the bytes). See [chdman's codecs](https://dagonco.github.io/warpzone/development/design/inbox/).
 - `warpzone inbox` (attended too) now also requires `library/.stfolder` under the hub root, as `serve` does, so a share that is not mounted is never taken for an empty library. The error names the folders that are missing.
 - The inbox lock (`inbox/.warpzone.lock`, taken by `warpzone inbox --apply` and `warpzone scrape`) now has a heartbeat: the run that holds it touches the file every minute, and a lock whose file has not been touched for 10 minutes is reported as stale (`no heartbeat since 10:15`) and taken over with `--force-lock`, instead of waiting 12 hours. A long conversion no longer risks its lock being reported as stale after 12 hours. A lock left by an older warpzone keeps the 12-hour rule. See [Inbox](https://dagonco.github.io/warpzone/development/design/inbox/).
@@ -41,6 +42,7 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ### Fixed
 
+- `warpzone doctor` says "about 1 night", not "about 1 nights", in the `Nightly scrape` line when one more night finishes the backlog.
 - `warpzone doctor` no longer warns that `[inbox] work_dir` "does not exist in this container" when only its last folder is missing under a writable mounted parent: `inbox` creates that folder on its first run, so the `Work folder` line is `[ok]` ("created on the first run"); it warns when the parent is missing or not writable.
 - `warpzone inbox` places a `.nsz` of a ticketless dump: `nsz -V` skips the hash check of such a file and prints `[TICKETLESS]` where it prints `[VERIFIED]`, which sent a valid game to review as "failed nsz verification". It is now placed, and the report says it was not hash-checked by nsz.
 - Two writers of the same file through `safefile` (`atomic_write`, `write_file`) no longer share the temporary file: each write has a `.<name>.<pid>-<random>.wz-tmp` of its own beside the file, so one cannot delete or move over the other's half-written copy. It still ends in `.wz-tmp`, which the folders already ignore.
