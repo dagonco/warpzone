@@ -518,6 +518,16 @@ def _clean(text: str) -> str:
     return _ILLEGAL.sub("", text)
 
 
+def staged_name(name: str) -> str:
+    """The name a game is staged under for Skyscraper: its gamelist path, except that a `.zcci`
+    (Azahar's compressed 3DS image) is staged as `.cci`, because Skyscraper's 3DS platform lists
+    only `*.3ds` and `*.cci` and would skip the file. The staged name only keys the batch;
+    the hub's names come from the game."""
+    if name.lower().endswith(".zcci"):
+        return name[: -len(".zcci")] + ".cci"
+    return name
+
+
 def _staged_name(path: str, root: str) -> str | None:
     """A Skyscraper entry's `<path>` as a name below the staged folder, or None when it is
     outside it, climbs with `..` or is empty. `./Game.zip`, `Game.zip` and `<root>/Game.zip`

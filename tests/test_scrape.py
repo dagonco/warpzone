@@ -55,6 +55,12 @@ class PlatformTableTest(unittest.TestCase):
         self.assertEqual(scrape.PLATFORMS["sega32x"], "sega32x")
         self.assertEqual(scrape.PLATFORMS["atarijaguar"], "atarijaguar")
 
+    def test_a_zcci_is_staged_as_a_cci_and_nothing_else_is_renamed(self):
+        self.assertEqual(scrape.staged_name("Game (USA).zcci"), "Game (USA).cci")
+        self.assertEqual(scrape.staged_name("Sub/Game.ZCCI"), "Sub/Game.cci")
+        for name in ("Game.cci", "Game.3ds", "Game.zip", "Game.zcia", "Game.m3u"):
+            self.assertEqual(scrape.staged_name(name), name)
+
     def test_left_out_systems_have_a_reason(self):
         self.assertEqual(set(scrape.UNSCRAPED), {"ps4", "psvita", "xbox360", "wiiu"})
         self.assertTrue(all(scrape.UNSCRAPED.values()))

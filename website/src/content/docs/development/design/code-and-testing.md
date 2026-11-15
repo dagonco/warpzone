@@ -92,7 +92,7 @@ warpzone/
   shadps4.py         shadPS4's install directories and launch script edits (pure)
   cemu.py            Cemu's MLC path and game paths in its settings.xml (pure)
   titlelinks.py      symlinks from the library's game folders into an emulator's own (pure plan)
-  inbox_n3ds.py      3DS images (`.3ds`, `.cci`): NCSD / NCCH header check, placed as `.cci`
+  inbox_n3ds.py      3DS images (`.3ds`, `.cci`, `.zcci`): NCSD / NCCH or Z3DS header check, placed as `.cci` or `.zcci`
   inbox_dolphin.py   Wii and GameCube `.rvz` / `.wia`: header check (disc type, magic, game ID), placed in `wii/` or `gc/`
   inbox_chd.py       a dropped `.chd` of a CHD system: `chdman info`, extraction to the work folder, unmatched reasons
   flatpak.py         the SyncThingy flatpak: app id and the unit's commands

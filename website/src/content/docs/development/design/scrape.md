@@ -203,6 +203,9 @@ scrapes, so the games it placed are there.
    after the folder that points at the playlist inside it (`Game.m3u` -> `.../Game.m3u/Game.m3u`),
    so Skyscraper sees one game, searches by the name without disc tags and writes one entry. The
    map from staged name to game is kept for the merge; Skyscraper's paths are never trusted.
+   A `.zcci` (Azahar's compressed 3DS image) is linked as `<name>.cci`, because Skyscraper's
+   `3ds` platform lists only `*.3ds` and `*.cci` and would skip it (`scrape.staged_name`); the
+   hub's names still come from the game, so its media is `<name>.png`, as for a `.cci`.
 3. **Gather**, in batches of 100 games (an `--includefrom` list of staged paths): `Skyscraper -p
    <platform> -s screenscraper -i <input> --includefrom <batch> --flags
    onlymissing,videos,backcovers,unattend,nohints`. This is the only step that makes requests;

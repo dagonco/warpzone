@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 
 from inbox_support import age
-from n3ds_support import UNIT, ncsd
+from n3ds_support import UNIT, ncsd, z3ds
 from test_inbox import Base
 from warpzone import inbox_n3ds as n3
 from warpzone.config import InboxSettings
@@ -13,6 +13,7 @@ from warpzone.inbox_core import whitelist_line
 
 NAME = "Plumber Kart 3D (Europe) (En,Fr,De).3ds"
 CCI = "Plumber Kart 3D (Europe) (En,Fr,De).cci"
+ZCCI = "Plumber Kart 3D (Europe) (En,Fr,De).zcci"
 
 
 def detect_bytes(data: bytes) -> n3.Verdict:
@@ -25,9 +26,22 @@ def judge(data: bytes) -> n3.Verdict:
 
 class PureTests(unittest.TestCase):
     def test_claimed_names(self) -> None:
-        for name in ("A.3ds", "A.3DS", "b.cci", "c/d.CCI", "Game (USA).3ds"):
+        for name in ("A.3ds", "A.3DS", "b.cci", "c/d.CCI", "Game (USA).3ds", "A.zcci", "B.ZCCI"):
             self.assertTrue(n3.claimed_name(name), name)
-        for name in ("A.3dsx", "A.cia", "A.3ds.zip", "A.3ds.bak", "cci", "A.cc", "A.iso"):
+        for name in (
+            "A.3dsx",
+            "A.cia",
+            "A.3ds.zip",
+            "A.3ds.bak",
+            "cci",
+            "A.cc",
+            "A.iso",
+            "A.zcia",
+            "A.zcxi",
+            "A.z3dsx",
+            "A.zcci.bak",
+            "zcci",
+        ):
             self.assertFalse(n3.claimed_name(name), name)
 
     def test_the_target_name_is_always_cci(self) -> None:
@@ -36,6 +50,20 @@ class PureTests(unittest.TestCase):
         self.assertEqual(n3.target_name("Game (USA).cci"), "Game (USA).cci")
         self.assertEqual(n3.target_name("Game (USA).CCI"), "Game (USA).cci")
         self.assertEqual(n3.target_name("Game.3ds.3ds"), "Game.3ds.cci")
+
+    def test_a_zcci_keeps_its_suffix_in_lower_case(self) -> None:
+        self.assertEqual(n3.target_name("Game (USA).zcci"), "Game (USA).zcci")
+        self.assertEqual(n3.target_name("Game (USA).ZCCI"), "Game (USA).zcci")
+        self.assertEqual(n3.target_name("Game.cci.zcci"), "Game.cci.zcci")
+        self.assertTrue(n3.is_compressed_name("A.ZCCI"))
+        self.assertFalse(n3.is_compressed_name("A.cci"))
+
+    def test_the_forms_of_one_game_share_a_key(self) -> None:
+        for name in ("Game.3ds", "Game.cci", "Game.CCI", "Game.zcci", "Game.ZCCI"):
+            self.assertEqual(n3.game_key(name), "Game", name)
+        self.assertNotEqual(n3.game_key("Game.cci"), n3.game_key("Game 2.zcci"))
+        self.assertEqual(n3.other_form("Game.cci"), "Game.zcci")
+        self.assertEqual(n3.other_form("Game.zcci"), "Game.cci")
 
     def test_a_decrypted_image_is_accepted(self) -> None:
         verdict = judge(ncsd())
@@ -87,6 +115,79 @@ class PureTests(unittest.TestCase):
         struct.pack_into("<II", head, 0x120, 0x30, 0x10)
         self.assertEqual(n3.partition0_offset(bytes(head)), 0x30 * UNIT)
         self.assertIsNone(n3.partition0_offset(b"\x00" * 0x200))
+
+
+def judge_z(data: bytes) -> n3.Verdict:
+    return n3.judge_z3ds(data[:0x200], len(data))
+
+
+class Z3dsPureTests(unittest.TestCase):
+    def test_a_z3ds_wrapping_ncsd_is_accepted(self) -> None:
+        verdict = judge_z(z3ds())
+        self.assertTrue(verdict.ok)
+        self.assertTrue(verdict.compressed)
+        self.assertIn("Z3DS compressed", verdict.describe())
+
+    def test_the_header_of_a_real_file_starts_like_the_builder(self) -> None:
+        # the first 16 bytes of an Azahar .zcci: Z3DS, NCSD, version 1, reserved 0, header
+        # size 0x20, metadata size 0x80
+        self.assertEqual(z3ds()[:16], bytes.fromhex("5a3344534e4353440100200080000000"))
+
+    def test_a_larger_header_and_no_metadata_are_accepted(self) -> None:
+        self.assertTrue(judge_z(z3ds(header_size=0x40, metadata_size=0)).ok)
+
+    def test_a_cut_or_padded_file_is_invalid(self) -> None:
+        data = z3ds()
+        cut = n3.judge_z3ds(data[:0x200], len(data) - 10)
+        self.assertEqual(cut.status, n3.INVALID)
+        self.assertIn("truncated", cut.reason)
+        padded = judge_z(z3ds(padding=5))
+        self.assertEqual(padded.status, n3.INVALID)
+        self.assertIn("extra bytes", padded.reason)
+
+    def test_a_bad_header_is_invalid_with_a_reason(self) -> None:
+        cases = {
+            "no Z3DS magic": z3ds(magic=b"Z3DX"),
+            "wraps 'CIA\\x00'": z3ds(wrapped=b"CIA\0"),
+            "wraps 'NCCH'": z3ds(wrapped=b"NCCH"),
+            "version 2": z3ds(version=2),
+            "version 0": z3ds(version=0),
+            "too small": z3ds(header_size=0x10),
+            "empty": z3ds(uncompressed=0),
+            "truncated": z3ds(compressed=1 << 40),
+        }
+        for want, data in cases.items():
+            verdict = judge_z(data)
+            self.assertEqual(verdict.status, n3.INVALID, want)
+            self.assertIn(want, verdict.reason, want)
+            self.assertTrue(verdict.compressed)
+
+    def test_a_short_file_is_invalid(self) -> None:
+        for data in (b"", b"Z3DS", z3ds()[:0x1F]):
+            self.assertEqual(n3.judge_z3ds(data, len(data)).status, n3.INVALID)
+
+    def test_a_plain_image_is_not_a_zcci(self) -> None:
+        self.assertEqual(judge_z(ncsd()).status, n3.INVALID)
+        self.assertIn("Z3DS", judge_z(ncsd()).reason)
+
+    def test_a_z3ds_under_a_cci_name_says_to_rename_it(self) -> None:
+        verdict = n3.judge(z3ds()[:0x200], b"", len(z3ds()))
+        self.assertEqual(verdict.status, n3.INVALID)
+        self.assertIn(".zcci", verdict.reason)
+
+    def test_detect_reads_the_header_only_and_follows_the_flag(self) -> None:
+        reads: list[int] = []
+
+        class Spy(io.BytesIO):
+            def read(self, n: int | None = -1) -> bytes:
+                reads.append(-1 if n is None else n)
+                return super().read(n)
+
+        data = z3ds(payload_bytes=100_000)
+        self.assertTrue(n3.detect(Spy(data), compressed=True).ok)
+        self.assertTrue(reads and max(reads) <= 0x200, reads)
+        self.assertEqual(n3.detect(io.BytesIO(data)).status, n3.INVALID)
+        self.assertEqual(n3.detect(io.BytesIO(ncsd()), compressed=True).status, n3.INVALID)
 
 
 class DetectTests(unittest.TestCase):
@@ -178,6 +279,127 @@ class PlacementTests(FlowBase):
         self.drop(NAME, ncsd())
         self.assertEqual(self.go(), 0, self.out)
         self.assertEqual(sorted(p.name for p in (self.roms / "n3ds").iterdir()), [CCI])
+
+
+class ZcciFlowTests(FlowBase):
+    def test_a_zcci_is_filed_as_it_is(self) -> None:
+        data = z3ds()
+        self.drop("Plumber Kart 3D (Europe) (En,Fr,De).ZCCI", data)
+        self.assertEqual(self.go(), 0, self.out)
+        self.assertEqual(self.library(), [f"n3ds/{ZCCI}"])
+        self.assertEqual((self.roms / "n3ds" / ZCCI).read_bytes(), data)
+        self.assertIn(f"path: library/roms/n3ds/{ZCCI}", self.out)
+        self.assertIn(whitelist_line("n3ds", ZCCI), self.out)
+        self.assertIn("Z3DS compressed", self.out)
+        self.assertNotIn("no DAT match", self.out)
+        self.assertEqual(self.done(), ["Plumber Kart 3D (Europe) (En,Fr,De).ZCCI"])
+
+    def test_report_only_changes_nothing(self) -> None:
+        self.drop(ZCCI, z3ds())
+        self.assertEqual(self.go(apply=False), 0, self.out)
+        self.assertIn("would place", self.out)
+        self.assertIn(whitelist_line("n3ds", ZCCI), self.out)
+        self.assertFalse((self.roms / "n3ds").exists())
+
+    def test_in_a_folder_and_in_an_archive(self) -> None:
+        self.drop("pack", {f"x/{ZCCI}": z3ds(), "readme.txt": b"hi"})
+        self.zip_of("dump.zip", {"Other Game.zcci": z3ds(payload_bytes=900), "Third.cci": ncsd()})
+        self.assertEqual(self.go(), 0, self.out)
+        self.assertEqual(self.library(), ["n3ds/Other Game.zcci", f"n3ds/{ZCCI}", "n3ds/Third.cci"])
+
+    def test_the_same_zcci_again_is_already_in_the_library(self) -> None:
+        data = z3ds()
+        self.drop(ZCCI, data)
+        self.assertEqual(self.go(), 0, self.out)
+        self.drop(ZCCI, data)
+        self.assertEqual(self.go(), 0, self.out)
+        self.assertIn("already in the library", self.out)
+        self.assertEqual(self.library(), [f"n3ds/{ZCCI}"])
+
+    def test_a_different_zcci_with_the_same_name_is_never_replaced(self) -> None:
+        self.drop(ZCCI, z3ds(payload_bytes=500))
+        self.assertEqual(self.go(), 0)
+        kept = (self.roms / "n3ds" / ZCCI).read_bytes()
+        self.drop(ZCCI, z3ds(payload_bytes=700))
+        self.assertEqual(self.go(), 1, self.out)
+        self.assertEqual((self.roms / "n3ds" / ZCCI).read_bytes(), kept)
+        self.assertIn("different file", self.reason(ZCCI))
+
+    def test_a_cci_is_not_placed_beside_the_same_game_as_zcci(self) -> None:
+        (self.roms / "n3ds").mkdir()
+        (self.roms / "n3ds" / ZCCI).write_bytes(z3ds())
+        self.drop(NAME, ncsd())
+        self.assertEqual(self.go(), 1, self.out)
+        self.assertEqual(self.library(), [f"n3ds/{ZCCI}"])
+        self.assertIn(f"{ZCCI} is already in the library", self.reason(NAME))
+        self.assertIn("compressed form", self.reason(NAME))
+        self.assertEqual(self.review(), [NAME, f"{NAME}.reason.txt"])
+
+    def test_a_zcci_is_not_placed_beside_the_same_game_as_cci(self) -> None:
+        (self.roms / "n3ds").mkdir()
+        (self.roms / "n3ds" / CCI).write_bytes(ncsd())
+        self.drop(ZCCI, z3ds())
+        self.assertEqual(self.go(), 1, self.out)
+        self.assertEqual(self.library(), [f"n3ds/{CCI}"])
+        self.assertIn(f"{CCI} is already in the library", self.reason(ZCCI))
+        self.assertIn("uncompressed form", self.reason(ZCCI))
+
+    def test_the_other_form_is_reported_without_apply_too(self) -> None:
+        (self.roms / "n3ds").mkdir()
+        (self.roms / "n3ds" / CCI).write_bytes(ncsd())
+        self.drop(ZCCI, z3ds())
+        self.assertEqual(self.go(apply=False), 1, self.out)
+        self.assertIn(f"{CCI} is already in the library", self.out)
+        self.assertEqual([p.name for p in self.inbox.iterdir()], [ZCCI])
+
+    def test_a_cci_and_a_zcci_in_one_item_go_to_review(self) -> None:
+        self.drop("pack", {"Same.cci": ncsd(), "Same.zcci": z3ds()})
+        self.assertEqual(self.go(), 1, self.out)
+        self.assertEqual(self.library(), ["n3ds/Same.cci"])
+        self.assertIn("Same.zcci", self.reason("pack"))
+        self.assertIn("same game", self.reason("pack"))
+
+    def test_a_3ds_and_a_zcci_in_one_item_go_to_review(self) -> None:
+        self.drop("pack", {"Same.zcci": z3ds(), "Same.3ds": ncsd()})
+        self.assertEqual(self.go(), 1, self.out)
+        self.assertEqual(len(self.library()), 1)
+
+    def test_different_games_with_both_forms_are_placed(self) -> None:
+        self.drop("pack", {"One.cci": ncsd(), "Two.zcci": z3ds()})
+        self.assertEqual(self.go(), 0, self.out)
+        self.assertEqual(self.library(), ["n3ds/One.cci", "n3ds/Two.zcci"])
+
+
+class ZcciReviewTests(FlowBase):
+    def test_a_wrong_magic_goes_to_review_with_a_reason(self) -> None:
+        self.drop("Bogus.zcci", b"just some bytes" * 1000)
+        self.assertEqual(self.go(), 1, self.out)
+        self.assertIn("Z3DS", self.reason("Bogus.zcci"))
+        self.assertNotIn("no DAT match", self.reason("Bogus.zcci"))
+        self.assertEqual(self.library(), [])
+
+    def test_a_z3ds_of_another_format_goes_to_review(self) -> None:
+        self.drop("Install.zcci", z3ds(wrapped=b"CIA\0"))
+        self.assertEqual(self.go(), 1, self.out)
+        self.assertIn("not a 3DS cartridge image", self.reason("Install.zcci"))
+        self.assertEqual(self.library(), [])
+
+    def test_a_truncated_zcci_goes_to_review(self) -> None:
+        self.drop("Cut.zcci", z3ds()[:-50])
+        self.assertEqual(self.go(), 1, self.out)
+        self.assertIn("truncated", self.reason("Cut.zcci"))
+        self.assertEqual(self.library(), [])
+
+    def test_a_good_and_a_bad_zcci_in_a_folder(self) -> None:
+        self.drop("pack", {"Good.zcci": z3ds(), "Bad.zcci": z3ds(version=9)})
+        self.assertEqual(self.go(), 1, self.out)
+        self.assertEqual(self.library(), ["n3ds/Good.zcci"])
+        self.assertIn("Bad.zcci", self.reason("pack"))
+
+    def test_other_compressed_formats_are_not_claimed(self) -> None:
+        self.drop("Install.zcia", z3ds(wrapped=b"CIA\0"))
+        self.assertEqual(self.go(), 1, self.out)
+        self.assertIn("no DAT match", self.reason("Install.zcia"))
 
 
 class AlreadyThereTests(FlowBase):
