@@ -247,8 +247,8 @@ The contract:
   matching or conversion.
 - **PS3, Xbox, Xbox 360 and Wii U images.** See [Console disc images](#console-disc-images)
   below; they are identified by signature, not by DAT.
-- **3DS images.** See [3DS images](#3ds-images) below; `.3ds` and `.cci` files are
-  identified by their NCSD and NCCH headers, not by DAT.
+- **3DS images.** See [3DS images](#3ds-images) below; `.3ds`, `.cci` and `.zcci` files are
+  identified by their NCSD and NCCH headers (a `.zcci` by its Z3DS header), not by DAT.
 - **Wii and GameCube `.rvz` and `.wia`.** See
   [Compressed Wii and GameCube images](#compressed-wii-and-gamecube-images) below; they are
   identified by the disc header copy they carry, not by DAT and not with `dolphin-tool`.
@@ -496,13 +496,14 @@ signature. The code is in `warpzone/inbox_console_iso.py`, which is both a kind 
 
 ## 3DS images
 
-A `.3ds` or `.cci` file has no DAT here, so it is identified by its headers. The code is in
+A `.3ds`, `.cci` or `.zcci` file has no DAT here, so it is identified by its headers. The code is in
 `warpzone/inbox_n3ds.py`, a kind handler in `inbox.kind_handlers()` (it is not an
 `UnmatchedHandler`).
 
 - **Claiming.** The handler claims an item (a file, a folder, or an archive listed with
-  `inbox_console_iso.names_in`) when a file name ends in `.3ds` or `.cci`, case-insensitively.
-  `.3dsx` and `.cia` are not claimed. Names alone never identify: a claimed file whose headers are
+  `inbox_console_iso.names_in`) when a file name ends in `.3ds`, `.cci` or `.zcci`,
+  case-insensitively. `.3dsx`, `.cia` and the other compressed formats of Azahar (`.zcia`,
+  `.zcxi`, `.z3dsx`) are not claimed. Names alone never identify: a claimed file whose headers are
   not valid goes to review. Other non-sidecar files of a claimed item are named in the review
   reason.
 - **Verdict.** `judge(head, ncch, file_size)` is pure and reads nothing; `detect` reads the first
@@ -515,16 +516,48 @@ A `.3ds` or `.cci` file has no DAT here, so it is identified by its headers. The
     NoCrypto bit (0x04). Without it the status is `encrypted`.
   - Statuses are `ok`, `encrypted` and `invalid`. Both of the last two go to review with a
     reason; an encrypted image says that Azahar opens only decrypted images.
-- **Placement.** `library/roms/n3ds/<stem>.cci`, for a `.3ds` as well as for a `.cci`: the
-  file is renamed on placement and its bytes are not changed. It uses the same copy as the console
+- **Compressed images (`.zcci`).** Azahar loads a `.zcci` directly (since 2123-beta1), and
+  ES-DE lists `.zcci` in its `n3ds` system (since 3.4.0), so the file is filed as it is and
+  never decompressed: Python's standard library has no zstd before 3.14, and the library
+  keeps the file the user dropped. `judge_z3ds(head, file_size)` is pure and checks the
+  0x20-byte Z3DS header Azahar reads (`Z3DSFileHeader` in `src/common/file_derived.h`),
+  all little-endian:
+
+  | Offset | Size | Field | Accepted |
+  |---|---|---|---|
+  | 0x00 | 4 | magic | `Z3DS` |
+  | 0x04 | 4 | magic of the wrapped format | `NCSD` (another wrapped format, as in a `.zcia`, goes to review) |
+  | 0x08 | 1 | version | 1, the only one Azahar reads |
+  | 0x09 | 1 | reserved | not checked |
+  | 0x0A | 2 | header size | at least 0x20 |
+  | 0x0C | 4 | metadata size | not checked on its own |
+  | 0x10 | 8 | compressed size | not 0 |
+  | 0x18 | 8 | uncompressed size | at least 0x200 (an NCSD header) |
+
+  The header size, the metadata size and the compressed size must add up to the size of
+  the file: Azahar finds the zstd seek table at the end of the file, so a truncated copy
+  and a file with extra bytes after the data both fail to open and go to review with
+  that reason. A `.cci` or `.3ds` whose content begins with `Z3DS` goes to review with
+  "drop it as .zcci". The wrapped image is never read, so the NCSD and NCCH checks, and
+  the encryption check, do not apply: the report says
+  `Z3DS compressed, filed as it is; encryption not checked`. Only the first 0x200 bytes
+  are read.
+- **Placement.** `library/roms/n3ds/<stem>.cci`, for a `.3ds` as well as for a `.cci`, and
+  `<stem>.zcci` for a `.zcci` (the suffix in lower case): a `.3ds` is renamed on placement
+  and its bytes are not changed. It uses the same copy as the console
   images (`inbox_console_iso.place_file`: `<name>.part`, `inbox.copy_verified`, rename, a re-check
   right before the rename), so nothing is replaced: an existing name with the same size and SHA1
   is "already in the library" and a different one a review (`inbox.destination_verdict`). In report
   mode an existing name is "already exists" and nothing is written, not even the folder. The
   report shows `detected: Nintendo 3DS image (decrypted)`, the path and the whitelist line
-  (`!/roms/n3ds/<name>.cci`).
-- **One target name.** Two files of one item that would be filed under the same name (`X.3ds`
-  and `X.cci`) are not placed together: the second goes to review.
+  (`!/roms/n3ds/<name>.cci`, or `.zcci`).
+- **One game, one file.** `X.3ds` and `X.cci` are the same file under two names, so the
+  second one dropped is "already in the library". `X.cci` and `X.zcci` are the same game
+  in two forms whose bytes differ, so they cannot be compared without decompressing, and
+  two copies would show twice in ES-DE: when the library has the other form, the item goes
+  to review (also in report mode) with a reason that names the file already there, and
+  nothing is replaced or deleted. Two files of one item for the same game (`X.3ds`,
+  `X.cci`, `X.zcci`, any two) are not placed together: the second goes to review.
 
 ## CHD images
 

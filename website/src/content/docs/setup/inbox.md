@@ -252,14 +252,16 @@ Titles come from a local clone of titledb (`git clone --depth 1 https://github.c
 
 ## 3DS games
 
-`.3ds` and `.cci` files (the two names of one format, a cartridge image) are recognised by their header, not by a DAT and not by their name alone, whether they are loose, in a folder or in an archive. Only two 0x200-byte pieces are read:
+`.3ds` and `.cci` files (the two names of one format, a cartridge image) and `.zcci` files (Azahar's compressed form of it) are recognised by their header, not by a DAT and not by their name alone, whether they are loose, in a folder or in an archive. For a `.3ds` or `.cci` only two 0x200-byte pieces are read:
 
 - the NCSD container: the magic `NCSD` at 0x100, and an image size (u32 at 0x104, counted in 0x200-byte units) that is not bigger than the file;
 - partition 0: an NCCH header whose flags mark it as decrypted (NoCrypto).
 
 A decrypted image is filed in `library/roms/n3ds/<name>.cci`. A `.3ds` is renamed to `.cci` on the way in and its bytes do not change, so the same game dropped as `.3ds` and as `.cci` is the same file ("already in the library"). Nothing is ever overwritten: a different file under that name goes to review. The report shows what was detected, the destination and the whitelist line (`!/roms/n3ds/<name>.cci`).
 
-An encrypted image goes to review: Azahar, the 3DS emulator of the consoles, opens only decrypted images, so decrypt it first and drop the result. A file whose header is not valid (no `NCSD` or `NCCH` magic, a size bigger than the file, a truncated dump) goes to review with the reason. `.3dsx` homebrew and `.cia` installers are not images and are not handled here.
+A `.zcci` (made with Azahar's Tools, Compress ROM File, or its command line; Azahar 2123 or later opens it, and ES-DE 3.4.0 or later lists it) is filed as it is in `library/roms/n3ds/<name>.zcci`, never decompressed. It is checked from its `Z3DS` header (it must wrap a cartridge image, `NCSD`, and its sizes must match the file, so a truncated copy goes to review), and because the image inside is not read, the report says that its encryption was not checked: compress only decrypted images. A game that is already in the library in the other form (`<name>.cci` when you drop `<name>.zcci`, or the reverse) is not filed a second time, because the two cannot be compared and ES-DE would list it twice: the item goes to review and the reason names the file that is there. Delete one of the two, from the hub's `library`, and drop the other again if you want to change form.
+
+An encrypted image goes to review: Azahar, the 3DS emulator of the consoles, opens only decrypted images, so decrypt it first and drop the result. A file whose header is not valid (no `NCSD` or `NCCH` magic, a size bigger than the file, a truncated dump) goes to review with the reason. `.3dsx` homebrew, `.cia` installers and the other compressed formats of Azahar (`.zcia`, `.zcxi`, `.z3dsx`) are not cartridge images and are not handled here.
 
 ## Wii and GameCube compressed images
 

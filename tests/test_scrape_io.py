@@ -502,6 +502,29 @@ class StageTest(HubCase):
         self.assertTrue((into / KIRBY).is_symlink())
         self.assertEqual([d.what for d in dropped], ["Gone.zip"])
 
+    def test_a_zcci_is_linked_under_a_cci_name_and_keeps_its_game(self):
+        from library_support import game
+
+        folder = self.hub.root / "library" / "roms" / "n3ds"
+        folder.mkdir(parents=True)
+        (folder / "Plumber Kart.zcci").write_bytes(b"Z3DS")
+        (folder / "Other.zcci").write_bytes(b"Z3DS")
+        (folder / "Other.cci").write_bytes(b"NCSD")
+        z = game("n3ds", "roms/n3ds/Plumber Kart.zcci", "Plumber Kart")
+        a = game("n3ds", "roms/n3ds/Other.zcci", "Other")
+        b = game("n3ds", "roms/n3ds/Other.cci", "Other")
+        into = self.hub.base / "input"
+        into.mkdir()
+        staged, dropped = scrape_io.stage(self.hub.root / "library", into, [z, a, b])
+        self.assertEqual(set(staged), {"Plumber Kart.cci", "Other.cci"})
+        self.assertIs(staged["Plumber Kart.cci"], z)
+        self.assertEqual(
+            (into / "Plumber Kart.cci").resolve(), (folder / "Plumber Kart.zcci").resolve()
+        )
+        self.assertFalse((into / "Plumber Kart.zcci").exists())
+        self.assertEqual([d.what for d in dropped], ["Other.cci"])
+        self.assertIn("another game", dropped[0].reason)
+
     def test_a_path_that_climbs_is_not_staged(self):
         from library_support import game
 
