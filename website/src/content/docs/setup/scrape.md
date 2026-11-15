@@ -81,13 +81,15 @@ For a game without an entry, warpzone adds a `<game>` with the name, description
 |---|---|
 | `covers` | front of the box |
 | `screenshots` | a screenshot (the title screen when there is none) |
-| `miximages` | ES-DE's composite of screenshot, box and logo |
+| `miximages` | ES-DE's own composite: framed screenshot, 3D box, cartridge or disc and logo |
 | `marquees` | the logo |
 | `3dboxes` | the box in 3D with the logo on the spine |
 | `backcovers` | back of the box |
 | `videos` | the video preview |
 
-Not produced: `titlescreens` and `physicalmedia` (disc and cartridge scans). Skyscraper's ScreenScraper module does not fetch them, so scraped games go without them and ES-DE and the library UI fall back to the other kinds. Manuals and fanart are not fetched either.
+Not produced: `titlescreens` and `physicalmedia` as kinds of their own. The cartridge or disc scan Skyscraper fetches appears only inside the miximage; ES-DE and the library UI fall back to the other kinds for the rest. Manuals and fanart are not fetched either.
+
+The miximage follows the layout ES-DE itself makes by default. `scrape` only adds media, so miximages made before this layout keep the old look. To get the new one, move the `miximages/` folder of a system away and run `warpzone scrape` again: it rebuilds them from Skyscraper's cache without asking ScreenScraper for anything.
 
 A game takes about 10 to 18 seconds (18 on a NAS) and 2.6 MB of media, most of it the video, so a library of 1,000 games is about three to five hours and 2.6 GB on the hub (the videos stay on the hub; consoles ignore them) plus about as much in Skyscraper's cache on the machine that scrapes (in the container, `skyscraper/cache/` on the NAS's disk).
 

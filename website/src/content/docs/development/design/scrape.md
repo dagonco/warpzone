@@ -296,7 +296,7 @@ The I/O layer (`scrape_io.py`) applies the plan:
 |---|---|---|
 | `covers` | box-2D, as is | main, `<output type="cover"/>` |
 | `screenshots` | screenshot (title screen when there is none), as is | main, copied by Skyscraper with `miximages` |
-| `miximages` | composite of screenshot, box and logo | main, the `screenshot` output with `miximages` |
+| `miximages` | ES-DE's own miximage layout: framed screenshot, 3D box, physical media and logo | main, the `screenshot` output with `miximages` |
 | `marquees` | wheel (the logo; ES-DE's `marquees` are logos) | main, `<output type="marquee" resource="wheel"/>` |
 | `3dboxes` | box-2D with the `gamebox` effect, the logo on the spine | 3D box, its `cover` output |
 | `backcovers` | box-2D-back, as is | main, with `backcovers` |
@@ -317,14 +317,37 @@ Skyscraper's default `artwork.xml` turns the `screenshot` output into a 640x480 
 the user's artwork file; it passes its own, shipped in `warpzone/data/skyscraper/`:
 
 - `artwork-esde.xml`: a plain `cover` output (`<output type="cover" resource="cover"/>`), a `marquee` output from the `wheel` resource, and a
-  `screenshot` output that is the miximage: ES-DE's miximage layout, 1280x960, with the screenshot
-  as the background, the box at the bottom left and the logo at the top. With `--flags miximages`
-  this output goes to `miximages/` and the plain screenshot to `screenshots/`.
+  `screenshot` output that is the miximage, laid out like the one ES-DE makes with its default
+  settings (`MiximageGenerator.cpp`: 1280x960, include marquee, box and physical media). The
+  canvas is transparent, as ES-DE's. The screenshot is inset 1060x800 at 150,80 (stretched, as ES-DE
+  does for the usual aspect ratios) in a rounded frame 12 px wide, made by a first, larger
+  `screenshot` layer with the `rounded` and `stroke` effects whose colour Skyscraper takes from the
+  layer, as ES-DE takes the frame colour from the screenshot; the plain screenshot goes on top.
+  The wheel sits at the top right (it fits a 580x380 box, so a wide logo is wide and a tall one
+  is tall, as in ES-DE), the 3D box at the bottom left (the cover in a 560x600 box with the
+  `gamebox` effect, `side="wheel"`, as in the 3D box pass) and the physical media, which Skyscraper
+  calls the `texture` resource (ScreenScraper's `support-2D`, a cartridge or disc), at the bottom
+  next to the box. The wheel, box and media have a soft shadow. A layer whose resource the game
+  lacks is skipped, so a game without a wheel, box or physical media still gets its miximage.
+  With `--flags miximages` this output goes to `miximages/` and the plain screenshot to
+  `screenshots/`.
+
+  What differs from ES-DE, because Skyscraper's artwork format cannot express it: the physical
+  media has a fixed place (ES-DE puts it 32 px right of the box, whatever the box's width), the
+  box is the cover with the `gamebox` effect and not ScreenScraper's own 3D box, the sizes of the
+  box and the wheel are fixed boxes (ES-DE trims transparent padding and sizes the wheel by area),
+  a screenshot is always stretched to the frame (ES-DE crops one wider than 16:10 or taller than
+  1:1) and black bars in a screenshot are kept (ES-DE removes letterboxes and pillarboxes). The
+  shadows fall down and to the right, not all around.
 - `artwork-3dbox.xml`: one `cover` output with the `gamebox` effect (`side="wheel"`), on a fixed
   600 by 600 transparent canvas (without a width the box comes out off centre and cropped).
 
-They are data: a test parses them and checks the outputs above, and the look is a manual check
-against a miximage and a 3D box made by ES-DE.
+They are data: a test parses them and checks the outputs and layers above, and the look is a
+manual check against a miximage and a 3D box made by ES-DE.
+
+`scrape` only adds media, so a miximage already on the hub keeps the old look. To rebuild them, move
+the `miximages/` of the system away and run `warpzone scrape`: the games are in Skyscraper's cache,
+so the rebuild makes no request to ScreenScraper.
 
 ## The cache
 
