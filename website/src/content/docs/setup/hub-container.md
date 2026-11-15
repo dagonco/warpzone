@@ -159,7 +159,7 @@ It gives you:
 - A login (Access) before any request reaches the hub: a visitor who is not on your list never gets to the UI's page, let alone its token prompt.
 - No open port and no port forwarding. A `cloudflared` connector on your network dials out to Cloudflare, and Cloudflare sends the requests down that connection.
 
-The UI's own token stays as a second layer, so a visit asks for two things: the Cloudflare login, then the token.
+The UI's own token stays as a second layer, so a visit asks for two things: the Cloudflare login, then the token. Step 7 makes the UI accept the Cloudflare login as the only prompt; the token then stays for anything that does not come through Cloudflare.
 
 You need a domain whose DNS is on Cloudflare (a free account is enough) and a Zero Trust account (the free plan covers a few users). The example uses `ui.example.com` for the address, `<team-name>` for your Zero Trust team name, `<hub-lan-address>` for the hub's address on the home network and `you@example.com` for your e-mail. Use your own, and keep them out of anything you commit.
 
@@ -194,13 +194,28 @@ You need a domain whose DNS is on Cloudflare (a free account is enough) and a Ze
 
    The answer must be a redirect (`302`) whose `location` is on `<team-name>.cloudflareaccess.com`. A `200` or a page from the UI means no application covers the hostname: remove the route and go back to step 2.
 6. **Test it from outside.** On a phone off the home Wi-Fi (mobile data), open `https://ui.example.com`. You should get Cloudflare's login first, then, after you log in with the allowed e-mail, the UI's token prompt. Enter the token from `config/ui.token`. Try an address that is not on the list: it must be refused at the login, before the UI.
+7. **Optional: skip the token prompt.** Having logged in with Cloudflare, typing the UI token as well is redundant. Give `warpzone serve` your team's host and the application's AUD tag and it accepts the token Access attaches to each request it lets through, so the page opens straight after the Cloudflare login. Find the AUD tag under Zero Trust, Access controls, Applications: choose **Edit** on the application that covers the hostname and copy the **Application Audience (AUD) Tag** under Additional settings. A wildcard application (`*.example.com`) has one AUD tag for every hostname it covers, so the same value works for each of them. Your team's host is `<team-name>.cloudflareaccess.com`. In `config.toml`:
+
+   ```toml
+   [serve]
+   token_file = "/config/ui.token"
+   access_team_domain = "<team-name>.cloudflareaccess.com"
+   access_aud = "<the application's AUD tag>"
+   # access_emails = ["you@example.com"]     # optional: also require one of these e-mails
+   ```
+
+   Restart the container (`docker compose restart warpzone`); the log says `Cloudflare Access sign-in is on`. Reload `https://ui.example.com`: after the Cloudflare login the UI opens with no token prompt. `access_emails` is a second filter on the e-mail inside the token; leave it out and your Access policy alone decides who gets in, which is the usual choice.
+
+   The token is still required to start, and still opens the UI for everything that does not pass Access: the LAN address, a console, a script. Nothing about the Cloudflare login can be forged: the UI checks Cloudflare's signature on the token, the application's AUD tag and the expiry, using the signing keys it downloads from `https://<team-name>.cloudflareaccess.com/cdn-cgi/access/certs` (it needs to reach that address; if it cannot, it simply asks for the token as before and the log says so once). Only the `Cf-Access-Jwt-Assertion` header counts, never a cookie.
+
+   To make Access the only way in from outside, publish the UI's port to the host's loopback only, so nothing on the home network can reach it either. In `compose.yaml` change `ports:` to `- "127.0.0.1:8780:8780"`. The `cloudflared` service of the example still reaches `http://warpzone:8780` over Compose's own network; a `cloudflared` that runs on the host's own network (outside this project) points its route at `http://localhost:8780` instead. If the `warpzone` service uses `network_mode: host` there is no `ports:`; set `listen = "127.0.0.1:8780"` in `[serve]` for the same effect. The price is that the LAN address `http://<the NAS's address>:8780` stops answering, which cuts off every client that is not a browser, such as the Decky plugin on a console, unless it reaches the public hostname with an Access service token next to its bearer token. Browsers at home go through the public hostname too. If you want the LAN address as well, leave `ports:` as it is: the token still guards it.
 
 A few things to know:
 
 - **Host and scheme.** `cloudflared` sends the request to the UI with the `Host` header the browser used (`ui.example.com`), unless you set an HTTP Host Header override on the route; leave that empty. The UI's check that a write comes from its own page compares the `Origin` with that `Host`, so an override makes every change you make fail with a `bad-origin` error. The UI also marks its cookie `Secure` when the request carries `X-Forwarded-Proto: https`, which Cloudflare's edge sets on the requests it forwards; if you do not see `Secure` on the `wz_session` cookie in the browser's developer tools, nothing breaks: the cookie is just not restricted to HTTPS (it is still sent only to your HTTPS address). See [Authentication](/warpzone/development/design/library-ui/#authentication).
-- **The login can expire.** When the Access session ends, a request the page makes may get Cloudflare's login page instead of JSON, and the UI shows an error. Reload the page and log in again.
-- **Consoles keep the LAN address.** A client that is not a browser, such as the Decky plugin with its bearer token, cannot pass Access's login, so consoles keep using the hub's LAN address, not the public hostname.
-- **The LAN port stays.** `8780` still answers on the home network as before. Only the tunnel reaches the UI from outside.
+- **The login can expire.** When the Access session ends, a request the page makes may get Cloudflare's login page instead of JSON, and the UI shows an error. Reload the page and log in again. With step 7 the UI never asks for the token behind Access, and a request that reaches it without a valid Access token is asked for the token as always.
+- **Consoles keep the LAN address.** A client that is not a browser, such as the Decky plugin with its bearer token, cannot pass Access's login, so consoles keep using the hub's LAN address, not the public hostname. That is why the LAN port stays published unless you accept cutting them off (step 7).
+- **The LAN port stays.** Unless you published it to the loopback only (step 7), `8780` still answers on the home network as before. Only the tunnel reaches the UI from outside.
 - **Updating `cloudflared`.** The example pins an exact version, not `latest`, so an update is a change you make on purpose. Look up the newest release on the [`cloudflared` releases page](https://github.com/cloudflare/cloudflared/releases), change the tag in `compose.yaml`, and run `docker compose pull cloudflared && docker compose up -d cloudflared`. Cloudflare drops very old versions, so update it every few months. A tunnel you already had is updated the way you already update it.
 - **Taking it down.** Delete the route in the dashboard (and, for the example's tunnel, run `docker compose stop cloudflared`); the hostname then answers nothing.
 

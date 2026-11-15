@@ -153,17 +153,25 @@ class InboxSettings:
     chdman_flac: bool = True
 
 
-SERVE_KEYS = ("listen", "token_file")
+SERVE_KEYS = ("listen", "token_file", "access_team_domain", "access_aud", "access_emails")
 DEFAULT_LISTEN = "0.0.0.0:8780"
+ACCESS_TEAM_DOMAIN = re.compile(r"^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.cloudflareaccess\.com$")
+ACCESS_AUD = re.compile(r"^[A-Za-z0-9._-]{8,128}$")
+ACCESS_EMAIL = re.compile(r"^[^@\s]+@[^@\s]+$")
 
 
 @dataclass(frozen=True)
 class ServeSettings:
     """The optional `[serve]` table, read only by `warpzone serve`: the address it listens on
-    and the file whose first line is the UI token (else `WARPZONE_UI_TOKEN` is used)."""
+    and the file whose first line is the UI token (else `WARPZONE_UI_TOKEN` is used). The three
+    `access_*` fields turn on the optional Cloudflare Access sign-in: `access_team_domain` and
+    `access_aud` come together, and `access_emails` narrows who may use it."""
 
     listen: str = DEFAULT_LISTEN
     token_file: str | None = None
+    access_team_domain: str | None = None
+    access_aud: str | None = None
+    access_emails: tuple[str, ...] = ()
 
 
 def split_listen(value: str) -> tuple[str, int] | None:
@@ -375,9 +383,57 @@ def parse_serve(raw: object, errors: list[str]) -> ServeSettings:
     if "token_file" in raw and (not isinstance(token_file, str) or not token_file.strip()):
         errors.append("serve.token_file: must be a non-empty path string")
         token_file = None
+    team, aud, emails = _parse_access(raw, errors)
     return ServeSettings(
-        listen.strip(), str(Path(token_file.strip()).expanduser()) if token_file else None
+        listen.strip(),
+        str(Path(token_file.strip()).expanduser()) if token_file else None,
+        team,
+        aud,
+        emails,
     )
+
+
+def _parse_access(
+    raw: dict[str, Any], errors: list[str]
+) -> tuple[str | None, str | None, tuple[str, ...]]:
+    """The `access_*` keys of `[serve]`: the team domain and the AUD tag, both or neither, and
+    an optional list of e-mails that needs them."""
+    team = raw.get("access_team_domain")
+    if "access_team_domain" in raw:
+        team = team.strip().lower() if isinstance(team, str) else None
+        if team is None or not ACCESS_TEAM_DOMAIN.match(team):
+            errors.append(
+                "serve.access_team_domain: must be a bare host that ends in "
+                ".cloudflareaccess.com, such as example.cloudflareaccess.com"
+            )
+            team = None
+    aud = raw.get("access_aud")
+    if "access_aud" in raw:
+        aud = aud.strip() if isinstance(aud, str) else None
+        if aud is None or not ACCESS_AUD.match(aud):
+            errors.append(
+                "serve.access_aud: must be the application's AUD tag "
+                "(8 to 128 letters, digits, `.`, `_` or `-`)"
+            )
+            aud = None
+    emails: tuple[str, ...] = ()
+    if "access_emails" in raw:
+        value = raw["access_emails"]
+        if (
+            not isinstance(value, list)
+            or not value
+            or not all(isinstance(e, str) and ACCESS_EMAIL.match(e.strip()) for e in value)
+        ):
+            errors.append("serve.access_emails: must be a non-empty list of e-mail addresses")
+        else:
+            emails = tuple(dict.fromkeys(e.strip().lower() for e in value))
+    present = {"access_team_domain", "access_aud"} & set(raw)
+    if (present or emails) and len(present) < 2:
+        errors.append(
+            "serve: access_team_domain and access_aud must be set together "
+            "(access_emails needs both)"
+        )
+    return (team, aud, emails) if team and aud else (None, None, ())
 
 
 def parse_ra(raw: object, errors: list[str]) -> RaSettings:

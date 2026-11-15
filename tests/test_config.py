@@ -236,6 +236,63 @@ class ConfigTests(unittest.TestCase):
         self.assert_error(lambda d: d.update(serve={"port": 1}), "serve: unknown key 'port'")
         self.assert_error(lambda d: d.update(serve=[]), "[serve]: must be a table")
 
+    def test_serve_access_keys_come_together_and_are_checked(self) -> None:
+        team, aud = "example.cloudflareaccess.com", "0123456789abcdef"  # gitleaks:allow
+        cfg = parse_config(config_data())
+        self.assertEqual(
+            (cfg.serve.access_team_domain, cfg.serve.access_aud, cfg.serve.access_emails),
+            (None, None, ()),
+        )
+        data = copy.deepcopy(config_data())
+        data["serve"] = {
+            "access_team_domain": f" {team.upper()} ",
+            "access_aud": f" {aud} ",
+            "access_emails": [" User@Example.com ", "user@example.com", "b@example.com"],
+        }
+        serve = parse_config(data).serve
+        self.assertEqual(
+            (serve.access_team_domain, serve.access_aud, serve.access_emails),
+            (team, aud, ("user@example.com", "b@example.com")),
+        )
+        data["serve"] = {"access_team_domain": team, "access_aud": aud}
+        self.assertEqual(parse_config(data).serve.access_emails, ())
+        for bad in (
+            "https://example.cloudflareaccess.com",
+            "example.cloudflareaccess.com/path",
+            "example.cloudflareaccess.com:443",
+            "example.com",
+            "cloudflareaccess.com",
+            ".cloudflareaccess.com",
+            "a.b.cloudflareaccess.com",
+            "-x.cloudflareaccess.com",
+            "evilcloudflareaccess.com",
+            "",
+            5,
+        ):
+            self.assert_error(
+                lambda d, bad=bad: d.update(serve={"access_team_domain": bad, "access_aud": aud}),
+                "serve.access_team_domain: must be a bare host",
+            )
+        for bad in ("short", "has space 1234", "", 5, "x" * 129):
+            self.assert_error(
+                lambda d, bad=bad: d.update(serve={"access_team_domain": team, "access_aud": bad}),
+                "serve.access_aud: must be the application's AUD tag",
+            )
+        for bad in ([], "a@b.c", ["nope"], ["a@b.c", 5], ["a b@c.d"]):
+            self.assert_error(
+                lambda d, bad=bad: d.update(
+                    serve={"access_team_domain": team, "access_aud": aud, "access_emails": bad}
+                ),
+                "serve.access_emails: must be a non-empty list",
+            )
+        together = "access_team_domain and access_aud must be set together"
+        for partial in (
+            {"access_team_domain": team},
+            {"access_aud": aud},
+            {"access_emails": ["a@b.c"]},
+        ):
+            self.assert_error(lambda d, partial=partial: d.update(serve=partial), together)
+
     def test_channel_defaults_to_stable_and_must_be_known(self) -> None:
         self.assertEqual(parse_config(config_data()).devices["deck"].channel, "stable")
         data = copy.deepcopy(config_data())

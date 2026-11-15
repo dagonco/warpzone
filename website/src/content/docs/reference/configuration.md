@@ -127,8 +127,13 @@ Optional. Only `warpzone serve` reads it (together with `[hub]`, `[devices.*]` a
 |---|---|---|
 | `listen` | `"0.0.0.0:8780"` | `HOST:PORT` to listen on (`[::1]:8780` for IPv6). `--listen` overrides it. |
 | `token_file` | none | A file whose first line is the UI token, at least 16 characters (`openssl rand -hex 32` makes one). The environment variable `WARPZONE_UI_TOKEN` takes precedence. |
+| `access_team_domain` | none | Optional, with `access_aud`. Your Cloudflare Zero Trust team's host, such as `example.cloudflareaccess.com`: a bare host that ends in `.cloudflareaccess.com`, with no `https://`, path or port. |
+| `access_aud` | none | Optional, with `access_team_domain`. The application's Audience (AUD) tag, from Zero Trust, Access controls, Applications, Edit, Additional settings. |
+| `access_emails` | none | Optional, needs the two keys above. A list of e-mail addresses (any case): only a sign-in whose Access token carries one of them is accepted. Without it, the application's Access policy alone decides who gets in. |
 
 `serve` refuses to start (exit `2`) without a token. The token is never printed or logged. See [`warpzone serve`](/warpzone/reference/commands/#warpzone-serve).
+
+`access_team_domain` and `access_aud` turn on the sign-in with Cloudflare Access: a request that carries a valid `Cf-Access-Jwt-Assertion` header, which `cloudflared` forwards after Access logged the person in, is accepted with no token prompt. They are set together or not at all (a config with one of them is an error). The UI token stays required and keeps working for everything else. See [Opening the UI from outside the home](/warpzone/setup/hub-container/#opening-the-ui-from-outside-the-home) and [Authentication](/warpzone/development/design/library-ui/#cloudflare-access).
 
 ### `[ra]`
 
