@@ -198,3 +198,14 @@ dats_dir = "~/dats/libretro-database/metadat"
 # PS3 games are placed with ES-DE's alternative emulator "RPCS3 ISO (Standalone)", recorded in
 # this gamelist. Default: <root>/frontend/es-de/gamelists/ps3/gamelist.xml
 # gamelist_ps3 = "/Volumes/hub/frontend/es-de/gamelists/ps3/gamelist.xml"
+
+# Optional. Only `warpzone serve` (the library UI) reads this table.
+# [serve]
+# listen = "0.0.0.0:8780"
+# token_file = "/config/ui.token"       # else the WARPZONE_UI_TOKEN environment variable
+#
+# Optional: behind a Cloudflare Tunnel with Cloudflare Access, accept the Access login in place
+# of the token prompt. Both keys come together. The token above is still needed to start.
+# access_team_domain = "example.cloudflareaccess.com"   # your Zero Trust team's host
+# access_aud = "paste-the-application-AUD-tag-here"     # Access > Applications > Edit > Additional settings
+# access_emails = ["you@example.com"]                   # optional: only these e-mails

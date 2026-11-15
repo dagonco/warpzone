@@ -158,6 +158,8 @@ warpzone/
   saves_index.py     saves per game for the library API: exact matching of the hub's `saves/` to games
                      (pure), the listing and its short cache
   serve.py           `warpzone serve`: http.server, sessions, the write lock, caches, background runs
+  access_jwt.py      Cloudflare Access tokens: strict JWT parsing, RS256 check with the standard library, claims (pure)
+  access_keys.py     Access's signing keys: the fetch, the cache and the gate `serve` asks about a token
   localst.py         find and parse the local Syncthing config.xml
   data/ui/index.html the library UI page (static, no build step)
   data/ui/kit.js     its DOM builder, pixel icons, system names, codes and colours, title parsing
@@ -253,6 +255,11 @@ build the image; the `image` job of the weekly and manual runs does (see "CI" be
 - `prune` unit tests with the fake Syncthing: the pure decision (`classify`),
   every refusal (bootstrap ignores, wrong type, missing marker, size cap),
   protected names, nested folders, symlinks, re-check before delete, webhook.
+- Cloudflare Access sign-in (`test_access_jwt.py`, `test_access_keys.py`, `AccessSignInTests` in
+  `test_serve.py`): tokens signed in the test with a fixed throwaway RSA key (`access_support.py`),
+  no network. The pure checks (signature, `alg`, `kid`, `exp`, `nbf`, `aud`, `iss`, e-mail, malformed
+  input), the key cache with a fake fetch and clock (refetch rules, one log per failure streak), and
+  the requests through a real server.
 - The webhook sender (`test_notify.py`) with a stand-in HTTP server, and the run record of
   `inbox` (`test_inbox_record.py`): `build_record` from `ItemResult` values (no absolute path, a
   zRIF and secrets redacted, held, review, already), the id and the purge to 50, the record

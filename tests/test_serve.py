@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any, NamedTuple
 from unittest import mock
 
+import access_support
 from library_support import GIB, config, games, managed, write_catalog
 from support import API_KEY, DECK_ID, HUB_ID, MACHINE_ID, FakeSyncthing
 from test_cli import run
@@ -33,6 +34,7 @@ from warpzone import (
     serve,
 )
 from warpzone import whitelist as wl
+from warpzone.access_keys import AccessGate
 from warpzone.config import ServeSettings, parse_config
 from warpzone.syncthing import Client
 
@@ -1968,6 +1970,135 @@ class RefreshTests(ServeCase):
         self.assertEqual(reply.status, 400)
 
 
+class AccessSignInTests(ServeCase):
+    """The optional Cloudflare Access sign-in: a valid `Cf-Access-Jwt-Assertion` is a session."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.fetches: list[str] = []
+        self.answer: Any = access_support.jwks()
+        self.restart()
+
+    def restart(self, emails: tuple[str, ...] = (), login_delay: float = 0) -> None:
+        def fetch(team: str) -> object:
+            self.fetches.append(team)
+            if isinstance(self.answer, BaseException):
+                raise self.answer
+            return self.answer
+
+        gate = AccessGate(
+            access_support.TEAM, access_support.AUD, emails, fetch=fetch, log=self.logs.append
+        )
+        self.start(
+            access=gate,
+            login_delay=login_delay,
+            now=lambda: datetime.fromtimestamp(access_support.NOW, UTC),
+        )
+
+    def jwt(self, token: str | None = None) -> dict[str, str]:
+        return {"Cf-Access-Jwt-Assertion": token or access_support.make_token()}
+
+    def test_a_valid_token_opens_reads_with_no_cookie_or_bearer(self) -> None:
+        reply = self.get("/api/v1/devices", headers=self.jwt(), auth=False)
+        self.assertEqual(reply.status, 200)
+        self.assertNotIn("Set-Cookie", reply.headers)
+        self.assertEqual(self.get("/api/v1/devices", auth=False).status, 401)
+
+    def test_a_write_by_the_token_needs_the_origin_of_the_page_and_json(self) -> None:
+        body = {"changes": [{"device": "deck", "system": "gba", "on": False}], "dry_run": True}
+        body["expect"] = {"deck": self.etags()["deck"]}
+        host = f"127.0.0.1:{self.port}"
+        for origin in (None, "http://evil.example", f"https://{host}.evil"):
+            headers = self.jwt()
+            if origin is not None:
+                headers["Origin"] = origin
+            reply = self.call("POST", "/api/v1/changes", body, headers=headers, auth=False)
+            self.assertEqual((reply.status, self.error(reply)["code"]), (403, "bad-origin"))
+        headers = {**self.jwt(), "Origin": f"https://{host}"}
+        ok = self.call("POST", "/api/v1/changes", body, headers=headers, auth=False)
+        self.assertEqual(ok.status, 200)
+        raw = self.call("POST", "/api/v1/changes", raw=b"{}", headers=headers, auth=False)
+        self.assertEqual((raw.status, self.error(raw)["code"]), (400, "bad-request"))
+
+    def test_a_token_that_is_not_valid_is_no_credential_and_costs_no_wait(self) -> None:
+        good = access_support.make_token()
+        head, payload, sig = good.split(".")
+        bad = [
+            f"{head}.{payload}x.{sig}",
+            access_support.make_token(access_support.claims(aud=["other"])),
+            access_support.make_token(access_support.claims(exp=access_support.NOW - 1)),
+            "garbage",
+        ]
+        self.restart(login_delay=1.0)
+        with mock.patch.object(serve.time, "sleep") as sleep:
+            for token in bad:
+                reply = self.get("/api/v1/devices", headers=self.jwt(token), auth=False)
+                self.assertEqual((reply.status, self.error(reply)["code"]), (401, "unauthorized"))
+            sleep.assert_not_called()
+
+    def test_without_a_valid_token_the_ui_token_works_as_before(self) -> None:
+        bad = self.jwt("garbage")
+        self.assertEqual(self.get("/api/v1/devices", headers=bad).status, 200)  # the bearer
+        value = serve.session_cookie(TOKEN, access_support.NOW + 3600)  # the app's clock is fixed
+        cookie = {"Cookie": f"wz_session={value}"}
+        reply = self.get("/api/v1/devices", headers={**bad, **cookie}, auth=False)
+        self.assertEqual(reply.status, 200)
+        self.restart(login_delay=1.0)
+        wrong = {**bad, "Authorization": "Bearer wrong"}
+        with mock.patch.object(serve.time, "sleep") as sleep:
+            reply = self.get("/api/v1/devices", headers=wrong, auth=False)
+        self.assertEqual(reply.status, 401)
+        sleep.assert_called_once_with(1.0)  # a wrong bearer waits, whatever the token says
+
+    def test_a_valid_token_next_to_a_wrong_bearer_is_accepted_without_a_wait(self) -> None:
+        self.restart(login_delay=1.0)
+        headers = {**self.jwt(), "Authorization": "Bearer wrong"}
+        with mock.patch.object(serve.time, "sleep") as sleep:
+            self.assertEqual(self.get("/api/v1/devices", headers=headers, auth=False).status, 200)
+        sleep.assert_not_called()
+
+    def test_the_cf_authorization_cookie_alone_is_not_trusted(self) -> None:
+        cookie = {"Cookie": f"CF_Authorization={access_support.make_token()}"}
+        self.assertEqual(self.get("/api/v1/devices", headers=cookie, auth=False).status, 401)
+
+    def test_the_token_is_ignored_when_access_is_not_set_up(self) -> None:
+        self.start(access=None)
+        reply = self.get("/api/v1/devices", headers=self.jwt(), auth=False)
+        self.assertEqual(reply.status, 401)
+
+    def test_the_login_route_and_the_static_files_do_not_change(self) -> None:
+        reply = self.call("POST", "/api/v1/session", {"token": "wrong"}, self.jwt(), auth=False)
+        self.assertEqual(reply.status, 401)
+        reply = self.call("POST", "/api/v1/session", {"token": TOKEN}, self.jwt(), auth=False)
+        self.assertEqual(reply.status, 204)
+        self.assertEqual(self.get("/", auth=False).status, 200)
+
+    def test_the_list_of_emails_narrows_who_gets_in(self) -> None:
+        self.restart(emails=("someone.else@example.com",))
+        reply = self.get("/api/v1/devices", headers=self.jwt(), auth=False)
+        self.assertEqual(reply.status, 401)
+        self.restart(emails=("USER@example.com",))
+        self.assertEqual(self.get("/api/v1/devices", headers=self.jwt(), auth=False).status, 200)
+
+    def test_when_the_keys_cannot_be_fetched_the_ui_token_still_works(self) -> None:
+        self.answer = OSError("down")
+        self.restart()
+        for _ in range(3):
+            reply = self.get("/api/v1/devices", headers=self.jwt(), auth=False)
+            self.assertEqual(reply.status, 401)
+        self.assertEqual(self.get("/api/v1/devices", headers=self.jwt()).status, 200)
+        failures = [line for line in self.logs if "cannot fetch the signing keys" in line]
+        self.assertEqual(len(failures), 1)
+        self.assertNotIn(self.jwt()["Cf-Access-Jwt-Assertion"], "\n".join(self.logs))
+
+    def test_the_page_gets_no_401_so_it_shows_no_token_prompt(self) -> None:
+        # The page asks for the token only after an `/api/` answer of 401; with a valid token
+        # the first calls it makes are not 401, so the prompt never opens.
+        for path in ("/api/v1/devices", "/api/v1/systems", "/api/v1/progress"):
+            reply = self.get(path, headers=self.jwt(), auth=False)
+            self.assertNotEqual(reply.status, 401, path)
+
+
 class RefresherTests(unittest.TestCase):
     def test_the_job_gets_the_ra_flag_and_the_schedule_runs_until_stopped(self) -> None:
         seen: list[bool] = []
@@ -2548,6 +2679,7 @@ class RunTests(unittest.TestCase):
                 "deck": {"device_id": DECK_ID, "profile": "steamos-emudeck", "folders": ["library"]}
             },
         }
+        self.data = data
         self.cfg = parse_config(data)
         old = signal.getsignal(signal.SIGTERM)
         self.addCleanup(signal.signal, signal.SIGTERM, old)
@@ -2595,6 +2727,50 @@ class RunTests(unittest.TestCase):
             any(line.startswith("warpzone serve: listening on 127.0.0.1:") for line in lines), lines
         )
         self.assertNotIn(TOKEN, "\n".join(lines))
+
+    def test_it_says_when_the_cloudflare_access_sign_in_is_on(self) -> None:
+        (self.root / "library" / ".stfolder").mkdir(parents=True)
+        access = {"access_team_domain": access_support.TEAM, "access_aud": access_support.AUD}
+        cfg = parse_config({**self.data, "serve": access})
+        lines: list[str] = []
+        gates: list[object] = []
+
+        def ready(server: serve.UiServer) -> None:
+            gates.append(server.app.access)
+            threading.Thread(target=server.shutdown, daemon=True).start()
+
+        code = serve.run(
+            cfg,
+            listen="127.0.0.1:0",
+            env={"WARPZONE_UI_TOKEN": TOKEN},
+            out=lines.append,
+            log=lines.append,
+            ready=ready,
+        )
+        self.assertEqual(code, 0)
+        self.assertEqual([type(g) for g in gates], [AccessGate])
+        self.assertIn(
+            f"warpzone serve: Cloudflare Access sign-in is on for {access_support.TEAM}", lines
+        )
+        self.assertNotIn(access_support.AUD, "\n".join(lines))
+
+    def test_without_the_keys_there_is_no_gate(self) -> None:
+        (self.root / "library" / ".stfolder").mkdir(parents=True)
+        gates: list[object] = []
+
+        def ready(server: serve.UiServer) -> None:
+            gates.append(server.app.access)
+            threading.Thread(target=server.shutdown, daemon=True).start()
+
+        serve.run(
+            self.cfg,
+            listen="127.0.0.1:0",
+            env={"WARPZONE_UI_TOKEN": TOKEN},
+            out=lambda t: None,
+            log=lambda t: None,
+            ready=ready,
+        )
+        self.assertEqual(gates, [None])
 
     def test_a_bad_address_is_a_usage_error(self) -> None:
         (self.root / "library" / ".stfolder").mkdir(parents=True)

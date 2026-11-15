@@ -56,6 +56,9 @@ chdman_flac = true                           # optional, the default; false: `cr
 [serve]                                      # optional, read only by `warpzone serve`
 listen = "0.0.0.0:8780"                      # optional, the default
 token_file = "/config/ui.token"              # optional; else WARPZONE_UI_TOKEN
+# access_team_domain = "example.cloudflareaccess.com"   # optional, with access_aud: Cloudflare Access sign-in
+# access_aud = "<the application's AUD tag>"
+# access_emails = ["you@example.com"]        # optional: only these e-mails
 
 [ra]                                         # optional, read by `serve` and `catalog --ra-achievements`
 user = "ExampleUser"                         # optional; the RA user whose progress is shown

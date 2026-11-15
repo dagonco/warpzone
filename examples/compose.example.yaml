@@ -61,6 +61,10 @@ services:
     # by the image's health check.
     ports:
       - "8780:8780"
+      # With Cloudflare Access sign-in on (`[serve] access_team_domain` and `access_aud`), you can
+      # publish the port to the host's loopback only, so nothing but the tunnel reaches the UI:
+      # - "127.0.0.1:8780:8780"
+      # The `cloudflared` service below still reaches `http://warpzone:8780` over Compose's network.
 
     volumes:
       # The hub root, at the same path as `[hub] root` in the config, so one config is right

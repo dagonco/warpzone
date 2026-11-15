@@ -51,6 +51,7 @@ from warpzone import (
     saves_index,
 )
 from warpzone import whitelist_store as store
+from warpzone.access_keys import AccessGate
 from warpzone.config import Config, ServeSettings, split_listen
 from warpzone.errors import EXIT_OK, UsageError, WarpzoneError
 from warpzone.inbox_unattended import (
@@ -65,6 +66,7 @@ from warpzone.syncthing import Client, SyncthingError
 
 TOKEN_ENV = "WARPZONE_UI_TOKEN"
 COOKIE = "wz_session"
+ACCESS_HEADER = "cf-access-jwt-assertion"  # lower case, as the request headers are keyed
 COOKIE_MAX_AGE = 30 * 24 * 3600  # the session's lifetime: the cookie's Max-Age and the server's
 SESSION_MESSAGE = b"warpzone-ui-session"
 CACHE_SECONDS = 5.0  # a file is checked for a change at most this often
@@ -909,8 +911,10 @@ class App:
         now: Callable[[], datetime] = lambda: datetime.now(UTC),
         clock: Callable[[], float] = time.monotonic,
         body_seconds: float = BODY_SECONDS,
+        access: AccessGate | None = None,
     ) -> None:
         self.cfg = cfg
+        self.access = access
         self.body_seconds = body_seconds
         self.root = root or Path(cfg.hub.root)
         self.files = files or HubFiles(self.root)
@@ -967,7 +971,10 @@ class App:
     # ------------------------------------------------------------- authentication
 
     def _authenticated(self, request: Request) -> str | None:
-        """`bearer` or `cookie` when the request carries the token in one of the two ways."""
+        """`access` when the request carries a valid Cloudflare Access token, else `bearer` or
+        `cookie` when it carries the UI token in one of the two ways."""
+        if self._access_valid(request):
+            return "access"
         auth = request.headers.get("authorization", "")
         scheme, _, given = auth.partition(" ")
         given = given.strip()
@@ -993,6 +1000,17 @@ class App:
                 return "cookie"
             raise self._busy() from None
         return who[0] if who else None
+
+    def _access_valid(self, request: Request) -> bool:
+        """Whether the `Cf-Access-Jwt-Assertion` header, when Access is set up, is a valid token.
+        An invalid or absent one is no credential and costs no wait: it is not a guess at the
+        UI token, so the request goes on to the cookie and bearer checks as if it had none."""
+        if self.access is None:
+            return False
+        header = request.headers.get(ACCESS_HEADER)
+        if not header:
+            return False
+        return self.access.check(header, self.now().timestamp()).ok
 
     def _cookie_valid(self, request: Request) -> bool:
         # Every `wz_session` value is checked: a client may send others it does not know of.
@@ -1055,7 +1073,7 @@ class App:
         if request.method not in ("GET", "HEAD", "POST"):
             raise ApiError("not-found", "no such route")
         write = request.method == "POST"
-        if write and who == "cookie":
+        if write and who != "bearer":
             # The page may be behind a TLS proxy that keeps the Host header: either scheme.
             host = request.headers.get("host", "")
             origin = request.headers.get("origin")
@@ -1788,7 +1806,24 @@ def run(
     refresher = Refresher(
         catalog_job(root, rahasher=rahasher, ra_key=ra_key, log=log, ra_user=cfg.ra.user), log
     )
-    app = App(cfg, token, root=root, client_factory=client_factory, refresher=refresher, log=log)
+    access = None
+    if cfg.serve.access_team_domain and cfg.serve.access_aud:
+        access = AccessGate(
+            cfg.serve.access_team_domain,
+            cfg.serve.access_aud,
+            cfg.serve.access_emails,
+            log=log,
+        )
+        log(f"warpzone serve: Cloudflare Access sign-in is on for {cfg.serve.access_team_domain}")
+    app = App(
+        cfg,
+        token,
+        root=root,
+        client_factory=client_factory,
+        refresher=refresher,
+        log=log,
+        access=access,
+    )
     try:
         server = UiServer(address, app)
     except OSError as exc:

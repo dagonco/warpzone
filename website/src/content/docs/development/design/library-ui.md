@@ -842,13 +842,18 @@ never prints, logs or echoes it.
   lies over plain HTTP only stops its own browser from sending the cookie back. The login
   route is the only place that sets the cookie, and the page's script never reads it.
 - A client that is not a browser (the Decky plugin) sends `Authorization: Bearer <token>`.
-- Every `/api/` route except `POST /api/v1/session` needs one of the two, compared with
-  `hmac.compare_digest`; the static files and `GET /healthz` do not. The session cookie is
+- Optionally, a valid Cloudflare Access token stands for a session, so a browser that came
+  through Access is never asked for the UI token (see [Cloudflare Access](#cloudflare-access)).
+- Every `/api/` route except `POST /api/v1/session` needs one of the three, compared with
+  `hmac.compare_digest` (the Access token is verified, see below); the static files and
+  `GET /healthz` do not. The session cookie is
   looked for among all the cookies of the request (other applications on the same host share
   the jar), and every `wz_session` value is compared. A write authenticated by the cookie must
   carry an `Origin` equal to `http://<Host>` or `https://<Host>` (a TLS reverse proxy keeps the
   `Host` header the browser used), and every write must be `Content-Type: application/json`,
-  which together keep other pages from posting to it.
+  which together keep other pages from posting to it. A write authenticated by an Access
+  token needs the same `Origin`: only a write by the bearer token is exempt, because a browser
+  never adds it by itself.
 - Writes are `POST` only: any other method on an `/api/` route is `404 not-found`.
 - A wrong token, at login or as a bearer, is answered `401` after a wait, and the waits are
   shared: failures leave the server one second apart in all, however many connections send
@@ -865,6 +870,66 @@ never prints, logs or echoes it.
   to it (the cookie answers, as when the queue is not full), and neither are requests that
   offer no credentials (`401`, as always) or the static files. This keeps a flood of wrong
   tokens from using up the 64 connections the server serves.
+
+#### Cloudflare Access
+
+The UI is often reached from outside the home through a Cloudflare Tunnel with Cloudflare
+Access in front. Access has already logged the person in, so asking for the UI token as well
+adds nothing. With `[serve] access_team_domain` and `access_aud` set, `serve` accepts the
+token Access attaches to every request it lets through as proof of that login. The UI token
+stays: `serve` still refuses to start without one, and it is what works for any request that
+did not pass Access (the LAN address, a console, a port that is reachable some other way).
+
+- **Keys.** `access_team_domain` is the team's host (`<team-name>.cloudflareaccess.com`, a bare
+  host: no scheme, path or port) and `access_aud` is the application's AUD tag (Zero Trust,
+  Access controls, Applications, Edit the application, Additional settings, "Application
+  Audience (AUD) Tag"). They are set together or not at all, and `serve` refuses to start on a
+  config with one of them. The optional `access_emails` lists the e-mails allowed in; it needs
+  both of the others. Nothing else changes when they are absent.
+- **Which token.** The `Cf-Access-Jwt-Assertion` header, which `cloudflared` forwards. The
+  `CF_Authorization` cookie is never read: Cloudflare does not promise to pass it, and a cookie
+  is what a page on another site can make a browser send.
+- **Checks** (`access_jwt.py`, pure, standard library only). The token is a compact JWT whose
+  three parts are strict unpadded base64url (at most 8 KiB). The header must say `alg:
+  RS256` and name a `kid` that is in the team's key set; `none`, the HMAC algorithms and
+  every other value are refused before any key is used. The signature is RSASSA-PKCS1-v1_5
+  with SHA-256: the signature raised to the key's exponent modulo its modulus must equal,
+  byte for byte, the block `00 01 FF..FF 00 || DigestInfo || SHA-256(header.payload)` of the
+  modulus's length, compared with `hmac.compare_digest`. Only then are the claims believed:
+  `iss` is `https://<access_team_domain>`; `aud` (a string, or a list as Access sends it) holds
+  the AUD tag; `exp` is in the future; `nbf` and `iat`, when present, are at most 60 seconds
+  ahead; `type`, when present, is `app` (an `org` token is the team's global session, not
+  this application's); and with `access_emails`, the `email` claim is one of them, in any case.
+  Without `access_emails` the application's Access policy is the only filter on who gets in.
+  A key set entry is used only when it is RSA with a `kid`, a modulus of at least 2048 bits
+  and an odd exponent of at least 3.
+- **Keys of the team** (`access_keys.py`). The key set is `https://<access_team_domain>/cdn-cgi/access/certs`
+  (JWKS: `keys` with `kid`, `n`, `e`). It is fetched on the first token, then again after an
+  hour and whenever a token names a `kid` that is not in it (Access rotates its key every
+  six weeks and keeps the old one valid for seven days), and never more than once a minute,
+  so a stream of tokens with made-up `kid`s costs one fetch a minute. The fetch uses `urllib`
+  over `https` with a 5 second timeout, follows no redirect and reads at most 256 KiB. The keys
+  are kept in memory only. A fetch that fails never grants anything: no key means no
+  token is accepted and the request goes on to the UI token. It is logged once per streak of
+  failures (the kind of failure, never a token), and again when it recovers. Keys already
+  fetched keep working for up to 24 hours when later fetches fail.
+- **In the request.** Before the cookie and bearer checks, a request with that header that
+  verifies is authenticated as `access`, for reads and writes alike, with no wait. A header that
+  is absent, does not verify or arrives while Access is not set up counts as no credential at
+  all: it costs no wait and takes no place in the queue of failures, because it is not a guess
+  at the UI token, and the request is judged by its cookie and bearer as if the header were not
+  there. A valid token next to a wrong bearer is accepted.
+- **The page.** It needs no change. It asks for the token only after an `/api/` answer of `401`;
+  with a valid Access token the first calls (`devices`, `systems`, the catalog) are answered,
+  so the prompt never opens. If the Access login ends while the page is open, the next call
+  has no valid header and the page asks for the UI token as before.
+- **What it trusts.** A valid token proves that Cloudflare signed it for the application whose
+  AUD tag is configured, so a request that did not pass Access cannot carry one. Like any
+  bearer credential it works for whoever holds it until its `exp` (the session duration set
+  in Access), so a token copied out of a logged-in browser is as good as that session. The
+  server does not check that the request really came from the tunnel: publishing the port only to
+  the tunnel's host keeps every other route to the UI shut, and the UI token still guards the
+  rest.
 
 The server also bounds what a stranger can hold. A connection that sends nothing for 15
 seconds, also in the middle of a body, is closed; at most 64 connections are served at once and
@@ -891,7 +956,8 @@ the connection without an answer, as for a body that stalls. A client that sends
 The traffic is plain HTTP, so anyone who can read the LAN can read the token. warpzone itself
 does no TLS: access from outside the home goes through a reverse proxy or tunnel with TLS that
 the user runs, and that proxy is not part of warpzone. One worked example, a Cloudflare Tunnel
-with Cloudflare Access in front, is in [Opening the UI from outside the
+with Cloudflare Access in front (which can also stand in for the token prompt, see
+[Cloudflare Access](#cloudflare-access)), is in [Opening the UI from outside the
 home](/warpzone/setup/hub-container/#opening-the-ui-from-outside-the-home). What the UI needs
 from any such proxy is the two things above: it keeps the `Host` header the browser used (so
 the `Origin` check passes) and it sets `X-Forwarded-Proto: https` (so the cookie is `Secure`).
