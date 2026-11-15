@@ -209,9 +209,9 @@ RUN mkdir /out-vita3k \
             "https://github.com/Vita3K/Vita3K-builds/releases/download/${VITA3K_BUILD}/Vita3K-x86_64.AppImage" \
      && echo "${VITA3K_SHA256}  Vita3K.AppImage" | sha256sum -c - \
      && chmod +x Vita3K.AppImage \
-     && ./Vita3K.AppImage --appimage-extract >/dev/null \
+     && ./Vita3K.AppImage --appimage-extract > /tmp/extract.log \
      && rm -rf /out-vita3k \
-     && mv squashfs-root /out-vita3k \
+     && mv "$(readlink -f squashfs-root)" /out-vita3k \
      && test -e /out-vita3k/bin/Vita3K; \
     else \
         echo "Vita3K: no build for $(uname -m); the image gets none"; \
