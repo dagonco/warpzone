@@ -656,9 +656,31 @@ class FindAndConfigTest(unittest.TestCase):
         self.assertEqual(outputs, {("cover", "cover"), ("marquee", "wheel"), ("screenshot", None)})
         miximage = next(o for o in esde.findall("output") if o.get("type") == "screenshot")
         self.assertEqual((miximage.get("width"), miximage.get("height")), ("1280", "960"))
+        layers = miximage.findall("layer")
+        # The frame (the screenshot again, bigger, stroked), the screenshot, the wheel, the 3D box
+        # and the physical media, in ES-DE's order. A layer of a missing resource is skipped by
+        # Skyscraper, so none of them can break a game that lacks it.
         self.assertEqual(
-            [x.get("resource") for x in miximage.findall("layer")], ["screenshot", "cover", "wheel"]
+            [x.get("resource") for x in layers],
+            ["screenshot", "screenshot", "wheel", "cover", "texture"],
         )
+        frame, shot, wheel, box_art, media = layers
+        self.assertIsNotNone(frame.find("stroke"))
+        self.assertIsNotNone(frame.find("rounded"))
+        # ES-DE's inset: 1060x800 at 150,80 with a 12 px frame around it.
+        self.assertEqual(
+            [shot.get(k) for k in ["x", "y", "width", "height"]], ["150", "80", "1060", "800"]
+        )
+        self.assertEqual(frame.find("stroke").get("width"), "12")
+        # ES-DE scales the screenshot "sharp" (no smoothing); Skyscraper calls that "fast".
+        self.assertEqual((frame.get("transform"), shot.get("transform")), ("fast", "fast"))
+        self.assertEqual(
+            [frame.get(k) for k in ["x", "y", "width", "height"]], ["138", "68", "1060", "800"]
+        )
+        self.assertEqual((wheel.get("align"), wheel.get("valign")), ("right", "top"))
+        self.assertEqual(box_art.find("gamebox").get("side"), "wheel")
+        self.assertEqual(box_art.get("valign"), "bottom")
+        self.assertEqual(media.get("valign"), "bottom")
         box = ET.parse(scrape_io.ARTWORK_DIR / scrape.ARTWORK_3DBOX).getroot()
         (cover,) = box.findall("output")
         self.assertEqual(cover.get("type"), "cover")
