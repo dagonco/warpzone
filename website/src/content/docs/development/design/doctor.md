@@ -87,9 +87,10 @@ for every problem, the exact fix for this platform.
   against the clock; the check only reads them through the probes. No state file is `[--]` with
   the fix that schedules `warpzone scrape --unattended`; a run-level error is `[!!]`; `[! ]` for a
   last check more than 36 hours old, a trouble streak at or above its threshold and a quota streak
-  of 3 nights or more; `[ok]` with the last run, its counts and what is left, with the nights that
+  of 3 nights or more; `[ok]` with the last run (dated from the state), its counts and what is left, with the nights that
   takes when the last run ended on its cap or its time budget (the run's size is the games
-  Skyscraper was asked about, from the record). A state file the parser could not read whole
+  Skyscraper was asked about, from the record; a last run with no record of its own, such as a
+  busy night, shows its outcome in words instead of counts). A state file the parser could not read whole
   shows the parser's warning on the line. Findings share the line, the worst status first. The
   rules are in [Unattended scrape](/warpzone/development/design/scrape-unattended/#doctor).
   `health` does not read it.

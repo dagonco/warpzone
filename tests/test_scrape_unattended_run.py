@@ -60,6 +60,14 @@ class NightCase(HubCase):
         for name in names:
             self.hub.add_game(name)
 
+    def complete(self, stem: str, name: str) -> None:
+        self.hub.write_gamelist(
+            f'<?xml version="1.0"?>\n<gameList>\n\t<game>\n\t\t<path>./{name}</path>\n'
+            f"\t\t<name>x</name>\n\t</game>\n</gameList>\n"
+        )
+        for kind in scrape.MEDIA_KINDS:
+            self.hub.put_media(kind, stem, ext="mp4" if kind == "videos" else "png")
+
     def setup_for(self, **overrides: Any) -> nightly.Setup:
         values: dict[str, Any] = {
             "root": self.hub.root,
@@ -127,14 +135,6 @@ class NightCase(HubCase):
 
 
 class NothingToDoTest(NightCase):
-    def complete(self, stem: str, name: str) -> None:
-        self.hub.write_gamelist(
-            f'<?xml version="1.0"?>\n<gameList>\n\t<game>\n\t\t<path>./{name}</path>\n'
-            f"\t\t<name>x</name>\n\t</game>\n</gameList>\n"
-        )
-        for kind in scrape.MEDIA_KINDS:
-            self.hub.put_media(kind, stem, ext="mp4" if kind == "videos" else "png")
-
     def test_it_writes_only_checked_takes_no_lock_and_starts_no_skyscraper(self) -> None:
         self.games(CHRONO)
         self.complete("Chrono Trigger (USA)", CHRONO)
@@ -172,6 +172,54 @@ class NothingToDoTest(NightCase):
         self.assertEqual(self.state()["error"]["step"], nightly.STEP_CHECK)
         self.next_day()
         self.assertEqual(self.night(), 0)
+        self.assertIsNone(self.state()["error"])
+
+
+class EmptyNightClearsErrorsTest(NightCase):
+    """An empty night proves the steps up to planning work and leaves nothing for the later steps
+    to fail on, so it clears a runtime error of any step but keeps a configuration one."""
+
+    def test_an_empty_night_clears_a_runtime_error_of_the_run_step(self) -> None:
+        self.games(KIRBY)
+        with mock.patch.object(scrape_io, "run_held", side_effect=RuntimeError("boom")):
+            self.assertEqual(self.night(), 1)
+        error = self.state()["error"]
+        self.assertEqual((error["step"], error["config"]), (nightly.STEP_RUN, False))
+        self.next_day()
+        self.complete("Kirby Super Star (USA)", KIRBY)  # the library is complete now
+        self.assertEqual(self.night(), 0)
+        self.assertIsNone(self.state()["error"])
+
+    def test_a_runtime_error_of_the_lock_step_is_cleared_too(self) -> None:
+        self.games(KIRBY)
+        with mock.patch.object(inbox_lock, "look", side_effect=InboxError("unreadable")):
+            self.assertEqual(self.night(), 1)
+        error = self.state()["error"]
+        self.assertEqual((error["step"], error["config"]), (nightly.STEP_LOCK, False))
+        self.next_day()
+        self.complete("Kirby Super Star (USA)", KIRBY)
+        self.assertEqual(self.night(), 0)
+        self.assertIsNone(self.state()["error"])
+
+    def test_a_configuration_error_stays_through_empty_nights_until_a_run_gets_past_it(
+        self,
+    ) -> None:
+        self.lock_path.write_text(
+            json.dumps({"host": "other-host", "pid": 4242, "started": self.clock.t - 20 * 3600})
+        )
+        self.games(KIRBY)
+        self.assertEqual(self.night(), 2, self.out + self.err)
+        self.assertTrue(self.state()["error"]["config"])
+        self.complete("Kirby Super Star (USA)", KIRBY)
+        for _ in range(3):  # empty nights prove nothing about the lock
+            self.next_day()
+            self.assertEqual(self.night(), 0, self.out + self.err)
+            self.assertEqual(self.state()["error"]["step"], nightly.STEP_LOCK)
+        self.lock_path.unlink()  # the user fixed it, and there is work again
+        self.games(CHRONO)
+        self.hub.canned({"known": KNOWN3})
+        self.next_day()
+        self.assertEqual(self.night(), 0, self.out + self.err)
         self.assertIsNone(self.state()["error"])
 
 
@@ -414,6 +462,36 @@ class TierOrderTest(NightCase):
         (record,) = self.records()
         self.assertEqual(record["stop"], "quota")
         self.assertEqual(len(self.hub.gathers()), 1)  # tier 2 of `nes` was never asked for
+
+
+class WaveLogTest(NightCase):
+    """A system with games in two tiers is scraped in two waves; a failure message of the first
+    must still point at a log that holds that failure when the second has run."""
+
+    def test_each_wave_keeps_its_own_log_so_a_failure_message_points_at_its_failure(self) -> None:
+        self.hub.add_game(KIRBY)  # in the gamelist but without art: tier 2
+        self.hub.write_gamelist(NES_ENTRY.format(name=KIRBY))
+        self.games(CHRONO)  # new: tier 1
+        self.hub.canned({"known": KNOWN3, "gather_exit": 3})
+        self.night()
+        pointed = [
+            Path(m.split("(see ")[1].rstrip(")"))
+            for m in self.out + self.err
+            if m.startswith("warning: Skyscraper failed on snes")
+        ]
+        self.assertEqual(len(pointed), 2, self.out + self.err)
+        self.assertEqual(len(set(pointed)), 2, pointed)
+        for log in pointed:
+            self.assertEqual(log.read_text().count("exit code 3"), 1, log)
+
+    def test_a_night_names_the_log_of_a_wave_after_its_tier(self) -> None:
+        self.hub.canned({"known": KNOWN3, "gather_exit": 3})
+        self.games(CHRONO)
+        self.night()
+        self.assertEqual(
+            sorted(p.name for p in (self.hub.work / "scrape").iterdir() if p.suffix == ".log"),
+            ["snes.t1.log"],
+        )
 
 
 class RecordSkipsTest(NightCase):

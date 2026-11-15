@@ -97,6 +97,7 @@ class Options:
     force_lock: bool = False
     only: frozenset[str] | None = None  # `inbox`: scrape only the games under these primary paths
     as_warning: bool = False  # `inbox`: a failure is a warning of its report, not a plain line
+    wave: int | None = None  # the nightly run: the tier of this pass, so each pass has its log
     artwork_dir: Path = ARTWORK_DIR
     now: Callable[[], float] = time.time
     today: Callable[[], date] = date.today
@@ -717,7 +718,7 @@ def _scrape_system(run: Run, system: str) -> scrape.Selection | None:
             system,
             scrape.PLATFORMS[system],
             opts.scratch / system,
-            opts.scratch / f"{system}.log",
+            opts.scratch / (f"{system}.log" if opts.wave is None else f"{system}.t{opts.wave}.log"),
             {},
         )
         shutil.rmtree(sr.folder, ignore_errors=True)
