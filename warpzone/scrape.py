@@ -99,8 +99,8 @@ NO_MULTISCRAPE = "nomultiscrape"
 # Games per Skyscraper call.
 BATCH_SIZE = 100
 # What a game is assumed to cost in a time budget (see "Quota and time budget" in
-# development/design/scrape-unattended.md).
-EST_SECONDS_PER_GAME = 10
+# development/design/scrape-unattended.md): measured on a NAS, 500 games in 148 minutes.
+EST_SECONDS_PER_GAME = 18
 
 
 def batch_fits(now: float, deadline: float, games: int) -> bool:

@@ -89,7 +89,7 @@ For a game without an entry, warpzone adds a `<game>` with the name, description
 
 Not produced: `titlescreens` and `physicalmedia` (disc and cartridge scans). Skyscraper's ScreenScraper module does not fetch them, so scraped games go without them and ES-DE and the library UI fall back to the other kinds. Manuals and fanart are not fetched either.
 
-A game takes about 10 seconds and 2.6 MB of media, most of it the video, so a library of 1,000 games is about three hours and 2.6 GB on the hub (the videos stay on the hub; consoles ignore them) plus about as much in Skyscraper's cache on the machine that scrapes (in the container, `skyscraper/cache/` on the NAS's disk).
+A game takes about 10 to 18 seconds (18 on a NAS) and 2.6 MB of media, most of it the video, so a library of 1,000 games is about three to five hours and 2.6 GB on the hub (the videos stay on the hub; consoles ignore them) plus about as much in Skyscraper's cache on the machine that scrapes (in the container, `skyscraper/cache/` on the NAS's disk).
 
 Scraped systems: `nes`, `snes`, `n64`, `gb`, `gbc`, `gba`, `nds`, `genesis`, `mastersystem`, `gamegear`, `sega32x`, `atari2600`, `atari7800`, `atarilynx`, `atarijaguar`, `wonderswan`, `wonderswancolor`, `psx`, `ps2`, `psp`, `saturn`, `dreamcast`, `gc`, `wii`, `n3ds`, `mame`, `ps3`, `xbox` and `switch`. Not yet: `ps4`, `psvita`, `xbox360` and `wiiu`.
 
@@ -133,7 +133,7 @@ A game that reaches the library without going through `inbox` (copied by hand, p
 
 What a night does:
 
-- **It picks what is worth it.** New games with no entry go first, then games with an entry but no cover, screenshot or miximage, then games ScreenScraper did not know whose 30 days have passed, and last games that only lack a video, back cover, 3D box or logo. It takes at most `--max-games` of them (default 500) and stops before a batch that would end after `--max-minutes` (default 180). What is left is picked up the next night, so a big library fills over several nights.
+- **It picks what is worth it.** New games with no entry go first, then games with an entry but no cover, screenshot or miximage, then games ScreenScraper did not know whose 30 days have passed, and last games that only lack a video, back cover, 3D box or logo. It takes at most `--max-games` of them (default 500) and stops before a batch that would end after `--max-minutes` (default 180). What is left is picked up the next night, so a big library fills over several nights. On a NAS with a ScreenScraper account a night of 500 games took about two and a half hours and did not reach the quota.
 - **It does nothing when there is nothing to do.** It exits at once, with no lock and no Skyscraper, so an up-to-date library costs nothing.
 - **It skips games that cannot improve.** When ScreenScraper has no video or back cover for a game, the game would be "missing media" for ever. Every scrape remembers such games (per machine, next to the list of games ScreenScraper did not know) and the nightly run does not ask for them again; they come back when their file changes size or a media file they had goes missing.
 - **It takes the inbox lock.** If an `inbox` tick or a scrape by hand holds it, the run waits up to 30 minutes (a lock silent for 10 minutes is taken over). The inbox's own ticks during the run exit as busy and try again at the next one, so a game dropped at 03:30 is filed when the run ends, at most `--max-minutes` later.
