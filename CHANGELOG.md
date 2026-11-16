@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ## [Unreleased]
 
+## [0.4.0rc5] - 2026-11-16
+
+The fifth candidate lets the library UI delete a game from the hub into a trash, with Restore and Delete now, and removes the game's whitelist lines from each console once that console has received the deletion. The UI also groups the systems by maker, draws "Now showing" at random on each visit, and the 3DS scrape no longer fails on `.zcci` images. The inbox can ask Skyscraper for a region and a language first.
+
+**Upgrading from 0.4.0rc4:** rebuild the hub image (see [The hub container](https://dagonco.github.io/warpzone/setup/hub-container/)). Nothing in the configuration has to change. To delete arcade games from the UI, the `warpzone` service must be able to read the arcade DATs `[inbox]` names; DATs under the hub root, which the service already mounts, need nothing else.
+
 ### Added
 
 - The library UI can delete a game from the hub. The game's page ends with **Delete from the hub**, which first shows everything that would go (each file and folder with its size, the art and other media, the gamelist entry, the whitelist lines of each console, and the saves, which stay) and then, on **Move to trash**, moves the whole game with its updates, DLC and extras, its art and its gamelist entry into a `trash/` folder at the hub root. Every console that has the game deletes it as part of the normal sync, and the server removes the game's whitelist lines from each console once that console has received the deletion, so a console that is off keeps them until it is back. The new **Trash** view (the header link) lists what was deleted, with the days left before it is purged (7 days), **Restore** and **Delete now** (which asks for confirmation, since it cannot be undone), and the consoles whose lines are still waiting. Saves are never deleted. A deletion is refused while an inbox or a scrape runs, and for an arcade set that other sets of the library need as their parent or BIOS (the dialog names them). See [the hub container guide](https://dagonco.github.io/warpzone/setup/hub-container/#deleting-a-game-from-the-ui).
@@ -14,7 +20,6 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 ### Changed
 
 - The library UI lists the systems grouped by maker (Nintendo, Sony, Sega, Microsoft, Atari, NEC, SNK, Bandai, Commodore, then Other, and Arcade last) and by release year within a maker, in the side rail, which heads each group with the maker's name, and on the Systems page. Before, they were in name order. Atari Jaguar and WonderSwan get their proper names.
-
 - The library UI's "Now showing" draws eight games at random on each visit, from eight random systems with art, instead of the same alphabetically first systems with a game picked by the day. Its pause button is centred on the slide markers. In the home page's records, "Achievements by system" sizes its code column to the longest code, shortening every bar alike, so a long code such as ATARI2600 no longer runs over its bar.
 
 ### Fixed
@@ -397,7 +402,8 @@ First public release. warpzone keeps one game library on a home server and deliv
 - `warpzone doctor` checks the tools, config, Syncthing, DATs and hub folder of a machine and prints the fix for each problem.
 - `warpzone status`, `check` and `render-ignores` to inspect folder state, validate the config and preview a device's ignore lines. `provision` supports `--dry-run`.
 
-[Unreleased]: https://github.com/dagonco/warpzone/compare/v0.4.0rc4...HEAD
+[Unreleased]: https://github.com/dagonco/warpzone/compare/v0.4.0rc5...HEAD
+[0.4.0rc5]: https://github.com/dagonco/warpzone/compare/v0.4.0rc4...v0.4.0rc5
 [0.4.0rc4]: https://github.com/dagonco/warpzone/compare/v0.4.0rc3...v0.4.0rc4
 [0.4.0rc3]: https://github.com/dagonco/warpzone/compare/v0.4.0rc2...v0.4.0rc3
 [0.4.0rc2]: https://github.com/dagonco/warpzone/compare/v0.4.0rc1...v0.4.0rc2
