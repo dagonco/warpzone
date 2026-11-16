@@ -10,15 +10,23 @@ game or a whole system on or off for one console or for all of them. A JSON API 
 page and, later, a Decky plugin (a separate project; this page only keeps the API usable for
 it).
 
-Underneath, the UI does one thing: it rewrites `library/patterns-<device>.stignore`. It never
-deletes, moves or renames anything in the library. What it writes is limited to the device
-whitelists, the catalog index (`catalog/`), the backups of the whitelists it replaced and the
+Underneath, the UI does one thing for consoles: it rewrites `library/patterns-<device>.stignore`.
+What it writes is limited to the device whitelists, the catalog index (`catalog/`), the backups
+of the whitelists it replaced and the
 [play queue](/warpzone/development/design/play-queue/) (`catalog/queue.json`, with its own
 backups). It can also put one of those backups back (see
 [History and restore](#history-and-restore)).
 Removing a game from a console reaches the console through the normal path: Syncthing delivers
 the new whitelist, the console's rescan applies it, and the console's prune timer deletes the
 leftovers (see [Removal reaches the console](#removal-reaches-the-console)).
+
+The one thing it does to the library itself is delete a whole game from the hub, on the user's
+confirmed request: it moves the game's files, its media and its hub gamelist entry into a trash
+at the hub root, where they can be restored for 7 days, and removes the game's whitelist lines
+from each console once that console has received the deletion (see
+[Deleting a game](#deleting-a-game)). It never renames anything in the library, never moves a
+file anywhere but into its trash and back, never deletes part of a game, and never deletes a
+save.
 
 ## Decisions
 
@@ -47,6 +55,11 @@ These were decided before the design and are not reopened here:
 9. Games without a scrape show a generic placeholder; nothing else is designed for them yet.
 10. Standard library only: `warpzone serve` uses `http.server`, and the page is static HTML, CSS
     and JavaScript with no build step, shipped in `warpzone/data/ui/`.
+11. A whole game can be deleted from the hub (0.4.0rc5). It goes to `trash/` at the hub root,
+    outside every Syncthing folder, one entry per deletion, restorable from the page and purged
+    after 7 days. The whitelist lines of the game are removed by the server, per console, only
+    once that console is fully in sync after the deletion. An arcade set that another set of
+    the library depends on is refused. Saves are never deleted.
 
 ## The catalog index
 
@@ -65,6 +78,7 @@ Syncthing folder, so no console receives it and the hub's filesystem snapshots c
 ├── ra/user/games/<id>.json    when the user unlocked each achievement of one game, cached
 ├── ra/badges/<name>[_lock].png  badge images, cached
 ├── inbox/runs/<id>.json       the run record of each `inbox --apply` (the newest 50; see Inbox)
+├── cleanups.json              the whitelist lines of deleted games still to remove (see Deleting a game)
 └── whitelists/<device>/       backups of the whitelists the UI, the migration and a restore replaced
 ```
 
@@ -336,7 +350,9 @@ the pauses, the downloads and the guarded writes.
 
 ## Metadata and media
 
-The UI reads the ES-DE scrape that is already on the hub, read-only:
+The UI reads the ES-DE scrape that is already on the hub, read-only (the one exception is a
+deletion, which moves the game's media and gamelist entry into the trash; see
+[Deleting a game](#deleting-a-game)):
 
 - `frontend/es-de/gamelists/<system>/gamelist.xml`, read with `artwork.read_gamelist` (a file over 32 MiB is
   refused without being loaded, and the system shows no metadata) and parsed with
@@ -507,7 +523,14 @@ with the genres, developer and year it shares with X; each is hidden when empty)
   known: with `available: false` it says the list is not downloaded and shows the totals; with
   `progress: null` it lists the achievements without marking any; with `dates: false` it shows
   the counts from the summary and leaves the tiles unmarked. The filter (all, unlocked, locked)
-  exists only when the dates are known, and a long list shows the first 48 until asked.
+  exists only when the dates are known, and a long list shows the first 48 until asked. At the
+  very end, set apart, a "Delete from the hub" button opens the
+  [deletion dialog](#the-dry-run-and-the-confirmation).
+- **Trash:** reached from the header, from `GET /api/v1/trash`: one row per entry (title,
+  system, date of the deletion, size, days left, and a mark on an incomplete entry) with
+  Restore and Delete now, each behind a confirmation, and below them the consoles that still
+  have whitelist lines of deleted games, with what they wait for (see
+  [The trash](#the-trash)).
 - **Search:** results grouped by title key across systems, with the same per-console switches.
 - **Play queue:** an "Up next" section on the home page, a "Play queue" panel on the game page
   and a "Queued" mark on the tiles and search rows of queued games, all from
@@ -629,6 +652,11 @@ game's parts from the catalog):
 - **System on.** The system's roots are added; its includes and excludes are dropped by
   normalization, so every game of it is on, including games added later.
 - **System off.** The roots are removed and so are all the includes and excludes below them.
+- **Lines of a deleted game** (`whitelist.drop_lines`, only for
+  [the cleanup](#whitelist-cleanup)). The includes and excludes recorded for the game when it
+  was deleted are removed where they are still in the model; nothing is added, since the paths
+  no longer exist on the hub. `set_game` is not used: turning a game off adds an exclude under
+  a system that is on, which would leave a line for a path that is gone.
 
 After a change, `whitelist.effect` (pure) evaluates every part of every catalog game with the old
 and the new model and lists the games that turned on and off. The change is applied only when
@@ -804,6 +832,330 @@ it on again before the prune ran costs nothing: the files are still there and Sy
 them in sync. A removal the half-of-device guard refused stays on the console until the user
 runs `prune --apply` by hand.
 
+## Deleting a game
+
+Turning a game off keeps it on the hub. Deleting it takes it out of the library: its files go
+to the [trash](#the-trash), the hub's Syncthing announces the deletion, every console that
+receives the game deletes it as part of the normal sync, and the server removes the game's
+whitelist lines from each console afterwards. The order matters and is the one the manual
+procedure follows (`.claude/skills/edit-whitelist/SKILL.md`, "Remove a game"): **the hub first,
+the whitelist lines last, per console.** A line removed before the console has received the
+deletion makes Syncthing ignore the path there, so the deletion never reaches it, and prune does
+not help: it deletes only files the hub still has. The console would keep its copy forever.
+
+### What a deletion removes
+
+A deletion is about one catalog game as a whole, as `catalog.derive` groups it, never about a
+part of one (one disc, one update, one DLC):
+
+- **Its parts**, every path of `parts` below `library/`: a Switch base game with the
+  `extras/switch/updates` and `extras/switch/dlc` folders its TitleID claims, a PS4 game folder
+  with its `-UPDATE` folder, its DLC folder and its shortcuts, a Vita app with its licence and
+  `.psvita` launcher, an `.m3u` folder with its discs and `.sbi` files, a PS3 folder, an entry of
+  `roms/<system>/roms/` for `xbox360`, `wiiu` and `model2`, or the one file of most games.
+- **Its media**: for each kind the UI reads (`library_api.MEDIA_KINDS`) and each stem the lookup
+  tries (`media_stem` of every path of `gamelist_paths`, in the folder form and the file form),
+  the files `frontend/media/<system>/<kind>/<stem>.<ext>` with the extensions the UI reads (`png`,
+  `jpg`, `jpeg`; `mp4`, `webm` for `videos`). A stem that another catalog game of the same system
+  resolves to (through its own `gamelist_paths`) is left out, so the shorter paths the lookup
+  tries never take another game's art. A link, or a file in a kind or system folder that is a
+  link, is never moved or followed (see [Media and byte ranges](#media-and-byte-ranges)); it is
+  named in `warnings`. Kinds the UI does not read (`manuals`, `fanart`, ...) are left where they
+  are; ES-DE ignores the media of a game it does not list.
+- **Its hub gamelist entry**: every `<game>` or `<folder>` block of
+  `frontend/es-de/gamelists/<system>/gamelist.xml` whose `<path>` is one of the game's
+  `gamelist_paths` and not another game's, removed as text (`gamelist.drop_entries`, pure, on the
+  block parser of `update_entry`). The file is read under the 32 MiB limit of
+  `artwork.read_gamelist`, written to `.part` and renamed, and the file as it was is first copied
+  to `tools/logs/gamelist-backups/<system>-gamelist-<YYYYMMDD-HHMMSS>.xml`, as `inbox` and `scrape`
+  do (`inbox_mame.save_gamelist`; outside every synced folder). The removed blocks are kept in the
+  entry's manifest for a restore. A gamelist that cannot be read or written leaves the entry in
+  place with a warning, and the deletion goes on: ES-DE does not show an entry whose file is
+  missing.
+- **Its catalog record**: the server derives the system again (`catalog_store.update_system`,
+  stat only), which drops a game whose primary part is gone, and then asks for a background run
+  (`Refresher.trigger()`). A trigger while a run is in progress makes one more run start when that
+  one ends, since the run in progress may have listed the system before the move.
+
+Never removed: saves (nothing below `saves/` is touched; the dialog shows what the hub holds for
+the game, from [Saves per game](#saves-per-game), and says it stays), BIOS files, the parent or
+BIOS set of an arcade game (below), an unclaimed Switch folder, the folders above the parts (an
+emptied folder stays), and the play queue (an entry of the deleted game resolves as `missing`,
+or `moved` when another version exists; see
+[Game references](/warpzone/development/design/play-queue/#game-references)).
+
+### Refusals
+
+The plan (`trash.plan_delete`, pure, from the catalog, the listing of the parts and the media,
+the gamelist, the whitelists as read and the arcade sets) refuses, in this order:
+
+1. An unknown game: `404 not-found`.
+2. A part that is a symbolic link, is not of the type the catalog records (`file` or `dir`), or
+   is equal to, inside or above a part of another catalog game: `409 unsafe-path`, naming the
+   path. A part that is absent is listed in `absent` and skipped; the rest is deleted.
+3. A device that lists `library` whose whitelist is `needs-migration`: `409 not-managed`, naming
+   it. Its lines could not be found or removed reliably.
+4. An arcade set that another set of the library needs (below): `409 has-dependants`, or
+   `409 dats-missing` when the server cannot tell.
+5. `trash/` that cannot be created, or that is on another filesystem than `library/` or
+   `frontend/media/` (`st_dev` differs), so a move would be a copy: `409 trash-unavailable`.
+   Nothing is ever copied and then deleted.
+6. A pending cleanups file that exists but cannot be read: `500 read-failed`, naming it. A
+   deletion whose lines could not be recorded would leave them behind.
+
+And, for the apply only, the hub lock (see [Concurrency](#concurrency)): `409 hub-busy` while
+`inbox/.warpzone.lock` exists, whoever holds it and however old it is (a stale lock is for a
+person to take over, with `inbox --force-lock`).
+
+**Arcade dependencies.** The catalog does not model parent and clone sets, so the check is made
+at deletion time, for a game of an arcade system folder (`mame`, `arcade`, `fbneo`, `neogeo`,
+`cps1`, `cps2`, `cps3`), from the arcade DATs `inbox` uses (`[inbox] mame_dat`, `fbneo_dat`,
+`mame2003plus_dat`, read with `inbox_mame.load_sets` and its parse cache, and kept in memory while
+their size and mtime hold). The set's name is the primary file's name without `.zip`. A
+dependant is another zip of the same system folder whose set, in any configured DAT, has that name
+in its `cloneof` or `romof` chain or among its devices (`inbox_mame.pool_names`). The refusal names
+every dependant (`dependants`: the id, title and file name of each), so the user deletes them
+first or keeps the set. Deleting a clone never deletes its parent or BIOS: those are games of
+their own, deleted only when asked. With no arcade DAT configured or readable by `serve`, a
+deletion in an arcade system folder is refused with `409 dats-missing`, since nothing tells
+whether other sets depend on it; the DATs are then mounted read-only into the `serve` container
+too (see [the hub container guide](/warpzone/setup/hub-container/#deleting-a-game-from-the-ui)).
+A set no DAT knows has no dependants by name and is deleted.
+
+### The dry run and the confirmation
+
+A deletion moves data the user owns out of the library, so it follows the destructive rule of
+[Writing commands](/warpzone/development/design/configuration/#writing-commands): it reports first
+and acts only when confirmed. The confirmation in the page plays the role of `--apply`.
+
+1. The game page's button sends `POST /api/v1/games/{id}/delete` with `{"dry_run": true}`. The
+   answer lists every file and folder with its size (a folder is walked for its total and count,
+   no link followed), the parts absent on disk, the media files with their sizes, whether a
+   gamelist entry is removed, the whitelist lines of each device (as text, `!/path` or `/path`),
+   the saves the hub keeps, whether the hub lock is held (`busy`), the purge date, and `expect`:
+   `sha256:<hex>` of the canonical JSON (sorted keys, no spaces) of `files`, `media`, `gamelist`
+   and `whitelists`.
+2. The dialog shows all of it and says what follows: the files go to the trash for 7 days, the
+   hub's free space grows only when the entry is purged, every console that has the game deletes
+   it, saves stay. Its button is "Move to trash", disabled while `busy` is set.
+3. The confirmation sends `{"dry_run": false, "expect": "<expect>"}`. The server plans again
+   from what is on disk now; a plan whose `expect` differs (a file changed, a media file appeared,
+   a whitelist line was added for the game) is refused with `412 stale`, and the dialog shows the
+   new plan. No `expect` is `428 expect-missing`.
+
+### The order of a deletion
+
+Under the hub lock and the server's write lock (see [Concurrency](#concurrency)):
+
+1. Plan again and compare with `expect`. Every refusal applies again.
+2. Record the whitelist lines in [the pending cleanups](#whitelist-cleanup), before anything
+   moves. A line cannot be removed before the hub has recorded the deletion, so recording first
+   is safe, and a server that stops after the moves still knows the lines.
+3. Create `trash/<entry>/` and write its manifest with `"state": "moving"` and every path to move.
+4. Move each part, then each media file, with `os.rename` to the same relative path inside the
+   entry, creating the folders there. Right before each move the path is checked again with
+   `lstat`: not a link, the type of the plan, and for a file the size and mtime of the plan. A
+   path that no longer matches stops the deletion with `unsafe-path` and rolls it back (below).
+5. Remove the gamelist entries, with the backup; the removed blocks go into the manifest.
+6. Rewrite the manifest with `"state": "complete"`, then update the catalog.
+
+Then, with the locks released, the server asks the hub's Syncthing to scan what changed, so the
+deletion is announced at once: `POST /rest/db/scan?folder=wz-library&sub=<part>` for each part,
+`wz-media` with `sub=<system>/<kind>/<file>` for each media file, and `wz-esde` with
+`sub=gamelists/<system>/gamelist.xml`. A failed scan is a warning; the hub's watcher picks the
+change up anyway, and the cleanup waits for the hub's index in any case.
+
+**A move that fails halfway** is rolled back, the safer of the two choices: the server moves the
+paths already moved back to their places in reverse order, removes the lines it recorded in step
+2 and the entry folder, and answers `500 move-failed` with `"incomplete": false`. The library is
+as it was. A move back that fails too leaves the entry and its manifest as they are, and the
+error carries `"incomplete": true` and the paths still in the trash. The Trash view shows the
+entry as incomplete, and Restore puts back whatever is there. Its recorded lines stay pending,
+but the cleanup removes a line only for a path that is gone from the hub (below), so a part that
+never left keeps its line. An entry the server finds in `moving` (a server stopped in the middle)
+is incomplete in the same way. The 7-day purge never removes an incomplete entry; only Delete now
+does.
+
+### The trash
+
+`trash/` sits at the hub root, next to `library/` and `catalog/`, outside every Syncthing folder,
+so nothing in it reaches a console, and on the same filesystem as the library, so moving in and
+out is a rename. The hub's filesystem snapshots cover it. One folder per deletion:
+
+```
+<hub root>/trash/
+└── 20261116T101500Z-5d0c1f3a9b2e7c48/       <UTC time of the deletion>-<game id>[-N]
+    ├── manifest.json
+    ├── library/roms/psvita/app/PCSE00000/   each part, at its path below the hub root
+    ├── library/roms/psvita/license/PCSE00000/
+    ├── library/roms/psvita/Example Game.psvita
+    └── frontend/media/psvita/covers/Example Game.png   each media file, likewise
+```
+
+An entry name matches `^\d{8}T\d{6}Z-[0-9a-f]{16}(-\d+)?$` (a second deletion of the same game in
+the same second, after a restore, takes `-2`). A route names an entry only by that exact name, and
+a folder of `trash/` that does not match is not an entry and is never touched. The manifest is
+UTF-8 JSON with sorted keys, written with `safefile.atomic_write`:
+
+```json
+{
+  "format": 1,
+  "entry": "20261116T101500Z-5d0c1f3a9b2e7c48",
+  "state": "complete",
+  "deleted": "2026-11-16T10:15:00Z",
+  "purge_after": "2026-11-23T10:15:00Z",
+  "system": "psvita",
+  "id": "5d0c1f3a9b2e7c48",
+  "name": "Example Game",
+  "game": {"title": "Example Game", "key": "example game", "primary": "roms/psvita/app/PCSE00000",
+           "parts": ["…as in the catalog file…"], "gamelist": "./Example Game.psvita",
+           "size": 3221225993, "added": "2026-10-28", "dat": null, "serials": [], "ra": null,
+           "flags": []},
+  "files": [{"path": "library/roms/psvita/app/PCSE00000", "type": "dir", "size": 3221225472, "files": 812},
+            {"path": "library/roms/psvita/Example Game.psvita", "type": "file", "size": 9}],
+  "media": [{"path": "frontend/media/psvita/covers/Example Game.png", "size": 81234}],
+  "gamelist": {"path": "frontend/es-de/gamelists/psvita/gamelist.xml",
+               "entries": ["<game>\n\t\t<path>./Example Game.psvita</path>\n\t\t…\n\t</game>"],
+               "backup": "tools/logs/gamelist-backups/psvita-gamelist-20261116-111500.xml"},
+  "whitelists": {"deck": {"include": ["roms/psvita/app/PCSE00000", "roms/psvita/Example Game.psvita"],
+                          "exclude": []}}
+}
+```
+
+- `state` is `moving` (written before the first move), `complete` (after the last) or `restoring`
+  (before a restore's first move). The API shows `moving` and `restoring` found on disk outside a
+  running request as `incomplete`.
+- `game` is the catalog record as the system file held it, so a restore gives back the fields
+  only `inbox` knows (`added`, `dat`, `serials`, `ra`, `flags`). `name` is the gamelist name, else
+  the title.
+- Every `path` is relative to the hub root and names both the original place and, below
+  `trash/<entry>/`, the trashed copy. A reader accepts only paths below `library/` or
+  `frontend/media/`, with no empty, `.` or `..` component and no leading `/`; a manifest with any
+  other path is damaged.
+- `gamelist` is `null` when the game had no entry. `whitelists` is what was recorded for the
+  cleanup, kept for the record only (the cleanup reads [its own file](#whitelist-cleanup)).
+- A manifest that cannot be read, or is not this shape, makes the entry `damaged`: listed under
+  its folder name, never restored or purged by itself; Delete now removes it.
+
+**Restore** (`POST /api/v1/trash/{entry}/restore`), under the hub lock and the write lock:
+
+1. Each path of the manifest is located with `lstat` on both sides. A path that exists at its
+   original place (a copy filed again by `inbox`, new art from a scrape, a file put back by hand)
+   is a conflict: the restore is refused with `409 restore-conflict`, naming the paths, and nothing
+   moves. A path in neither place (an incomplete entry) is skipped with a warning.
+2. Write the manifest with `"state": "restoring"`, then move each path back (parts first, then
+   media), creating missing parent folders, with the same check right before each move. A failure
+   moves the restored paths back into the trash and answers `500 move-failed`, as for a deletion.
+3. Put each saved gamelist block back before `</gameList>`, with the backup, unless the gamelist
+   already has an entry with that `<path>`, which is kept (ES-DE may have written one back). An
+   unreadable gamelist is a warning.
+4. Derive the system again and merge the inbox-only fields of `game` into the record of the same
+   id (the primary path is the same, so the id is too), as `inbox` merges what it knows after
+   filing; then trigger a background run. The play queue finds the game `present` again.
+5. Cancel the game's cleanups that are still pending: those lines are still in the whitelists, so
+   the consoles that had the game receive it again. Lines already removed are **not** added back:
+   on those consoles the restored game is off, like a newly added game, and is turned on as usual.
+   The answer and the dialog say which consoles are which.
+6. Remove the entry folder (by then only the manifest and empty folders), then scan as after a
+   deletion.
+
+**Delete now** (`POST /api/v1/trash/{entry}/purge`) and the **automatic purge** remove the whole
+entry folder, under the write lock only, since nothing outside `trash/` changes. The entry's path
+must be a real directory directly below `trash/` (not a link); it is removed with
+`shutil.rmtree`, which does not follow links inside it. This is the one place where warpzone
+deletes library files on the hub, and only files a deletion moved there. The background task of
+`serve` purges each `complete` entry whose `purge_after` has passed (7 days, `TRASH_DAYS`);
+incomplete and damaged entries wait for Delete now. A purge that fails partway answers
+`500 purge-failed` and leaves the rest, which the next purge removes. Purging an entry does not
+touch its pending cleanups.
+
+### Whitelist cleanup
+
+The lines of a deleted game wait in `catalog/cleanups.json` until each console has received the
+deletion:
+
+```json
+{
+  "format": 1,
+  "cleanups": [
+    {"entry": "20261116T101500Z-5d0c1f3a9b2e7c48", "id": "5d0c1f3a9b2e7c48",
+     "system": "psvita", "title": "Example Game",
+     "deleted": "2026-11-16T10:15:00Z", "recorded": "2026-11-16T10:15:02Z",
+     "paths": ["roms/psvita/app/PCSE00000", "roms/psvita/license/PCSE00000",
+               "roms/psvita/Example Game.psvita"],
+     "devices": {"deck": {"include": ["roms/psvita/app/PCSE00000", "roms/psvita/Example Game.psvita"],
+                          "exclude": []}}}
+  ]
+}
+```
+
+- **What is recorded.** For each device that lists `library`, the includes and excludes of its
+  managed whitelist that are equal to or below one of the game's parts (`paths`). A device whose
+  whitelist has none (it does not have the game, or has the whole system, whose root line stays)
+  is not listed, and a game no whitelist names gets no entry. The file is UTF-8 JSON with sorted
+  keys, written with the guarded atomic write under the write lock; a missing file is an empty
+  list, and a file that cannot be read stops new deletions (`read-failed`) and the cleanup (logged
+  once).
+- **When the hub has recorded the deletion.** `recorded` is `null` until the hub's Syncthing has
+  the deletion in its index: the cleanup asks `GET /rest/db/file?folder=wz-library&file=<path>`
+  for each of `paths` and sets `recorded` to the time of that check once every answer has its
+  global record `deleted` (or Syncthing does not know the path). Without this, a console could
+  read as fully in sync before the hub had announced anything.
+- **When a console has received it.** A device is ready when a reading of the hub taken after
+  `recorded` shows it connected, with `remoteState` neither `paused` nor `notSharing`, and
+  `GET /rest/db/completion?folder=wz-library&device=<id>` gives `completion` 100 and `needItems` 0
+  (the questions of [Progress](#progress), asked fresh, not from its 15-second cache). A console
+  that is offline keeps its lines until it reconnects and finishes syncing, however long that
+  takes; a console that never reads as done keeps them, and the Trash view shows it waiting.
+- **Removing the lines.** For a ready device, under the write lock: every recorded path that
+  exists again on the hub (`lstat` below `library/`: restored, or filed again by `inbox`) is
+  dropped from the entry without touching the whitelist, since its line now serves the game that
+  is there. The other lines are removed with `whitelist.drop_lines`, the model is normalized and
+  the file is written as any whitelist write (read with its stamp, a backup in
+  `catalog/whitelists/<device>/`, the guarded atomic write, then a scan of the file). The effect
+  check holds: a write that would change the state of a catalog game is not made, and the lines
+  stay (logged). A file changed in between is read again on the next pass. A whitelist that became
+  `needs-migration` keeps its lines until it is migrated. The device leaves the entry once
+  written, and an entry with no device left leaves the file.
+- **Devices that leave.** A device no longer in the config, or that no longer lists `library`, is
+  dropped from every entry without a write.
+- **Cadence.** A background thread of `serve` runs at start and then every 60 seconds
+  (`CLEANUP_SECONDS`) while the file or the trash has entries: first the cleanup, then the purge
+  of expired entries. A pass that cannot reach the hub's Syncthing does nothing and tries again on
+  the next one, and no pass holds the write lock while it asks the hub anything.
+
+A cleanup write is a whitelist write like a change from the page: the device shows `pending` in
+[Progress](#progress) for a moment, the backup is in its history, and a client that holds the old
+`etag` is refused with `stale` and reads again.
+
+### What reaches the consoles
+
+- **The library.** The hub's `wz-library` announces the deleted paths, and every console that
+  receives them (by a game line or by its whole system) deletes its copy as a normal sync, with no
+  prune involved. A restore downloads the game again where its lines are still there.
+- **Media and gamelists.** `wz-media` and `wz-esde` are two-way, so the media deletion and the
+  gamelist edit reach every console that has them, and a restore reaches them back. ES-DE keeps
+  its gamelist in memory and writes it when it exits, so a console running ES-DE may write the
+  removed entry back to the hub. That is harmless: ES-DE does not show an entry whose file is
+  missing and the catalog does not list the game. A profile with `[artwork]` regenerates its
+  gamelists from the hub's copy.
+- **Saves** stay on the hub and on every console.
+
+### Concurrency
+
+Two locks, always taken in this order:
+
+- **The hub lock**, `inbox/.warpzone.lock`, shared with `inbox --apply` and `scrape`. A deletion or
+  a restore is refused with `409 hub-busy` while it exists (an inbox may be filing into the same
+  system or writing the same gamelist, a scrape may be adding the game's art), and otherwise takes
+  it for its own duration with `inbox_lock.hold(..., mode="attended", task="delete")`, so neither
+  can start in the middle; that lasts seconds. The inbox API's `busy.task` is then `delete`, and
+  the Inbox view says "The library UI". An unattended inbox or scrape that finds it busy behaves as
+  for any live holder.
+- **The server's write lock**, the one of every whitelist and queue write, held for the moves, the
+  gamelist and catalog writes and the cleanups file, so a change request, a queue write or the
+  cleanup never sees a game half deleted. The purge and the cleanup take only this one.
+
 ## HTTP API
 
 `warpzone serve` serves the page and the API from one port (`[serve] listen`, default
@@ -818,7 +1170,9 @@ The server reads the catalog files, the gamelists, the RA lists, the whitelists 
 every 5 seconds). It runs `catalog` in a background thread at start and every 6 hours, and
 `catalog --ra-lists` once a day when `RA_API_KEY` is set (the 7-day age rule makes most of those
 runs no-ops). With the key, every run also does a bounded share of `catalog --ra-achievements`
-(see [Achievements and progress](#achievements-and-progress)).
+(see [Achievements and progress](#achievements-and-progress)). Another thread runs the
+[whitelist cleanup](#whitelist-cleanup) and the purge of the trash every 60 seconds while there
+is anything to do.
 
 ### Authentication
 
@@ -1010,6 +1364,10 @@ service token and sends its bearer next to it.
 | `GET /api/v1/queue?history=N` | the [play queue](/warpzone/development/design/play-queue/#get-apiv1queue), resolved against the catalog, the whitelists, the play totals and the RA progress |
 | `POST /api/v1/queue` | applies a list of [queue operations](/warpzone/development/design/play-queue/#post-apiv1queue), with the whitelist changes they imply, in one request |
 | `POST /api/v1/catalog/refresh` | starts a `catalog` run now (`202`; `409` while one runs) |
+| `POST /api/v1/games/{id}/delete` | plans a [deletion](#deleting-a-game) (`dry_run`), or moves the game to the trash |
+| `GET /api/v1/trash` | the [trash](#the-trash) entries, newest first, and the pending whitelist cleanups |
+| `POST /api/v1/trash/{entry}/restore` | puts an entry back in the library |
+| `POST /api/v1/trash/{entry}/purge` | deletes an entry for good (Delete now) |
 
 `GET /api/v1/devices`:
 
@@ -1392,6 +1750,77 @@ when there is one. The errors are those of any whitelist write, in this order: `
 shape), `not-found` (an unknown device, or a backup that is not in its folder), `not-restorable`
 (an empty backup), `expect-missing` and `stale`, and `write-failed`.
 
+### Deleting and the trash
+
+`POST /api/v1/games/{id}/delete` takes `{"dry_run": true}` or `{"dry_run": false, "expect":
+"sha256:…"}` (`dry_run` is required; see
+[The dry run and the confirmation](#the-dry-run-and-the-confirmation)). The dry run answers:
+
+```json
+{"dry_run": true, "game": {"id": "5d0c1f3a9b2e7c48", "system": "psvita", "title": "Example Game",
+                           "name": "Example Game"},
+ "expect": "sha256:…",
+ "files": [{"path": "roms/psvita/app/PCSE00000", "type": "dir", "size": 3221225472, "files": 812},
+           {"path": "roms/psvita/Example Game.psvita", "type": "file", "size": 9}],
+ "absent": [], "size": 3221225993,
+ "media": [{"path": "psvita/covers/Example Game.png", "size": 81234}], "media_size": 81234,
+ "gamelist": true,
+ "whitelists": {"deck": ["!/roms/psvita/app/PCSE00000", "!/roms/psvita/Example Game.psvita"]},
+ "saves": {"data": true, "states": 0, "newest": "2026-11-08T21:14:03Z", "emulators": ["vita3k"]},
+ "busy": null, "purge_after": "2026-11-23T10:15:00Z", "warnings": []}
+```
+
+`files` are below `library/`, `media` below `frontend/media/`; `gamelist` says whether an entry
+is removed; `whitelists` has the lines as they are written in each device's file (devices with
+none are left out); `saves` is the object of [Saves per game](#saves-per-game), kept;
+`busy` is `null` or the inbox API's `{"since", "mode", "task"}`; `purge_after` is when the entry
+would be purged if made now. The apply answers:
+
+```json
+{"dry_run": false, "entry": "20261116T101500Z-5d0c1f3a9b2e7c48",
+ "purge_after": "2026-11-23T10:15:00Z", "moved": {"files": 2, "media": 1, "bytes": 3221307227},
+ "gamelist": "removed", "pending": {"deck": 2}, "warnings": []}
+```
+
+`gamelist` is `removed`, `none` (no entry) or `failed` (a warning says why); `pending` counts the
+lines recorded per device; `warnings` holds failed scans and skipped links.
+
+`GET /api/v1/trash`:
+
+```json
+{"size": 3221307227,
+ "entries": [{"entry": "20261116T101500Z-5d0c1f3a9b2e7c48", "id": "5d0c1f3a9b2e7c48",
+              "system": "psvita", "title": "Example Game", "name": "Example Game",
+              "deleted": "2026-11-16T10:15:00Z", "purge_after": "2026-11-23T10:15:00Z",
+              "days_left": 7, "size": 3221307227, "files": 2, "media": 1, "state": "complete"}],
+ "pending": [{"device": "deck", "entry": "20261116T101500Z-5d0c1f3a9b2e7c48",
+              "title": "Example Game", "lines": 2, "since": "2026-11-16T10:15:00Z",
+              "waiting": "offline"}]}
+```
+
+`state` is `complete`, `incomplete` or `damaged` (then only `entry` and `state` are certain, the
+rest `null`). `days_left` is the whole days until `purge_after`, rounded up, never below 0, and
+`null` for an entry the purge skips. `waiting` says what a device's lines wait for: `hub` (the
+hub has not recorded the deletion), `offline`, `paused`, `not-shared`, `syncing` (connected, not
+done yet), `not-managed` (its whitelist needs migration) or `unknown` (the hub's Syncthing did not
+answer).
+
+`POST /api/v1/trash/{entry}/restore` takes `{}` and answers:
+
+```json
+{"entry": "20261116T101500Z-5d0c1f3a9b2e7c48",
+ "game": {"id": "5d0c1f3a9b2e7c48", "system": "psvita", "title": "Example Game"},
+ "restored": {"files": 2, "media": 1}, "gamelist": "restored",
+ "kept": ["deck"], "removed": ["machine"], "warnings": []}
+```
+
+`gamelist` is `restored`, `present` (an entry with that path was there), `none` or `failed`;
+`kept` are the devices whose lines were still pending (they receive the game again) and `removed`
+those whose lines were already removed (the game is off there). `POST
+/api/v1/trash/{entry}/purge` takes `{}` and answers `{"entry": "…", "purged": true, "bytes":
+3221307227}`. An entry name that does not match the pattern, or is not in `trash/`, is
+`404 not-found` without touching the disk.
+
 ### Validation and errors
 
 `library_api.plan_changes` (pure) takes the request, the config, the profiles, the catalog and
@@ -1407,26 +1836,36 @@ and the per-device results of the files already written, each file being whole e
 
 Errors are `{"error": {"code": "...", "message": "...", "device": "...", "game": "..."}}` (the
 last two when they apply; an error about the queue file carries `"queue": true` instead of
-`device`, and the queue's own codes are in [Errors](/warpzone/development/design/play-queue/#errors)):
+`device`, and the queue's own codes are in [Errors](/warpzone/development/design/play-queue/#errors);
+an error about the trash carries `entry`, `has-dependants` carries `dependants`, `unsafe-path` and
+`restore-conflict` carry `paths`, and `move-failed` carries `incomplete` and, when true, `paths`):
 
 | Status | `code` | When |
 |---|---|---|
 | 400 | `bad-request` | malformed JSON, a body over 64 KiB, an unknown key, a wrong type |
 | 401 | `unauthorized` | no session cookie or bearer token, or a wrong one |
 | 403 | `bad-origin` | a cookie-authenticated write from another origin |
-| 404 | `not-found` | an unknown device, system, game, media kind or route, or a method other than `GET`, `HEAD` and `POST` |
+| 404 | `not-found` | an unknown device, system, game, media kind, trash entry or route, or a method other than `GET`, `HEAD` and `POST` |
 | 409 | `not-managed` | the device's whitelist needs `warpzone whitelist migrate` |
 | 409 | `covered` | a part stays off under an exclusion of a parent folder |
 | 409 | `cannot-apply` | the change would not reach its state or would change other games |
 | 409 | `unlistable` | a part's path cannot be written as a whitelist line |
 | 409 | `not-restorable` | restoring a backup that is empty (taken before the whitelist existed) |
 | 409 | `catalog-running` | `catalog/refresh` while a run is in progress |
-| 412 | `stale` | an `expect` differs from the file as it is now |
+| 409 | `hub-busy` | deleting or restoring a game while `inbox/.warpzone.lock` exists (an inbox or a scrape is running) |
+| 409 | `unsafe-path` | a part of the game to delete is a symbolic link, is not of the type the catalog records, belongs to another game too, or changed right before its move |
+| 409 | `has-dependants` | deleting an arcade set that another set of the library needs as its parent, BIOS or device |
+| 409 | `dats-missing` | deleting a game of an arcade system while `serve` can read none of the arcade DATs |
+| 409 | `trash-unavailable` | `trash/` cannot be created, or is on another filesystem than the library or the media |
+| 409 | `restore-conflict` | restoring an entry while a path it would put back exists again |
+| 412 | `stale` | an `expect` differs from the file as it is now, or a deletion's plan changed since its dry run |
 | 422 | `unsupported` | turning on a system in the device's `exclude_systems` |
-| 428 | `expect-missing` | a touched device has no `expect` |
+| 428 | `expect-missing` | a touched device has no `expect`, or a deletion is applied without one |
 | 429 | `too-many-attempts` | an attempt to sign in (the session route or a bearer token) while 8 failed ones already wait; has a `Retry-After` header |
 | 500 | `write-failed` | a whitelist could not be written (a disk error); the answer also lists the devices already written |
-| 500 | `read-failed` | a whitelist exists but could not be read (permissions on the share); the message names the file and the cause, the log has the full path |
+| 500 | `read-failed` | a whitelist, or the pending cleanups file, exists but could not be read (permissions on the share); the message names the file and the cause, the log has the full path |
+| 500 | `move-failed` | a move into or out of the trash failed; the moves were rolled back, unless `incomplete` is true |
+| 500 | `purge-failed` | a trash entry could not be removed whole |
 | 500 | `internal` | an unexpected failure of the server (the log has the exception name, never a token) |
 | 503 | `hub-unreachable` | only `progress`: the hub's API did not answer |
 
@@ -1582,14 +2021,18 @@ network:
   response builder (the play statistics included: `game_play`, `attach_play`, `recent_response`);
   `saves_index.build_index`, `match_game` and `saves_response`; `library_api.parse_record`,
   `inbox_busy`, `inbox_response` and `run_response` (the unattended inbox's answers); `progress.state`; `prune.guard`;
-  `diskstatus` (`measure`, `should_write`, `render`, `parse`, `stale`, `api_disk`).
+  `diskstatus` (`measure`, `should_write`, `render`, `parse`, `stale`, `api_disk`); `trash`
+  (`plan_delete` with the media stems, the arcade dependants and the plan's `expect`, the entry
+  names, the manifest's and the cleanups file's encoding and validation, which cleanup is ready,
+  what is expired, `days_left`), `whitelist.drop_lines` and `gamelist.drop_entries`.
 - **I/O:** `catalog_store` (the walk, hashing, RAHasher and the RA download through `ra.py`, the
   guarded writes), `diskstatus_io` (the disk report's write on a console and read on the hub),
   `queue_store` (the queue file: reading with a stamp, backups, the guarded write),
   `whitelist_store` (reading with a stamp, backups, the guarded write, the hub
   scan, the migration's walk, the restore), `saves_index.scan` and `SavesCache` (the listing of `saves/` and its
-  60-second cache), `serve` (sockets, sessions, the lock, the background runs, the
-  caches).
+  60-second cache), `trash_store` (the listing for a plan, the moves and their rollback, the
+  manifest and cleanups writes, the restore, the purge, the questions to the hub for the
+  cleanup), `serve` (sockets, sessions, the locks, the background runs, the caches).
 
 Tests: the derivation on listings of each layout (PS4 with and without its shortcut, Vita with
 and without a licence, Switch with updates and DLC and an unclaimed folder, `.m3u` folders,
@@ -1599,19 +2042,29 @@ special character and refusal of unlistable names; the migration on hand-written
 (shadowed lines, redundant exclusions, a file refused for a wildcard, a file refused by the
 proof); the API against a fake hub root and the fake Syncthing (auth, origin, `stale`,
 `not-managed`, `unsupported`, dry runs, a `*` change with a skipped device; the backups listed and
-restored, an empty one refused); and the progress
+restored, an empty one refused); deletion on a fake hub root (every layout of the derivation
+moved whole and restored to the same bytes, media stems shared with another game left alone, a
+symlinked part refused, an arcade parent refused with its clones named and a missing DAT refused,
+`stale` after a change between the dry run and the apply, `hub-busy`, a failed move rolled back
+and an unrecoverable one left incomplete, a restore conflict, Delete now, the purge after 7 days
+skipping incomplete entries) and the cleanup against the fake Syncthing (no write before the hub
+records the deletion, none for an offline or syncing device, lines removed once done, a path that
+reappeared kept, a restore cancelling what is pending); and the progress
 states; the disk report (when to write, parsing damaged and foreign files, staleness, the writer
 on a fake disk and the two jobs that call it, the hub reader and the API with missing, stale and
 damaged files). The e2e test adds the matcher check above and the completion check.
 
 ## Out of scope
 
-- Deleting, moving or renaming anything in the library. The UI only decides what each console
-  receives.
+- Moving or renaming anything in the library, and deleting anything but a whole catalog game:
+  one disc, update or DLC of a game, an unclaimed Switch folder, a BIOS file, a save.
+- Emptying the trash before 7 days other than entry by entry, and restoring a purged entry (the
+  hub's snapshots are the way back then).
 - Games without a scrape beyond the placeholder, and scraping itself.
 - `songs/` and its whitelists.
-- Arcade dependencies: a MAME game whose parent or BIOS set is another zip does not list that zip
-  as a part. Turning on the whole system is the safe way for arcade systems.
+- Arcade dependencies in the catalog: a MAME game whose parent or BIOS set is another zip does not
+  list that zip as a part. Turning on the whole system is the safe way for arcade systems. A
+  deletion checks the dependants itself (see [Refusals](#refusals)).
 - Per-game progress, unless the completion check above calls for it.
 - Users and roles, and TLS: the server is plain HTTP. Access from outside the LAN is the
   user's own proxy or tunnel in front of it, with a worked example in the hub container guide

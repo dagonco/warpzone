@@ -34,6 +34,8 @@ A whitelist the library UI manages (`// warpzone-whitelist` on its second line) 
 
 Hard order. Whitelist-first loses the deletion: Syncthing stops syncing an ignored file but leaves the copy on the console.
 
+Prefer the library UI when it runs a version that has it: **Delete from the hub** on the game's page follows this order by itself (trash for 7 days, lines removed per console once it is in sync); see [Deleting a game](../../../website/src/content/docs/development/design/library-ui.md#deleting-a-game). The steps below are the manual way.
+
 1. A game can be several parts. List every one on the hub and every whitelist line that names it (the lines `inbox` printed for it, and any in other devices' files):
    - PS4: `roms/ps4/games/<CUSAnnnnn>/` and `roms/ps4/shortcuts/<Title>.desktop`.
    - PS Vita: `roms/psvita/app/<TITLEID>/`, `roms/psvita/<Title>.psvita` and, if present, `roms/psvita/license/<TITLEID>/`.
