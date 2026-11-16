@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ## [Unreleased]
 
+### Fixed
+
+- `warpzone scrape` (and the scrape the inbox runs) no longer fails every 3DS batch that holds a `.zcci` (a bug of 0.4.0rc4). It staged the image as a `.cci` link, which Skyscraper resolves to the real file and then aborts the whole batch because the `.cci` name is not in its input folder. The `.zcci` is now staged under its own name and Skyscraper's `3ds` platform gets `--addext '*.zcci'` in the gather and both generate passes. Other systems are unchanged.
+
 ## [0.4.0rc4] - 2026-11-15
 
 The fourth candidate moves the inbox and the scraping onto the hub. Games dropped in `inbox/` from any computer are filed by a scheduled task in the hub container, with every tool the inbox needs built into the image (Vita3K, `nsz`, `dolphin-tool`, `orbis-pkg-util`, Skyscraper), and they are scraped as they are placed. `warpzone scrape` fills in descriptions and media for the games already in the library, and `warpzone scrape --unattended` does it a few hundred games a night; its miximages now follow ES-DE's own layout. The inbox also takes NDS, 32X, Atari, WonderSwan, PlayStation and Saturn CHDs, LibCrypt `.sbi` files and Azahar's compressed `.zcci` 3DS images, and the library UI gets an Inbox view and can trust a Cloudflare Access login instead of asking for its token.

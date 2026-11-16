@@ -241,8 +241,7 @@ def stage(
 ) -> tuple[dict[str, Game], list[scrape.Dropped]]:
     """Link each game into `input_dir` at its `gamelist` path (subfolders kept) to the file on
     the share. Nothing is copied. An `.m3u` folder is linked as a file named after the folder
-    that points at the playlist inside it, and a `.zcci` under a `.cci` name (see
-    `scrape.staged_name`). Returns the map from staged name to game and the
+    that points at the playlist inside it. Returns the map from staged name to game and the
     games that could not be staged, each with the reason."""
     staged: dict[str, Game] = {}
     dropped: list[scrape.Dropped] = []
@@ -258,12 +257,6 @@ def stage(
             target = target / parts[-1]
         if not target.exists():
             dropped.append(scrape.Dropped(name, "is not on the share any more; skipped"))
-            continue
-        name = scrape.staged_name(name)
-        if name in staged:
-            dropped.append(
-                scrape.Dropped(name, "would be staged under the name of another game; skipped")
-            )
             continue
         link = input_dir / name
         link.parent.mkdir(parents=True, exist_ok=True)
