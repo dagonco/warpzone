@@ -833,6 +833,16 @@ class RestoreTests(TrashCase):
         self.assertFalse((src / "f").exists())
         self.assertEqual(after.st_nlink, 1)
 
+    def test_a_restore_puts_the_old_record_back_and_asks_for_a_catalog_run(self) -> None:
+        entry = self.deleted(OTHER)
+        calls: list[int] = []
+        self.app.trash.request_run = lambda: calls.append(1)
+        self.assertEqual(self.restore(entry).status, 200)
+        self.assertEqual(calls, [1])
+        # a refused restore asks for nothing
+        self.assertEqual(self.restore(entry).status, 404)
+        self.assertEqual(calls, [1])
+
     def test_a_restore_keeps_what_a_catalog_run_made_in_the_meantime(self) -> None:
         entry = self.deleted(OTHER)
         self.put(OTHER.primary, b"filed again by hand")  # a conflict

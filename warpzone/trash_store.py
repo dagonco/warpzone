@@ -5,7 +5,8 @@ purge. The decisions are in `trash.py` (pure); `trash_run.py` takes the locks an
 See "Deleting a game" in development/design/library-ui.md.
 
 Nothing here follows a symbolic link, and every path is looked at again with `lstat` right
-before it is moved or removed. Nothing is ever copied and then deleted: a move is a `rename`.
+before it is moved or removed. Nothing is ever copied and then deleted: a move is a hard link
+and an unlink, or a `rename`, and never replaces what is at its target.
 """
 
 from __future__ import annotations

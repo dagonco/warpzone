@@ -1078,9 +1078,12 @@ UTF-8 JSON with sorted keys, written with `safefile.atomic_write`:
 3. Put each saved gamelist block back before `</gameList>`, with the backup, unless the gamelist
    already has an entry with that `<path>`, which is kept (ES-DE may have written one back). An
    unreadable gamelist is a warning.
-4. Derive the system again and merge the inbox-only fields of `game` into the record of the same
-   id (the primary path is the same, so the id is too), as `inbox` merges what it knows after
-   filing; then trigger a background run. The play queue finds the game `present` again.
+4. Put the saved catalog record (`game` of the manifest) back into its system file, merged into
+   the record of the same id when a catalog run already made one (the primary path is the same,
+   so the id is too): the merge keeps what that run has and adds what only the old record knew
+   (`added`, `dat`, `serials`, `ra`, `flags`). The server does not derive the system itself;
+   it asks for a background catalog run, which derives it again from the files that are back and
+   corrects what changed. The play queue finds the game `present` again.
 5. Cancel the game's cleanups that are still pending: those lines are still in the whitelists, so
    the consoles that had the game receive it again. Lines already removed are **not** added back:
    on those consoles the restored game is off, like a newly added game, and is turned on as usual.
