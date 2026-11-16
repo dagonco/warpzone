@@ -65,34 +65,33 @@
 
   // ===== home ==============================================================================
 
-  // The games of "Now showing": a few covers per system, picked by the day so the shelf changes
-  // from one day to the next and not from one load to the next. Details come after, one by one.
+  // The games of "Now showing": eight games picked at random on each visit, one from each of eight
+  // random systems that have covers (a second game per system only when fewer systems have any).
+  // It waits until every system's list was tried, so every system can be drawn.
   let featured = null;
   const featuredData = new Map();
   let featuredToken = 0;
 
-  function dayHash(text) {
-    const day = new Date().toISOString().slice(0, 10);
-    let n = 17;
-    for (const ch of text + day) n = (n * 31 + ch.charCodeAt(0)) >>> 0;
-    return n;
+  function shuffled(items) {
+    const a = items.slice();
+    for (let i = a.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [a[i], a[j]] = [a[j], a[i]];
+    }
+    return a;
   }
 
   function pickFeatured() {
     if (featured || !S.systems.length) return false;
-    if (S.lists.size < Math.min(4, S.systems.length)) return false;
+    if (S.lists.size < S.systems.length && !S.preloaded) return false;
     const perSystem = [];
     for (const [system, list] of S.lists) {
       const covers = list.games.filter((g) => g.cover);
-      if (!covers.length) continue;
-      const start = dayHash(system) % covers.length;
-      const picks = [covers[start]];
-      if (covers.length > 3) picks.push(covers[(start + Math.floor(covers.length / 2)) % covers.length]);
-      perSystem.push(picks.map((g) => ({ id: g.id, system, name: g.name || g.title })));
+      if (covers.length) perSystem.push(shuffled(covers).slice(0, 2).map((g) => ({ id: g.id, system, name: g.name || g.title })));
     }
-    perSystem.sort((a, b) => a[0].system.localeCompare(b[0].system));
+    const systems = shuffled(perSystem);
     const out = [];
-    for (let round = 0; round < 2; round++) for (const picks of perSystem) if (picks[round]) out.push(picks[round]);
+    for (let round = 0; round < 2; round++) for (const picks of systems) if (picks[round]) out.push(picks[round]);
     featured = out.slice(0, 8);
     return featured.length > 0;
   }
@@ -233,10 +232,12 @@
     const rows = (ra.systems || []).filter((x) => x.played > 0 && x.achievements > 0 && x.unlocked != null)
       .map((x) => ({ system: x.system, pct: Math.min(1, x.unlocked / x.achievements), unlocked: x.unlocked, of: x.achievements }))
       .sort((a, b) => b.pct - a.pct || a.system.localeCompare(b.system)).slice(0, 6);
-    return recBlock('Achievements by system', rows.map((r) => h('div', { class: 'rec-row', vars: ui.systemTint(r.system), title: `${systemName(r.system)}: ${fmt(r.unlocked)} of ${fmt(r.of)}` },
+    const block = recBlock('Achievements by system', rows.map((r) => h('div', { class: 'rec-row', vars: ui.systemTint(r.system), title: `${systemName(r.system)}: ${fmt(r.unlocked)} of ${fmt(r.of)}` },
       h('b', null, systemCode(r.system)),
       h('span', { class: 'rec-bar', 'aria-hidden': 'true' }, h('i', { vars: { w: String(r.pct) } })),
       h('em', null, r.pct > 0 && r.pct < 0.01 ? '<1%' : `${Math.round(r.pct * 100)}%`))));
+    if (block) block.classList.add('sys');
+    return block;
   }
 
   // The games played most, from the totals the system lists carry (the lists load in the

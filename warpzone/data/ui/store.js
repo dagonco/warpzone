@@ -19,6 +19,7 @@
     etags: {},              // device -> the whitelist etag the page last saw
     lists: new Map(),       // system -> {games: [...], byId: Map}
     listLoads: new Map(),   // system -> promise (dedupes loads)
+    preloaded: false,       // preloadLists has tried every system (some may have failed)
     unclaimed: new Map(),   // system -> update/DLC folders no game claims (Switch)
     byId: new Map(),        // game id -> {game, system}
     progress: {},           // device -> progress entry
@@ -172,9 +173,12 @@
       }
     };
     await Promise.all([worker(), worker(), worker()]);
+    S.preloaded = true;
+    listsChanged();
   }
 
   async function reloadAll() {
+    S.preloaded = false;
     S.lists.clear();
     S.byId.clear();
     S.listLoads.clear();

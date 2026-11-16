@@ -14,6 +14,8 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 - The library UI lists the systems grouped by maker (Nintendo, Sony, Sega, Microsoft, Atari, NEC, SNK, Bandai, Commodore, then Other, and Arcade last) and by release year within a maker, in the side rail, which heads each group with the maker's name, and on the Systems page. Before, they were in name order. Atari Jaguar and WonderSwan get their proper names.
 
+- The library UI's "Now showing" draws eight games at random on each visit, from eight random systems with art, instead of the same alphabetically first systems with a game picked by the day. Its pause button is centred on the slide markers. In the home page's records, "Achievements by system" sizes its code column to the longest code, shortening every bar alike, so a long code such as ATARI2600 no longer runs over its bar.
+
 ### Fixed
 
 - `warpzone scrape` (and the scrape the inbox runs) no longer fails every 3DS batch that holds a `.zcci` (a bug of 0.4.0rc4). It staged the image as a `.cci` link, which Skyscraper resolves to the real file and then aborts the whole batch because the `.cci` name is not in its input folder. The `.zcci` is now staged under its own name and Skyscraper's `3ds` platform gets `--addext '*.zcci'` in the gather and both generate passes. Other systems are unchanged.
