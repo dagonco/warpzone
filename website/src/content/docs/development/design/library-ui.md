@@ -471,7 +471,8 @@ only uses what the API above provides. A strict `Content-Security-Policy: defaul
 applies, so there is no inline script, handler or style attribute, no external font and no
 request to another origin; dynamic styling sets CSS custom properties from script.
 
-- **Home:** a "Now showing" carousel of games that have art, the state and download progress of
+- **Home:** a "Now showing" carousel of eight games that have art, drawn at random on each
+  visit from eight random systems once every system's list was loaded, the state and download progress of
   each console (from `/api/v1/progress`) with its disk as a bar of used and free space (from
   `disk`; nothing for a console that reported none), a "Continue playing" row (from
   `/api/v1/recent`: cover, name, the console that played it last and when), the two

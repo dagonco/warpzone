@@ -65,34 +65,33 @@
 
   // ===== home ==============================================================================
 
-  // The games of "Now showing": a few covers per system, picked by the day so the shelf changes
-  // from one day to the next and not from one load to the next. Details come after, one by one.
+  // The games of "Now showing": eight games picked at random on each visit, one from each of eight
+  // random systems that have covers (a second game per system only when fewer systems have any).
+  // It waits until every system's list was tried, so every system can be drawn.
   let featured = null;
   const featuredData = new Map();
   let featuredToken = 0;
 
-  function dayHash(text) {
-    const day = new Date().toISOString().slice(0, 10);
-    let n = 17;
-    for (const ch of text + day) n = (n * 31 + ch.charCodeAt(0)) >>> 0;
-    return n;
+  function shuffled(items) {
+    const a = items.slice();
+    for (let i = a.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [a[i], a[j]] = [a[j], a[i]];
+    }
+    return a;
   }
 
   function pickFeatured() {
     if (featured || !S.systems.length) return false;
-    if (S.lists.size < Math.min(4, S.systems.length)) return false;
+    if (S.lists.size < S.systems.length && !S.preloaded) return false;
     const perSystem = [];
     for (const [system, list] of S.lists) {
       const covers = list.games.filter((g) => g.cover);
-      if (!covers.length) continue;
-      const start = dayHash(system) % covers.length;
-      const picks = [covers[start]];
-      if (covers.length > 3) picks.push(covers[(start + Math.floor(covers.length / 2)) % covers.length]);
-      perSystem.push(picks.map((g) => ({ id: g.id, system, name: g.name || g.title })));
+      if (covers.length) perSystem.push(shuffled(covers).slice(0, 2).map((g) => ({ id: g.id, system, name: g.name || g.title })));
     }
-    perSystem.sort((a, b) => a[0].system.localeCompare(b[0].system));
+    const systems = shuffled(perSystem);
     const out = [];
-    for (let round = 0; round < 2; round++) for (const picks of perSystem) if (picks[round]) out.push(picks[round]);
+    for (let round = 0; round < 2; round++) for (const picks of systems) if (picks[round]) out.push(picks[round]);
     featured = out.slice(0, 8);
     return featured.length > 0;
   }
