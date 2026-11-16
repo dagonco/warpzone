@@ -689,6 +689,11 @@ def _game_json(game: Game) -> dict[str, Any]:
     }
 
 
+def encode_game(game: Game) -> dict[str, Any]:
+    """One game as the system file holds it (the trash manifest keeps it the same way)."""
+    return _game_json(game)
+
+
 def encode(system: str, games: Iterable[Game], updated: str) -> bytes:
     """The bytes of a system file: UTF-8 JSON with sorted keys, so the same catalog always
     gives the same bytes."""
@@ -759,6 +764,12 @@ def _game_from_json(ident: str, raw: object) -> Game | None:
         if isinstance(serials, list)
         else (),
     )
+
+
+def decode_game(ident: str, raw: object) -> Game | None:
+    """The game `encode_game` made under id `ident`, or None when `raw` is not one (or its id
+    is not the one of its primary path)."""
+    return _game_from_json(ident, raw)
 
 
 def decode(data: bytes) -> SystemDoc | None:

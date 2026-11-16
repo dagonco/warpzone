@@ -90,7 +90,7 @@ A device that lists `play-state` without `frontend` is refused, and so is one th
 
 ### `[inbox]`
 
-Optional. Only `warpzone inbox` and `warpzone doctor` read it. `inbox` works with just this table, with no `[hub]` or `[devices]`, on a computer that mounts the hub's games share, and it also runs in the hub container, where every path below is a path inside the container ([the two ways](/warpzone/setup/inbox/#where-inbox-runs)). Every key is a non-empty string, and `~` is expanded, except `tool_timeout_minutes` and `chdman_threads`, which are whole numbers, `chdman_flac`, which is `true` or `false`, and `scrape_region` and `scrape_language`, which are one code each. A tool path that is set (`chdman`, `bsdtar`, `rahasher`, `dolphin_tool`, `nsz`, `orbis_pkg_util`) must be an executable file, `vita3k` must be an app bundle with its binary or an executable file, and `vita_zrif` must be a file, or `inbox` stops.
+Optional. Only `warpzone inbox` and `warpzone doctor` read it, apart from `rahasher` and the arcade DATs, which `warpzone serve` reads too. `inbox` works with just this table, with no `[hub]` or `[devices]`, on a computer that mounts the hub's games share, and it also runs in the hub container, where every path below is a path inside the container ([the two ways](/warpzone/setup/inbox/#where-inbox-runs)). Every key is a non-empty string, and `~` is expanded, except `tool_timeout_minutes` and `chdman_threads`, which are whole numbers, `chdman_flac`, which is `true` or `false`, and `scrape_region` and `scrape_language`, which are one code each. A tool path that is set (`chdman`, `bsdtar`, `rahasher`, `dolphin_tool`, `nsz`, `orbis_pkg_util`) must be an executable file, `vita3k` must be an app bundle with its binary or an executable file, and `vita_zrif` must be a file, or `inbox` stops.
 
 | Key | Default | Meaning |
 |---|---|---|
@@ -123,7 +123,7 @@ The environment variable `RA_API_KEY`, when set, is used for RetroAchievements l
 
 ### `[serve]`
 
-Optional. Only `warpzone serve` reads it (together with `[hub]`, `[devices.*]` and `[inbox] rahasher`).
+Optional. Only `warpzone serve` reads it (together with `[hub]`, `[devices.*]`, `[inbox] rahasher` and the arcade DATs of `[inbox]`, which it needs to delete an arcade game).
 
 | Key | Default | Meaning |
 |---|---|---|

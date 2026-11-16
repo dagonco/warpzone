@@ -496,6 +496,28 @@ def set_system(model: Model, system: str, on: bool) -> Model:
     )
 
 
+def lines_below(model: Model, parts: Sequence[str]) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """The includes and the excludes of `model` that are equal to or below one of `parts`, each
+    sorted: what a whitelist holds for a game whose parts are `parts`."""
+    return (
+        tuple(sorted(i for i in model.includes if any(covers(p, i) for p in parts))),
+        tuple(sorted(e for e in model.excludes if any(covers(p, e) for p in parts))),
+    )
+
+
+def drop_lines(model: Model, includes: Iterable[str], excludes: Iterable[str]) -> Model:
+    """`model` without the given includes and excludes (those it does not hold are ignored),
+    normalized. Nothing is added: this is for the paths of a game that left the hub, where
+    `set_game(model, parts, False)` would add an exclude under a system that is on."""
+    return normalize(
+        Model(
+            model.systems,
+            model.includes - frozenset(includes),
+            model.excludes - frozenset(excludes),
+        )
+    )
+
+
 @dataclass(frozen=True)
 class Effect:
     """The games whose state differs between two models, by id."""

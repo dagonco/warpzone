@@ -364,7 +364,8 @@ killed for memory would block every tick for 12 hours.
 
 - **Heartbeat.** The lock's JSON gains `"beat": 60` and `"mode": "unattended"` or `"attended"`
   (and, for a scrape, the optional `"task": "scrape"`; see
-  [Locking with the inbox](/warpzone/development/design/scrape-unattended/#locking-with-the-inbox)).
+  [Locking with the inbox](/warpzone/development/design/scrape-unattended/#locking-with-the-inbox);
+  `"task": "delete"` while the library UI deletes or restores a game).
   While it holds the lock, every run (attended too) touches the file's modification time every 60
   seconds from a thread (`inbox_lock.Heartbeat`), and only while the file still holds this run's
   host, pid and start time.
@@ -544,7 +545,9 @@ join the [endpoints](/warpzone/development/design/library-ui/#endpoints):
 
 `busy` is `{"since", "mode", "task"}` while `inbox/.warpzone.lock` exists, else `null` (`since`
 is the lock's own start, `mode` is `attended`, `unattended`, or `unknown` for a lock that cannot
-be read, and `task` is `scrape` when a scrape holds the lock, else `null`). `error` is `{"message", "since", "count", "config"}` from the state's error, else `null`.
+be read, and `task` is `scrape` when a scrape holds the lock, `delete` while the library UI
+deletes or restores a game (see [Concurrency](/warpzone/development/design/library-ui/#concurrency)),
+else `null`). `error` is `{"message", "since", "count", "config"}` from the state's error, else `null`.
 `held` lists the held entries of the state (`since` is when it was held) and `waiting` the others
 (`since` is `first`). `why` is `settling` or `space`; the state does not record which, so it is
 `space` when no run is working and the last check (`checked`) found the item's fingerprint

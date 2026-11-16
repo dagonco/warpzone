@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import re
 import xml.etree.ElementTree as ET
-from collections.abc import Callable
+from collections.abc import Callable, Collection, Sequence
 
 from warpzone.errors import WarpzoneError
 
@@ -26,6 +26,8 @@ EMPTY_GAMELIST = '<?xml version="1.0"?>\n<gameList>\n</gameList>\n'
 
 COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
 GAME = re.compile(r"<game(?:\s[^>]*)?>.*?</game\s*>", re.DOTALL)
+# A `<game>` or a `<folder>`: the two kinds of entry ES-DE keeps in a gamelist.
+ENTRY = re.compile(r"<(game|folder)(?:\s[^>]*)?>.*?</\1\s*>", re.DOTALL)
 _PATH = re.compile(r"<path>(.*?)</path>", re.DOTALL)
 _PATH_AT_LINE_START = re.compile(r"^([ \t]*)<path\b", re.MULTILINE)
 # `<altemulator>X</altemulator>` or the self-closing `<altemulator/>` (no group 1: empty).
@@ -98,6 +100,14 @@ def game_blocks(text: str, *, skip_comments: bool = True) -> list[re.Match[str]]
     blocks: list[re.Match[str]] = []
     for start, end in _outside_comments(text):
         blocks.extend(GAME.finditer(text, start, end))
+    return blocks
+
+
+def entry_blocks(text: str) -> list[re.Match[str]]:
+    """Every `<game>` and `<folder>` of `text` that is not inside an XML comment, in order."""
+    blocks: list[re.Match[str]] = []
+    for start, end in _outside_comments(text):
+        blocks.extend(ENTRY.finditer(text, start, end))
     return blocks
 
 
@@ -263,3 +273,63 @@ def _insert_entry(text: str, file_name: str, emulator: str) -> str:
         )
 
     return append_games(text, render)
+
+
+# ------------------------------------------------------------------ deleting and restoring entries
+
+
+def _plain(path: str) -> str:
+    """A gamelist `<path>` as `entry_path` gives it: without the leading `./`."""
+    path = path.strip()
+    return path[2:] if path.startswith("./") else path
+
+
+def drop_entries(text: str, paths: Collection[str]) -> tuple[str, list[str]]:
+    """`text` without every `<game>` or `<folder>` whose `<path>` is one of `paths` (with or
+    without the leading `./`), and the blocks that were removed, each exactly as written, from
+    its opening tag to its closing one. An entry that owns its lines is removed with them;
+    everything else stays as it is. `GamelistError` when the result would not be well-formed
+    XML and the text was."""
+    wanted = {_plain(p) for p in paths}
+    found = [m for m in entry_blocks(text) if entry_path(m.group(0)) in wanted]
+    if not found:
+        return text, []
+    new = text
+    for match in reversed(found):  # from the end, so the earlier offsets stay right
+        new = _drop_block(new, match)
+    if well_formed(text) and not well_formed(new):
+        raise GamelistError("the edited gamelist would not be well-formed XML; left untouched")
+    return new, [m.group(0) for m in found]
+
+
+def restore_entries(text: str, blocks: Sequence[str]) -> tuple[str, list[str], list[str]]:
+    """`text` with each block of `blocks` (as `drop_entries` returned it) added before
+    `</gameList>`, except one whose `<path>` the gamelist already has: that entry stays as it
+    is. Returns the new text, the paths restored and the paths that were there already.
+    `GamelistError` when the text has no `<gameList>` or the result is not well-formed."""
+    have = {entry_path(m.group(0)) for m in entry_blocks(text)}
+    add: list[str] = []
+    restored: list[str] = []
+    present: list[str] = []
+    for block in blocks:
+        path = entry_path(block)
+        if path in have:
+            present.append(path)
+            continue
+        have.add(path)
+        restored.append(path)
+        add.append(block)
+    if not add:
+        return text, restored, present
+
+    def render(entry: str, child: str, eol: str) -> str:
+        return "".join(f"{entry}{_with_eol(block, eol)}{eol}" for block in add)
+
+    new = append_games(text, render)
+    if well_formed(text) and not well_formed(new):
+        raise GamelistError("the edited gamelist would not be well-formed XML; left untouched")
+    return new, restored, present
+
+
+def _with_eol(block: str, eol: str) -> str:
+    return block.replace("\r\n", "\n").replace("\n", eol)

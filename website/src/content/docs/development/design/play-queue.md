@@ -178,9 +178,13 @@ What each case means in practice:
   below), never automatic, not even with one candidate in the same system. It keeps the state, the dates and the order,
   ends every open claim as `kept` (the claims were about the old parts, and the new game's state
   on each console says nothing about who put it there) and takes a new snapshot.
-- **Removed from the library:** `missing`. The whitelist lines of the removed parts stay in the
-  whitelists, as they do today for any game that leaves the library; the queue cannot turn off a
-  game whose parts it no longer knows, so a held claim of a missing game can only end as `kept`.
+- **Removed from the library:** `missing`. A game deleted by hand leaves the whitelist lines of
+  its parts in the whitelists; one deleted from the library UI has them removed by the server,
+  per console, once that console has received the deletion (see
+  [Whitelist cleanup](/warpzone/development/design/library-ui/#whitelist-cleanup)). The queue
+  touches neither: it cannot turn off a game whose parts it no longer knows, so a held claim of a
+  missing game can only end as `kept`. A game restored from the trash keeps its id and is
+  `present` again.
 
 Collections use the same references and the same resolution.
 

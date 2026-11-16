@@ -59,9 +59,20 @@ class ParseTests(unittest.TestCase):
     def test_reads_the_hub_answers(self) -> None:
         reading = progress.parse(
             {"connected": True},
-            {"completion": 42.5, "needBytes": 10, "needItems": 2, "remoteState": "valid"},
+            {
+                "completion": 42.5,
+                "needBytes": 10,
+                "needItems": 2,
+                "needDeletes": 3,
+                "remoteState": "valid",
+            },
         )
-        self.assertEqual(reading, Reading(True, 42.5, 10, 2, "valid"))
+        self.assertEqual(reading, Reading(True, 42.5, 10, 2, "valid", True, 3))
+
+    def test_a_missing_count_of_deletions_is_unknown(self) -> None:
+        reading = progress.parse({"connected": True}, {"completion": 100, "needItems": 0})
+        self.assertIsNone(reading.need_deletes)
+        self.assertEqual(progress.parse({"connected": True}, None).need_deletes, 0)
 
     def test_a_device_the_hub_does_not_list_is_not_connected(self) -> None:
         self.assertFalse(progress.parse(None, {"completion": 100}).connected)
@@ -73,7 +84,7 @@ class ParseTests(unittest.TestCase):
         reading = progress.parse(
             {"connected": True}, {"completion": "x", "needBytes": None, "remoteState": 3}
         )
-        self.assertEqual(reading, Reading(True, 0.0, 0, 0, "valid"))
+        self.assertEqual(reading, Reading(True, 0.0, 0, 0, "valid", True, None))
 
 
 class WrittenAtTests(unittest.TestCase):

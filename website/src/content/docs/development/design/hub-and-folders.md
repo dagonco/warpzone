@@ -20,7 +20,8 @@ title: "Hub, folders and ignores"
 ├── songs/                   hub: send-only → opted-in devices, per-device whitelist
 ├── tools/                   hub: send-only → devices (scripts, docs)
 ├── settings/                hub: send-receive ⇄ devices: send-receive, emulator settings layers
-├── catalog/                 never synced; the catalog index, whitelist backups, the play queue and the inbox's run records (`catalog/inbox/runs/`, see Library UI and Inbox)
+├── catalog/                 never synced; the catalog index, whitelist backups, the play queue, the pending whitelist cleanups and the inbox's run records (`catalog/inbox/runs/`, see Library UI and Inbox)
+├── trash/                   never synced; games deleted from the library UI, one entry each, kept 7 days (see Library UI)
 └── inbox/                   never synced; drop zone for new content (SMB)
 ```
 
