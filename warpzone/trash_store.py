@@ -586,19 +586,60 @@ def list_entries(root: Path) -> list[Listed]:
     return [Listed(name, read_manifest(root, name)) for name in entry_names(root)]
 
 
-def purge_entry(root: Path, entry: str) -> int:
-    """Remove a whole entry folder and return the bytes it held. `OSError` when it cannot be
-    removed whole (what is left stays for the next purge); `FileNotFoundError` when it is not
-    a real folder. `shutil.rmtree` does not follow a link inside it."""
-    if entry_kind(root, entry) != F_DIR:
-        raise FileNotFoundError(entry)
-    path = entry_path(root, entry)
+def _real_dir(path: Path) -> bool:
+    """Whether `path` is a real folder (`lstat`: a link to a folder is not one)."""
+    try:
+        return stat.S_ISDIR(os.lstat(path).st_mode)
+    except OSError:
+        return False
+
+
+def purging_names(root: Path) -> list[str]:
+    """The `trash/.purging-<entry>` folders a failed purge left, by name: real folders only
+    (a link or a file of that name is not touched)."""
+    try:
+        names = os.listdir(trash_path(root))
+    except OSError:
+        return []
+    return sorted(n for n in names if trash.purging_entry(n) and _real_dir(trash_path(root) / n))
+
+
+def _remove_purging(root: Path, name: str) -> int:
+    """Remove one `.purging-` folder and return the bytes it held. `shutil.rmtree` does not
+    follow a link inside it."""
+    path = trash_path(root) / name
     try:
         size, _ = tree_totals(path)
     except OSError:
         size = 0
     shutil.rmtree(path)
     return size
+
+
+def purge_entry(root: Path, entry: str) -> int:
+    """Remove a whole entry folder and return the bytes it held. The entry is first renamed
+    to `trash/.purging-<entry>` in one step, so a removal that fails partway leaves a folder
+    that is not an entry: it is never listed or restored, and the next purge (this call again,
+    or `finish_purges`) removes the rest. `OSError` when it cannot be removed whole;
+    `FileNotFoundError` when there is neither an entry nor a leftover of that name."""
+    purging = trash.purging_name(entry)
+    if entry_kind(root, entry) == F_DIR:
+        os.rename(entry_path(root, entry), trash_path(root) / purging)
+    elif not (trash.valid_entry(entry) and _real_dir(trash_path(root) / purging)):
+        raise FileNotFoundError(entry)
+    return _remove_purging(root, purging)
+
+
+def finish_purges(root: Path) -> list[tuple[str, OSError]]:
+    """Remove what failed purges left (`purging_names`). Returns the names that could not be
+    removed whole, with why."""
+    failed: list[tuple[str, OSError]] = []
+    for name in purging_names(root):
+        try:
+            _remove_purging(root, name)
+        except OSError as exc:
+            failed.append((name, exc))
+    return failed
 
 
 # --------------------------------------------------------------------------- the gamelist

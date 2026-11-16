@@ -974,6 +974,47 @@ class PurgeTests(TrashCase):
         self.assertEqual(self.error(reply)["entry"], entry)
         self.assertEqual(self.purge(entry).status, 200)
 
+    def test_a_half_purged_entry_is_never_restorable(self) -> None:
+        entry = self.deleted(PS4)
+        tdir = self.root / "trash" / entry
+        game_dir = next(p for p in PS4.parts if p.type == "dir").path
+
+        def partial(path: Any, *args: Any, **kw: Any) -> None:
+            # a rmtree that removed one file of the game, then failed
+            os.unlink(Path(path) / "library" / game_dir / "eboot.bin")
+            raise OSError(13, "Permission denied")
+
+        self.assertTrue(tdir.is_dir())
+        with mock.patch.object(trash_store.shutil, "rmtree", partial):
+            reply = self.purge(entry)
+        self.assertEqual((reply.status, self.error(reply)["code"]), (500, "purge-failed"))
+        self.assertEqual([e["entry"] for e in self.trash_list()["entries"]], [])
+        restored = self.restore(entry)
+        self.assertEqual((restored.status, self.error(restored)["code"]), (404, "not-found"))
+        self.assertFalse((self.library / game_dir).exists())
+        # what is left is not an entry: the next purge pass finishes it
+        self.assertEqual(self.entries(), [".purging-" + entry])
+        self.app.trash.purge_pass()
+        self.assertEqual(self.entries(), [])
+
+    def test_delete_now_finishes_a_half_purged_entry(self) -> None:
+        entry = self.deleted(PS4)
+        with mock.patch.object(trash_store.shutil, "rmtree", side_effect=OSError(13, "no")):
+            self.assertEqual(self.purge(entry).status, 500)
+        self.assertEqual(self.purge(entry).status, 200)
+        self.assertEqual(self.entries(), [])
+
+    def test_the_purge_pass_leaves_a_purging_name_that_is_not_a_real_folder(self) -> None:
+        outside = self.tmp / "outside"
+        outside.mkdir()
+        (outside / "keep.txt").write_text("keep")
+        name = ".purging-20260101T000000Z-" + "2" * 16
+        (self.root / "trash").mkdir(exist_ok=True)
+        (self.root / "trash" / name).symlink_to(outside)
+        self.app.trash.purge_pass()
+        self.assertEqual(self.entries(), [name])
+        self.assertTrue((outside / "keep.txt").exists())
+
     def test_the_purge_after_seven_days_skips_what_is_not_complete(self) -> None:
         clock = [datetime(2026, 11, 16, 10, 0, tzinfo=UTC)]
         self.start(now=lambda: clock[0], progress_seconds=0)

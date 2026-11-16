@@ -506,8 +506,7 @@ class Trasher:
 
     def purge(self, entry: str) -> dict[str, Any]:
         """Delete now: the whole entry folder, under the write lock only (nothing outside
-        `trash/` changes)."""
-        self._require_entry(entry)
+        `trash/` changes). It also finishes the leftover of a purge that failed partway."""
         with self.write_lock:
             try:
                 size = trash_store.purge_entry(self.root, entry)
@@ -522,8 +521,11 @@ class Trasher:
         return {"entry": entry, "purged": True, "bytes": size}
 
     def purge_pass(self) -> None:
-        """Remove each complete entry whose `purge_after` has passed. Incomplete and damaged
-        entries wait for Delete now."""
+        """Finish what a failed purge left (`trash/.purging-*`), then remove each complete entry
+        whose `purge_after` has passed. Incomplete and damaged entries wait for Delete now."""
+        with self.write_lock:
+            for name, exc in trash_store.finish_purges(self.root):
+                self.log(f"warning: the purge of {name} failed ({_reason(exc)})")
         now = self.now()
         for item in trash_store.list_entries(self.root):
             if not trash.expired(item, now):
@@ -714,8 +716,10 @@ class Trasher:
     # ------------------------------------------------------------- the background task
 
     def has_work(self) -> bool:
-        return os.path.lexists(trash_store.cleanups_path(self.root)) or bool(
-            trash_store.entry_names(self.root)
+        return (
+            os.path.lexists(trash_store.cleanups_path(self.root))
+            or bool(trash_store.entry_names(self.root))
+            or bool(trash_store.purging_names(self.root))
         )
 
     def tick(self) -> None:

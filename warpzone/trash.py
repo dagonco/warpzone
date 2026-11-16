@@ -41,6 +41,7 @@ CLEANUP_SECONDS = 60  # the background task's period
 LIBRARY = "library/"  # the paths of a manifest are relative to the hub root
 MEDIA = "frontend/media/"
 ENTRY_RE = re.compile(r"^\d{8}T\d{6}Z-[0-9a-f]{16}(-\d+)?$")
+PURGING_PREFIX = ".purging-"  # `trash/.purging-<entry>`: an entry being removed
 ID_RE = re.compile(r"^[0-9a-f]{16}$")
 # The system folders whose games are arcade sets that may need another set (a parent, a BIOS).
 ARCADE_SYSTEMS = ("mame", "arcade", "fbneo", "neogeo", "cps1", "cps2", "cps3")
@@ -113,6 +114,20 @@ def entry_name(when: datetime, game_id: str, taken: Collection[str] = ()) -> str
 
 def valid_entry(name: str) -> bool:
     return ENTRY_RE.fullmatch(name) is not None
+
+
+def purging_name(entry: str) -> str:
+    """The name an entry is renamed to before it is removed: not an entry (listings, Restore
+    and the manifest reader never see it), so what a failed removal leaves cannot be restored."""
+    return PURGING_PREFIX + entry
+
+
+def purging_entry(name: str) -> str | None:
+    """The entry a `purging_name` was made from, or None when `name` is not one."""
+    if not name.startswith(PURGING_PREFIX):
+        return None
+    entry = name[len(PURGING_PREFIX) :]
+    return entry if valid_entry(entry) else None
 
 
 # --------------------------------------------------------------------------- lines

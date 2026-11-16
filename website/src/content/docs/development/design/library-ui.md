@@ -1080,8 +1080,14 @@ must be a real directory directly below `trash/` (not a link); it is removed wit
 deletes library files on the hub, and only files a deletion moved there. The background task of
 `serve` purges each `complete` entry whose `purge_after` has passed (7 days, `TRASH_DAYS`);
 incomplete and damaged entries wait for Delete now. A purge that fails partway answers
-`500 purge-failed` and leaves the rest, which the next purge removes. Purging an entry does not
-touch its pending cleanups.
+`500 purge-failed`. Purging an entry does not touch its pending cleanups.
+
+The folder is first renamed, in one step, to `trash/.purging-<entry>`, and that is what is
+removed. A removal that fails partway therefore leaves a folder that is not an entry: the
+listing, Restore and the manifest reader never see it, so a half-purged game cannot be restored
+with its old catalog record. The next pass of the background task, or Delete now again on the
+same entry name, removes what is left; it looks only at real folders directly below `trash/`
+and never follows a link.
 
 ### Whitelist cleanup
 
