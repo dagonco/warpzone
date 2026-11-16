@@ -113,6 +113,18 @@ CHDMAN_THREADS_KEY = "chdman_threads"
 # Whether `createcd` keeps chdman's FLAC codec for CD audio (default true); see inbox_core.Tools.
 CHDMAN_FLAC_KEY = "chdman_flac"
 DEFAULT_TOOL_TIMEOUT_MINUTES = 240
+# The region and the language `warpzone scrape` asks Skyscraper to put first (`--region`,
+# `--lang`); unset passes nothing. The codes are the ones Skyscraper 3.21.1 documents for
+# ScreenScraper (docs/REGIONS.md, docs/LANGUAGES.md); Skyscraper itself checks neither.
+SCRAPE_REGION_KEY = "scrape_region"
+SCRAPE_LANGUAGE_KEY = "scrape_language"
+_REGION_CODES = (
+    "ame asi au bg br ca cl cn cus cz de dk eu fi fr gr hu il it jp kr kw mor nl no nz oce pe pl "
+    "pt ru se sk sp ss tr tw uk us wor"
+)
+_LANGUAGE_CODES = "cz da de en es fi fr hu it ja ko nl no pl pt ru sk sv tr zh"
+SCRAPE_REGIONS = frozenset(_REGION_CODES.split())
+SCRAPE_LANGUAGES = frozenset(_LANGUAGE_CODES.split())
 
 
 @dataclass(frozen=True)
@@ -151,6 +163,8 @@ class InboxSettings:
     tool_timeout_minutes: int = DEFAULT_TOOL_TIMEOUT_MINUTES
     chdman_threads: int | None = None
     chdman_flac: bool = True
+    scrape_region: str | None = None
+    scrape_language: str | None = None
 
 
 SERVE_KEYS = ("listen", "token_file", "access_team_domain", "access_aud", "access_emails")
@@ -331,7 +345,17 @@ def parse_inbox(raw: object, errors: list[str]) -> InboxSettings:
         errors.append("[inbox]: must be a table")
         return InboxSettings()
     _check_keys(
-        raw, {*INBOX_KEYS, TOOL_TIMEOUT_KEY, CHDMAN_THREADS_KEY, CHDMAN_FLAC_KEY}, "inbox", errors
+        raw,
+        {
+            *INBOX_KEYS,
+            TOOL_TIMEOUT_KEY,
+            CHDMAN_THREADS_KEY,
+            CHDMAN_FLAC_KEY,
+            SCRAPE_REGION_KEY,
+            SCRAPE_LANGUAGE_KEY,
+        },
+        "inbox",
+        errors,
     )
     minutes = DEFAULT_TOOL_TIMEOUT_MINUTES
     if TOOL_TIMEOUT_KEY in raw:
@@ -357,6 +381,17 @@ def parse_inbox(raw: object, errors: list[str]) -> InboxSettings:
             errors.append(f"inbox.{CHDMAN_FLAC_KEY}: must be true or false")
         else:
             values[CHDMAN_FLAC_KEY] = flac
+    for key, allowed in (
+        (SCRAPE_REGION_KEY, SCRAPE_REGIONS),
+        (SCRAPE_LANGUAGE_KEY, SCRAPE_LANGUAGES),
+    ):
+        if key not in raw:
+            continue
+        code = raw[key]
+        if not isinstance(code, str) or code.strip() not in allowed:
+            errors.append(f"inbox.{key}: must be one of {' '.join(sorted(allowed))}")
+        else:
+            values[key] = code.strip()
     for key in INBOX_KEYS:
         if key not in raw:
             continue

@@ -90,6 +90,8 @@ def after_apply(opts: Options, rep: Reporter, results: Sequence[ItemResult]) -> 
         or scrape.config_ini_path(os.environ, Path.home(), Path.exists),
         only=frozenset(p for paths in placed.values() for p in paths),
         as_warning=True,
+        region=opts.settings.scrape_region,
+        language=opts.settings.scrape_language,
         now=opts.now,
         today=opts.today,
     )

@@ -876,6 +876,8 @@ def _scrape(args: argparse.Namespace, rep: Reporter) -> int:
             notify_url=args.notify_url,
             max_games=args.max_games or nightly.DEFAULT_MAX_GAMES,
             max_minutes=args.max_minutes or nightly.DEFAULT_MAX_MINUTES,
+            region=settings.scrape_region,
+            language=settings.scrape_language,
         )
         # 0 no news, 1 news, 2 a new configuration error
         return nightly.run_unattended(setup, rep)
@@ -896,6 +898,8 @@ def _scrape(args: argparse.Namespace, rep: Reporter) -> int:
         dry_run=args.dry_run,
         retry_not_found=args.retry_not_found,
         force_lock=args.force_lock,
+        region=settings.scrape_region,
+        language=settings.scrape_language,
     )
     return scrape_io.run_scrape(options, rep)
 

@@ -168,9 +168,18 @@ dats_dir = "~/dats/libretro-database/metadat"
 # switch_keys = "~/.switch/prod.keys"
 
 # Optional scraping (`warpzone scrape`). Skyscraper (Gemba's fork) fetches descriptions and
-# media from ScreenScraper; its credentials, language and region live in its own config.ini,
-# never here. Default: Skyscraper on PATH (the hub container has it there; no setting needed).
+# media from ScreenScraper; its credentials live in its own config.ini, never here.
+# Default: Skyscraper on PATH (the hub container has it there; no setting needed).
 # skyscraper = "/usr/local/bin/Skyscraper"
+
+# Optional. The one region and the one language Skyscraper tries first when it gathers
+# (`--region`, `--lang`): here Spanish, then Skyscraper's own order (Europe, USA, ... and
+# English, German, French). Region codes: sp Spain, eu Europe, wor World, uk, us, jp, ...
+# (https://github.com/Gemba/skyscraper/blob/3.21.1/docs/REGIONS.md); language codes: es, en, fr,
+# de, ja, ... (.../docs/LANGUAGES.md). Unset passes nothing. Games already scraped keep their
+# media. For a longer order of your own use regionPrios / langPrios in Skyscraper's config.ini.
+# scrape_region = "sp"
+# scrape_language = "es"
 
 # Optional PS Vita .pkg support. A file you keep with the zRIF (the licence key) of each
 # game: CONTENT_ID<TAB>zRIF lines, or a TSV with a header row such as NoPayStation's

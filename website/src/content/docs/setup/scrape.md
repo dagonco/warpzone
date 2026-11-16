@@ -60,18 +60,32 @@ userCreds="USER:PASSWORD"
 
 (`USER:PASSWORD` is a placeholder; Skyscraper builds that use XDG paths read `$XDG_CONFIG_HOME/skyscraper/config.ini` instead.) warpzone never reads the value, never prints it and never puts it on a command line: the only thing it checks, for `doctor` and the scrape report, is that a `userCreds` key exists in `[screenscraper]`. Keep the file private (`chmod 600 ~/.skyscraper/config.ini`; in the container, owned by the service's uid and mode 600).
 
-## Language and region
+## Region and language
 
-Which language and region the descriptions and the cover art come from is a matter of taste, so it lives in Skyscraper's `config.ini` too, and warpzone does not set it. In the `[main]` section (or under a section named after one platform, such as `[snes]`):
+ScreenScraper holds one box, screenshot and logo for each region of a game and one description for each language, and Skyscraper picks one of each when it gathers. Left alone it tries Europe, then the USA, then ScreenScraper's own, the UK, the world and Japan, and English first for the text. Name your own first choice in the `[inbox]` table of `config.toml`:
+
+```toml
+[inbox]
+scrape_region = "sp"      # Spain first, then Skyscraper's own order (Europe, USA, ...)
+scrape_language = "es"    # Spanish first, then English, German, French
+```
+
+That is Spanish first, then European and English, which is what most of a European library wants; both keys are optional and the values above are only an example. Each is one code: `scrape_region` a region (`sp` Spain, `eu` Europe, `wor` World, `uk`, `us`, `jp`; the [full list](https://github.com/Gemba/skyscraper/blob/3.21.1/docs/REGIONS.md)) and `scrape_language` a language (`es`, `en`, `fr`, `de`, `ja`; the [full list](https://github.com/Gemba/skyscraper/blob/3.21.1/docs/LANGUAGES.md)). A region decides the logo, the screenshot, the box and the title; a language decides the description and the genre. warpzone passes them as `--region` and `--lang` on the gather, and a code Skyscraper does not document is a configuration error. Unset, warpzone passes nothing.
+
+Things to know:
+
+- **Games already scraped keep what they have.** The setting reaches the games scraped from now on. warpzone never overwrites a medium or the text of an entry it already wrote, and Skyscraper keeps what it fetched in its cache. To redo a game, delete its media files and its `<game>` entry from the hub's gamelist, purge the cache of that system (`Skyscraper -p <platform> --cache purge:m=screenscraper`, which cannot be undone; the hub image's `config.ini` and cache are on its `/skyscraper` volume), and run `warpzone scrape --system <system>`.
+- **Only one code each.** Skyscraper's command line takes one region and one language, and puts it first in its order. For a longer order of your own, such as `regionPrios="sp,eu,wor,uk,us"`, use Skyscraper's `config.ini` in its `[main]` section (or one named after a platform, such as `[snes]`), as below; the two combine, and `scrape_region` goes first in whatever list `config.ini` holds.
+- **The file name's region.** With `scrape_region` set, a region in the file name such as `(USA)` no longer goes first; `--region` replaces it. If you want each game's own region to win, leave `scrape_region` unset and put `regionFromFilename="first"` in `config.ini`. In a test, "Kirby Super Star (USA)" got the European title "Kirby's Fun Pak" with the defaults.
 
 ```ini
 [main]
 langPrios="es,en"              ; the languages you read, in order of preference
-regionPrios="eu,us,jp,wor"     ; the regions to take art and titles from, in order
+regionPrios="sp,eu,wor,uk,us"  ; the regions to take art and titles from, in order
 regionFromFilename="first"     ; the region named in the file name goes first
 ```
 
-These are Skyscraper's `langPrios`, `regionPrios` and `regionFromFilename` options; the values above are only an example. Put `regionFromFilename="first"` if you want the region in the file name to win: without it (the default is `inline`) a European release can win over the one the file names. In a test, "Kirby Super Star (USA)" got the European title "Kirby's Fun Pak". Do not set `nameTemplate`: it makes Skyscraper ignore the title options warpzone passes. Everything the hub layout depends on (the frontend, the folders, the shape of the title, which media are fetched) warpzone passes on the command line, which Skyscraper puts before every section of `config.ini`, so your file cannot break it.
+Do not set `nameTemplate` in `config.ini`: it makes Skyscraper ignore the title options warpzone passes. Everything the hub layout depends on (the frontend, the folders, the shape of the title, which media are fetched) warpzone passes on the command line, which Skyscraper puts before every section of `config.ini`, so your file cannot break it.
 
 ## What you get
 

@@ -248,6 +248,16 @@ class RunTest(NightCase):
         self.nice.assert_called_once_with(10)
         self.assertIn(f"run record: catalog/scrape/runs/{record['id']}.json", self.out)
 
+    def test_the_night_gathers_with_the_configured_region_and_language(self) -> None:
+        self.games(KIRBY)
+        self.hub.canned({"known": KNOWN3[:1]})
+        self.assertEqual(self.night(region="sp", language="es"), 0, self.out + self.err)
+        gather = self.hub.calls()[1]
+        self.assertEqual(gather[gather.index("--region") + 1], "sp")
+        self.assertEqual(gather[gather.index("--lang") + 1], "es")
+        for call in self.hub.calls()[2:]:
+            self.assertFalse({"--region", "--lang"} & set(call), call)
+
     def test_the_next_night_takes_what_the_cap_left(self) -> None:
         self.games(KIRBY, CHRONO, HOMEBREW)
         self.hub.canned({"known": KNOWN3})

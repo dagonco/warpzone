@@ -129,6 +129,22 @@ class ApplyTests(ScrapeAfterInboxCase):
         self.assertLess(self.out.index("scrape: nes"), self.out.index("items: 1;"))
         self.assertEqual(self.scrape_note(), {"state": "done", "systems": ["nes"]})
 
+    def test_the_inbox_settings_give_the_gather_its_region_and_language(self) -> None:
+        settings = InboxSettings(scrape_region="sp", scrape_language="es")
+        code, _ = self.go_inbox(settings=settings)
+        self.assertEqual(code, 0, self.out)
+        gather, main, box = self.sky.calls()[1:]
+        self.assertEqual(gather[gather.index("--region") + 1], "sp")
+        self.assertEqual(gather[gather.index("--lang") + 1], "es")
+        for call in (main, box):
+            self.assertFalse({"--region", "--lang"} & set(call), call)
+
+    def test_without_the_settings_the_gather_gets_neither(self) -> None:
+        code, _ = self.go_inbox()
+        self.assertEqual(code, 0, self.out)
+        for call in self.sky.calls()[1:]:
+            self.assertFalse({"--region", "--lang"} & set(call), call)
+
     def test_only_the_games_this_run_placed_are_scraped(self) -> None:
         older = self.roms / "nes" / "Older (USA).zip"
         older.write_bytes(b"older")

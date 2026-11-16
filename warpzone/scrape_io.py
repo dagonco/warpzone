@@ -98,6 +98,8 @@ class Options:
     only: frozenset[str] | None = None  # `inbox`: scrape only the games under these primary paths
     as_warning: bool = False  # `inbox`: a failure is a warning of its report, not a plain line
     wave: int | None = None  # the nightly run: the tier of this pass, so each pass has its log
+    region: str | None = None  # [inbox] scrape_region: `--region` of the gather
+    language: str | None = None  # [inbox] scrape_language: `--lang` of the gather
     artwork_dir: Path = ARTWORK_DIR
     now: Callable[[], float] = time.time
     today: Callable[[], date] = date.today
@@ -630,7 +632,14 @@ def _run_batch(
     """Gather one batch, then merge it. `later` is how many games wait in the batches after it."""
     batch_file = sr.folder / f"batch-{number}.txt"
     batch_file.write_text("".join(f"{sr.input / n}\n" for n in names), encoding="utf-8")
-    args = scrape.skyscraper_args(scrape.GATHER, sr.platform, input_dir=sr.input, batch=batch_file)
+    args = scrape.skyscraper_args(
+        scrape.GATHER,
+        sr.platform,
+        input_dir=sr.input,
+        batch=batch_file,
+        region=run.opts.region,
+        language=run.opts.language,
+    )
     ok, text = _call(run, sr, f"gather {number}", args)
     outcome = scrape.classify_output(text)
     if outcome.stop is not None:

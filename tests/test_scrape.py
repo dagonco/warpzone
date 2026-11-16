@@ -176,6 +176,33 @@ class ArgsTest(unittest.TestCase):
         self.assertNotIn("-g", gather)
         self.assertNotIn("-o", gather)
 
+    def test_region_and_language_go_on_the_gather_only(self):
+        gather = scrape.skyscraper_args(
+            "gather", "snes", input_dir="/i", batch="/b", region="sp", language="es"
+        )
+        self.assertEqual(gather[:6], ["-p", "snes", "-s", "screenscraper", "--region", "sp"])
+        self.assertEqual(gather[6:8], ["--lang", "es"])
+        paths = {"gamelist_dir": "/g", "media_dir": "/m", "artwork_file": "/a.xml"}
+        for step in ("main", "box"):
+            args = scrape.skyscraper_args(
+                step, "snes", input_dir="/i", batch="/b", region="sp", language="es", **paths
+            )
+            self.assertFalse({"--region", "--lang"} & set(args), step)
+
+    def test_region_and_language_are_independent_and_absent_by_default(self):
+        only_region = scrape.skyscraper_args(
+            "gather", "nes", input_dir="/i", batch="/b", region="eu"
+        )
+        self.assertEqual(only_region.count("--region"), 1)
+        self.assertNotIn("--lang", only_region)
+        only_lang = scrape.skyscraper_args(
+            "gather", "nes", input_dir="/i", batch="/b", language="en"
+        )
+        self.assertEqual(only_lang.count("--lang"), 1)
+        self.assertNotIn("--region", only_lang)
+        plain = scrape.skyscraper_args("gather", "nes", input_dir="/i", batch="/b")
+        self.assertFalse({"--region", "--lang"} & set(plain))
+
     def test_no_credential_option_for_any_platform_or_step(self):
         self.assertIn(FAKE_CREDS, FAKE_CONFIG)
         words = set(re.findall(r"[A-Za-z0-9]+", FAKE_CREDS))

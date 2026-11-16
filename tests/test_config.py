@@ -473,6 +473,34 @@ class InboxSettingsTests(unittest.TestCase):
                 parse_config(data)
             self.assertIn("inbox.chdman_flac: must be true or false", str(ctx.exception))
 
+    def test_scrape_region_and_language_are_optional_codes_skyscraper_documents(self) -> None:
+        inbox = parse_config(config_data()).inbox
+        self.assertIsNone(inbox.scrape_region)
+        self.assertIsNone(inbox.scrape_language)
+        data = config_data()
+        data["inbox"] = {"scrape_region": " sp ", "scrape_language": "es"}
+        inbox = parse_config(data).inbox
+        self.assertEqual((inbox.scrape_region, inbox.scrape_language), ("sp", "es"))
+        for region in ("eu", "wor", "uk", "us", "jp", "ss"):
+            data["inbox"] = {"scrape_region": region}
+            self.assertEqual(parse_config(data).inbox.scrape_region, region)
+        for language in ("en", "ja", "zh", "cz"):
+            data["inbox"] = {"scrape_language": language}
+            self.assertEqual(parse_config(data).inbox.scrape_language, language)
+
+    def test_scrape_region_and_language_reject_what_skyscraper_does_not_document(self) -> None:
+        data = config_data()
+        for bad in ("es", "xx", "SP", "", "  ", 1, True, ["sp"], None):  # "es" is a language
+            data["inbox"] = {"scrape_region": bad}
+            with self.assertRaises(ConfigError, msg=repr(bad)) as ctx:
+                parse_config(data)
+            self.assertIn("inbox.scrape_region: must be one of", str(ctx.exception))
+        for bad in ("sp", "jp", "ES", "", 1, ["es", "en"], None):  # "sp" is a region
+            data["inbox"] = {"scrape_language": bad}
+            with self.assertRaises(ConfigError, msg=repr(bad)) as ctx:
+                parse_config(data)
+            self.assertIn("inbox.scrape_language: must be one of", str(ctx.exception))
+
     def test_only_the_inbox_table_is_needed_to_run_inbox(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "config.toml"
