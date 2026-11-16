@@ -1063,6 +1063,75 @@ class PurgeTests(TrashCase):
         self.assertEqual(listing[broken]["state"], "damaged")
 
 
+class GamelistEditTests(TrashCase):
+    NOW = datetime(2026, 11, 16, 10, 0, tzinfo=UTC)
+    GAMELIST = Path("frontend/es-de/gamelists/ps4/gamelist.xml")
+    CONCURRENT = PS4_GAMELIST.replace(
+        "</gameList>",
+        "\t<game>\n\t\t<path>./shortcuts/Concurrent.desktop</path>\n\t\t<name>Concurrent</name>\n"
+        "\t</game>\n</gameList>",
+    )
+
+    def drop(self) -> trash_store.GamelistEdit:
+        return trash_store.drop_gamelist(
+            self.root, "ps4", ["./shortcuts/Example PS4.desktop"], self.NOW
+        )
+
+    def test_a_gamelist_replaced_after_it_was_read_is_read_again_not_overwritten(self) -> None:
+        path = self.root / self.GAMELIST
+        real = trash_store.read_gamelist
+        calls: list[int] = []
+
+        def read_then_syncthing_replaces(root: Path, system: str) -> tuple[str | None, str | None]:
+            found = real(root, system)
+            if not calls:  # once: the hub's Syncthing brings a newer file right after the read
+                path.write_text(self.CONCURRENT)
+            calls.append(1)
+            return found
+
+        with mock.patch.object(trash_store, "read_gamelist", read_then_syncthing_replaces):
+            edit = self.drop()
+        self.assertEqual(edit.status, "removed")
+        text = path.read_text()
+        self.assertNotIn("Example PS4.desktop", text)
+        self.assertIn("Concurrent.desktop", text)  # what arrived in between is kept
+
+    def test_a_gamelist_that_keeps_changing_is_given_up_untouched(self) -> None:
+        path = self.root / self.GAMELIST
+        real = trash_store.read_gamelist
+        n = [0]
+
+        def always_replaced(root: Path, system: str) -> tuple[str | None, str | None]:
+            found = real(root, system)
+            n[0] += 1
+            path.write_text(self.CONCURRENT + "\n" * n[0])
+            return found
+
+        with mock.patch.object(trash_store, "read_gamelist", always_replaced):
+            edit = self.drop()
+        self.assertEqual(edit.status, "failed")
+        self.assertIn("Example PS4.desktop", path.read_text())
+
+    def test_a_backup_that_cannot_be_named_is_a_warning_and_the_deletion_completes(self) -> None:
+        real = Path.exists
+
+        def refuse(self_: Path) -> bool:
+            if "gamelist-backups" in str(self_):
+                raise PermissionError(13, "Permission denied")
+            return real(self_)
+
+        with mock.patch.object(Path, "exists", refuse):
+            reply = self.apply(PS4)
+        self.assertEqual(reply.status, 200, reply.body)
+        self.assertEqual(reply.json["gamelist"], "failed")
+        self.assertTrue(any("gamelist" in w for w in reply.json["warnings"]), reply.json)
+        manifest = json.loads(
+            (self.root / "trash" / reply.json["entry"] / "manifest.json").read_text()
+        )
+        self.assertEqual(manifest["state"], "complete")
+        self.assertEqual(self.get(f"/api/v1/games/{PS4.id}").status, 404)
+
+
 class CleanupTests(TrashCase):
     def setUp(self) -> None:
         super().setUp()

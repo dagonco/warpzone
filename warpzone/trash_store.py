@@ -11,6 +11,7 @@ before it is moved or removed. Nothing is ever copied and then deleted: a move i
 from __future__ import annotations
 
 import errno
+import hashlib
 import os
 import posixpath
 import shutil
@@ -677,26 +678,36 @@ def _edit_gamelist(
 ) -> GamelistEdit:
     """Read the hub gamelist, apply `edit(text) -> (new text, result)`, copy the file as it was
     to `tools/logs/gamelist-backups/` and write the new one unless the file changed since it was
-    read (read again, up to three times). A file that is not there is made by `create` when
-    given."""
+    read (read again, up to three times). The file is stamped before it is read and the text
+    must be what the stamp hashed. A file that is not there is made by `create` when given. Any
+    `OSError` on the way (the backup included) is a `failed` result, never an exception."""
     path = root / trash.gamelist_path(system)
-    backup, shown = _backup_name(root, system, when)
     for _ in range(TRIES):
-        text, error = read_gamelist(root, system)
-        if error is not None:
-            return GamelistEdit("failed", warning=f"the gamelist cannot be read ({error})")
         try:
-            if text is None:
+            # The stamp is taken before the file is read, and the text must be exactly the
+            # bytes it hashed: a file replaced in between (by Syncthing) is read again, and one
+            # replaced after the stamp fails the guarded write below instead of being undone.
+            before = _stamp_or_none(path)
+            text, error = read_gamelist(root, system)
+            if error is not None:
+                return GamelistEdit("failed", warning=f"the gamelist cannot be read ({error})")
+            if (before is None) != (text is None) or (
+                before is not None
+                and text is not None
+                and hashlib.sha256(text.encode("utf-8")).hexdigest() != before.sha256
+            ):
+                continue
+            if text is None or before is None:
                 if create is None:
                     return GamelistEdit("none")
                 new, result = create()
                 if safefile.atomic_write(path, new.encode("utf-8"), expect=None):
                     return result
                 continue
-            before = safefile.stamp(path)
             new, result = edit(text)
             if new == text:
                 return result
+            backup, shown = _backup_name(root, system, when)
             backup.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(path, backup)
             if safefile.atomic_write(path, new.encode("utf-8"), expect=before):
@@ -707,6 +718,14 @@ def _edit_gamelist(
             reason = getattr(exc, "strerror", None) or str(exc)
             return GamelistEdit("failed", warning=f"the gamelist cannot be changed ({reason})")
     return GamelistEdit("failed", warning="the gamelist kept changing: its entry was not touched")
+
+
+def _stamp_or_none(path: Path) -> safefile.FileStamp | None:
+    """The stamp of the file, or None when it is not there."""
+    try:
+        return safefile.stamp(path)
+    except FileNotFoundError:
+        return None
 
 
 def drop_gamelist(root: Path, system: str, paths: Sequence[str], when: datetime) -> GamelistEdit:

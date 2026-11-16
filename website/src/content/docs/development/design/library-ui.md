@@ -870,11 +870,14 @@ part of one (one disc, one update, one DLC):
   block parser of `update_entry`). The file is read under the 32 MiB limit of
   `artwork.read_gamelist`, written through `safefile.atomic_write` (a temporary file renamed
   over it, and refused when the file changed since it was read, in which case it is read and
-  edited again, up to three times), and the file as it was is first copied to
+  edited again, up to three times). The file is stamped (size, mtime, sha256) before it is read
+  and the text edited is exactly the bytes that stamp hashed: a file that Syncthing replaced
+  in between is read again, never written back from the old text. The file as it was is first copied to
   `tools/logs/gamelist-backups/<system>-gamelist-<YYYYMMDD-HHMMSS>.xml`, as `inbox` and `scrape`
   do (`inbox_mame.backup_path`; outside every synced folder). A name already taken gets a `-2`,
   `-3` suffix, so two edits in one second never share a backup. The removed blocks are kept in the
-  entry's manifest for a restore. A gamelist that cannot be read or written leaves the entry in
+  entry's manifest for a restore. A gamelist that cannot be read or written, or whose backup
+  cannot be named or made (any `OSError` of the edit), leaves the entry in
   place with a warning, and the deletion goes on: ES-DE does not show an entry whose file is
   missing.
 - **Its catalog record**: the server takes the game's record out of its system file
