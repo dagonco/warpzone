@@ -120,7 +120,54 @@
     neogeo: 'Neo Geo', pcengine: 'PC Engine', tg16: 'TurboGrafx-16', atari2600: 'Atari 2600',
     atari7800: 'Atari 7800', lynx: 'Atari Lynx', atarilynx: 'Atari Lynx',
     pokemini: 'Pokémon Mini', c64: 'Commodore 64', ngp: 'Neo Geo Pocket', model2: 'Sega Model 2',
+    atarijaguar: 'Atari Jaguar', wonderswan: 'WonderSwan', wonderswancolor: 'WonderSwan Color',
   };
+
+  // The maker and first release year of each known system: the side rail and the Systems page
+  // group the systems by maker in MAKERS order, and by year within a maker (then by name). A
+  // system missing here goes to "Other", by name; arcade comes last.
+  const MAKERS = ['Nintendo', 'Sony', 'Sega', 'Microsoft', 'Atari', 'NEC', 'SNK', 'Bandai', 'Commodore', 'Other', 'Arcade'];
+  const SYSTEM_MAKERS = {
+    gameandwatch: ['Nintendo', 1980], nes: ['Nintendo', 1983], famicom: ['Nintendo', 1983],
+    fds: ['Nintendo', 1986], gb: ['Nintendo', 1989], snes: ['Nintendo', 1990], sfc: ['Nintendo', 1990],
+    sgb: ['Nintendo', 1994], virtualboy: ['Nintendo', 1995], satellaview: ['Nintendo', 1995],
+    n64: ['Nintendo', 1996], gbc: ['Nintendo', 1998], n64dd: ['Nintendo', 1999],
+    pokemini: ['Nintendo', 2001], gba: ['Nintendo', 2001], gc: ['Nintendo', 2001],
+    nds: ['Nintendo', 2004], wii: ['Nintendo', 2006], n3ds: ['Nintendo', 2011], '3ds': ['Nintendo', 2011],
+    wiiu: ['Nintendo', 2012], switch: ['Nintendo', 2017],
+    psx: ['Sony', 1994], ps2: ['Sony', 2000], psp: ['Sony', 2004], ps3: ['Sony', 2006],
+    psvita: ['Sony', 2011], ps4: ['Sony', 2013],
+    'sg-1000': ['Sega', 1983], mastersystem: ['Sega', 1985], genesis: ['Sega', 1988],
+    megadrive: ['Sega', 1988], gamegear: ['Sega', 1990], segacd: ['Sega', 1991], megacd: ['Sega', 1991],
+    model2: ['Sega', 1993], sega32x: ['Sega', 1994], saturn: ['Sega', 1994], model3: ['Sega', 1996],
+    dreamcast: ['Sega', 1998], naomi: ['Sega', 1998],
+    xbox: ['Microsoft', 2001], xbox360: ['Microsoft', 2005],
+    atari2600: ['Atari', 1977], atari800: ['Atari', 1979], atari5200: ['Atari', 1982],
+    atarist: ['Atari', 1985], atari7800: ['Atari', 1986], lynx: ['Atari', 1989],
+    atarilynx: ['Atari', 1989], atarijaguar: ['Atari', 1993], atarijaguarcd: ['Atari', 1995],
+    pcengine: ['NEC', 1987], tg16: ['NEC', 1987], pcenginecd: ['NEC', 1988], 'tg-cd': ['NEC', 1988],
+    supergrafx: ['NEC', 1989], pcfx: ['NEC', 1994],
+    neogeo: ['SNK', 1990], neogeocd: ['SNK', 1994], ngp: ['SNK', 1998], ngpc: ['SNK', 1999],
+    wonderswan: ['Bandai', 1999], wonderswancolor: ['Bandai', 2000],
+    vic20: ['Commodore', 1980], c64: ['Commodore', 1982], c16: ['Commodore', 1984],
+    amiga: ['Commodore', 1985], cdtv: ['Commodore', 1991], amiga600: ['Commodore', 1992],
+    amiga1200: ['Commodore', 1992], amigacd32: ['Commodore', 1993],
+    arcade: ['Arcade'], mame: ['Arcade'], fbneo: ['Arcade'], fba: ['Arcade'], cps1: ['Arcade'],
+    cps2: ['Arcade'], cps3: ['Arcade'], daphne: ['Arcade'],
+  };
+
+  function systemMaker(id) {
+    return (SYSTEM_MAKERS[id] || ['Other'])[0];
+  }
+
+  // Sort order for system folder names: maker, then release year (unknown last), then name.
+  function compareSystems(a, b) {
+    const [ma, ya] = SYSTEM_MAKERS[a] || ['Other'];
+    const [mb, yb] = SYSTEM_MAKERS[b] || ['Other'];
+    return MAKERS.indexOf(ma) - MAKERS.indexOf(mb)
+      || (ya || 9999) - (yb || 9999)
+      || systemName(a).localeCompare(systemName(b));
+  }
 
   function systemName(id) {
     if (SYSTEM_NAMES[id]) return SYSTEM_NAMES[id];
@@ -210,6 +257,6 @@
 
   window.WZ = Object.assign(window.WZ || {}, {
     h, $, $$, plural, debounce, throttle, icon, tint,
-    systemName, systemCode, systemColor, consoleCode, parseTitle, regionCodes, languageName,
+    systemName, systemMaker, compareSystems, systemCode, systemColor, consoleCode, parseTitle, regionCodes, languageName,
   });
 })();

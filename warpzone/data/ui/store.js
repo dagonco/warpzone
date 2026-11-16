@@ -9,7 +9,7 @@
 (function () {
   'use strict';
 
-  const { ApiError, api, humanError, h, $, plural, throttle, systemName } = window.WZ;
+  const { ApiError, api, humanError, h, $, plural, throttle, systemName, compareSystems } = window.WZ;
 
   // ===== state =============================================================================
 
@@ -128,8 +128,7 @@
   }
 
   async function loadSystems() {
-    S.systems = ensureArray(await api.systems(), 'systems').sort((a, b) =>
-      systemName(a.system).localeCompare(systemName(b.system)));
+    S.systems = ensureArray(await api.systems(), 'systems').sort((a, b) => compareSystems(a.system, b.system));
   }
 
   function indexList(system, games) {
