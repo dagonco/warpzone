@@ -1154,7 +1154,13 @@ deletion:
   its 15-second cache). `needItems` counts files, folders and links to fetch, not deletions: a
   console whose only pending work is the deletion answers `completion` 95 (Syncthing's cap while
   only deletions remain), `needItems` 0 and `needDeletes` 1, so `needDeletes` must be 0 as well.
-  An answer without `needDeletes` is unknown, not ready. A console
+  An answer without `needDeletes` is unknown, not ready. `needItems` above 0 does not hold the
+  lines when everything else is done and the hub's `GET /rest/db/remoteneed?folder=wz-library&
+  device=<id>` (read page by page, at most 1000 names) lists nothing at or below a deleted
+  path: a console keeps empty system folders its whitelist does not take (EmuDeck creates
+  them), which the hub counts as needed items for ever (a real hub answered `completion` 100,
+  `needBytes` 0, `needDeletes` 0 and `needItems` 6, all six such folders). Without that list
+  (no answer, or more names than the limit) the device is not ready. A console
   that is offline keeps its lines until it reconnects and finishes syncing, however long that
   takes; a console that never reads as done keeps them, and the Trash view shows it waiting.
 - **Removing the lines.** For a ready device, under the write lock: every recorded path that
