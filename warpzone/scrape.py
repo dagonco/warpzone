@@ -296,6 +296,12 @@ _FLAGS: dict[str, tuple[str, ...]] = {
 }
 
 
+# Extensions Skyscraper's platform does not list but warpzone stages (`--addext`), by Skyscraper
+# platform. Its `3ds` platform lists only `*.3ds` and `*.cci`, so Azahar's compressed image would
+# be skipped, and a batch that names it is refused as not found.
+EXTRA_EXTENSIONS: dict[str, tuple[str, ...]] = {"3ds": ("*.zcci",)}
+
+
 def skyscraper_args(
     step: Step,
     platform: str,
@@ -314,6 +320,8 @@ def skyscraper_args(
       (`gamelist_dir`) and media (`media_dir`) of the batch with the artwork file
       `artwork_file` (`ARTWORK_ESDE` for `main`, `ARTWORK_3DBOX` for `box`).
 
+    A platform in `EXTRA_EXTENSIONS` also gets `--addext` with its extra extensions.
+
     No credential option can be built here: warpzone never passes `-u`, `-c` or `-t`, so the
     account stays in Skyscraper's own `config.ini` (see "Credentials" in the design).
     """
@@ -321,6 +329,9 @@ def skyscraper_args(
         raise ValueError(f"unknown step {step!r}")
     head = ["-p", platform]
     tail = ["--includefrom", str(batch), "--flags", ",".join(_FLAGS[step])]
+    if platform in EXTRA_EXTENSIONS:
+        # one value, extensions separated by a space (Skyscraper's own syntax)
+        tail = ["--addext", " ".join(EXTRA_EXTENSIONS[platform]), *tail]
     if step == GATHER:
         return [*head, "-s", "screenscraper", "-i", str(input_dir), *tail]
     if gamelist_dir is None or media_dir is None or artwork_file is None:
@@ -516,16 +527,6 @@ class MergePlan:
 
 def _clean(text: str) -> str:
     return _ILLEGAL.sub("", text)
-
-
-def staged_name(name: str) -> str:
-    """The name a game is staged under for Skyscraper: its gamelist path, except that a `.zcci`
-    (Azahar's compressed 3DS image) is staged as `.cci`, because Skyscraper's 3DS platform lists
-    only `*.3ds` and `*.cci` and would skip the file. The staged name only keys the batch;
-    the hub's names come from the game."""
-    if name.lower().endswith(".zcci"):
-        return name[: -len(".zcci")] + ".cci"
-    return name
 
 
 def _staged_name(path: str, root: str) -> str | None:

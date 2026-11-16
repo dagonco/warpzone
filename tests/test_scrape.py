@@ -4,6 +4,7 @@ command lines and the classification of Skyscraper's output. No network, no Skys
 import re
 import unittest
 from datetime import date, timedelta
+from unittest import mock
 
 from library_support import game
 from warpzone import artwork, inbox_dolphin, inbox_mame, inbox_n3ds, inbox_vita, scrape
@@ -55,11 +56,9 @@ class PlatformTableTest(unittest.TestCase):
         self.assertEqual(scrape.PLATFORMS["sega32x"], "sega32x")
         self.assertEqual(scrape.PLATFORMS["atarijaguar"], "atarijaguar")
 
-    def test_a_zcci_is_staged_as_a_cci_and_nothing_else_is_renamed(self):
-        self.assertEqual(scrape.staged_name("Game (USA).zcci"), "Game (USA).cci")
-        self.assertEqual(scrape.staged_name("Sub/Game.ZCCI"), "Sub/Game.cci")
-        for name in ("Game.cci", "Game.3ds", "Game.zip", "Game.zcia", "Game.m3u"):
-            self.assertEqual(scrape.staged_name(name), name)
+    def test_extra_extensions_are_only_for_the_systems_that_need_them(self):
+        self.assertEqual(scrape.EXTRA_EXTENSIONS, {"3ds": ("*.zcci",)})
+        self.assertLessEqual(set(scrape.EXTRA_EXTENSIONS), set(scrape.PLATFORMS.values()))
 
     def test_left_out_systems_have_a_reason(self):
         self.assertEqual(set(scrape.UNSCRAPED), {"ps4", "psvita", "xbox360", "wiiu"})
@@ -144,12 +143,28 @@ class ArgsTest(unittest.TestCase):
                 "/box/m",
                 "-a",
                 "/data/artwork-3dbox.xml",
+                "--addext",
+                "*.zcci",
                 "--includefrom",
                 "/b.txt",
                 "--flags",
                 "theinfront,nobrackets,relative,unattend,nohints",
             ],
         )
+
+    def test_n3ds_adds_the_zcci_extension_in_every_step(self):
+        paths = {"gamelist_dir": "/g", "media_dir": "/m", "artwork_file": "/a.xml"}
+        for step in ("gather", "main", "box"):
+            args = scrape.skyscraper_args(step, "3ds", input_dir="/i", batch="/b", **paths)
+            self.assertEqual(args.count("--addext"), 1, step)
+            self.assertEqual(args[args.index("--addext") + 1], "*.zcci", step)
+            other = scrape.skyscraper_args(step, "nes", input_dir="/i", batch="/b", **paths)
+            self.assertNotIn("--addext", other, step)
+
+    def test_several_extra_extensions_are_one_space_separated_value(self):
+        with mock.patch.dict(scrape.EXTRA_EXTENSIONS, {"nes": ("*.a", "*.b")}):
+            args = scrape.skyscraper_args("gather", "nes", input_dir="/i", batch="/b")
+        self.assertEqual(args[args.index("--addext") + 1], "*.a *.b")
 
     def test_only_gather_asks_for_the_source(self):
         gather = scrape.skyscraper_args("gather", "nes", input_dir="/i", batch="/b")
