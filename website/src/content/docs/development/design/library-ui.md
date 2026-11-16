@@ -853,15 +853,17 @@ part of one (one disc, one update, one DLC):
   with its `-UPDATE` folder, its DLC folder and its shortcuts, a Vita app with its licence and
   `.psvita` launcher, an `.m3u` folder with its discs and `.sbi` files, a PS3 folder, an entry of
   `roms/<system>/roms/` for `xbox360`, `wiiu` and `model2`, or the one file of most games.
-- **Its media**: for each kind the UI reads (`library_api.MEDIA_KINDS`) and each stem the lookup
-  tries (`media_stem` of every path of `gamelist_paths`, in the folder form and the file form),
-  the files `frontend/media/<system>/<kind>/<stem>.<ext>` with the extensions the UI reads (`png`,
-  `jpg`, `jpeg`; `mp4`, `webm` for `videos`). A stem that another catalog game of the same system
-  resolves to (through its own `gamelist_paths`) is left out, so the shorter paths the lookup
-  tries never take another game's art. A link, or a file in a kind or system folder that is a
-  link, is never moved or followed (see [Media and byte ranges](#media-and-byte-ranges)); it is
-  named in `warnings`. Kinds the UI does not read (`manuals`, `fanart`, ...) are left where they
-  are; ES-DE ignores the media of a game it does not list.
+- **Its media**: for every kind folder that exists under `frontend/media/<system>/` (not only
+  the kinds the UI reads, `library_api.MEDIA_KINDS`, so `manuals`, `fanart` or a kind ES-DE adds
+  later never leave files behind) and each stem the lookup tries (`media_stem` of every path of
+  `gamelist_paths`, in the folder form and the file form), every regular file
+  `frontend/media/<system>/<kind>/<stem>.<ext>` whatever its extension: a file whose name without
+  its last extension is the stem, compared exactly (so the stem `Game` takes `Game.png` and
+  `Game.pdf` but not `Game.m3u.png`, which is the folder form's). A stem that another catalog game
+  of the same system resolves to (through its own `gamelist_paths`) is left out, so the shorter
+  paths the lookup tries never take another game's art. A link, or a file in a kind or system
+  folder that is a link, is never moved or followed (see
+  [Media and byte ranges](#media-and-byte-ranges)); it is named in `warnings`.
 - **Its hub gamelist entry**: every `<game>` or `<folder>` block of
   `frontend/es-de/gamelists/<system>/gamelist.xml` whose `<path>` is one of the game's
   `gamelist_paths` and not another game's, removed as text (`gamelist.drop_entries`, pure, on the
@@ -918,8 +920,10 @@ every dependant (`dependants`: the id, title and file name of each), so the user
 first or keeps the set. Deleting a clone never deletes its parent or BIOS: those are games of
 their own, deleted only when asked. With no arcade DAT configured or readable by `serve`, a
 deletion in an arcade system folder is refused with `409 dats-missing`, since nothing tells
-whether other sets depend on it; the DATs are then mounted read-only into the `serve` container
-too (see [the hub container guide](/warpzone/setup/hub-container/#deleting-a-game-from-the-ui)).
+whether other sets depend on it. `serve` reads the DATs at the paths `[inbox]` names: DATs under
+the hub root need nothing more, since the container mounts the hub root at its own path, and only
+DATs outside it must be mounted read-only into the `serve` container at the same paths (see
+[the hub container guide](/warpzone/setup/hub-container/#deleting-a-game-from-the-ui)).
 A set no DAT knows has no dependants by name and is deleted.
 
 ### The dry run and the confirmation
@@ -930,7 +934,8 @@ and acts only when confirmed. The confirmation in the page plays the role of `--
 
 1. The game page's button sends `POST /api/v1/games/{id}/delete` with `{"dry_run": true}`. The
    answer lists every file and folder with its size (a folder is walked for its total and count,
-   no link followed), the parts absent on disk, the media files with their sizes, whether a
+   no link followed), the parts absent on disk, the media files of every kind folder with their
+   sizes, whether a
    gamelist entry is removed, the whitelist lines of each device (as text, `!/path` or `/path`),
    the saves the hub keeps, whether the hub lock is held (`busy`), the purge date, and `expect`:
    `sha256:<hex>` of the canonical JSON (sorted keys, no spaces) of `files`, `media`, `gamelist`
@@ -1032,6 +1037,8 @@ UTF-8 JSON with sorted keys, written with `safefile.atomic_write`:
   `trash/<entry>/`, the trashed copy. A reader accepts only paths below `library/` or
   `frontend/media/`, with no empty, `.` or `..` component and no leading `/`; a manifest with any
   other path is damaged.
+- `media` lists the files moved from every kind folder, whichever kinds the system has, so a
+  restore puts back and a purge removes all of them.
 - `gamelist` is `null` when the game had no entry. `whitelists` is what was recorded for the
   cleanup, kept for the record only (the cleanup reads [its own file](#whitelist-cleanup)).
 - A manifest that cannot be read, or is not this shape, makes the entry `damaged`: listed under
@@ -2043,7 +2050,7 @@ special character and refusal of unlistable names; the migration on hand-written
 proof); the API against a fake hub root and the fake Syncthing (auth, origin, `stale`,
 `not-managed`, `unsupported`, dry runs, a `*` change with a skipped device; the backups listed and
 restored, an empty one refused); deletion on a fake hub root (every layout of the derivation
-moved whole and restored to the same bytes, media stems shared with another game left alone, a
+moved whole and restored to the same bytes, media of a kind the UI does not read moved too, media stems shared with another game left alone, a
 symlinked part refused, an arcade parent refused with its clones named and a missing DAT refused,
 `stale` after a change between the dry run and the apply, `hub-busy`, a failed move rolled back
 and an unrecoverable one left incomplete, a restore conflict, Delete now, the purge after 7 days
