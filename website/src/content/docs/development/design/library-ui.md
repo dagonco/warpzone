@@ -968,8 +968,11 @@ Under the hub lock and the server's write lock (see [Concurrency](#concurrency))
    moves. A line cannot be removed before the hub has recorded the deletion, so recording first
    is safe, and a server that stops after the moves still knows the lines.
 3. Create `trash/<entry>/` and write its manifest with `"state": "moving"` and every path to move.
-4. Move each part, then each media file, with `os.rename` to the same relative path inside the
-   entry, creating the folders there. Right before each move the path is checked again with
+4. Move each part, then each media file, to the same relative path inside the entry, creating
+   the folders there. A move never replaces what is at its target and never copies: a file is
+   moved with `os.link` and `os.unlink` (the same inode and mtime; `os.link` refuses an existing
+   target atomically), a folder with `os.rename` after a look at its target right before (a
+   file system without hard links does the same for files). Right before each move the path is checked again with
    `lstat`: not a link, the type of the plan, and for a file the size and mtime of the plan. A
    path that no longer matches stops the deletion with `unsafe-path` and rolls it back (below).
 5. Remove the gamelist entries, with the backup; the removed blocks go into the manifest.
@@ -1069,6 +1072,9 @@ UTF-8 JSON with sorted keys, written with `safefile.atomic_write`:
 2. Write the manifest with `"state": "restoring"`, then move each path back (parts first, then
    media), creating missing parent folders, with the same check right before each move. A failure
    moves the restored paths back into the trash and answers `500 move-failed`, as for a deletion.
+   A path that appears at its place between the check of step 1 and its move is never replaced:
+   it is a conflict like the others (`409 restore-conflict`, naming it, after the paths already
+   restored went back into the trash).
 3. Put each saved gamelist block back before `</gameList>`, with the backup, unless the gamelist
    already has an entry with that `<path>`, which is kept (ES-DE may have written one back). An
    unreadable gamelist is a warning.

@@ -478,6 +478,15 @@ class Trasher:
             trash_store.write_manifest(self.root, manifest)  # the state it had
         except OSError as err:
             self.log(f"warning: the manifest of {manifest.entry} could not be written ({err})")
+        if exc.conflict:
+            # a file or folder appeared at its place after the plan looked: nothing was replaced
+            return ApiError(
+                "restore-conflict",
+                f"{exc.path} exists again where the game was: move or delete it first; "
+                "everything is back in the trash",
+                entry=manifest.entry,
+                extra={"paths": [exc.path]},
+            )
         if exc.unsafe:
             return ApiError(
                 "unsafe-path",

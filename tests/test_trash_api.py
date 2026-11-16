@@ -789,6 +789,50 @@ class RestoreTests(TrashCase):
             reply = self.restore(entry)
         self.assertEqual((reply.status, self.error(reply)["code"]), (404, "not-found"))
 
+    def test_a_file_that_appears_while_restoring_is_a_conflict_and_is_never_replaced(self) -> None:
+        entry = self.deleted(OTHER)
+        real = trash_store._rename
+
+        def appears_first(src: Path, dst: Path) -> None:
+            if dst == self.library / OTHER.primary:
+                dst.write_bytes(b"filed again a moment ago")  # after the check, before the move
+            real(src, dst)
+
+        with mock.patch.object(trash_store, "_rename", appears_first):
+            reply = self.restore(entry)
+        self.assertEqual((reply.status, self.error(reply)["code"]), (409, "restore-conflict"))
+        self.assertEqual(self.error(reply)["paths"], ["library/" + OTHER.primary])
+        self.assertEqual((self.library / OTHER.primary).read_bytes(), b"filed again a moment ago")
+        # everything else went back into the trash, the entry is as it was
+        self.assertEqual(self.entries(), [entry])
+        manifest = json.loads((self.root / "trash" / entry / "manifest.json").read_text())
+        self.assertEqual(manifest["state"], "complete")
+        self.assertTrue((self.root / "trash" / entry / "library" / OTHER.primary).exists())
+
+    def test_a_move_never_replaces_what_is_at_its_target(self) -> None:
+        src, dst = self.tmp / "src", self.tmp / "dst"
+        src.mkdir()
+        dst.mkdir()
+        (src / "f").write_bytes(b"new")
+        (dst / "f").write_bytes(b"old")
+        with self.assertRaises(FileExistsError):
+            trash_store._rename(src / "f", dst / "f")
+        self.assertEqual((dst / "f").read_bytes(), b"old")
+        self.assertEqual((src / "f").read_bytes(), b"new")
+        (src / "d").mkdir()
+        (src / "d" / "inner").write_bytes(b"x")
+        (dst / "d").mkdir()  # an empty folder is refused too
+        with self.assertRaises(FileExistsError):
+            trash_store._rename(src / "d", dst / "d")
+        self.assertTrue((src / "d" / "inner").exists())
+        # a free target: the file keeps its inode and its mtime
+        before = (src / "f").stat()
+        trash_store._rename(src / "f", dst / "g")
+        after = (dst / "g").stat()
+        self.assertEqual((before.st_ino, before.st_mtime_ns), (after.st_ino, after.st_mtime_ns))
+        self.assertFalse((src / "f").exists())
+        self.assertEqual(after.st_nlink, 1)
+
     def test_a_restore_keeps_what_a_catalog_run_made_in_the_meantime(self) -> None:
         entry = self.deleted(OTHER)
         self.put(OTHER.primary, b"filed again by hand")  # a conflict

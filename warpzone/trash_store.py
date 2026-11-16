@@ -49,10 +49,36 @@ TRIES = 3  # a gamelist that keeps changing under a write is given up after this
 Rename = Callable[[Path, Path], None]
 
 
+# `os.link` errors that mean this filesystem cannot make a hard link, not that the target exists.
+_NO_LINK = {errno.EPERM, errno.ENOTSUP, errno.ENOSYS, errno.EMLINK, errno.EACCES}
+
+
 def _rename(src: Path, dst: Path) -> None:
-    """The one place a deletion or a restore moves anything: `os.rename`, which fails (rather
-    than copying) when the two places are on different filesystems or the target exists as a
-    folder. A test replaces it to make a move fail."""
+    """The one place a deletion or a restore moves anything. It never replaces what is at
+    `dst` (`FileExistsError`), and it fails (rather than copying) when the two places are on
+    different filesystems. A file is moved by `os.link` and `os.unlink`, which refuse an
+    existing `dst` atomically: a file that appeared there since the caller looked is not lost.
+    A folder (or a file on a filesystem without hard links) is checked right before an
+    `os.rename`, which on its own would replace an empty folder. A test replaces this function
+    to make a move fail."""
+    if stat.S_ISREG(os.lstat(src).st_mode):
+        try:
+            if os.link in os.supports_follow_symlinks:
+                os.link(src, dst, follow_symlinks=False)
+            else:
+                os.link(src, dst)
+        except OSError as exc:
+            if exc.errno not in _NO_LINK:
+                raise
+        else:
+            try:
+                os.unlink(src)
+            except OSError:
+                os.unlink(dst)  # not moved: leave one copy, where it was
+                raise
+            return
+    if os.path.lexists(dst):
+        raise FileExistsError(errno.EEXIST, os.strerror(errno.EEXIST), str(dst))
     os.rename(src, dst)
 
 
@@ -429,14 +455,17 @@ def moves_of_manifest(m: Manifest, paths: Sequence[str]) -> list[Move]:
 
 class MoveError(Exception):
     """A move that cannot be made. `unsafe` is a path that is no longer what it was (a link, or
-    changed since the plan); the rest is an I/O failure. `done` are the paths moved before it."""
+    changed since the plan); `conflict` is a target that exists; the rest is an I/O failure. `done` are the paths moved before it."""
 
-    def __init__(self, path: str, why: str, *, unsafe: bool, done: list[str]) -> None:
+    def __init__(
+        self, path: str, why: str, *, unsafe: bool, done: list[str], conflict: bool = False
+    ) -> None:
         super().__init__(f"{path}: {why}")
         self.path = path
         self.why = why
         self.unsafe = unsafe
         self.done = done
+        self.conflict = conflict  # the target exists (it was free when the plan looked)
 
 
 def _check_source(base: Path, move: Move, *, strict: bool) -> str | None:
@@ -490,7 +519,13 @@ def transfer(
             target.parent.mkdir(parents=True, exist_ok=True)
             do(src / move.path, target)
         except OSError as exc:
-            raise MoveError(move.path, _reason(exc), unsafe=False, done=done) from exc
+            raise MoveError(
+                move.path,
+                _reason(exc),
+                unsafe=False,
+                done=done,
+                conflict=isinstance(exc, FileExistsError),
+            ) from exc
         done.append(move.path)
     return done
 
