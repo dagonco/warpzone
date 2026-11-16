@@ -232,10 +232,12 @@
     const rows = (ra.systems || []).filter((x) => x.played > 0 && x.achievements > 0 && x.unlocked != null)
       .map((x) => ({ system: x.system, pct: Math.min(1, x.unlocked / x.achievements), unlocked: x.unlocked, of: x.achievements }))
       .sort((a, b) => b.pct - a.pct || a.system.localeCompare(b.system)).slice(0, 6);
-    return recBlock('Achievements by system', rows.map((r) => h('div', { class: 'rec-row', vars: ui.systemTint(r.system), title: `${systemName(r.system)}: ${fmt(r.unlocked)} of ${fmt(r.of)}` },
+    const block = recBlock('Achievements by system', rows.map((r) => h('div', { class: 'rec-row', vars: ui.systemTint(r.system), title: `${systemName(r.system)}: ${fmt(r.unlocked)} of ${fmt(r.of)}` },
       h('b', null, systemCode(r.system)),
       h('span', { class: 'rec-bar', 'aria-hidden': 'true' }, h('i', { vars: { w: String(r.pct) } })),
       h('em', null, r.pct > 0 && r.pct < 0.01 ? '<1%' : `${Math.round(r.pct * 100)}%`))));
+    if (block) block.classList.add('sys');
+    return block;
   }
 
   // The games played most, from the totals the system lists carry (the lists load in the

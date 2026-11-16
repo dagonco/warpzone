@@ -14,7 +14,7 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 - The library UI lists the systems grouped by maker (Nintendo, Sony, Sega, Microsoft, Atari, NEC, SNK, Bandai, Commodore, then Other, and Arcade last) and by release year within a maker, in the side rail, which heads each group with the maker's name, and on the Systems page. Before, they were in name order. Atari Jaguar and WonderSwan get their proper names.
 
-- The library UI's "Now showing" draws eight games at random on each visit, from eight random systems with art, instead of the same alphabetically first systems with a game picked by the day. Its pause button is centred on the slide markers. In the home page's records, a long system code (such as ATARI2600) no longer runs over its achievement bar.
+- The library UI's "Now showing" draws eight games at random on each visit, from eight random systems with art, instead of the same alphabetically first systems with a game picked by the day. Its pause button is centred on the slide markers. In the home page's records, "Achievements by system" sizes its code column to the longest code, shortening every bar alike, so a long code such as ATARI2600 no longer runs over its bar.
 
 ### Fixed
 

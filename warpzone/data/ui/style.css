@@ -357,8 +357,13 @@ a.badge:hover { background: color-mix(in srgb, var(--c) 14%, transparent); }
 .rec-line { display: grid; gap: 5px; font: 600 11px/1.3 var(--mono); color: var(--mute); }
 .rec-bar { display: block; height: 6px; background: #1c1738; overflow: hidden; }
 .rec-bar i { display: block; height: 100%; background: var(--c, var(--amber)); box-shadow: 0 0 5px var(--c, var(--amber)); transform-origin: left center; transform: scaleX(var(--w, 0)); }
-.rec-row { display: grid; grid-template-columns: 10ch minmax(0, 1fr) 40px; gap: 10px; align-items: center; min-width: 0; font: 700 10px/1.3 var(--mono); }
-.rec-row b { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--c); letter-spacing: .04em; } /* the full name is in the row's title */
+.rec-row { display: grid; grid-template-columns: 40px minmax(0, 1fr) 40px; gap: 10px; align-items: center; min-width: 0; font: 700 10px/1.3 var(--mono); }
+.rec-row b { color: var(--c); letter-spacing: .04em; }
+/* Achievements by system: the rows share the block's columns, so the code column is as wide as the
+   longest code and every bar is shortened by the same amount. */
+.rec-b.sys { grid-template-columns: max-content minmax(0, 1fr) minmax(40px, max-content); column-gap: 10px; }
+.rec-b.sys > * { grid-column: 1 / -1; }
+.rec-b.sys > .rec-row { grid-template-columns: subgrid; white-space: nowrap; }
 .rec-row em { font-style: normal; text-align: right; color: var(--text); }
 .rec-row.game { grid-template-columns: 16px minmax(0, 1fr) auto; padding: 3px 0; border-bottom: 1px dashed #241e48; }
 .rec-row.game:hover .rn { color: var(--c); }
