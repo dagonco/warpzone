@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ## [Unreleased]
 
+### Fixed
+
+- A game deleted from the library UI now has its whitelist lines removed from a console once that console has received the deletion, also when the console keeps empty system folders its whitelist does not take, as EmuDeck creates them (a bug of 0.4.0rc5). The hub counts those folders as items the console still needs, so the lines waited for ever; the server now asks the hub which items they are and waits only for those at or below the deleted game.
+
 ## [0.4.0rc5] - 2026-11-16
 
 The fifth candidate lets the library UI delete a game from the hub into a trash, with Restore and Delete now, and removes the game's whitelist lines from each console once that console has received the deletion. The UI also groups the systems by maker, draws "Now showing" at random on each visit, and the 3DS scrape no longer fails on `.zcci` images. The inbox can ask Skyscraper for a region and a language first.

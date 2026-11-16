@@ -22,7 +22,7 @@ import json
 import math
 import posixpath
 import re
-from collections.abc import Collection, Mapping, Sequence
+from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -1070,13 +1070,28 @@ W_HUB, W_OFFLINE, W_PAUSED, W_NOT_SHARED, W_SYNCING = (
 W_NOT_MANAGED, W_UNKNOWN = "not-managed", "unknown"
 
 
-def waiting(*, recorded: bool, managed: bool, reading: progress.Reading | None) -> str | None:
+def needs_any(names: Iterable[str], paths: Iterable[str]) -> bool:
+    """Whether any name a device still needs is one of `paths` or below one."""
+    roots = list(paths)
+    return any(n == p or n.startswith(p + "/") for n in names for p in roots)
+
+
+def waiting(
+    *,
+    recorded: bool,
+    managed: bool,
+    reading: progress.Reading | None,
+    needed: bool | None = None,
+) -> str | None:
     """What a device's lines wait for, or None when they can go: the whitelist is managed, the
     hub has recorded the deletion, and a fresh reading of the hub shows the device connected,
     the folder shared and not paused, and nothing left to fetch or delete: completion 100,
-    `needItems` 0, `needBytes` 0 and `needDeletes` 0 (Syncthing counts a pending deletion only
-    there, and caps the completion at 95 while only deletions remain). A `needDeletes` the hub
-    did not give is unknown, so not ready."""
+    `needBytes` 0 and `needDeletes` 0 (Syncthing counts a pending deletion only there, and caps
+    the completion at 95 while only deletions remain). A `needDeletes` the hub did not give is
+    unknown, so not ready. `needItems` must be 0 too, unless `needed` is False: the hub listed
+    what the device still needs (`remoteneed`) and none of it is a deleted path or below one.
+    A console keeps empty system folders its whitelist does not take (EmuDeck creates them),
+    which the hub counts as needed items for ever."""
     if not managed:
         return W_NOT_MANAGED
     if not recorded:
@@ -1091,7 +1106,7 @@ def waiting(*, recorded: bool, managed: bool, reading: progress.Reading | None) 
         return W_PAUSED
     if (
         reading.completion < 100
-        or reading.need_items > 0
+        or (reading.need_items > 0 and needed is not False)
         or reading.need_bytes > 0
         or (reading.need_deletes or 0) > 0
     ):

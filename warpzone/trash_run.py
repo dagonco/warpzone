@@ -575,6 +575,14 @@ class Trasher:
             completion = None  # the folder is not shared with the device
         return progress.parse(connections.get(device_id), completion)
 
+    def _remote_need(self, client: Client, device_id: str) -> list[str] | None:
+        try:
+            return client.remote_need(LIBRARY_ID, device_id)
+        except SyncthingError as exc:
+            if exc.status != 404:
+                raise
+            return None
+
     def cleanup_pass(self) -> list[str]:
         """Remove the whitelist lines of deleted games from the consoles that have received
         the deletion. Returns the devices whose whitelist was written.
@@ -596,6 +604,7 @@ class Trasher:
         valid = {d.name: d for d in library_api.library_devices(self.cfg)}
         recorded: dict[str, str | None] = {}
         readings: dict[str, progress.Reading] = {}
+        needs: dict[str, list[str] | None] = {}
         try:
             # Asked on every pass, even of an entry already recorded: a path filed again and
             # deleted again is live in the hub's index until it records the second deletion.
@@ -616,12 +625,22 @@ class Trasher:
                         readings[device] = self._reading(
                             client, connections, valid[device].device_id
                         )
+            # A console that has every byte and no deletion left but still "needs" items: ask
+            # which, so empty folders it never fetches do not hold its lines for ever.
+            for device, reading in readings.items():
+                if (
+                    reading.need_items > 0
+                    and reading.completion >= 100
+                    and reading.need_bytes == 0
+                    and reading.need_deletes == 0
+                ):
+                    needs[device] = self._remote_need(client, valid[device].device_id)
         except SyncthingError as exc:
             self._once("hub", f"warning: the whitelist cleanup cannot ask the hub ({exc})")
             return []
         self._said.discard("hub")
         with self.write_lock:
-            written = self._apply_cleanups(valid, recorded, readings)
+            written = self._apply_cleanups(valid, recorded, readings, needs)
         if written:
             client = self._client()
             for device in written:
@@ -635,6 +654,7 @@ class Trasher:
         valid: Mapping[str, Any],
         recorded: Mapping[str, str | None],
         readings: Mapping[str, progress.Reading],
+        needs: Mapping[str, list[str] | None],
     ) -> list[str]:
         try:
             items, stamp = trash_store.read_cleanups(self.root)
@@ -647,7 +667,7 @@ class Trasher:
         written: list[str] = []
         result: list[trash.Cleanup] = []
         for c in items:
-            left = self._settle(c, valid, recorded, readings, views, lib, now, written)
+            left = self._settle(c, valid, recorded, readings, needs, views, lib, now, written)
             if left is not None:
                 result.append(left)
         if result != items:
@@ -664,6 +684,7 @@ class Trasher:
         valid: Mapping[str, Any],
         recorded: Mapping[str, str | None],
         readings: Mapping[str, progress.Reading],
+        needs: Mapping[str, list[str] | None],
         views: Mapping[str, library_api.DeviceView],
         lib: library_api.Library,
         now: datetime,
@@ -682,10 +703,12 @@ class Trasher:
             left = replace(left, recorded=recorded[left.entry])
         for device in list(left.devices):
             view = views[device]
+            names = needs.get(device)
             why = trash.waiting(
                 recorded=left.recorded is not None,
                 managed=trash.is_managed(view),
                 reading=readings.get(device),
+                needed=None if names is None else trash.needs_any(names, left.paths),
             )
             if why is not None:
                 continue
