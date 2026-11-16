@@ -456,7 +456,8 @@ def moves_of_manifest(m: Manifest, paths: Sequence[str]) -> list[Move]:
 
 class MoveError(Exception):
     """A move that cannot be made. `unsafe` is a path that is no longer what it was (a link, or
-    changed since the plan); `conflict` is a target that exists; the rest is an I/O failure. `done` are the paths moved before it."""
+    changed since the plan); `conflict` is a target that exists; the rest is an I/O failure.
+    `done` are the paths moved before it."""
 
     def __init__(
         self, path: str, why: str, *, unsafe: bool, done: list[str], conflict: bool = False
