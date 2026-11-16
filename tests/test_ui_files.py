@@ -236,6 +236,25 @@ class UiFilesTest(unittest.TestCase):
         for name in SCRIPTS:
             self.assertNotRegex(read(name), r"replaceChildren\([^;()]*\?[^;()]*:\s*null\)", name)
 
+    def test_a_restore_is_confirmed_before_it_is_sent(self):
+        # The design puts Restore and Delete now each behind a confirmation. The store asks the
+        # dialog first; the dialog is registered by the app; the Trash row hands over its row and
+        # what waits for its consoles, so the dialog can name the game, its size and the consoles.
+        store = read("store.js")
+        body = store[store.index("function restoreEntry(") : store.index("function purgeEntry(")]
+        self.assertIn("hooks.confirmRestore(", body)
+        self.assertLess(body.index("hooks.confirmRestore("), body.index("api.trashRestore("))
+        self.assertRegex(store, r"confirmRestore\(row, pending\)\s*\{")
+        app = read("app.js")
+        self.assertIn("function confirmRestore(row, pending)", app)
+        self.assertRegex(app, r"\n\s+confirmRestore,\n")
+        dialog = app[app.index("function confirmRestore(") : app.index("function confirmPurge(")]
+        for needle in ("formatBytes(row.size)", "pending", "disabled", "dlg.showModal()"):
+            self.assertIn(needle, dialog, needle)
+        views = read("views.js")
+        self.assertNotIn("store.restoreEntry(r.entry)", views)
+        self.assertRegex(views, r"store\.restoreEntry\(r, ")
+
     def test_the_page_reads_the_catalog_state(self):
         text = scripts()
         self.assertIn("api.catalog()", text)

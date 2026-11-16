@@ -528,7 +528,11 @@ with the genres, developer and year it shares with X; each is hidden when empty)
   [deletion dialog](#the-dry-run-and-the-confirmation).
 - **Trash:** reached from the header, from `GET /api/v1/trash`: one row per entry (title,
   system, date of the deletion, size, days left, and a mark on an incomplete entry) with
-  Restore and Delete now, each behind a confirmation, and below them the consoles that still
+  Restore and Delete now, each behind a confirmation (Delete now names the game and the size it
+  frees; Restore names the game and its size and says which consoles will download it again,
+  those with a pending row for the entry in the same answer, or that none does and the game
+  comes back off everywhere; its button is disabled once pressed, so a double click sends one
+  restore), and below them the consoles that still
   have whitelist lines of deleted games, with what they wait for (see
   [The trash](#the-trash)).
 - **Search:** results grouped by title key across systems, with the same per-console switches.

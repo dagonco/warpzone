@@ -59,6 +59,7 @@
     // The deletion dialog: (plan, send) resolves the apply's answer, or null when cancelled.
     confirmDelete(plan, send) { return Promise.resolve(null); },
     refuseDelete(err) { return Promise.resolve(); },   // a deletion the server refuses: say why
+    confirmRestore(row, pending) { return Promise.resolve(false); },
     confirmPurge(row) { return Promise.resolve(false); },
   };
 
@@ -614,11 +615,15 @@
     });
   }
 
-  // Put a trash entry back. The errors that name paths stay on the entry's row (`trashNotes`)
-  // besides the toast, so the paths can be read and acted on.
-  function restoreEntry(entry) {
-    S.trashNotes.delete(entry);
+  // Put a trash entry back, after the user confirmed it (the dialog names the game and the
+  // consoles that get it again, from `pending`: the rows of the trash answer for this entry).
+  // The errors that name paths stay on the entry's row (`trashNotes`) besides the toast, so the
+  // paths can be read and acted on.
+  function restoreEntry(row, pending) {
+    const entry = row.entry;
     return guarded(async () => {
+      if (!(await hooks.confirmRestore(row, pending || []))) return null;
+      S.trashNotes.delete(entry);
       let res;
       try {
         res = await api.trashRestore(entry);

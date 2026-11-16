@@ -460,6 +460,41 @@
     });
   }
 
+  // "Restore" on a trash entry: the game goes back where it was, so the dialog names it, its
+  // size and the consoles that will download it again (`pending` are the rows of the trash
+  // answer whose lines are still in a whitelist). Resolves true on confirm; the button is
+  // disabled once pressed, so a double click sends one restore.
+  function confirmRestore(row, pending) {
+    const dlg = $('#confirm');
+    const t = parseTitle(row.name || row.title || row.entry);
+    const again = [...new Set((pending || []).map((p) => p.device))].sort();
+    return new Promise((resolve) => {
+      let result = false;
+      dlg.className = 'modal eject';
+      setTintOn(dlg, row.system ? systemColor(row.system) : '#4ad7ff');
+      const go = h('button', {
+        type: 'button', class: 'btn primary', dataset: { fk: 'restore-go' },
+        onclick: () => { go.disabled = true; result = true; dlg.close(); },
+      }, 'Restore');
+      dlg.replaceChildren(h('div', { class: 'modal-inner' },
+        h('div', { class: 'mh' }, h('i'), 'Restore'),
+        h('div', { class: 'mb' },
+          h('h2', { id: 'confirm-title' }, `Restore ${t.name}?`),
+          h('p', null,
+            `The game goes back into the library${row.size ? ` (${formatBytes(row.size)})` : ''}, with its art and its entry in the frontend's list.`),
+          again.length
+            ? h('p', null, `${again.join(', ')} still ${again.length === 1 ? 'has' : 'have'} its whitelist lines and will download it again.`)
+            : h('p', { class: 'mute' }, 'No console has lines for it any more, so it comes back off everywhere: turn it on from its page.'),
+          row.state === 'incomplete' ? h('p', { class: 'note warn' }, 'The entry is incomplete: only what is in the trash is put back.') : null),
+        h('div', { class: 'macts' },
+          h('button', { type: 'button', class: 'btn', dataset: { fk: 'restore-cancel' }, onclick: () => dlg.close() }, 'Cancel'),
+          go)));
+      dlg.addEventListener('close', () => resolve(result), { once: true });
+      dlg.showModal();
+      $('[data-fk="restore-cancel"]', dlg).focus();
+    });
+  }
+
   // "Delete now" on a trash entry: irreversible, so it names the game and what it frees.
   function confirmPurge(row) {
     const dlg = $('#confirm');
@@ -795,6 +830,7 @@
       confirmSystem,
       confirmDelete,
       refuseDelete,
+      confirmRestore,
       confirmPurge,
       openHistory,
       reset() { views.resetFeatured(); },

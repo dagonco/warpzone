@@ -848,6 +848,7 @@
     const root = h('div', { class: 'page' },
       h('div', { class: 'pagehead' }, h('h1', null, 'Trash'), h('span', { class: 'sub' }, 'Deleted games wait here before they are purged')), host);
     let restored = null; // what the last restore did, with a link to the game
+    let restoring = false; // a restore is being confirmed or sent: a second click does nothing
     let timer = null;
 
     function row(r) {
@@ -941,8 +942,15 @@
     }
 
     async function restore(r) {
-      const res = await store.restoreEntry(r.entry);
-      if (res) restored = res;
+      if (restoring) return;
+      restoring = true;
+      try {
+        const pending = ((S.trash && S.trash.pending) || []).filter((p) => p.entry === r.entry);
+        const res = await store.restoreEntry(r, pending);
+        if (res) restored = res;
+      } finally {
+        restoring = false;
+      }
       if (!view.dead) paint();
     }
 
