@@ -710,7 +710,12 @@ class CleanupTests(unittest.TestCase):
         deleted = {"global": {"deleted": True}, "local": {"deleted": True}}
         live = {"global": {"deleted": False}, "local": {"deleted": False}}
         self.assertTrue(trash.in_index({"a": deleted, "b": None}))
-        self.assertTrue(trash.in_index({"a": {"global": None}}))
+        # an answer that does not say what the global record is, is not a recorded deletion
+        self.assertFalse(trash.in_index({"a": {"global": None}}))
+        self.assertFalse(trash.in_index({"a": {"local": {"deleted": True}}}))
+        self.assertFalse(trash.in_index({"a": {}}))
+        self.assertFalse(trash.in_index({"a": {"global": {}}}))
+        self.assertFalse(trash.in_index({"a": {"global": "x"}}))
         self.assertFalse(trash.in_index({"a": deleted, "b": live}))
         self.assertFalse(trash.in_index({"a": {"global": {"version": ["X:1"]}}}))
         self.assertTrue(trash.in_index({}))

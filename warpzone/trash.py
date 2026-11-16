@@ -1046,12 +1046,14 @@ def parse_cleanups(data: bytes | None) -> list[Cleanup]:
 
 def in_index(answers: Mapping[str, Mapping[str, Any] | None]) -> bool:
     """Whether the hub's Syncthing has recorded the deletion of every path: `db/file` gave no
-    record (None: it does not know the path) or a global record that is `deleted`."""
+    record (None: it does not know the path) or a global record that is `deleted`. An answer
+    that has no global record to read (none, not a mapping, an empty one) is not a recorded
+    deletion: this fails closed."""
     for answer in answers.values():
         if answer is None:
             continue
         record = answer.get("global")
-        if isinstance(record, Mapping) and record and record.get("deleted") is not True:
+        if not isinstance(record, Mapping) or record.get("deleted") is not True:
             return False
     return True
 

@@ -1121,8 +1121,12 @@ deletion:
 - **When the hub has recorded the deletion.** `recorded` is `null` until the hub's Syncthing has
   the deletion in its index: the cleanup asks `GET /rest/db/file?folder=wz-library&file=<path>`
   for each of `paths` and sets `recorded` to the time of that check once every answer has its
-  global record `deleted` (or Syncthing does not know the path). Without this, a console could
-  read as fully in sync before the hub had announced anything.
+  global record `deleted` (or Syncthing does not know the path). An answer with no global record
+  to read (a 200 without a `global` mapping) is not a recorded deletion. Without this, a console
+  could read as fully in sync before the hub had announced anything. The check is made again on
+  every pass, also for an entry that has `recorded`: a path filed again and deleted again is live
+  in the hub's index until it records the second deletion, and `recorded` goes back to `null`
+  until it has.
 - **When a console has received it.** A device is ready when a reading of the hub taken after
   `recorded` shows it connected, with `remoteState` neither `paused` nor `notSharing`, and
   `GET /rest/db/completion?folder=wz-library&device=<id>` gives `completion` 100, `needBytes` 0,

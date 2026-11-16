@@ -576,17 +576,20 @@ class Trasher:
         if client is None:
             return []
         valid = {d.name: d for d in library_api.library_devices(self.cfg)}
-        recorded: dict[str, str] = {}
+        recorded: dict[str, str | None] = {}
         readings: dict[str, progress.Reading] = {}
         try:
+            # Asked on every pass, even of an entry already recorded: a path filed again and
+            # deleted again is live in the hub's index until it records the second deletion.
             for c in items:
-                if c.recorded is None:
-                    answers = {p: client.db_file(LIBRARY_ID, p) for p in c.paths}
-                    if trash.in_index(answers):
-                        recorded[c.entry] = trash.when_text(self.now())
+                answers = {p: client.db_file(LIBRARY_ID, p) for p in c.paths}
+                if not trash.in_index(answers):
+                    recorded[c.entry] = None
+                else:
+                    recorded[c.entry] = c.recorded or trash.when_text(self.now())
             connections: Mapping[str, Any] | None = None
             for c in items:
-                if c.recorded is None and c.entry not in recorded:
+                if recorded[c.entry] is None:
                     continue
                 for device in c.devices:
                     if device in valid and device not in readings:
@@ -612,7 +615,7 @@ class Trasher:
     def _apply_cleanups(
         self,
         valid: Mapping[str, Any],
-        recorded: Mapping[str, str],
+        recorded: Mapping[str, str | None],
         readings: Mapping[str, progress.Reading],
     ) -> list[str]:
         try:
@@ -641,7 +644,7 @@ class Trasher:
         self,
         c: trash.Cleanup,
         valid: Mapping[str, Any],
-        recorded: Mapping[str, str],
+        recorded: Mapping[str, str | None],
         readings: Mapping[str, progress.Reading],
         views: Mapping[str, library_api.DeviceView],
         lib: library_api.Library,
@@ -657,7 +660,7 @@ class Trasher:
         left = trash.reappeared(left, trash_store.paths_at(self.root / "library", left.paths))
         if left is None:
             return None
-        if left.recorded is None and left.entry in recorded:
+        if left.entry in recorded and left.recorded != recorded[left.entry]:
             left = replace(left, recorded=recorded[left.entry])
         for device in list(left.devices):
             view = views[device]

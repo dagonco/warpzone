@@ -1115,6 +1115,31 @@ class CleanupTests(TrashCase):
         self.fake.completion[("wz-library", DECK_ID)] = DONE
         self.assertEqual(self.app.trash.cleanup_pass(), ["deck"])
 
+    def test_the_hub_index_is_checked_again_on_every_pass(self) -> None:
+        self.fake.file_info[("wz-library", EXAMPLE.primary)] = DELETED
+        self.app.trash.cleanup_pass()
+        (item,) = self.cleanups()
+        self.assertIsNotNone(item["recorded"])
+        # the same path is filed again and deleted again: the hub's global record is live
+        # until it indexes the second deletion
+        self.fake.file_info[("wz-library", EXAMPLE.primary)] = LIVE
+        self.fake.completion[("wz-library", DECK_ID)] = DONE
+        before = (self.library / "patterns-deck.stignore").read_bytes()
+        self.assertEqual(self.app.trash.cleanup_pass(), [])
+        self.assertEqual((self.library / "patterns-deck.stignore").read_bytes(), before)
+        (item,) = self.cleanups()
+        self.assertIsNone(item["recorded"])
+        self.assertEqual(self.waiting()["deck"], "hub")
+        self.fake.file_info[("wz-library", EXAMPLE.primary)] = DELETED
+        self.assertEqual(self.app.trash.cleanup_pass(), ["deck"])
+
+    def test_an_index_answer_without_a_global_record_is_not_a_recorded_deletion(self) -> None:
+        self.fake.file_info[("wz-library", EXAMPLE.primary)] = {"local": {"deleted": True}}
+        self.fake.completion[("wz-library", DECK_ID)] = DONE
+        self.assertEqual(self.app.trash.cleanup_pass(), [])
+        (item,) = self.cleanups()
+        self.assertIsNone(item["recorded"])
+
     def test_the_hub_index_is_asked_for_every_path_of_the_game(self) -> None:
         self.fake.file_info[("wz-library", EXAMPLE.primary)] = DELETED
         self.app.trash.cleanup_pass()
