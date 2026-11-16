@@ -872,5 +872,36 @@ class MigrationTests(unittest.TestCase):
         self.assertTrue(bad.errors)
 
 
+class GameLinesTests(unittest.TestCase):
+    MODEL = wl.Model(
+        frozenset({"psx"}),
+        frozenset(
+            {"roms/gba/A.gba", "roms/ps4/games/X", "roms/ps4/games/X/inner", "roms/ps4/other"}
+        ),
+        frozenset({"roms/psx/B.chd"}),
+    )
+
+    def test_lines_below_are_those_at_or_below_a_part(self) -> None:
+        self.assertEqual(
+            wl.lines_below(self.MODEL, ["roms/ps4/games/X"]),
+            (("roms/ps4/games/X", "roms/ps4/games/X/inner"), ()),
+        )
+        self.assertEqual(
+            wl.lines_below(self.MODEL, ["roms/psx/B.chd", "roms/gba/A.gba"]),
+            (("roms/gba/A.gba",), ("roms/psx/B.chd",)),
+        )
+        self.assertEqual(wl.lines_below(self.MODEL, ["roms/nes/C.nes"]), ((), ()))
+
+    def test_drop_lines_removes_only_those_and_adds_nothing(self) -> None:
+        after = wl.drop_lines(self.MODEL, ["roms/gba/A.gba", "roms/not/there"], ["roms/psx/B.chd"])
+        self.assertEqual(after.systems, frozenset({"psx"}))
+        # the line below another one is redundant and normalization drops it
+        self.assertEqual(after.includes, frozenset({"roms/ps4/games/X", "roms/ps4/other"}))
+        self.assertEqual(after.excludes, frozenset())
+
+    def test_drop_lines_of_nothing_is_the_normalized_model(self) -> None:
+        self.assertEqual(wl.drop_lines(self.MODEL, [], []), wl.normalize(self.MODEL))
+
+
 if __name__ == "__main__":
     unittest.main()

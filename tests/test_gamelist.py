@@ -1397,5 +1397,51 @@ def edit_state(text: str, changes: dict, included: dict) -> str:
     return playstate.edit_gamelist(text, changes, included, "gba", CET)
 
 
+LIST = """<?xml version="1.0"?>
+<gameList>
+\t<game>
+\t\t<path>./A.chd</path>
+\t\t<name>A</name>
+\t</game>
+\t<!-- <game><path>./B.chd</path></game> -->
+\t<game>
+\t\t<path>./B.chd</path>
+\t</game>
+\t<folder>
+\t\t<path>./Dir</path>
+\t</folder>
+</gameList>
+"""
+
+
+class DropEntriesTests(unittest.TestCase):
+    def test_the_entries_of_those_paths_go_with_their_lines_and_come_back_as_written(self) -> None:
+        text, blocks = gamelist.drop_entries(LIST, ["A.chd", "./Dir"])
+        self.assertEqual(len(blocks), 2)
+        self.assertTrue(blocks[0].startswith("<game>") and blocks[0].endswith("</game>"))
+        self.assertIn("<name>A</name>", blocks[0])
+        self.assertNotIn("<name>A</name>", text)
+        self.assertNotIn("./Dir", text)
+        self.assertIn("<path>./B.chd</path>", text)
+        self.assertIn("<!-- <game><path>./B.chd</path></game> -->", text)  # a comment is no entry
+        self.assertEqual(text.count("\n\n"), 0)
+
+    def test_no_match_changes_nothing(self) -> None:
+        self.assertEqual(gamelist.drop_entries(LIST, ["Z.chd"]), (LIST, []))
+
+    def test_restoring_adds_the_blocks_before_the_end_and_skips_what_is_there(self) -> None:
+        text, blocks = gamelist.drop_entries(LIST, ["A.chd"])
+        again, restored, present = gamelist.restore_entries(text, blocks)
+        self.assertEqual((restored, present), (["A.chd"], []))
+        self.assertIn("<name>A</name>", again)
+        self.assertTrue(again.rstrip().endswith("</gameList>"))
+        same, restored, present = gamelist.restore_entries(again, blocks)
+        self.assertEqual((same, restored, present), (again, [], ["A.chd"]))
+
+    def test_restoring_into_a_text_with_no_gamelist_fails(self) -> None:
+        with self.assertRaises(gamelist.GamelistError):
+            gamelist.restore_entries("not xml at all", ["<game><path>./A</path></game>"])
+
+
 if __name__ == "__main__":
     unittest.main()

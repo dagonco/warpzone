@@ -158,6 +158,9 @@ warpzone/
   saves_index.py     saves per game for the library API: exact matching of the hub's `saves/` to games
                      (pure), the listing and its short cache
   serve.py           `warpzone serve`: http.server, sessions, the write lock, caches, background runs
+  trash.py           deleting a game from the library UI as pure decisions: the plan and its refusals, the manifest and cleanups encodings, what a restore moves, which cleanup is ready (see library-ui.md)
+  trash_store.py     the disk side of it: what a plan reads, the moves into `trash/` and back with their rollback, the manifest and cleanups files, the gamelist edits, the listing and the purge
+  trash_run.py       the server's side of it: the dry run, the deletion, the restore, Delete now and the background task (whitelist cleanups, purge), under the hub lock and the write lock
   access_jwt.py      Cloudflare Access tokens: strict JWT parsing, RS256 check with the standard library, claims (pure)
   access_keys.py     Access's signing keys: the fetch, the cache and the gate `serve` asks about a token
   localst.py         find and parse the local Syncthing config.xml

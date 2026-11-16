@@ -49,6 +49,9 @@ from warpzone import (
     ra_data,
     ra_store,
     saves_index,
+    trash,
+    trash_run,
+    trash_store,
 )
 from warpzone import whitelist_store as store
 from warpzone.access_keys import AccessGate
@@ -665,6 +668,11 @@ class HubFiles:
         with self._lock:
             return self._inbox_record(run_id)
 
+    def busy(self) -> dict[str, str | None] | None:
+        """`busy` now, not from the cache: a deletion's dry run says whether it can start."""
+        with self._lock:
+            return self._busy()
+
     def _busy(self) -> dict[str, str | None] | None:
         """`busy`: null without a lock file. A lock that is a link, not a regular file, too big
         or unreadable is busy with an unknown mode: it is never followed or waited on (a named
@@ -778,6 +786,7 @@ class Refresher:
         self._state_lock = threading.Lock()
         self._last: dict[str, Any] | None = None
         self._running = False
+        self._again = False  # a `request` came in during a run: one more starts when it ends
 
     @property
     def running(self) -> bool:
@@ -808,6 +817,10 @@ class Refresher:
             }
         self._log(f"catalog run {'finished' if ok else 'failed'}: {message}")
         self._busy.release()
+        with self._state_lock:
+            again, self._again = self._again, False
+        if again:
+            self.trigger()
 
     def trigger(self, ra_lists: bool = False) -> bool:
         """Start a run in a thread; False when one is running."""
@@ -817,6 +830,18 @@ class Refresher:
             self._running = True
         threading.Thread(target=self._run, args=(ra_lists,), daemon=True).start()
         return True
+
+    def request(self, ra_lists: bool = False) -> bool:
+        """Ask for a run that sees what changed just now (a game moved to the trash or back):
+        start one, or, when one is running (it may have listed the system before the move),
+        make one more start when it ends. True when one started now."""
+        with self._state_lock:
+            self._again = True
+        if self.trigger(ra_lists):
+            with self._state_lock:
+                self._again = False
+            return True
+        return False
 
     def run_now(self, ra_lists: bool = False) -> bool:
         """Run in the calling thread; False when one is running."""
@@ -932,6 +957,17 @@ class App:
         self.now = now
         self.clock = clock
         self.write_lock = threading.Lock()
+        self.trash = trash_run.Trasher(
+            cfg,
+            self.root,
+            self.files,
+            self.write_lock,
+            client_factory=client_factory,
+            request_run=refresher.request if refresher is not None else None,
+            log=log,
+            now=now,
+            arcade=trash_store.ArcadeCache(cfg.inbox, log),
+        )
         self._progress_lock = threading.Lock()
         self._progress: tuple[float, list[dict[str, Any]]] | None = None
         self._progress_failed: float | None = None  # when the last question failed
@@ -1167,6 +1203,8 @@ class App:
                 return json_response(200, self._progress_entries())
             case ["catalog"]:
                 return json_response(200, self._catalog_status())
+            case ["trash"]:
+                return json_response(200, self.trash.listing(self._progress_states()))
             case ["queue"]:
                 return self._queue_get(request)
             case ["inbox"]:
@@ -1193,12 +1231,40 @@ class App:
             case ["devices", device, "restore"]:
                 self._known_device(device)
                 return self._restore(device, self._json_body(request))
+            case ["games", game_id, "delete"]:
+                asked = trash.parse_delete(self._json_body(request))
+                if asked.dry_run:
+                    return json_response(200, self.trash.dry_run(game_id))
+                return json_response(200, self.trash.delete(game_id, asked.expect))
+            case ["trash", entry, "restore"]:
+                self._known_entry(entry)
+                trash.parse_empty(self._json_body(request))
+                return json_response(200, self.trash.restore(entry))
+            case ["trash", entry, "purge"]:
+                self._known_entry(entry)
+                trash.parse_empty(self._json_body(request))
+                return json_response(200, self.trash.purge(entry))
             case ["catalog", "refresh"]:
                 self._json_body(request)
                 if self.refresher is None or not self.refresher.trigger():
                     raise ApiError("catalog-running", "a catalog run is already running")
                 return json_response(202, {"started": True})
         raise ApiError("not-found", "no such route")
+
+    @staticmethod
+    def _known_entry(entry: str) -> None:
+        """A trash entry is named only by its exact name: anything else is `404` and the disk
+        is not touched."""
+        if not trash.valid_entry(entry):
+            raise ApiError("not-found", "no such trash entry", entry=entry)
+
+    def _progress_states(self) -> dict[str, str] | None:
+        """The progress state of each device (the 15-second cache of `progress`), or None when
+        the hub's Syncthing does not answer."""
+        try:
+            return {str(e["device"]): str(e["state"]) for e in self._progress_entries()}
+        except ApiError:
+            return None
 
     def _play_index(self) -> library_api.PlayIndex:
         horizon = int(self.now().timestamp()) + playstate.FUTURE_SLACK
@@ -1835,6 +1901,7 @@ def run(
     threading.Thread(
         target=refresher.schedule, args=(stop,), kwargs={"key": ra_key is not None}, daemon=True
     ).start()
+    threading.Thread(target=app.trash.loop, args=(stop,), daemon=True).start()
 
     def terminate(signum: int, frame: object) -> None:
         threading.Thread(target=server.shutdown, daemon=True).start()

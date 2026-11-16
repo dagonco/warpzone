@@ -8,6 +8,7 @@ import os
 import tempfile
 import unittest
 import urllib.error
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from unittest import mock
@@ -778,6 +779,55 @@ class RaCliTests(StoreCase):
         self.assertIn("psp: 1 game(s), would write (+1 -0 ~0); 1 game(s) to RA-hash", out)
         self.assertIn("RA list 41 (psp): would download", out)
         self.assertFalse((self.root / "catalog").exists())
+
+
+class GameRecordTests(StoreCase):
+    def setUp(self) -> None:
+        super().setUp()
+        self.put("roms/gba/Alpha.gba", b"alpha")
+        self.put("roms/gba/Beta.gba", b"beta")
+        self.run_catalog()
+        self.games = self.system_file("gba")["games"]
+        self.alpha = next(i for i, g in self.games.items() if g["title"].startswith("Alpha"))
+
+    def test_remove_game_drops_one_record_and_nothing_else(self) -> None:
+        before = self.system_file("gba")
+        self.assertEqual(
+            catalog_store.remove_game(self.root, "gba", self.alpha, now=LATER), "written"
+        )
+        after = self.system_file("gba")
+        self.assertEqual(set(after["games"]), set(before["games"]) - {self.alpha})
+        for ident in after["games"]:
+            self.assertEqual(after["games"][ident], before["games"][ident])
+        self.assertEqual(
+            catalog_store.remove_game(self.root, "gba", self.alpha, now=LATER), "unchanged"
+        )
+        self.assertEqual(
+            catalog_store.remove_game(self.root, "nes", self.alpha, now=LATER), "missing"
+        )
+
+    def test_put_game_gives_the_record_back_whole(self) -> None:
+        before = self.system_file("gba")
+        found = catalog.decode_game(self.alpha, before["games"][self.alpha])
+        catalog_store.remove_game(self.root, "gba", self.alpha, now=LATER)
+        self.assertEqual(catalog_store.put_game(self.root, "gba", found, now=LATER), "written")
+        self.assertEqual(self.system_file("gba")["games"], before["games"])
+        self.assertEqual(catalog_store.put_game(self.root, "gba", found, now=LATER), "unchanged")
+
+    def test_put_game_keeps_what_a_run_made_and_adds_what_only_the_old_record_knew(self) -> None:
+        found = catalog.decode_game(self.alpha, self.games[self.alpha])
+        old = replace(
+            found, added="2026-01-01", dat="Alpha (World)", serials=("SER-1",), flags=("x",)
+        )
+        newer = replace(found, added="", dat=None, serials=(), flags=("y",))
+        catalog_store.remove_game(self.root, "gba", self.alpha, now=LATER)
+        catalog_store.put_game(self.root, "gba", newer, now=LATER)
+        catalog_store.put_game(self.root, "gba", old, now=LATER)
+        now = catalog.decode_game(self.alpha, self.system_file("gba")["games"][self.alpha])
+        self.assertEqual(
+            (now.added, now.dat, now.serials, now.flags),
+            ("2026-01-01", "Alpha (World)", ("SER-1",), ("y", "x")),
+        )
 
 
 if __name__ == "__main__":

@@ -791,5 +791,17 @@ class CliLockTests(Base):
         self.assertFalse((self.inbox / LOCK_NAME).exists())
 
 
+class DeleteTaskTests(unittest.TestCase):
+    def test_the_library_ui_task_is_known_and_named(self) -> None:
+        self.assertIn(inbox_lock.DELETE, inbox_lock.TASKS)
+        text = (
+            '{"host": "h", "pid": 7, "started": 5.0, "beat": 60, "mode": "attended",'
+            ' "task": "delete"}'
+        )
+        self.assertEqual(inbox_lock.parse(text), LockInfo("h", 7, 5.0, 60, "attended", "delete"))
+        held = inbox_lock.describe(replace(beating(), task="delete"), NOW, NOW)
+        self.assertIn("held by the library UI deleting or restoring a game since", held)
+
+
 if __name__ == "__main__":
     unittest.main()

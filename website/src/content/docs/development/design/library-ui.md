@@ -868,16 +868,23 @@ part of one (one disc, one update, one DLC):
   `frontend/es-de/gamelists/<system>/gamelist.xml` whose `<path>` is one of the game's
   `gamelist_paths` and not another game's, removed as text (`gamelist.drop_entries`, pure, on the
   block parser of `update_entry`). The file is read under the 32 MiB limit of
-  `artwork.read_gamelist`, written to `.part` and renamed, and the file as it was is first copied
-  to `tools/logs/gamelist-backups/<system>-gamelist-<YYYYMMDD-HHMMSS>.xml`, as `inbox` and `scrape`
-  do (`inbox_mame.save_gamelist`; outside every synced folder). The removed blocks are kept in the
+  `artwork.read_gamelist`, written through `safefile.atomic_write` (a temporary file renamed
+  over it, and refused when the file changed since it was read, in which case it is read and
+  edited again, up to three times), and the file as it was is first copied to
+  `tools/logs/gamelist-backups/<system>-gamelist-<YYYYMMDD-HHMMSS>.xml`, as `inbox` and `scrape`
+  do (`inbox_mame.backup_path`; outside every synced folder). A name already taken gets a `-2`,
+  `-3` suffix, so two edits in one second never share a backup. The removed blocks are kept in the
   entry's manifest for a restore. A gamelist that cannot be read or written leaves the entry in
   place with a warning, and the deletion goes on: ES-DE does not show an entry whose file is
   missing.
-- **Its catalog record**: the server derives the system again (`catalog_store.update_system`,
-  stat only), which drops a game whose primary part is gone, and then asks for a background run
-  (`Refresher.trigger()`). A trigger while a run is in progress makes one more run start when that
-  one ends, since the run in progress may have listed the system before the move.
+- **Its catalog record**: the server takes the game's record out of its system file
+  (`catalog_store.remove_game`: nothing is walked or hashed, and only that record changes), and
+  then asks for a background run (`Refresher.request()`). A request while a run is in progress
+  makes one more run start when that one ends, since the run in progress may have listed the
+  system before the move. A restore puts the record back (`catalog_store.put_game`); a record of
+  the same id that a run made in the meantime keeps what it has and gains what only the old
+  record knew (the day it was added, the DAT name, serials, the RA entry, flags, the SHA-1 of a
+  part whose size and mtime are the same).
 
 Never removed: saves (nothing below `saves/` is touched; the dialog shows what the hub holds for
 the game, from [Saves per game](#saves-per-game), and says it stays), BIOS files, the parent or
@@ -891,7 +898,7 @@ or `moved` when another version exists; see
 The plan (`trash.plan_delete`, pure, from the catalog, the listing of the parts and the media,
 the gamelist, the whitelists as read and the arcade sets) refuses, in this order:
 
-1. An unknown game: `404 not-found`.
+1. An unknown game, or one none of whose parts exists on disk: `404 not-found`.
 2. A part that is a symbolic link, is not of the type the catalog records (`file` or `dir`), or
    is equal to, inside or above a part of another catalog game: `409 unsafe-path`, naming the
    path. A part that is absent is listed in `absent` and skipped; the rest is deleted.
@@ -945,8 +952,8 @@ and acts only when confirmed. The confirmation in the page plays the role of `--
    it, saves stay. Its button is "Move to trash", disabled while `busy` is set.
 3. The confirmation sends `{"dry_run": false, "expect": "<expect>"}`. The server plans again
    from what is on disk now; a plan whose `expect` differs (a file changed, a media file appeared,
-   a whitelist line was added for the game) is refused with `412 stale`, and the dialog shows the
-   new plan. No `expect` is `428 expect-missing`.
+   a whitelist line was added for the game) is refused with `412 stale`, whose error carries the
+   new plan as `plan` (the answer of a dry run), and the dialog shows it. No `expect` is `428 expect-missing`.
 
 ### The order of a deletion
 
@@ -1857,7 +1864,7 @@ an error about the trash carries `entry`, `has-dependants` carries `dependants`,
 | 409 | `covered` | a part stays off under an exclusion of a parent folder |
 | 409 | `cannot-apply` | the change would not reach its state or would change other games |
 | 409 | `unlistable` | a part's path cannot be written as a whitelist line |
-| 409 | `not-restorable` | restoring a backup that is empty (taken before the whitelist existed) |
+| 409 | `not-restorable` | restoring a backup that is empty (taken before the whitelist existed), or a trash entry whose manifest is damaged |
 | 409 | `catalog-running` | `catalog/refresh` while a run is in progress |
 | 409 | `hub-busy` | deleting or restoring a game while `inbox/.warpzone.lock` exists (an inbox or a scrape is running) |
 | 409 | `unsafe-path` | a part of the game to delete is a symbolic link, is not of the type the catalog records, belongs to another game too, or changed right before its move |
@@ -2032,6 +2039,10 @@ network:
   (`plan_delete` with the media stems, the arcade dependants and the plan's `expect`, the entry
   names, the manifest's and the cleanups file's encoding and validation, which cleanup is ready,
   what is expired, `days_left`), `whitelist.drop_lines` and `gamelist.drop_entries`.
+- **Orchestration:** `trash_run` (`Trasher`: the hub lock with `task: "delete"` and then the
+  write lock, the plan again, the order of a deletion with its rollback, the restore, the
+  purge, and the background task every 60 seconds that purges after 7 days and cleans the
+  whitelists), over the I/O of `trash_store` and the pure `trash`.
 - **I/O:** `catalog_store` (the walk, hashing, RAHasher and the RA download through `ra.py`, the
   guarded writes), `diskstatus_io` (the disk report's write on a console and read on the hub),
   `queue_store` (the queue file: reading with a stamp, backups, the guarded write),
