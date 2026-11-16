@@ -1070,7 +1070,10 @@ W_NOT_MANAGED, W_UNKNOWN = "not-managed", "unknown"
 def waiting(*, recorded: bool, managed: bool, reading: progress.Reading | None) -> str | None:
     """What a device's lines wait for, or None when they can go: the whitelist is managed, the
     hub has recorded the deletion, and a fresh reading of the hub shows the device connected,
-    the folder shared and not paused, and nothing left to fetch or delete."""
+    the folder shared and not paused, and nothing left to fetch or delete: completion 100,
+    `needItems` 0, `needBytes` 0 and `needDeletes` 0 (Syncthing counts a pending deletion only
+    there, and caps the completion at 95 while only deletions remain). A `needDeletes` the hub
+    did not give is unknown, so not ready."""
     if not managed:
         return W_NOT_MANAGED
     if not recorded:
@@ -1083,9 +1086,14 @@ def waiting(*, recorded: bool, managed: bool, reading: progress.Reading | None) 
         return W_NOT_SHARED
     if reading.remote_state == "paused":
         return W_PAUSED
-    if reading.completion < 100 or reading.need_items > 0 or reading.need_bytes > 0:
+    if (
+        reading.completion < 100
+        or reading.need_items > 0
+        or reading.need_bytes > 0
+        or (reading.need_deletes or 0) > 0
+    ):
         return W_SYNCING
-    return None
+    return W_UNKNOWN if reading.need_deletes is None else None
 
 
 def waiting_from_state(state: str | None, *, recorded: bool, managed: bool) -> str:

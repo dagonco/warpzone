@@ -38,6 +38,9 @@ class Reading:
     need_items: int = 0
     remote_state: str = "valid"
     shared: bool = True  # False: the hub does not know the folder as shared with the device
+    # Deletions the device still has to apply (`needDeletes`; `needItems` does not count them).
+    # None: the answer did not say, so nothing is known about them.
+    need_deletes: int | None = 0
 
 
 @dataclass(frozen=True)
@@ -52,6 +55,13 @@ def _number(value: object) -> float:
     if isinstance(value, bool) or not isinstance(value, int | float):
         return 0.0
     return float(value) if math.isfinite(value) else 0.0
+
+
+def _count(value: object) -> int | None:
+    """A count the hub gave, or None when it did not give a number."""
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return None
+    return int(_number(value))
 
 
 def parse(
@@ -72,6 +82,7 @@ def parse(
         need_bytes=int(_number(completion.get("needBytes"))),
         need_items=int(_number(completion.get("needItems"))),
         remote_state=remote if isinstance(remote, str) else "valid",
+        need_deletes=_count(completion.get("needDeletes")),
     )
 
 

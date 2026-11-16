@@ -1053,7 +1053,9 @@ UTF-8 JSON with sorted keys, written with `safefile.atomic_write`:
 
 **Restore** (`POST /api/v1/trash/{entry}/restore`), under the hub lock and the write lock:
 
-1. Each path of the manifest is located with `lstat` on both sides. A path that exists at its
+1. The entry is looked at again once the locks are held: one that a purge removed in between
+   answers `404 not-found`, not damaged. Each path of the manifest is located with `lstat` on
+   both sides. A path that exists at its
    original place (a copy filed again by `inbox`, new art from a scrape, a file put back by hand)
    is a conflict: the restore is refused with `409 restore-conflict`, naming the paths, and nothing
    moves. A path in neither place (an incomplete entry) is skipped with a warning.
@@ -1123,8 +1125,12 @@ deletion:
   read as fully in sync before the hub had announced anything.
 - **When a console has received it.** A device is ready when a reading of the hub taken after
   `recorded` shows it connected, with `remoteState` neither `paused` nor `notSharing`, and
-  `GET /rest/db/completion?folder=wz-library&device=<id>` gives `completion` 100 and `needItems` 0
-  (the questions of [Progress](#progress), asked fresh, not from its 15-second cache). A console
+  `GET /rest/db/completion?folder=wz-library&device=<id>` gives `completion` 100, `needBytes` 0,
+  `needItems` 0 and `needDeletes` 0 (the questions of [Progress](#progress), asked fresh, not from
+  its 15-second cache). `needItems` counts files, folders and links to fetch, not deletions: a
+  console whose only pending work is the deletion answers `completion` 95 (Syncthing's cap while
+  only deletions remain), `needItems` 0 and `needDeletes` 1, so `needDeletes` must be 0 as well.
+  An answer without `needDeletes` is unknown, not ready. A console
   that is offline keeps its lines until it reconnects and finishes syncing, however long that
   takes; a console that never reads as done keeps them, and the Trash view shows it waiting.
 - **Removing the lines.** For a ready device, under the write lock: every recorded path that

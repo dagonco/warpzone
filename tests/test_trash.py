@@ -716,7 +716,12 @@ class CleanupTests(unittest.TestCase):
         self.assertTrue(trash.in_index({}))
 
     def reading(self, **kw: Any) -> progress.Reading:
-        base: dict[str, Any] = {"connected": True, "completion": 100.0, "need_items": 0}
+        base: dict[str, Any] = {
+            "connected": True,
+            "completion": 100.0,
+            "need_items": 0,
+            "need_deletes": 0,
+        }
         return progress.Reading(**{**base, **kw})
 
     def test_what_the_lines_wait_for(self) -> None:
@@ -735,6 +740,10 @@ class CleanupTests(unittest.TestCase):
         self.assertEqual(w(reading=self.reading(completion=42.0)), "syncing")
         self.assertEqual(w(reading=self.reading(need_items=1)), "syncing")
         self.assertEqual(w(reading=self.reading(need_bytes=1)), "syncing")
+        # a pending deletion is `needDeletes`, which `needItems` does not count
+        self.assertEqual(w(reading=self.reading(need_deletes=1)), "syncing")
+        self.assertEqual(w(reading=self.reading(completion=95.0, need_deletes=1)), "syncing")
+        self.assertEqual(w(reading=self.reading(need_deletes=None)), "unknown")
         # the hub comes before an offline console
         self.assertEqual(w(recorded=False, reading=self.reading(connected=False)), "hub")
 

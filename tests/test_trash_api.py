@@ -24,7 +24,13 @@ from warpzone import whitelist as wl
 from warpzone.syncthing import Client
 
 MGS = by_title("psx", "Metal Gear Solid (USA)")
-DONE = {"completion": 100, "needBytes": 0, "needItems": 0, "remoteState": "valid"}
+DONE = {
+    "completion": 100,
+    "needBytes": 0,
+    "needItems": 0,
+    "needDeletes": 0,
+    "remoteState": "valid",
+}
 DELETED = {"global": {"deleted": True}, "local": {"deleted": True}}
 LIVE = {"global": {"deleted": False}, "local": {"deleted": False}}
 PACMAN = catalog.Game(
@@ -745,6 +751,18 @@ class RestoreTests(TrashCase):
         self.assertEqual(self.get(f"/api/v1/games/{PS4.id}").status, 200)
         self.assertIn(("wz-library", PS4.primary), self.scans())
 
+    def test_a_restore_that_loses_a_race_with_a_purge_is_not_found(self) -> None:
+        entry = self.deleted(OTHER)
+        real = trash_run.Trasher._require_entry
+
+        def check_then_purge(trasher: Any, name: str) -> None:
+            real(trasher, name)  # the entry is there when the restore looks ...
+            shutil.rmtree(self.root / "trash" / name)  # ... and gone once it holds the locks
+
+        with mock.patch.object(trash_run.Trasher, "_require_entry", check_then_purge):
+            reply = self.restore(entry)
+        self.assertEqual((reply.status, self.error(reply)["code"]), (404, "not-found"))
+
     def test_a_restore_keeps_what_a_catalog_run_made_in_the_meantime(self) -> None:
         entry = self.deleted(OTHER)
         self.put(OTHER.primary, b"filed again by hand")  # a conflict
@@ -1055,6 +1073,7 @@ class CleanupTests(TrashCase):
             **DONE,
             "completion": 42.7,
             "needItems": 812,
+            "needDeletes": 0,
         }
 
     def waiting(self) -> dict[str, str]:
@@ -1072,6 +1091,29 @@ class CleanupTests(TrashCase):
         (item,) = self.cleanups()
         self.assertIsNone(item["recorded"])
         self.assertEqual(self.waiting(), {"deck": "hub", "machine": "hub"})
+
+    def test_a_console_whose_only_pending_work_is_the_deletion_keeps_its_lines(self) -> None:
+        # Syncthing counts a pending deletion in `needDeletes`, not in `needItems`, and caps the
+        # completion at 95 while only deletions remain.
+        self.fake.file_info[("wz-library", EXAMPLE.primary)] = DELETED
+        self.fake.completion[("wz-library", DECK_ID)] = {
+            **DONE,
+            "completion": 95,
+            "needDeletes": 1,
+        }
+        before = (self.library / "patterns-deck.stignore").read_bytes()
+        self.assertEqual(self.app.trash.cleanup_pass(), [])
+        self.assertEqual((self.library / "patterns-deck.stignore").read_bytes(), before)
+        self.assertEqual(self.waiting()["deck"], "syncing")
+        # the same answer with the count of deletions unknown is not ready either
+        self.fake.completion[("wz-library", DECK_ID)] = {
+            k: v for k, v in DONE.items() if k != "needDeletes"
+        }
+        self.assertEqual(self.app.trash.cleanup_pass(), [])
+        self.assertEqual((self.library / "patterns-deck.stignore").read_bytes(), before)
+        # done: nothing left to fetch or delete
+        self.fake.completion[("wz-library", DECK_ID)] = DONE
+        self.assertEqual(self.app.trash.cleanup_pass(), ["deck"])
 
     def test_the_hub_index_is_asked_for_every_path_of_the_game(self) -> None:
         self.fake.file_info[("wz-library", EXAMPLE.primary)] = DELETED

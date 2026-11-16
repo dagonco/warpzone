@@ -382,6 +382,9 @@ class Trasher:
             raise ApiError("not-found", "no such trash entry", entry=entry)
 
     def _restore_locked(self, entry: str, scans: list[Scan], warnings: list[str]) -> dict[str, Any]:
+        if trash_store.entry_kind(self.root, entry) != trash.F_DIR:
+            # a purge took the entry between the first look and the locks
+            raise ApiError("not-found", "no such trash entry", entry=entry)
         manifest = trash_store.read_manifest(self.root, entry)
         if manifest is None:
             raise ApiError(
