@@ -903,8 +903,9 @@ the gamelist, the whitelists as read and the arcade sets) refuses, in this order
 
 1. An unknown game, or one none of whose parts exists on disk: `404 not-found`.
 2. A part that is a symbolic link, is not of the type the catalog records (`file` or `dir`), or
-   is equal to, inside or above a part of another catalog game: `409 unsafe-path`, naming the
-   path. A part that is absent is listed in `absent` and skipped; the rest is deleted.
+   is equal to, inside or above a part of another catalog game, or is a system root itself
+   (`roms/xbox360/roms`, `extras/switch/updates`: a line for one is never recorded for
+   removal): `409 unsafe-path`, naming the path. A part that is absent is listed in `absent` and skipped; the rest is deleted.
 3. A device that lists `library` whose whitelist is `needs-migration`: `409 not-managed`, naming
    it. Its lines could not be found or removed reliably.
 4. An arcade set that another set of the library needs (below): `409 has-dependants`, or

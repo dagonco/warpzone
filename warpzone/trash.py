@@ -68,11 +68,12 @@ def safe_below(path: str, prefix: str) -> bool:
 
 def safe_part(path: str, system: str) -> bool:
     """Whether a catalog part path may be moved: below `library/` as `roms/<system>/...` or
-    `extras/<system>/...`, with a name at least three components deep."""
+    `extras/<system>/...`, with a name at least three components deep, and never a system root
+    (`roms/xbox360/roms`, `extras/switch/updates`): a line for one is not a game's to remove."""
     parts = path.split("/")
     if len(parts) < MIN_PART_DEPTH or any(p in ("", ".", "..") for p in parts) or "\0" in path:
         return False
-    return wl.system_of(path) == system
+    return wl.system_of(path) == system and wl.system_of_root(path) is None
 
 
 def when_text(when: datetime) -> str:

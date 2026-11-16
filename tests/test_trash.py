@@ -142,6 +142,22 @@ class PlanTests(unittest.TestCase):
             error = refusal(g=bad, items=[("psx", bad)], parts={path: Found(F_FILE, 1, 1)})
             self.assertEqual(error.code, "unsafe-path", path)
 
+    def test_a_system_root_is_never_a_part(self) -> None:
+        for path, system in (
+            ("roms/xbox360/roms", "xbox360"),
+            ("roms/wiiu/roms", "wiiu"),
+            ("extras/switch/updates", "switch"),
+            ("extras/switch/dlc", "switch"),
+        ):
+            self.assertFalse(trash.safe_part(path, system), path)
+            bad = replace(GAME, parts=(catalog.Part(path, "dir", 1, 1),))
+            error = refusal(g=bad, items=[(system, bad)], parts={path: Found(F_DIR, 1, 1, 1)})
+            self.assertEqual(error.code, "unsafe-path", path)
+        # a game inside a system root is still a part
+        self.assertTrue(trash.safe_part("roms/xbox360/roms/Game", "xbox360"))
+        self.assertTrue(trash.safe_part("extras/switch/updates/Game.nsp", "switch"))
+        self.assertTrue(trash.safe_part("roms/psx/roms", "psx"))  # not a root for this system
+
     def test_a_whitelist_that_needs_migration_is_not_managed(self) -> None:
         error = refusal(view=views(machine="/roms/psx/hand written\n*\n"))
         self.assertEqual((error.code, error.status, error.device), ("not-managed", 409, "machine"))
