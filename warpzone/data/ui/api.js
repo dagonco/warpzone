@@ -173,7 +173,7 @@
           ? `A move failed and some files could not be put back (${err.message}). The entry is in the Trash view as incomplete; Restore puts back what is there.`
           : `A move failed (${err.message}). Everything was put back, so nothing changed.`;
       case 'purge-failed':
-        return `The entry could not be removed whole (${err.message}). What is left stays in the trash; try Delete now again.`;
+        return `The entry could not be removed whole (${err.message}). The rest is removed in the background within a minute.`;
       case 'hub-unreachable':
         return 'The hub could not reach its Syncthing, so progress is unknown for now.';
       case 'internal':
