@@ -858,3 +858,13 @@ class CleanupTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class NeedsAnyTests(unittest.TestCase):
+    def test_a_name_at_or_below_a_path_is_needed_and_a_neighbour_is_not(self) -> None:
+        paths = ["roms/ps4/games/CUSA00001", "roms/gba/Game.zip"]
+        self.assertTrue(trash.needs_any(["roms/gba/Game.zip"], paths))
+        self.assertTrue(trash.needs_any(["roms/ps4/games/CUSA00001/eboot.bin"], paths))
+        self.assertFalse(trash.needs_any(["roms/ps4/games/CUSA000012"], paths))
+        self.assertFalse(trash.needs_any(["roms/dreamcast", "roms/ps2"], paths))
+        self.assertFalse(trash.needs_any([], paths))

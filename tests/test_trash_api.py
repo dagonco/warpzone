@@ -1264,6 +1264,40 @@ class CleanupTests(TrashCase):
         self.fake.completion[("wz-library", DECK_ID)] = DONE
         self.assertEqual(self.app.trash.cleanup_pass(), ["deck"])
 
+    def test_empty_folders_the_console_never_fetches_do_not_hold_its_lines(self) -> None:
+        # The answer a real hub gave for a console with EmuDeck's empty system folders that
+        # its whitelist does not take: the bytes are all there, nothing is left to delete,
+        # and the six items are those folders, none of them the deleted game.
+        self.fake.file_info[("wz-library", EXAMPLE.primary)] = DELETED
+        self.fake.completion[("wz-library", DECK_ID)] = {**DONE, "needItems": 6}
+        self.fake.remote_need[("wz-library", DECK_ID)] = [
+            "roms/dreamcast",
+            "roms/ps2",
+            "roms/ps3",
+            "roms/psp",
+            "roms/saturn",
+            "roms/switch",
+        ]
+        self.assertEqual(self.app.trash.cleanup_pass(), ["deck"])
+        self.assertNotIn(EXAMPLE.primary, self.deck_lines().includes)
+
+    def test_items_still_needed_at_or_below_a_deleted_path_hold_the_lines(self) -> None:
+        self.fake.file_info[("wz-library", EXAMPLE.primary)] = DELETED
+        self.fake.completion[("wz-library", DECK_ID)] = {**DONE, "needItems": 2}
+        self.fake.remote_need[("wz-library", DECK_ID)] = ["roms/ps2", EXAMPLE.primary]
+        before = (self.library / "patterns-deck.stignore").read_bytes()
+        self.assertEqual(self.app.trash.cleanup_pass(), [])
+        self.assertEqual((self.library / "patterns-deck.stignore").read_bytes(), before)
+        self.assertEqual(self.waiting()["deck"], "syncing")
+
+    def test_items_needed_without_a_list_of_them_hold_the_lines(self) -> None:
+        # The hub could not say which items they are (no remoteneed answer): not ready.
+        self.fake.file_info[("wz-library", EXAMPLE.primary)] = DELETED
+        self.fake.completion[("wz-library", DECK_ID)] = {**DONE, "needItems": 6}
+        before = (self.library / "patterns-deck.stignore").read_bytes()
+        self.assertEqual(self.app.trash.cleanup_pass(), [])
+        self.assertEqual((self.library / "patterns-deck.stignore").read_bytes(), before)
+
     def test_the_hub_index_is_checked_again_on_every_pass(self) -> None:
         self.fake.file_info[("wz-library", EXAMPLE.primary)] = DELETED
         self.app.trash.cleanup_pass()
