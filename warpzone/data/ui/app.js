@@ -11,7 +11,7 @@
  *   store.js       the data, the progress poll and the writes
  *   components.js  art, tiles, slots, levers, system cards, console status
  *   queue.js       the play queue: the Up next section, the game's queue panel and their dialogs
- *   views.js       the pages (the Inbox view reads the unattended runs; the header dot is here)
+ *   views.js       the pages (the Inbox view reads the unattended runs, the Trash view the deleted games)
  *   app.js         this file: the frame (header, rail, bottom bar), router, dialogs, keyboard
  *                  and gamepad navigation, login, boot
  *
@@ -23,7 +23,7 @@
   'use strict';
 
   const W = window.WZ;
-  const { humanError, formatBytes, formatMoment, timeAgo, h, $, $$, plural, debounce, icon, tint, systemName, systemMaker, systemCode, systemColor,
+  const { humanError, formatBytes, formatMoment, formatDay, timeAgo, parseTitle, h, $, $$, plural, debounce, icon, tint, systemName, systemMaker, systemCode, systemColor,
     consoleCode, api, store, ui, views } = W;
   const { S, toast } = store;
 
@@ -126,6 +126,7 @@
     if (path === '/systems') return { name: 'systems' };
     if (path === '/consoles') return { name: 'consoles' };
     if (path === '/inbox') return { name: 'inbox' };
+    if (path === '/trash') return { name: 'trash' };
     return { name: 'home' };
   }
 
@@ -157,6 +158,7 @@
       case 'systems': V.view = views.viewSystems(); break;
       case 'consoles': V.view = views.viewConsoles(); break;
       case 'inbox': V.view = views.viewInbox(); break;
+      case 'trash': V.view = views.viewTrash(); break;
       case 'search':
         V.q = route.q.trim();
         S.searchResult = null;
@@ -293,6 +295,192 @@
       dlg.addEventListener('close', () => resolve(result), { once: true });
       dlg.showModal();
       (on ? confirmBtn : cancelBtn).focus();
+    });
+  }
+
+  // ===== deleting a game and the trash =====================================================
+
+  const LIST_ROWS = 60; // rows of a list in a dialog before "and N more"
+
+  // A list of paths with their sizes, in a box that scrolls.
+  function sizedList(title, rows, note) {
+    if (!rows.length) return null;
+    const more = rows.length - LIST_ROWS;
+    return h('div', { class: 'dsec' },
+      h('h3', null, title),
+      h('ul', { class: 'dlist' },
+        rows.slice(0, LIST_ROWS).map((r) => h('li', null,
+          h('span', { class: 'dl-path', title: r.path }, r.path),
+          h('span', { class: 'dl-size' }, r.note ? `${r.note}, ${formatBytes(r.size) || '0 B'}` : formatBytes(r.size) || '0 B'))),
+        more > 0 ? h('li', { class: 'mute' }, `and ${more.toLocaleString('en-US')} more`) : null),
+      note ? h('p', { class: 'mute small' }, note) : null);
+  }
+
+  // What the saves line says: the hub keeps them whatever happens here.
+  function savesLine(sv) {
+    const bits = [];
+    if (sv && sv.data) bits.push('a battery save');
+    if (sv && sv.states > 0) bits.push(plural(sv.states, 'save state'));
+    if (!bits.length) return 'Saves are never touched. The hub holds none for this game.';
+    return `Saves stay: the hub keeps ${bits.join(' and ')}${sv.newest ? ` (last written ${timeAgo(sv.newest)})` : ''}, and so does every console.`;
+  }
+
+  // Everything a deletion would move, from the dry run, and the "Move to trash" button. `send`
+  // posts the body to the delete endpoint. The dialog stays open while it moves, shows the new
+  // plan when the server answers `stale`, and resolves the apply's answer (null on cancel).
+  // A failure other than the ones it can show inside is rejected after the dialog closed.
+  function confirmDelete(first, send) {
+    const dlg = $('#confirm');
+    let plan = first;
+    let working = '';   // '' | 'move' | 'check'
+    let note = '';      // a refusal of the apply shown above the buttons
+    let changed = false; // the plan on screen replaced the one the user first saw
+    let result = null;
+    let failure = null;
+    return new Promise((resolve, reject) => {
+      const n = (x) => x.toLocaleString('en-US');
+      const lock = () => { dlg.dataset.working = working ? '1' : ''; };
+
+      async function move() {
+        working = 'move'; note = ''; paint();
+        try {
+          result = await send({ dry_run: false, expect: plan.expect });
+          working = ''; lock(); dlg.close();
+        } catch (err) {
+          if (err && err.code === 'stale' && err.info && err.info.plan) {
+            plan = err.info.plan; changed = true; working = ''; paint(); return;
+          }
+          if (err && err.code === 'hub-busy') { note = humanError(err); working = ''; paint(); return; }
+          failure = err; working = ''; lock(); dlg.close();
+        }
+      }
+
+      async function check() {
+        working = 'check'; note = ''; paint();
+        try {
+          plan = await send({ dry_run: true });
+          changed = false;
+        } catch (err) {
+          failure = err; working = ''; lock(); dlg.close(); return;
+        }
+        working = ''; paint();
+      }
+
+      function paint() {
+        lock();
+        const fk = document.activeElement && dlg.contains(document.activeElement) ? document.activeElement.dataset.fk : null;
+        const g = plan.game || {};
+        const t = parseTitle(g.name || g.title || '');
+        const files = plan.files || [];
+        const media = plan.media || [];
+        const lines = plan.whitelists || {};
+        const consoles = Object.keys(lines).sort();
+        const fileCount = files.reduce((sum, f) => sum + (f.type === 'dir' ? f.files || 0 : 1), 0);
+        const busy = plan.busy;
+        const stateBtn = (cls, label, fk2, fn, off) => h('button', { type: 'button', class: 'btn ' + cls, dataset: { fk: fk2 }, disabled: off || null, onclick: fn }, label);
+        dlg.className = 'modal eject del';
+        setTintOn(dlg, '#ff5470');
+        dlg.replaceChildren(h('div', { class: 'modal-inner' },
+          h('div', { class: 'mh' }, h('i'), 'Delete from the hub'),
+          h('div', { class: 'mb' },
+            h('h2', { id: 'confirm-title' }, `Move ${t.name} to the trash?`),
+            h('p', { class: 'mute small' }, `${systemName(g.system)}. The whole game goes, with every update, DLC and extra it owns.`),
+            changed ? h('p', { class: 'note warn', role: 'alert' }, 'The game changed since you first looked (a file, its art or a whitelist line). This is the plan now; read it again before you confirm.') : null,
+            h('dl', { class: 'mstat' },
+              h('div', null, h('dt', null, 'Leaves the library'), h('dd', null, formatBytes((plan.size || 0) + (plan.media_size || 0)) || '0 B')),
+              h('div', null, h('dt', null, 'Files'), h('dd', null, n(fileCount))),
+              h('div', null, h('dt', null, 'Media files'), h('dd', null, n(media.length)))),
+            sizedList(`Files and folders (${n(files.length)})`,
+              files.map((f) => ({ path: f.path, size: f.size, note: f.type === 'dir' ? plural(f.files || 0, 'file') : '' }))),
+            (plan.absent || []).length ? h('p', { class: 'mute small' }, 'Not on the hub, so skipped: ' + plan.absent.join(', ') + '.') : null,
+            media.length
+              ? sizedList(`Art and other media (${n(media.length)}, ${formatBytes(plan.media_size) || '0 B'})`, media.map((m) => ({ path: m.path, size: m.size })))
+              : h('p', { class: 'mute small' }, 'No art or other media was found for it.'),
+            h('p', { class: 'dline' }, plan.gamelist ? 'Its entry in the hub gamelist is removed too (a backup is kept).' : 'It has no entry in the hub gamelist.'),
+            consoles.length
+              ? h('div', { class: 'dsec' },
+                h('h3', null, 'Whitelist lines removed later'),
+                h('p', { class: 'mute small' }, 'Each console deletes the game by itself as part of the normal sync. The server removes these lines from its whitelist only after that console has received the deletion, so a console that is off keeps them until it is back.'),
+                consoles.map((c) => h('div', { class: 'dblock' },
+                  h('h3', null, c),
+                  h('pre', { class: 'diff', tabindex: '0', 'aria-label': `Whitelist lines of ${c} for this game` }, (lines[c] || []).join('\n')))))
+              : h('p', { class: 'dline' }, 'No console whitelist has a line for this game. A console that has the whole system deletes it as part of the normal sync.'),
+            h('p', { class: 'dline' }, savesLine(plan.saves)),
+            (plan.warnings || []).length ? h('div', { class: 'note warn' }, plan.warnings.map((w) => h('p', null, w))) : null,
+            h('p', { class: 'note' },
+              `The files wait in the trash until ${formatDay(plan.purge_after) || 'the purge date'}, and Restore in the Trash view brings them back. The hub's free space grows only when the entry is purged.`),
+            busy ? h('p', { class: 'note warn', role: 'alert' },
+              `An inbox or a scrape is running on the hub${busy.since ? ` (since ${timeAgo(busy.since)})` : ''}, so nothing can be deleted right now. Check again when it ends.`) : null,
+            note ? h('p', { class: 'error-text', role: 'alert' }, note) : null),
+          h('div', { class: 'macts' },
+            stateBtn('', 'Cancel', 'del-cancel', () => dlg.close(), working === 'move'),
+            busy || note ? stateBtn('', working === 'check' ? 'Checking...' : 'Check again', 'del-check', check, !!working) : null,
+            stateBtn('danger solid', working === 'move' ? 'Moving...' : 'Move to trash', 'del-go', move, !!(busy || working)))));
+        const again = fk && $(`[data-fk="${CSS.escape(fk)}"]`, dlg);
+        if (again && !again.disabled) again.focus({ preventScroll: true });
+      }
+
+      const onCancel = (e) => { if (working) e.preventDefault(); };
+      dlg.addEventListener('cancel', onCancel);
+      dlg.addEventListener('close', () => {
+        dlg.removeEventListener('cancel', onCancel);
+        dlg.dataset.working = '';
+        if (failure) reject(failure); else resolve(result);
+      }, { once: true });
+      paint();
+      dlg.showModal();
+      $('[data-fk="del-cancel"]', dlg).focus();
+    });
+  }
+
+  // A deletion the server refuses on the dry run: why, and what to do, with no confirm button.
+  function refuseDelete(err) {
+    const dlg = $('#confirm');
+    const info = err.info || {};
+    const dependants = info.dependants || [];
+    const paths = info.paths || [];
+    return new Promise((resolve) => {
+      dlg.className = 'modal eject del';
+      setTintOn(dlg, '#ff5470');
+      dlg.replaceChildren(h('div', { class: 'modal-inner' },
+        h('div', { class: 'mh' }, h('i'), 'Delete from the hub'),
+        h('div', { class: 'mb' },
+          h('h2', { id: 'confirm-title' }, 'This game cannot be deleted'),
+          h('p', { class: 'note warn', role: 'alert' }, humanError(err)),
+          dependants.length ? h('div', { class: 'dsec' },
+            h('h3', null, `Sets that need it (${dependants.length})`),
+            h('ul', { class: 'dlist' }, dependants.map((d) => h('li', null,
+              h('a', { class: 'dl-path', href: ui.gameHref(V.route && V.route.system, d.id), onclick: () => dlg.close(), dataset: { fk: 'dep:' + d.id } }, d.title),
+              h('span', { class: 'dl-size' }, d.file))))) : null,
+          paths.length ? sizedList('Paths', paths.map((p) => ({ path: p, size: null }))) : null),
+        h('div', { class: 'macts' }, h('button', { type: 'button', class: 'btn', dataset: { fk: 'del-close' }, onclick: () => dlg.close() }, 'Close'))));
+      dlg.addEventListener('close', () => resolve(), { once: true });
+      dlg.showModal();
+      $('[data-fk="del-close"]', dlg).focus();
+    });
+  }
+
+  // "Delete now" on a trash entry: irreversible, so it names the game and what it frees.
+  function confirmPurge(row) {
+    const dlg = $('#confirm');
+    const t = parseTitle(row.name || row.title || row.entry);
+    return new Promise((resolve) => {
+      let result = false;
+      dlg.className = 'modal eject del';
+      setTintOn(dlg, '#ff5470');
+      dlg.replaceChildren(h('div', { class: 'modal-inner' },
+        h('div', { class: 'mh' }, h('i'), 'Delete now'),
+        h('div', { class: 'mb' },
+          h('h2', { id: 'confirm-title' }, `Delete ${t.name} for good?`),
+          h('p', { class: 'note warn' },
+            `This removes ${row.size ? formatBytes(row.size) : 'the entry'} from the hub's disk and cannot be undone. The game cannot be restored afterwards, and its saves are not touched.`),
+          row.state === 'damaged' ? h('p', { class: 'mute small' }, 'The entry is damaged, so it was never going to be restored by itself.') : null),
+        h('div', { class: 'macts' },
+          h('button', { type: 'button', class: 'btn', dataset: { fk: 'purge-cancel' }, onclick: () => dlg.close() }, 'Cancel'),
+          h('button', { type: 'button', class: 'btn danger solid', dataset: { fk: 'purge-go' }, onclick: () => { result = true; dlg.close(); } }, 'Delete now'))));
+      dlg.addEventListener('close', () => resolve(result), { once: true });
+      dlg.showModal();
+      $('[data-fk="purge-cancel"]', dlg).focus();
     });
   }
 
@@ -605,6 +793,9 @@
       },
       detailChanged(id) { if (V.view && V.view.kind === 'game' && V.view.id === id && V.view.reload) V.view.reload(); },
       confirmSystem,
+      confirmDelete,
+      refuseDelete,
+      confirmPurge,
       openHistory,
       reset() { views.resetFeatured(); },
       queueChanged() {
@@ -635,7 +826,7 @@
     search.addEventListener('focus', () => { if (V.route && V.route.name !== 'search' && getComputedStyle(search.closest('form')).display !== 'none') search.select(); });
 
     const confirmDlg = $('#confirm');
-    confirmDlg.addEventListener('click', (e) => { if (e.target === confirmDlg) confirmDlg.close(); });
+    confirmDlg.addEventListener('click', (e) => { if (e.target === confirmDlg && !confirmDlg.dataset.working) confirmDlg.close(); });
     const historyDlg = $('#history');
     historyDlg.addEventListener('click', (e) => { if (e.target === historyDlg) historyDlg.close(); });
     document.addEventListener('click', (e) => {

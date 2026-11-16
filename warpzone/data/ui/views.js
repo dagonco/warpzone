@@ -818,6 +818,156 @@
     });
   }
 
+  // ===== trash =============================================================================
+
+  const WAITING = {
+    hub: 'the hub has not recorded the deletion yet',
+    offline: 'the console is offline; it keeps its lines until it is back and has synced',
+    paused: 'Syncthing is paused for this console',
+    'not-shared': 'the library is not shared with this console',
+    syncing: 'the console is still syncing',
+    'not-managed': 'its whitelist needs "warpzone whitelist migrate"',
+    unknown: 'the hub\'s Syncthing did not answer',
+  };
+
+  const STATE_TEXT = {
+    incomplete: 'Part of the files could not be moved back after a failure, or the move was interrupted. Restore puts back whatever is in the trash; it is never purged by itself.',
+    damaged: 'Its manifest cannot be read, so it cannot be restored. Delete now removes it.',
+  };
+
+  // The days left of an entry the purge will remove, as one phrase.
+  function daysLeft(row) {
+    if (row.days_left == null) return row.state === 'complete' ? '' : 'kept until you delete it';
+    if (row.days_left <= 0) return 'purged soon';
+    return row.days_left === 1 ? '1 day left' : `${row.days_left} days left`;
+  }
+
+  function viewTrash() {
+    const view = { kind: 'trash', dead: false };
+    const host = h('div', { class: 'ix tr' });
+    const root = h('div', { class: 'page' },
+      h('div', { class: 'pagehead' }, h('h1', null, 'Trash'), h('span', { class: 'sub' }, 'Deleted games wait here before they are purged')), host);
+    let restored = null; // what the last restore did, with a link to the game
+    let timer = null;
+
+    function row(r) {
+      const damaged = r.state === 'damaged';
+      const t = parseTitle(r.name || r.title || r.entry);
+      const note = S.trashNotes.get(r.entry);
+      const left = daysLeft(r);
+      return h('li', { class: 'tr-row st-' + r.state, vars: r.system ? ui.systemTint(r.system) : null },
+        h('div', { class: 'tr-main' },
+          h('div', { class: 'tr-title' },
+            r.system ? h('span', { class: 'sysb', title: systemName(r.system) }, systemCode(r.system)) : null,
+            h('b', { class: 'ix-name' }, t.name),
+            r.state !== 'complete' ? h('span', { class: 'ix-tag ' + (damaged ? 'bad' : 'held') }, r.state) : null),
+          h('p', { class: 'mute small' },
+            [r.system ? systemName(r.system) : null,
+              r.deleted ? h('span', { title: formatMoment(r.deleted) }, 'deleted ' + timeAgo(r.deleted)) : null,
+              r.size != null ? formatBytes(r.size) : null,
+              left ? h('span', { title: r.purge_after ? 'Purged on ' + formatMoment(r.purge_after) : null }, left) : null]
+              .filter(Boolean).flatMap((x, i) => (i ? [' / ', x] : [x]))),
+          STATE_TEXT[r.state] ? h('p', { class: 'mute small' }, STATE_TEXT[r.state]) : null,
+          note ? h('div', { class: 'note warn', role: 'alert' },
+            h('p', null, note.message),
+            note.paths.length ? h('ul', { class: 'tr-paths' }, note.paths.map((p) => h('li', null, h('code', null, p)))) : null) : null),
+        h('div', { class: 'tr-acts' },
+          h('button', {
+            type: 'button', class: 'btn sm primary', disabled: damaged || null, dataset: { fk: 'tr-restore:' + r.entry, write: '1' },
+            'aria-label': `Restore ${t.name}`, onclick: () => restore(r),
+          }, 'Restore'),
+          h('button', {
+            type: 'button', class: 'btn sm danger', dataset: { fk: 'tr-purge:' + r.entry, write: '1' },
+            'aria-label': `Delete ${t.name} now`, onclick: () => purge(r),
+          }, 'Delete now')));
+    }
+
+    function entriesPanel(d) {
+      const entries = d.entries || [];
+      if (!entries.length) {
+        return emptyPanel('The trash is empty', 'A game deleted from its page waits here for 7 days, and can be restored until then.');
+      }
+      return h('section', { class: 'panel', 'aria-label': 'Deleted games' },
+        h('h2', null, h('i'), 'Deleted games', h('span', null, `${plural(entries.length, 'entry', 'entries')} / ${formatBytes(d.size) || '0 B'}`)),
+        h('ul', { class: 'tr-list ix-body' }, entries.map(row)));
+    }
+
+    function pendingPanel(d) {
+      const pending = d.pending || [];
+      if (!pending.length) return null;
+      const devices = [...new Set(pending.map((p) => p.device))].sort();
+      return h('section', { class: 'panel', 'aria-label': 'Whitelist lines still to remove' },
+        h('h2', null, h('i'), 'Waiting for consoles', h('span', null, plural(pending.length, 'deletion'))),
+        h('p', { class: 'mute small ix-body' }, 'A console deletes a deleted game by itself. The server removes that game\'s lines from the console\'s whitelist only after the console has received the deletion, so the lines below stay until then.'),
+        h('div', { class: 'ix-body tr-wait' }, devices.map((dev) => h('div', { class: 'tr-dev' },
+          h('h3', null, dev),
+          h('ul', { class: 'ix-list' }, pending.filter((p) => p.device === dev).map((p) => h('li', { class: 'ix-item' },
+            h('b', { class: 'ix-name' }, parseTitle(p.title || p.entry).name),
+            h('p', { class: 'mute small' },
+              `${plural(p.lines, 'line')} since `, h('span', { title: formatMoment(p.since) }, timeAgo(p.since)),
+              `. Waiting: ${WAITING[p.waiting] || p.waiting || 'unknown'}.`))))))));
+    }
+
+    function restoredNote() {
+      if (!restored) return null;
+      const g = restored.game || {};
+      const kept = restored.kept || [];
+      const removed = restored.removed || [];
+      return h('div', { class: 'note', role: 'status' },
+        h('b', null, 'Restored: '),
+        g.id && g.system ? h('a', { href: ui.gameHref(g.system, g.id), dataset: { fk: 'tr-open' } }, parseTitle(g.title || '').name) : parseTitle(g.title || '').name,
+        '. ',
+        kept.length ? `${kept.join(', ')} still had its lines and will receive it again. ` : '',
+        removed.length ? `On ${removed.join(', ')} it is off, like a new game: turn it on from its page.` : '');
+    }
+
+    function paint() {
+      const fk = captureFocus();
+      const d = S.trash;
+      if (!d) {
+        host.replaceChildren(S.trashError
+          ? emptyPanel('The trash is not available', 'The server could not read it.',
+            h('button', { class: 'btn', type: 'button', onclick: load }, 'Try again'))
+          : h('p', { class: 'loading-note' }, 'Loading...'));
+        return;
+      }
+      host.replaceChildren(...[restoredNote(), entriesPanel(d), pendingPanel(d)].filter(Boolean));
+      restoreFocus(fk);
+    }
+
+    async function load() {
+      await store.loadTrash();
+      if (!view.dead) paint();
+    }
+
+    async function restore(r) {
+      const res = await store.restoreEntry(r.entry);
+      if (res) restored = res;
+      if (!view.dead) paint();
+    }
+
+    async function purge(r) {
+      await store.purgeEntry(r);
+      if (!view.dead) paint();
+    }
+
+    // The cleanups move on their own every minute: look again while the page is open.
+    function schedule() {
+      clearTimeout(timer);
+      timer = setTimeout(async () => { if (!document.hidden) await load(); if (!view.dead) schedule(); }, 20000);
+    }
+
+    setMain(root, 'Trash');
+    paint();
+    settled();
+    load();
+    schedule();
+    return Object.assign(view, {
+      refresh() {},
+      dispose() { clearTimeout(timer); },
+    });
+  }
+
   // ===== search ============================================================================
 
   function localSearch(q) {
@@ -1175,6 +1325,23 @@
       locked ? h('span', { class: 'badge warn' }, 'Cannot be changed from the UI') : null);
   }
 
+  // The one destructive action of a game page, set apart at its very end: it takes the whole game
+  // out of the hub. The dry run and the confirmation are in store.deleteGame.
+  function deletePanel(view, d, ref, system) {
+    return h('section', { class: 'panel danger-zone', 'aria-label': 'Delete from the hub' },
+      h('h2', null, h('i'), 'Delete from the hub'),
+      h('div', { class: 'pbody dz-body' },
+        h('p', { class: 'mute' },
+          'Takes the whole game out of the library: its files with their updates and DLC, its art and its gamelist entry. It waits in the trash for 7 days, and every console that has it deletes it. Saves stay.'),
+        h('button', {
+          type: 'button', class: 'btn danger', dataset: { fk: 'delete-game', write: '1' }, 'aria-label': `Delete ${ref.title} from the hub`,
+          onclick: async () => {
+            const res = await store.deleteGame({ id: d.id, title: ref.title, system });
+            if (res && !view.dead) location.hash = ui.systemHref(system);
+          },
+        }, icon('trash'), 'Delete from the hub')));
+  }
+
   function viewGame(system, id) {
     const view = { kind: 'game', dead: false, system, id };
     const root = h('div', { class: 'page detail', vars: ui.systemTint(system) });
@@ -1287,7 +1454,8 @@
             return h('a', { class: 'vitem', href: ui.gameHref(v.system, v.id), vars: ui.systemTint(v.system), dataset: { fk: 'v:' + v.id }, title: vt.full },
               h('span', { class: 'vart' }, ui.artBox({ id: v.id, system: v.system, has: known ? !!known.game.cover : undefined })),
               h('span', { class: 'vi' }, h('b', null, vt.name), h('span', null, [systemName(v.system), vt.region].filter(Boolean).join(' · '))));
-          })))] : []));
+          })))] : []),
+        deletePanel(view, d, ref, sys));
       paintConsoleBar(d, ref);
       ui.paintProgress();
       document.title = `${t.name} - warpzone library`;
@@ -1397,5 +1565,5 @@
 
   const resetFeatured = () => { featured = null; featuredData.clear(); featuredToken++; };
 
-  W.views = { resetFeatured, viewHome, viewSystems, viewSystem, viewConsoles, viewInbox, viewSearch, viewGame, setPendingScroll, scrollMemory, setMain, localSearch, filterMemory };
+  W.views = { resetFeatured, viewHome, viewSystems, viewSystem, viewConsoles, viewInbox, viewTrash, viewSearch, viewGame, setPendingScroll, scrollMemory, setMain, localSearch, filterMemory };
 })();
