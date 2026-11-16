@@ -10,6 +10,10 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 - `[inbox] scrape_region` and `scrape_language` (optional; one code each) choose the region and the language Skyscraper tries first when `warpzone scrape` and the scrape of `warpzone inbox --apply` gather from ScreenScraper. They are passed as `--region` and `--lang` on the gather only, so Skyscraper's own order follows (`scrape_region = "sp"` and `scrape_language = "es"` give Spanish first, then Europe and English) and `config.ini` is never touched. Skyscraper has no command-line option for a priority list, so a longer order still goes in its `config.ini` (`regionPrios`, `langPrios`), which the two keys combine with. A code that Skyscraper's REGIONS.md or LANGUAGES.md does not list is a configuration error; unset passes nothing, so nothing changes by default. Games already scraped keep their media: see [Region and language](https://dagonco.github.io/warpzone/setup/scrape/#region-and-language).
 
+### Changed
+
+- The library UI lists the systems grouped by maker (Nintendo, Sony, Sega, Microsoft, Atari, NEC, SNK, Bandai, Commodore, then Other, and Arcade last) and by release year within a maker, in the side rail, which heads each group with the maker's name, and on the Systems page. Before, they were in name order. Atari Jaguar and WonderSwan get their proper names.
+
 ### Fixed
 
 - `warpzone scrape` (and the scrape the inbox runs) no longer fails every 3DS batch that holds a `.zcci` (a bug of 0.4.0rc4). It staged the image as a `.cci` link, which Skyscraper resolves to the real file and then aborts the whole batch because the `.cci` name is not in its input folder. The `.zcci` is now staged under its own name and Skyscraper's `3ds` platform gets `--addext '*.zcci'` in the gather and both generate passes. Other systems are unchanged.

@@ -523,7 +523,11 @@ with the genres, developer and year it shares with X; each is hidden when empty)
   reads; see [the unattended inbox](/warpzone/development/design/inbox-unattended/#page).
 
 What the API does not provide is not drawn, not even as a placeholder (no high-score table, no
-attract mode), and a piece whose data is missing is left out rather than shown empty. Long system names are shortened to a code
+attract mode), and a piece whose data is missing is left out rather than shown empty. The side
+rail and the Systems page list the systems grouped by maker (Nintendo, Sony, Sega, Microsoft,
+Atari, NEC, SNK, Bandai, Commodore, then Other for a system the page does not know, by name,
+and Arcade last), by first release year within a maker; the rail heads each group with the
+maker's name. Long system names are shortened to a code
 (for example GBA) with the full name in a `title` attribute. On a phone (390 px and up) the
 navigation is a bar at the bottom and the console switches sit within thumb reach. The page keeps
 keyboard and gamepad navigation, visible focus and `prefers-reduced-motion`, and a toggle turns

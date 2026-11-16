@@ -23,7 +23,7 @@
   'use strict';
 
   const W = window.WZ;
-  const { humanError, formatBytes, formatMoment, timeAgo, h, $, $$, plural, debounce, icon, tint, systemName, systemCode, systemColor,
+  const { humanError, formatBytes, formatMoment, timeAgo, h, $, $$, plural, debounce, icon, tint, systemName, systemMaker, systemCode, systemColor,
     consoleCode, api, store, ui, views } = W;
   const { S, toast } = store;
 
@@ -67,17 +67,20 @@
       railItem('#/consoles', 'consoles', 'pad', 'Consoles'),
       h('p', { class: 'r-h' }, h('span', null, 'Systems'),
         h('span', { class: 'r-cons', 'aria-hidden': 'true' }, S.devices.map((d) => h('i', { title: d.name }, consoleCode(d.name)[0])))),
-      S.systems.map((s) => h('a', {
-        class: 'r-sys', href: ui.systemHref(s.system), vars: ui.systemTint(s.system), title: systemName(s.system),
-        dataset: { nav: 'system/' + s.system, fk: 'r-' + s.system },
-      },
-      h('span', { class: 'pip' }),
-      h('span', { class: 'nm' }, systemName(s.system)),
-      h('span', { class: 'ct' }, s.games.toLocaleString('en-US')),
-      h('span', { class: 'pips' }, S.devices.map((d) => {
-        const st = store.excludes(d.name, s.system) ? 'unsupported' : ((s.devices || {})[d.name] || {}).state || 'none';
-        return h('i', { class: 'p ' + st, title: `${d.name}: ${st === 'unsupported' ? 'not offered' : st}` });
-      })))),
+      S.systems.flatMap((s, i) => [
+        i === 0 || systemMaker(s.system) !== systemMaker(S.systems[i - 1].system)
+          ? h('p', { class: 'r-mk' }, systemMaker(s.system)) : null,
+        h('a', {
+          class: 'r-sys', href: ui.systemHref(s.system), vars: ui.systemTint(s.system), title: systemName(s.system),
+          dataset: { nav: 'system/' + s.system, fk: 'r-' + s.system },
+        },
+        h('span', { class: 'pip' }),
+        h('span', { class: 'nm' }, systemName(s.system)),
+        h('span', { class: 'ct' }, s.games.toLocaleString('en-US')),
+        h('span', { class: 'pips' }, S.devices.map((d) => {
+          const st = store.excludes(d.name, s.system) ? 'unsupported' : ((s.devices || {})[d.name] || {}).state || 'none';
+          return h('i', { class: 'p ' + st, title: `${d.name}: ${st === 'unsupported' ? 'not offered' : st}` });
+        })))]),
       S.systems.length ? h('div', { class: 'r-foot' }, h('p', null, plural(total, 'game')), h('p', null, formatBytes(size))) : null));
     markNav();
     if (fk) { const el = $(`[data-fk="${CSS.escape(fk)}"]`); if (el) el.focus({ preventScroll: true }); }
