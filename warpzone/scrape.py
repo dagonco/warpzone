@@ -311,6 +311,8 @@ def skyscraper_args(
     gamelist_dir: str | PurePath | None = None,
     media_dir: str | PurePath | None = None,
     artwork_file: str | PurePath | None = None,
+    region: str | None = None,
+    language: str | None = None,
 ) -> list[str]:
     """The arguments of one Skyscraper call (without the program), for `step`:
 
@@ -320,7 +322,10 @@ def skyscraper_args(
       (`gamelist_dir`) and media (`media_dir`) of the batch with the artwork file
       `artwork_file` (`ARTWORK_ESDE` for `main`, `ARTWORK_3DBOX` for `box`).
 
-    A platform in `EXTRA_EXTENSIONS` also gets `--addext` with its extra extensions.
+    A platform in `EXTRA_EXTENSIONS` also gets `--addext` with its extra extensions. `region` and
+    `language`, when set, go on the `gather` only as `--region` and `--lang`: Skyscraper picks the
+    media and the text out of ScreenScraper's answer when it gathers, and keeps one value in its
+    cache, so a generate pass has nothing left to choose (see "Language and region" in the design).
 
     No credential option can be built here: warpzone never passes `-u`, `-c` or `-t`, so the
     account stays in Skyscraper's own `config.ini` (see "Credentials" in the design).
@@ -333,7 +338,11 @@ def skyscraper_args(
         # one value, extensions separated by a space (Skyscraper's own syntax)
         tail = ["--addext", " ".join(EXTRA_EXTENSIONS[platform]), *tail]
     if step == GATHER:
-        return [*head, "-s", "screenscraper", "-i", str(input_dir), *tail]
+        choice = [
+            *(["--region", region] if region else []),
+            *(["--lang", language] if language else []),
+        ]
+        return [*head, "-s", "screenscraper", *choice, "-i", str(input_dir), *tail]
     if gamelist_dir is None or media_dir is None or artwork_file is None:
         raise ValueError(f"step {step!r} needs gamelist_dir, media_dir and artwork_file")
     return [

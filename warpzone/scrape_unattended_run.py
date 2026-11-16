@@ -105,6 +105,8 @@ class Setup:
     notify_url: str | None = field(default=None, repr=False)
     max_games: int = DEFAULT_MAX_GAMES
     max_minutes: int = DEFAULT_MAX_MINUTES
+    region: str | None = None  # [inbox] scrape_region
+    language: str | None = None  # [inbox] scrape_language
     now: Callable[[], float] = time.time
     today: Callable[[], date] = date.today
     sleep: Callable[[float], None] = time.sleep
@@ -297,6 +299,8 @@ class _Night:
             work_dir=setup.work_dir,
             cache_dir=setup.cache_dir,
             config_ini=setup.config_ini,
+            region=setup.region,
+            language=setup.language,
             as_warning=True,
             now=setup.now,
             today=setup.today,

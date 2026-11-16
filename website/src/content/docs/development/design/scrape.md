@@ -40,8 +40,9 @@ closes that gap on the machine that files the game, in the layout ES-DE and the 
 - **Correctness on the command line, taste in the config.** warpzone passes every option that the
   hub layout depends on (frontend, folders, artwork file, the shape of the title, which media are
   fetched), so a user's `config.ini` cannot break it: Skyscraper gives the command line precedence
-  over every section of the config. Language and region, which are a matter of taste, stay in the
-  user's config and warpzone never sets them (see [Language and region](#language-and-region)).
+  over every section of the config. Language and region, which are a matter of taste, are the
+  user's: they stay in the user's config, and warpzone passes one region and one language only when
+  `[inbox]` names them (see [Language and region](#language-and-region)).
 - **When it runs.** Automatically in `inbox --apply` when Skyscraper is configured or found,
   only for what that run placed; a scrape failure is a warning and never blocks or undoes a
   placement. And on demand with `warpzone scrape` for games already in the library. A "Scrape"
@@ -121,21 +122,43 @@ Threads are left to Skyscraper, which takes the number the account allows; warpz
 
 ### Language and region
 
-`langPrios`, `regionPrios` and `regionFromFilename` live in `config.ini` and warpzone does not
-set them. The setup guide (written with the implementation) says how to change them and gives
-these values:
+Skyscraper 3.21.1 (`docs/CLIHELP.md`, `docs/CONFIGINI.md`, `docs/REGIONS.md`,
+`docs/LANGUAGES.md`, `src/screenscraper.cpp`) works like this:
 
-```ini
-[main]
-langPrios="es,en"            ; any order of the languages the user reads; this is an example
-regionPrios="eu,us,jp,wor"
-regionFromFilename="first"
-```
+- ScreenScraper answers with every region's media, title and date and every language's
+  description, and Skyscraper picks one of each **while it gathers**: `regionPrios` chooses the
+  title, the date and each medium, `langPrios` the description and the genre. The cache keeps the
+  one value picked, so the generate passes have nothing to choose. A game already in the cache
+  keeps what it has until it is purged from it (`onlymissing` skips it), and warpzone itself never
+  overwrites a medium or an entry's text on the hub, so a change of region or language reaches the
+  games scraped from then on (see "Only adds" above and the setup guide).
+- The defaults are `eu us ss uk wor jp au ame de cus cn kr asi br sp fr gr it no dk nz nl pl ru se
+  tw ca` and `en de fr es`. `regionFromFilename` (default `inline`) adds the region named in the
+  file name, such as `(Europe)`, at its place in that list.
+- `config.ini` has `region`, `regionPrios`, `lang` and `langPrios`. `regionPrios` and `langPrios`
+  replace the defaults and have **no command-line option**. `--region CODE` and `--lang CODE` take
+  one code each, put it first in the list (the defaults or the `config.ini` list) and, for the
+  region, replace any region read from the file name. Skyscraper checks no code.
 
-`regionFromFilename="first"` puts the regions of the file name first. Without it (the default is
-`inline`) the European release wins over the one named in the file: "Kirby Super Star (USA)" got
-the European title "Kirby's Fun Pak" in a test. The guide also says not to set `nameTemplate`,
-which makes Skyscraper ignore the title options warpzone passes.
+So warpzone cannot pass a priority list without writing `config.ini`, which it never does (it
+would also have to merge with the `userCreds` the user keeps there). It passes the two single
+options instead, on the **gather only**, and only when `[inbox]` sets them:
+
+| `[inbox]` key | Skyscraper | Example | With the defaults after it |
+|---|---|---|---|
+| `scrape_region` | `--region` | `"sp"` | `sp eu us ss uk wor jp ...` |
+| `scrape_language` | `--lang` | `"es"` | `es en de fr` |
+
+The pair `scrape_region = "sp"` and `scrape_language = "es"` is the example of the docs: Spanish
+first, then Europe and English, with the default order after that. A user who wants another
+order (a different list, or `regionFromFilename`) sets it in `config.ini` as before, and the two
+compose: the command line puts its one code first in whatever list `config.ini` holds. Each key
+takes one code of the tables Skyscraper documents and anything else is a configuration error
+(`config.SCRAPE_REGIONS`, `config.SCRAPE_LANGUAGES`); unset passes nothing and Skyscraper decides
+as before. A language code is not a region code (`es` is Spanish, `sp` is Spain). `--region` also turns off the
+region read from the file name, which `regionFromFilename` would otherwise place; a user who needs a game's own
+region to win leaves `scrape_region` unset and uses `config.ini`. The guide also says not to set
+`nameTemplate`, which makes Skyscraper ignore the title options warpzone passes.
 
 ### What warpzone passes
 
@@ -143,6 +166,7 @@ which makes Skyscraper ignore the title options warpzone passes.
 |---|---|---|
 | `-p <platform>` | | from the [platform table](#systems-and-platforms) |
 | `-s screenscraper` (gather only) | | the one source |
+| `--region <code>`, `--lang <code>` (gather only, when `[inbox]` sets them) | `region`, `lang` | the user's first choice of region and language (see [Language and region](#language-and-region)) |
 | `-f esde` | `frontend="esde"` | ES-DE's media folder names and gamelist shape |
 | `-i`, `-g`, `-o` | `inputFolder`, `gameListFolder`, `mediaFolder` | the staged and temporary folders, never the hub |
 | `-a <file>` | `artworkXml` | warpzone's artwork files (see [Artwork files](#artwork-files)) |

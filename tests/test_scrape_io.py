@@ -108,6 +108,19 @@ class FlowTest(HubCase):
         self.assertEqual(seen["targets"][KIRBY], os.path.realpath(library / KIRBY))
         self.assertEqual(len(seen["targets"]), 3)
 
+    def test_region_and_language_reach_the_gather_and_nothing_else(self):
+        self.hub.run(region="sp", language="es")
+        gather, main, box = self.hub.calls()[1:]
+        self.assertEqual(gather[gather.index("--region") + 1], "sp")
+        self.assertEqual(gather[gather.index("--lang") + 1], "es")
+        for call in (main, box):
+            self.assertFalse({"--region", "--lang"} & set(call), call)
+
+    def test_without_them_skyscraper_is_given_neither(self):
+        self.hub.run()
+        for call in self.hub.calls()[1:]:
+            self.assertFalse({"--region", "--lang"} & set(call), call)
+
     def test_nothing_staged_or_temporary_stays_and_the_log_is_private(self):
         self.hub.run()
         scratch = self.hub.work / "scrape"
