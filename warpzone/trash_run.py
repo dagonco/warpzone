@@ -222,11 +222,20 @@ class Trasher:
         if cleanup is not None:
             self._write_cleanups([*cleanups, cleanup], stamp)
         # 3. the entry and its manifest, with every path to move
+        ours = False  # whether the entry folder was made by this deletion
         try:
-            trash_store.create_entry(self.root, entry)
+            try:
+                trash_store.create_entry(self.root, entry)
+            except FileExistsError:
+                # the name is taken by something that is not ours (a link, a folder made since
+                # the name was chosen): it is never touched, only our own recorded lines go
+                self._forget(entry)
+                raise
+            ours = True
             trash_store.write_manifest(self.root, trash.new_manifest(plan, entry, now))
         except OSError as exc:
-            self._abandon(entry)
+            if ours:
+                self._abandon(entry)
             reason = getattr(exc, "strerror", None) or str(exc)
             raise ApiError(
                 "write-failed", f"the trash entry could not be written ({reason})", game=game_id

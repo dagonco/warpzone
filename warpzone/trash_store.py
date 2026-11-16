@@ -516,7 +516,11 @@ def undo(src: Path, dst: Path, done: Sequence[str], *, rename: Rename | None = N
 
 def discard_entry(root: Path, entry: str) -> bool:
     """Remove an entry folder that holds only its manifest and empty folders. False (and
-    nothing removed but the empty folders) when something else is in it."""
+    nothing removed but the empty folders) when something else is in it, or when the name is not
+    a real folder (a link, a file: `os.walk` would follow a link given as its top, so nothing
+    is touched)."""
+    if entry_kind(root, entry) != F_DIR:
+        return False
     top = entry_path(root, entry)
     try:
         for here, dirs, files in os.walk(top, topdown=False, followlinks=False):

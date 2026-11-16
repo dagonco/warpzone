@@ -983,7 +983,10 @@ change up anyway, and the cleanup waits for the hub's index in any case.
 **A move that fails halfway** is rolled back, the safer of the two choices: the server moves the
 paths already moved back to their places in reverse order, removes the lines it recorded in step
 2 and the entry folder, and answers `500 move-failed` with `"incomplete": false`. The library is
-as it was. A move back that fails too leaves the entry and its manifest as they are, and the
+as it was. The entry folder is removed only when this deletion made it and it is a real folder
+(`lstat`, never a link): if its name turns out to be taken (a link, or a folder made in the
+meantime), nothing at that name is touched, the recorded lines go, and the answer is
+`500 write-failed`. A move back that fails too leaves the entry and its manifest as they are, and the
 error carries `"incomplete": true` and the paths still in the trash. The Trash view shows the
 entry as incomplete, and Restore puts back whatever is there. Its recorded lines stay pending,
 but the cleanup removes a line only for a path that is gone from the hub (below), so a part that

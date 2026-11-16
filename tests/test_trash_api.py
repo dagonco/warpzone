@@ -613,6 +613,32 @@ class RollbackTests(TrashCase):
 
         return mock.patch.object(trash_store, "_rename", rename)
 
+    def test_a_taken_entry_name_is_left_alone_even_as_a_link(self) -> None:
+        fixed = datetime(2026, 11, 16, 10, 0, tzinfo=UTC)
+        self.start(now=lambda: fixed, progress_seconds=0)
+        name = trash.entry_name(fixed, OTHER.id)
+        (self.root / "trash").mkdir()
+        outside = self.tmp / "outside"
+        (outside / "sub").mkdir(parents=True)
+        (outside / trash.MANIFEST).write_text("not yours")
+        taken = self.root / "trash" / name
+        for make in (
+            lambda: taken.symlink_to(outside),
+            lambda: shutil.copytree(outside, taken),
+        ):
+            make()
+            with mock.patch.object(trash, "entry_name", lambda *a, **k: name):
+                reply = self.apply(OTHER)
+            self.assertEqual((reply.status, self.error(reply)["code"]), (500, "write-failed"))
+            self.assertEqual((outside / trash.MANIFEST).read_text(), "not yours")
+            self.assertTrue((outside / "sub").is_dir())
+            self.assertTrue((self.library / OTHER.primary).exists())
+            self.assertEqual(self.cleanups(), [])
+            if taken.is_symlink():
+                taken.unlink()
+            else:
+                shutil.rmtree(taken)
+
     def test_a_move_that_fails_halfway_puts_everything_back(self) -> None:
         self.write_whitelist("deck", managed(["gba"], includes=[PS4.primary]))
         before = self.snapshot()
