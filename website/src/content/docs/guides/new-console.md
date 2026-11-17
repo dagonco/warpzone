@@ -9,7 +9,7 @@ Adding a device takes up to four pieces: a table in the config, a profile if it 
 
 ## Is it a new kind of device?
 
-A profile describes one kind of device, not one device. A second Steam Deck, or a Steam Machine, uses the existing `steamos-emudeck` profile ([Steam Deck and EmuDeck](/warpzone/guides/emudeck/), [Steam Machine](/warpzone/guides/steam-machine/)), and a second Anbernic RG351MP uses `anbernic-rg351mp` ([Anbernic](/warpzone/guides/anbernic/)). In that case skip step 3.
+A profile describes one kind of device, not one device. A second Steam Deck, or a Steam Machine, uses the existing `steamos-emudeck` profile ([Steam Deck and EmuDeck](/warpzone/guides/emudeck/), [Steam Machine](/warpzone/guides/steam-machine/)), a second Anbernic RG351MP uses `anbernic-rg351mp` ([Anbernic RG351MP](/warpzone/guides/anbernic/)), and a handheld running Knulli uses `anbernic-rg40xxv` ([Anbernic RG40XX V](/warpzone/guides/anbernic-rg40xxv/)). In that case skip step 3.
 
 A different system (another handheld OS, a PC with its own emulators) needs a profile of its own.
 

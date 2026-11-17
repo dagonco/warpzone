@@ -19,7 +19,7 @@ profile = "anbernic-rg351mp"
 folders = ["library", "saves", "frontend"]
 ```
 
-`library`, `saves` and `frontend` are the folders that make sense here. `bios` is accepted but empty (the profile has no BIOS placements; BIOS files arrive through the library, from `bios/` in your whitelist). Whitelist systems by the folder names dArkOS uses; a name on the hub that dArkOS spells differently (for example `megacd` and `segacd`) needs the hub folder renamed or a copy under the other name.
+`library`, `saves` and `frontend` are the folders that make sense here. `bios` is accepted but empty (the profile has no BIOS placements; BIOS files arrive through the library, from `bios/` in your whitelist). Whitelist systems by the hub's folder names: the profile maps the names dArkOS spells differently (`segacd` reads the hub's `megacd`, `pokemonmini` reads `pokemini`, and so on).
 
 Then, on the device (the user that runs Syncthing), with EmulationStation and RetroArch closed:
 

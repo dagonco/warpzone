@@ -21,8 +21,9 @@ Two profiles ship with warpzone, in `warpzone/data/profiles/`:
 |---|---|
 | `steamos-emudeck` | SteamOS with EmuDeck (Steam Deck, Steam Machine) |
 | `anbernic-rg351mp` | Anbernic RG351MP running dArkOS (EmulationStation and RetroArch, ROMs on an exFAT card) |
+| `anbernic-rg40xxv` | Anbernic RG40XX V running Knulli (EmulationStation and RetroArch, `/userdata` on exFAT) |
 
-Guides: [Steam Deck / EmuDeck](/warpzone/guides/emudeck/), [Anbernic](/warpzone/guides/anbernic/) and [Steam Machine](/warpzone/guides/steam-machine/). Another kind of device is described with a profile ([Adding a new console](/warpzone/guides/new-console/)).
+Guides: [Steam Deck / EmuDeck](/warpzone/guides/emudeck/), [Anbernic RG351MP](/warpzone/guides/anbernic/), [Anbernic RG40XX V](/warpzone/guides/anbernic-rg40xxv/) and [Steam Machine](/warpzone/guides/steam-machine/). Another kind of device is described with a profile ([Adding a new console](/warpzone/guides/new-console/)).
 
 ## Is it safe?
 

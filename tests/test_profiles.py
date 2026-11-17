@@ -150,7 +150,9 @@ class ProfileTests(unittest.TestCase):
     def test_unknown_and_unsafe_names(self) -> None:
         with self.assertRaises(ProfileError) as ctx:
             load_profile("nope")
-        self.assertIn("available: anbernic-rg351mp, steamos-emudeck", str(ctx.exception))
+        self.assertIn(
+            "available: anbernic-rg351mp, anbernic-rg40xxv, steamos-emudeck", str(ctx.exception)
+        )
         with self.assertRaises(ProfileError):
             load_profile("../config")
 
