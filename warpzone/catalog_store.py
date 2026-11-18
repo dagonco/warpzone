@@ -284,6 +284,83 @@ def update_system(
         return SystemResult(system, "error", message=exc.strerror or str(exc))
 
 
+def _rewrite(
+    root: Path,
+    system: str,
+    change: Callable[[dict[str, catalog.Game]], dict[str, catalog.Game] | None],
+    now: datetime | None,
+) -> str:
+    """Apply `change` to the games of `catalog/systems/<system>.json` with the guarded write
+    (read again and retried when the file changed in between). `change` returns the new games,
+    or None when there is nothing to write. Returns `written`, `unchanged` or `missing` (no
+    system file); `OSError` when the file keeps changing or cannot be written."""
+    path = system_path(root, system)
+    for _ in range(WRITE_TRIES):
+        doc, stamp = read_state(path)
+        if doc is None:
+            return "missing"
+        games = change(dict(doc.games))
+        if games is None:
+            return "unchanged"
+        data = catalog.encode(system, games.values(), _clock(now)[1])
+        if safefile.atomic_write(path, data, expect=stamp):
+            return "written"
+    raise OSError(f"{path} keeps changing")
+
+
+def remove_game(root: Path, system: str, game_id: str, *, now: datetime | None = None) -> str:
+    """Take one game's record out of its system file (the library UI's deletion: the files are
+    gone from `library/`, and the next `catalog` run would drop the record anyway). Nothing
+    else in the file changes and nothing is walked or hashed."""
+
+    def change(games: dict[str, catalog.Game]) -> dict[str, catalog.Game] | None:
+        return games if games.pop(game_id, None) is not None else None
+
+    return _rewrite(root, system, change, now)
+
+
+def put_game(root: Path, system: str, game: catalog.Game, *, now: datetime | None = None) -> str:
+    """Put a game back into its system file (a restore from the trash). A record of the same id
+    that a catalog run made in the meantime keeps what it has and gains what only the old
+    record knew: the day it was added, the DAT name, the serials, the RA entry, the flags and
+    the SHA-1 of a part whose size and mtime are the same."""
+
+    def change(games: dict[str, catalog.Game]) -> dict[str, catalog.Game] | None:
+        found = games.get(game.id)
+        merged = game if found is None else _merge_record(found, game)
+        if merged == found:
+            return None
+        games[game.id] = merged
+        return games
+
+    return _rewrite(root, system, change, now)
+
+
+def _merge_record(found: catalog.Game, old: catalog.Game) -> catalog.Game:
+    known = {p.path: p for p in old.parts}
+    parts = []
+    for part in found.parts:
+        was = known.get(part.path)
+        if (
+            part.type == catalog.FILE
+            and part.sha1 is None
+            and was is not None
+            and was.type == catalog.FILE
+            and (was.size, was.mtime) == (part.size, part.mtime)
+        ):
+            part = replace(part, sha1=was.sha1)
+        parts.append(part)
+    return replace(
+        found,
+        parts=tuple(parts),
+        added=found.added or old.added,
+        dat=found.dat or old.dat,
+        ra=found.ra if found.ra is not None else old.ra,
+        serials=found.serials or old.serials,
+        flags=tuple(dict.fromkeys((*found.flags, *old.flags))),
+    )
+
+
 def _clock(now: datetime | None) -> tuple[str, str]:
     stamp = now or datetime.now(UTC)
     return stamp.date().isoformat(), stamp.strftime("%Y-%m-%dT%H:%M:%SZ")

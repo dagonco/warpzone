@@ -2,7 +2,7 @@
 
 `inbox/.warpzone.lock` is created atomically (O_CREAT | O_EXCL) and holds the host name, the pid,
 the start time, the heartbeat interval (`beat`), the mode of the run and, when the run is not the
-inbox itself, its `task` (`scrape`). While a run holds it, a
+inbox itself, its `task` (`scrape`, or `delete` for the library UI). While a run holds it, a
 `Heartbeat` thread touches the file's modification time every `BEAT_SECONDS`, and only while the
 file still holds this run's identity.
 
@@ -39,7 +39,8 @@ STALE_BEAT_SECONDS = 10 * 60  # silence after which a lock with a heartbeat is s
 ATTENDED = "attended"
 UNATTENDED = "unattended"
 SCRAPE = "scrape"  # the task of a scrape run; a lock with no task is the inbox's own
-TASKS = (SCRAPE,)
+DELETE = "delete"  # the task of the library UI deleting or restoring a game (`serve`)
+TASKS = (SCRAPE, DELETE)
 _SHOWN = f"inbox/{LOCK_NAME}"  # what messages call it: never a path outside the hub
 
 # The verdicts of `judge`.
@@ -56,7 +57,7 @@ class LockInfo:
     started: float
     beat: int | None = None  # heartbeat interval in seconds; None for a lock of an older warpzone
     mode: str | None = None  # ATTENDED or UNATTENDED; None for a lock of an older warpzone
-    task: str | None = None  # SCRAPE when a scrape holds it; None for the inbox's own run
+    task: str | None = None  # SCRAPE or DELETE when one holds it; None for the inbox's own run
 
 
 @dataclass(frozen=True)
@@ -217,6 +218,8 @@ def describe(info: LockInfo | None, mtime: float, now: float) -> str:
     ago = f"{minutes // 60} h {minutes % 60} min" if minutes >= 60 else f"{minutes} min"
     if info is None:
         return f"held by an unknown run since {since} ({ago} ago)"
+    if info.task == DELETE:
+        return f"held by the library UI deleting or restoring a game since {since} ({ago} ago)"
     if info.task == SCRAPE:
         if info.mode == UNATTENDED:
             return f"held by the nightly scrape on the hub since {since} ({ago} ago)"
@@ -474,8 +477,8 @@ def hold(
 ) -> Iterator[Held]:
     """Hold `inbox/.warpzone.lock` for the body, with a heartbeat; it is released on any exit.
 
-    `mode` is ATTENDED or UNATTENDED; `task` is SCRAPE for a scrape run and None for the inbox
-    itself. An unattended run takes over a silent lock by itself
+    `mode` is ATTENDED or UNATTENDED; `task` is SCRAPE for a scrape run, DELETE for the library
+    UI and None for the inbox itself. An unattended run takes over a silent lock by itself
     (judged against `previous`, the reading of an earlier run) and cannot be forced. A lock
     held by someone else raises `LockBusy`; a stale one it may not take, `LockStale`."""
     if mode not in (ATTENDED, UNATTENDED):

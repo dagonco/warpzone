@@ -343,6 +343,34 @@ class Client:
         answer = self.get("/rest/db/completion", folder=folder_id, device=device_id)
         return answer if isinstance(answer, dict) else {}
 
+    def remote_need(self, folder_id: str, device_id: str, limit: int = 1000) -> list[str] | None:
+        """`GET /rest/db/remoteneed`: the names `device_id` still needs, page by page, or None
+        when the answer has no list or holds more than `limit` names."""
+        names: list[str] = []
+        perpage = 500
+        page = 1
+        while True:
+            answer = self.get(
+                "/rest/db/remoteneed",
+                folder=folder_id,
+                device=device_id,
+                page=str(page),
+                perpage=str(perpage),
+            )
+            files = answer.get("files") if isinstance(answer, dict) else None
+            if not isinstance(files, list):
+                return None
+            for f in files:
+                name = f.get("name") if isinstance(f, dict) else None
+                if not isinstance(name, str):
+                    return None
+                names.append(name)
+            if len(names) > limit:
+                return None
+            if len(files) < perpage:
+                return names
+            page += 1
+
     def browse(self, folder_id: str) -> list[str]:
         """Names at the top level of a folder."""
         entries = self.get("/rest/db/browse", folder=folder_id, levels="0") or []

@@ -42,7 +42,11 @@
     if (res.ok) return data;
     const e = (data && data.error) || {};
     const err = new ApiError(res.status, e.code || 'http-' + res.status, e.message || res.statusText,
-      { device: e.device, game: e.game, queue: e.queue === true, body: data });
+      {
+        device: e.device, game: e.game, queue: e.queue === true, body: data,
+        // What an error about a deletion or the trash carries (see the design's error table).
+        entry: e.entry, dependants: e.dependants, paths: e.paths, incomplete: e.incomplete, plan: e.plan,
+      });
     if (res.status === 401 && path !== '/api/v1/session' && unauthorizedHook) unauthorizedHook();
     throw err;
   }
@@ -71,6 +75,12 @@
     // The unattended inbox: its state with the newest runs, and one run record in full.
     inbox: () => request('GET', '/api/v1/inbox'),
     inboxRun: (id) => request('GET', `/api/v1/inbox/runs/${encodeURIComponent(id)}`),
+    // Deleting a game: `{dry_run: true}` answers the plan, `{dry_run: false, expect}` moves it to the trash.
+    deleteGame: (id, body) => request('POST', `/api/v1/games/${encodeURIComponent(id)}/delete`, body),
+    // The trash: its entries and the pending whitelist cleanups, and the two things done to an entry.
+    trash: () => request('GET', '/api/v1/trash'),
+    trashRestore: (entry) => request('POST', `/api/v1/trash/${encodeURIComponent(entry)}/restore`, {}),
+    trashPurge: (entry) => request('POST', `/api/v1/trash/${encodeURIComponent(entry)}/purge`, {}),
     // An image URL, not a request: the browser loads it (lazily) through an <img>.
     mediaUrl: (id, kind) => `/api/v1/games/${encodeURIComponent(id)}/media/${kind}`,
     // The same for a cached RetroAchievements badge; `variant` is 'unlocked' or 'locked'.
@@ -89,6 +99,7 @@
       case 'bad-origin':
         return 'The server refused the change because the page was opened from a different address than the one it answers on. Open the page from the server address itself.';
       case 'not-found':
+        if (err.info.entry) return 'That entry is no longer in the trash (it was restored or deleted by another tab or the hub). The list was reloaded.';
         return 'That console, system, game, queue entry or image no longer exists. The page was reloaded.' + where;
       case 'not-managed':
         return `The whitelist of ${dev || 'a console'} is not in the format the UI manages. On the hub run "warpzone whitelist migrate ${dev || '<console>'}" first, then reload.`;
@@ -99,13 +110,16 @@
       case 'unlistable':
         return 'A file of this game has a name that cannot be written into a whitelist (a newline or leading/trailing spaces). It cannot be changed from the UI.';
       case 'not-restorable':
+        if (err.info.entry) return 'That entry is damaged (its manifest cannot be read), so it cannot be restored. "Delete now" removes it.';
         return 'That backup is empty (it was taken before the whitelist existed), so it cannot be restored: an empty whitelist would let every file through.' + where;
       case 'stale':
+        if (err.info.plan) return 'The game changed since the plan was made (a file, its art or a whitelist line). This is the plan now; check it before you confirm.';
         if (err.info.queue) return 'The queue changed since this page loaded it (another tab or the command line). Nothing was written; the page reloaded the queue. Check it and try again.';
         return `The whitelist of ${dev || 'a console'} changed since this page loaded it (another tab, the command line or another change). Nothing was written; the page reloaded the current state. Check it and try again.`;
       case 'unsupported':
         return `${dev || 'This console'} does not support that system, so it cannot be turned on there.`;
       case 'expect-missing':
+        if (err.info.game) return 'The page did not send the plan it had confirmed. Nothing was moved; open the deletion again.';
         if (err.info.queue) return 'The page did not know the current version of the queue. It reloaded; try again.';
         return 'The page did not know the current version of a console whitelist. It reloaded; try again.' + where;
       case 'already-queued':
@@ -125,6 +139,7 @@
       case 'too-many-attempts':
         return 'Too many wrong tokens were tried just now. Wait a few seconds and try again.';
       case 'write-failed':
+        if (err.info.game || err.info.entry) return `The server could not write what the trash needs (${err.message}). Nothing was moved; check the hub's disk and try again.`;
         if (err.info.queue) {
           return err.info.body && err.info.body.devices
             ? 'The consoles were changed, but the server could not remove the entry from the queue file, so it is still in the queue. Remove it again.'
@@ -135,7 +150,30 @@
         }
         return `The server could not write the whitelist of ${dev || 'a console'}. Nothing of it was changed; check the hub's disk and try again.`;
       case 'read-failed':
+        if (err.info.game) return `The server could not read what it needs to plan the deletion: ${err.message}. Nothing was moved.`;
         return `The server could not read a whitelist${where}. On the hub, check the permissions of the library folder for the user the server runs as.`;
+      case 'hub-busy':
+        return 'An inbox or a scrape is running on the hub, so nothing can be deleted or restored right now. Try again when it ends.';
+      case 'unsafe-path':
+        return `The server stopped before moving anything: ${err.message}. A part of the game may be a link, differ from what the catalog recorded, belong to another game too, or have changed just before the move.`;
+      case 'has-dependants': {
+        const names = (err.info.dependants || []).map((d) => d.title).join(', ');
+        return `Other arcade sets need this one as their parent, BIOS or device${names ? ` (${names})` : ''}. Delete them first or keep this set.`;
+      }
+      case 'dats-missing':
+        return 'The server can read none of the arcade DATs, so it cannot tell whether other sets need this one. Check [inbox] mame_dat, fbneo_dat and mame2003plus_dat on the hub.';
+      case 'trash-unavailable':
+        return `The hub's trash folder cannot be used (${err.message}), so nothing was moved.`;
+      case 'restore-conflict': {
+        const n = (err.info.paths || []).length;
+        return `Nothing was restored: ${n === 1 ? 'a path exists' : (n ? n + ' paths exist' : 'some paths exist')} again where the game was. Move or delete ${n === 1 ? 'it' : 'them'} first.`;
+      }
+      case 'move-failed':
+        return err.info.incomplete
+          ? `A move failed and some files could not be put back (${err.message}). The entry is in the Trash view as incomplete; Restore puts back what is there.`
+          : `A move failed (${err.message}). Everything was put back, so nothing changed.`;
+      case 'purge-failed':
+        return `The entry could not be removed whole (${err.message}). The rest is removed in the background within a minute.`;
       case 'hub-unreachable':
         return 'The hub could not reach its Syncthing, so progress is unknown for now.';
       case 'internal':

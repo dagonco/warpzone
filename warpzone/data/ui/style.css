@@ -765,6 +765,44 @@ body.busy { cursor: progress; }
 
 .hints { display: flex; flex-wrap: wrap; gap: 8px 22px; align-items: center; padding: 16px var(--pad) 24px 14px; border-top: 2px solid var(--line); font: 600 10px/1.6 var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--mute); }
 
+/* ---------- Deleting a game and the trash ---------- */
+.danger-zone .btn.danger, .tr-acts .btn.danger { border-color: #7a2c3c; color: #ffb3c0; }
+.danger-zone .btn.danger:hover, .tr-acts .btn.danger:hover { --bc: var(--red); color: #fff; }
+.btn.danger.solid { background: var(--red); border-color: var(--red); color: #07060d; box-shadow: 3px 3px 0 #000; }
+.btn.danger.solid:hover { background: color-mix(in srgb, var(--red) 80%, #fff); box-shadow: 3px 3px 0 #fff; color: #07060d; }
+.btn .px { flex: none; }
+.drest > .panel.danger-zone { margin-top: 40px; border-color: #5a2433; }
+.danger-zone > h2 { color: #ffb3c0; border-bottom-color: #5a2433; }
+.danger-zone > h2 i { background: var(--red); box-shadow: 0 0 8px var(--red); }
+.dz-body { display: grid; justify-items: start; gap: 12px; max-width: 70ch; }
+.dz-body p { margin: 0; }
+dialog.del { width: min(640px, calc(100vw - 24px)); }
+.dsec { margin: 12px 0 0; }
+.dsec h3, .dblock h3 { margin: 0 0 6px; font: 800 11px var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--c); }
+.dsec > .mute { margin: 0 0 6px; }
+.dlist { display: grid; gap: 4px; max-height: 20dvh; margin: 0 0 8px; padding: 8px 10px; overflow: auto; list-style: none; background: #000; border: 2px solid var(--line); font: 600 12px/1.4 var(--mono); }
+.dlist li { display: flex; justify-content: space-between; gap: 14px; min-width: 0; }
+.dl-path { min-width: 0; overflow-wrap: anywhere; color: var(--text); }
+a.dl-path:hover { color: var(--c); text-decoration: underline; }
+.dl-size { flex: none; max-width: 45%; text-align: right; color: var(--mute); }
+.dline { margin: 12px 0 0; color: var(--dim); font-size: 13px; line-height: 1.5; }
+.mb .note { margin-top: 12px; }
+.mb .error-text { margin-top: 10px; }
+.tr { gap: 16px; }
+.tr-list { display: grid; gap: 10px; margin: 0 14px; padding: 0; list-style: none; }
+.tr-row { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 10px 16px; padding: 10px 12px; background: #000; border: 2px solid var(--line); }
+.tr-row.st-incomplete { border-color: #6b5518; }
+.tr-row.st-damaged { border-color: #6b2434; }
+.tr-main { flex: 1 1 280px; min-width: 0; }
+.tr-title { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 9px; }
+.tr-main p { margin: 4px 0 0; overflow-wrap: anywhere; }
+.tr-main .note { margin: 8px 0 0; }
+.tr-acts { display: flex; flex: none; gap: 8px; }
+.tr-paths { margin: 6px 0 0; padding: 0 0 0 16px; font: 600 12px/1.5 var(--mono); overflow-wrap: anywhere; }
+.tr-dev { margin: 8px 0 12px; }
+.tr-dev h3 { margin: 0 0 6px; font: 800 11px var(--mono); letter-spacing: .12em; text-transform: uppercase; color: var(--cyan); }
+.ix-tag.bad { border-color: var(--red); color: var(--red); }
+
 /* ---------- Bottom bar and console buttons (phone) ---------- */
 .bnav, .consolebar { display: none; }
 
@@ -870,6 +908,11 @@ body.busy { cursor: progress; }
   dialog.modal { width: 100%; max-height: 92dvh; margin: auto 0 0; border-width: 2px 0 0; padding-bottom: env(safe-area-inset-bottom); }
   .macts .btn { flex: 1; min-height: 50px; }
   .mstat dd { font-size: 17px; }
+  .macts { flex-wrap: wrap; }
+  .tr-acts { flex: 1 1 100%; }
+  .tr-acts .btn { flex: 1; }
+  .dlist li { flex-wrap: wrap; gap: 2px 14px; }
+  .dl-size { max-width: none; }
 }
 
 @media (prefers-reduced-motion: reduce) {

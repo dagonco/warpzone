@@ -9,7 +9,7 @@
 (function () {
   'use strict';
 
-  const { ApiError, api, humanError, h, $, plural, throttle, systemName, compareSystems } = window.WZ;
+  const { ApiError, api, humanError, formatBytes, h, $, plural, throttle, systemName, compareSystems } = window.WZ;
 
   // ===== state =============================================================================
 
@@ -38,6 +38,9 @@
     detail: null,           // {id, data}: the game page being shown
     inbox: null,            // the unattended inbox (/inbox), or null until it loaded
     inboxError: false,      // the last load of the inbox failed
+    trash: null,            // the trash (/trash): {size, entries, pending}, or null until it loaded
+    trashError: false,      // the last load of the trash failed
+    trashNotes: new Map(),  // trash entry -> the error its last restore or delete now ended in
     busy: false,
   };
 
@@ -53,6 +56,11 @@
     reset() {},             // the whole catalog was loaded again: drop what was derived from it
     queueChanged() {},      // the queue loaded or changed
     inboxChanged() {},      // the inbox loaded, changed or was marked seen
+    // The deletion dialog: (plan, send) resolves the apply's answer, or null when cancelled.
+    confirmDelete(plan, send) { return Promise.resolve(null); },
+    refuseDelete(err) { return Promise.resolve(); },   // a deletion the server refuses: say why
+    confirmRestore(row, pending) { return Promise.resolve(false); },
+    confirmPurge(row) { return Promise.resolve(false); },
   };
 
   const ensureArray = (x, key) => (Array.isArray(x) ? x : x && Array.isArray(x[key]) ? x[key] : []);
@@ -84,7 +92,7 @@
     if (!(err instanceof ApiError)) { console.error(err); toast('Something unexpected went wrong.', 'error'); return; }
     if (err.code === 'unauthorized') return; // the login form is already open
     if (!quiet) toast(humanError(err), 'error');
-    if (['stale', 'expect-missing', 'not-found', 'cannot-apply', 'not-managed', 'covered'].includes(err.code) ||
+    if (['stale', 'expect-missing', 'not-found', 'cannot-apply', 'not-managed', 'covered', 'move-failed'].includes(err.code) ||
         (err.status >= 500 && err.info && err.info.body && err.info.body.devices)) {
       await reloadAll();
     }
@@ -541,6 +549,123 @@
     });
   }
 
+  // ===== deleting a game and the trash =====================================================
+
+  // The trash is read only until the user restores or purges an entry. The pending cleanups come
+  // with it: the consoles that still have whitelist lines of deleted games.
+  async function loadTrash() {
+    try {
+      const data = await api.trash();
+      S.trash = data && typeof data === 'object' ? data : null;
+      S.trashError = !S.trash;
+    } catch (err) {
+      if (err.code === 'unauthorized') return;
+      S.trashError = true;
+    }
+  }
+
+  // A refusal of the dry run that is an answer, not a failure: the dialog says why and offers no
+  // confirm button.
+  const refusesDeletion = (err) => err.status === 409 || (err.code === 'read-failed' && !!err.info.game);
+
+  // What changed for the page when a game left the library: the lists, the counts, the queue and
+  // the catalog run the server asked for.
+  async function afterDelete(system) {
+    S.searchResult = null;
+    homeAskedAt = 0;
+    try {
+      await Promise.all([loadSystems(), ensureList(system, true)]);
+    } catch (err) {
+      await handleError(err, true);
+    }
+    hooks.reset();
+    hooks.refresh();
+    loadQueue();
+    loadTrash();
+    watchCatalog(1500);
+  }
+
+  // A game out of the library: a dry run, a dialog with everything that goes, then the move to
+  // the trash with the plan's `expect`. The dialog sends the apply itself, so it stays open with
+  // "Moving..." and can show the new plan when the server answers `stale`. Resolves the answer, or
+  // null when the user cancelled or the server refused.
+  function deleteGame(ref) {
+    return guarded(async () => {
+      let plan;
+      try {
+        plan = await api.deleteGame(ref.id, { dry_run: true });
+      } catch (err) {
+        if (!(err instanceof ApiError) || !refusesDeletion(err)) throw err;
+        await hooks.refuseDelete(err);
+        if (err.code === 'not-managed') await reloadAll();
+        return null;
+      }
+      let res;
+      try {
+        res = await hooks.confirmDelete(plan, (body) => api.deleteGame(ref.id, body));
+      } catch (err) {
+        if (err.code === 'move-failed') loadTrash();
+        throw err;
+      }
+      if (!res) return null;
+      const name = (plan.game && (plan.game.name || plan.game.title)) || ref.title;
+      toast(`"${name}" is in the trash for 7 days.` + (res.warnings && res.warnings.length ? ` ${res.warnings.length} warning(s): ${res.warnings.join('; ')}.` : ''), 'ok');
+      afterDelete(plan.game && plan.game.system ? plan.game.system : ref.system);
+      return res;
+    });
+  }
+
+  // Put a trash entry back, after the user confirmed it (the dialog names the game and the
+  // consoles that get it again, from `pending`: the rows of the trash answer for this entry).
+  // The errors that name paths stay on the entry's row (`trashNotes`) besides the toast, so the
+  // paths can be read and acted on.
+  function restoreEntry(row, pending) {
+    const entry = row.entry;
+    return guarded(async () => {
+      if (!(await hooks.confirmRestore(row, pending || []))) return null;
+      S.trashNotes.delete(entry);
+      let res;
+      try {
+        res = await api.trashRestore(entry);
+      } catch (err) {
+        if (err instanceof ApiError && ['restore-conflict', 'unsafe-path', 'move-failed', 'not-restorable'].includes(err.code)) {
+          S.trashNotes.set(entry, { message: humanError(err), paths: err.info.paths || [] });
+        }
+        await loadTrash();
+        throw err;
+      }
+      S.trashNotes.delete(entry);
+      await reloadAll();
+      await loadTrash();
+      watchCatalog(1500);
+      const kept = res.kept || [];
+      const removed = res.removed || [];
+      toast(`Restored "${res.game ? res.game.title : entry}".` +
+        (kept.length ? ` ${kept.join(', ')} will receive it again.` : '') +
+        (removed.length ? ` It is off on ${removed.join(', ')}: turn it on from its page.` : '') +
+        (res.warnings && res.warnings.length ? ` ${res.warnings.join('; ')}.` : ''), 'ok');
+      return res;
+    });
+  }
+
+  // Delete one entry for good, after the user confirmed it.
+  function purgeEntry(row) {
+    return guarded(async () => {
+      if (!(await hooks.confirmPurge(row))) return null;
+      S.trashNotes.delete(row.entry);
+      let res;
+      try {
+        res = await api.trashPurge(row.entry);
+      } catch (err) {
+        await loadTrash();
+        throw err;
+      }
+      await loadTrash();
+      toast(`Deleted "${row.title || row.entry}" for good` + (res.bytes ? `; ${formatBytes(res.bytes)} freed.` : '.'), 'ok');
+      return res;
+    });
+  }
+
   // ===== the catalog scan ==================================================================
 
   // A refresh runs on the hub for a while: poll /catalog until it ends, then load what it found.
@@ -591,5 +716,6 @@
     loadQueue, ensureQueue, queueUsable, queueDry, queueRun, skippedNote,
     changeGame, changeSystem, restoreBackup, watchCatalog, refreshCatalog, plural,
     loadInbox, watchInbox, inboxNews, markInboxSeen,
+    loadTrash, deleteGame, restoreEntry, purgeEntry,
   };
 })();

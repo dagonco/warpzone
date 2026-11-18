@@ -68,19 +68,28 @@ STATUS = {
     "unlistable": 409,
     "not-restorable": 409,
     "catalog-running": 409,
+    "hub-busy": 409,
+    "unsafe-path": 409,
+    "has-dependants": 409,
+    "dats-missing": 409,
+    "trash-unavailable": 409,
+    "restore-conflict": 409,
     "stale": 412,
     "unsupported": 422,
     "expect-missing": 428,
     "too-many-attempts": 429,
     "write-failed": 500,
     "read-failed": 500,
+    "move-failed": 500,
+    "purge-failed": 500,
     "internal": 500,
     "hub-unreachable": 503,
 }
 
 
 class ApiError(Exception):
-    """An answer that is an error: `{"error": {"code", "message", "device", "game"}}`."""
+    """An answer that is an error: `{"error": {"code", "message", "device", "game"}}`, and for
+    the trash `entry` and the fields in `extra` (`dependants`, `paths`, `incomplete`, `plan`)."""
 
     def __init__(
         self,
@@ -91,6 +100,8 @@ class ApiError(Exception):
         game: str | None = None,
         queue: bool = False,
         retry_after: int | None = None,
+        entry: str | None = None,
+        extra: Mapping[str, Any] | None = None,
     ) -> None:
         super().__init__(message)
         self.code = code
@@ -99,6 +110,8 @@ class ApiError(Exception):
         self.game = game
         self.queue = queue  # the error is about the queue file, not a whitelist
         self.retry_after = retry_after  # seconds, sent as `Retry-After`
+        self.entry = entry  # the trash entry the error is about
+        self.extra = dict(extra or {})
 
     @property
     def status(self) -> int:
@@ -112,6 +125,9 @@ class ApiError(Exception):
             error["game"] = self.game
         if self.queue:
             error["queue"] = True
+        if self.entry is not None:
+            error["entry"] = self.entry
+        error.update(self.extra)
         return {"error": error}
 
 

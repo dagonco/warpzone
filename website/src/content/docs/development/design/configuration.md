@@ -69,7 +69,9 @@ user = "ExampleUser"                         # optional; the RA user whose progr
 `warpzone inbox` and `warpzone scrape` read only the `[inbox]` table, so a computer (or the hub container) that only files games
 needs no `[hub]` or `[devices]`. API keys are never printed, logged or included in
 error messages; the RetroAchievements key is read from `RA_API_KEY`, never from a file.
-`warpzone serve` reads `[hub]`, `[devices.*]`, `[serve]`, `[ra]` and `[inbox] rahasher`; its token
+`warpzone serve` reads `[hub]`, `[devices.*]`, `[serve]`, `[ra]`, `[inbox] rahasher` and the arcade
+DATs of `[inbox]` (`mame_dat`, `fbneo_dat`, `mame2003plus_dat`, to refuse deleting a set others
+depend on); its token
 comes from `WARPZONE_UI_TOKEN` or `[serve] token_file` and is never printed either (see
 [Library UI](/warpzone/development/design/library-ui/#authentication)).
 
@@ -132,7 +134,7 @@ in the clear. The optional `[hub] api_cert_sha256` removes that choice:
 | `warpzone catalog` | where the hub root is mounted (the hub's container) | Builds and updates the catalog index in `catalog/` from `library/` (see [The catalog index](/warpzone/development/design/library-ui/#the-catalog-index)). `--root PATH` (default `[hub] root`), `--dry-run`. `--ra-hash` hashes the games that lack an RA hash with RAHasher (`--rahasher PATH`, else `[inbox] rahasher`); `--ra-lists` refreshes the cached RA game lists (`RA_API_KEY`; `--force` ignores their age); `--dats [--dats-dir PATH]` fills the DAT `serials` of games that have none from the DAT folder of `inbox`. |
 | `warpzone whitelist migrate [device ...]` | where the hub root is mounted | Converts hand-written `patterns-<device>.stignore` files into the library UI's format, proving on the hub's tree that the included paths stay the same, with a backup of each file it replaces (see [The migration](/warpzone/development/design/library-ui/#the-migration)). `--root PATH`, `--dry-run`. Exit 1 if any file was refused. |
 | `warpzone whitelist restore <device> [backup]` | where the hub root is mounted | Lists the backups of a device's whitelist, or writes one back after showing its diff against the current file and the paths it turns on and off, with a backup of the file it replaces and a re-check right before the write (see [History and restore](/warpzone/development/design/library-ui/#history-and-restore)). `--root PATH`, `--dry-run`. Exit 1 if refused. |
-| `warpzone serve` | in the hub's container | Serves the library UI and its JSON API (see [Library UI](/warpzone/development/design/library-ui/)). Writes only device whitelists, the catalog and the whitelist backups, on request. Runs until stopped; exit 2 without a token or when `[hub] root` has no `library/.stfolder`. |
+| `warpzone serve` | in the hub's container | Serves the library UI and its JSON API (see [Library UI](/warpzone/development/design/library-ui/)). Writes only device whitelists, the catalog, the whitelist backups and the play queue, on request, and, on a confirmed deletion, moves one game's files, media and gamelist entry into `trash/` (see [Deleting a game](/warpzone/development/design/library-ui/#deleting-a-game)). Runs until stopped; exit 2 without a token or when `[hub] root` has no `library/.stfolder`. |
 | `warpzone bios` | on a device or the hub | Reports which BIOS and firmware files a library has, lacks or has wrong (see [BIOS check](/warpzone/development/design/bios/)). Read-only. Exit 1 if a required item is missing or wrong. |
 | `warpzone inbox` | a computer that mounts the hub's share, or the hub's container | Identifies, converts and files new games dropped in `inbox/` (see [Inbox](/warpzone/development/design/inbox/)). Report only by default, `--apply` acts, and every `--apply` that processed an item writes a run record (see [The run record](/warpzone/development/design/inbox/#the-run-record)); `--notify-url URL` sends a webhook when some item went to review. With `--apply` it then scrapes the games it placed when Skyscraper is configured or found; `--no-scrape` skips that (see [Scraping](/warpzone/development/design/scrape/#in-inbox---apply)). Exit 1 if any item needs review; a scrape never changes it. |
 | `warpzone scrape` | a computer that mounts the hub's share, or the hub's container | Fills the hub's ES-DE gamelists and media for the library's games that lack them, with Skyscraper (see [Scraping](/warpzone/development/design/scrape/)). Convergent: writes by default, only adds, `--dry-run` runs no Skyscraper and writes nothing. `--root PATH`, `--system NAME ...`, `--retry-not-found`, `--force-lock`. `--unattended [--max-games N] [--max-minutes N] [--notify-url URL]` is the run of a scheduled task, once a night (see [Unattended scrape](/warpzone/development/design/scrape-unattended/)): it refuses `--dry-run`, `--force-lock` and `--retry-not-found`, and exits non-zero only for news. Exit 1 when the run could not finish, 2 for no Skyscraper or a held lock. |
@@ -204,6 +206,20 @@ still being written (the item must hold still for 5 minutes across runs). It exi
 for news. See [Unattended inbox](/warpzone/development/design/inbox-unattended/#the-exception).
 No other destructive command runs unattended.
 
+**The third exception: deleting a game from the library UI.** `serve` is a server, not a
+command, but a deletion moves data the user owns out of the library, so it follows this rule
+with the page in place of the terminal: a delete request first answers with its plan (every file
+and its size, the media, the gamelist entry, the whitelist lines per console, the saves that
+stay) and acts only when the same request comes back with the plan's `expect`, which is what the
+user's confirmation sends. The confirmation plays the role of `--apply`, and a plan that changed
+in between is refused. What it can do is bounded: it moves, never deletes, the files of one whole
+game into `trash/` at the hub root, re-checking each path right before moving it; it refuses
+while the inbox lock is held and refuses an arcade set that others depend on; it never touches
+saves; and it removes a console's whitelist lines only once that console has received the
+deletion. The trash keeps each entry 7 days for a restore. Its purge after that runs by itself,
+like the inbox's purge of `_done/`, and removes only what a confirmed deletion moved there. See
+[Deleting a game](/warpzone/development/design/library-ui/#deleting-a-game).
+
 **Convergent commands write by default and accept `--dry-run`.** They bring the machine to
 the state the config and the profile describe: running one again changes nothing, and what
 they change is either warpzone's own (Syncthing folders it prefixes with `wz-`, its units,
@@ -231,7 +247,8 @@ it.
 `serve` is a server, not a run: it writes only on request, one device whitelist at a time,
 with the convergent rule's safeguards (a backup of the file it replaces, refused when the file
 changed since the client read it, a re-check right before the rename) and a `dry_run` on every
-request instead of `--dry-run`. Its restore of a whitelist backup is the same guarded write.
+request instead of `--dry-run`. Its restore of a whitelist backup is the same guarded write. Its
+deletion of a game is the destructive exception above.
 
 **Read-only commands** never write user data: `check`, `bios`, `doctor`, `health`, `status`,
 `render-ignores` and `settings audit`.
