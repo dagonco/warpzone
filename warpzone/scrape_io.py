@@ -242,20 +242,23 @@ def stage(
     library: Path, input_dir: Path, games: Sequence[Game]
 ) -> tuple[dict[str, Game], list[scrape.Dropped]]:
     """Link each game into `input_dir` at its `gamelist` path (subfolders kept) to the file on
-    the share. Nothing is copied. An `.m3u` folder is linked as a file named after the folder
-    that points at the playlist inside it. Returns the map from staged name to game and the
-    games that could not be staged, each with the reason."""
+    the share: its primary, or the part its gamelist path names when that is another one (the
+    launcher file of a PS4 or Vita game, whose primary is a folder Skyscraper cannot read).
+    Nothing is copied. An `.m3u` folder is linked as a file named after the folder that points
+    at the playlist inside it. Returns the map from staged name to game and the games that could
+    not be staged, each with the reason."""
     staged: dict[str, Game] = {}
     dropped: list[scrape.Dropped] = []
     for game in games:
         name = artwork.relative(game.gamelist)
-        parts = game.primary.split("/")
-        if name is None or any(p in ("", ".", "..") for p in parts) or game.primary[:1] == "/":
+        part = scrape.entry_part(game)
+        path = game.primary if part is None else part.path
+        parts = path.split("/")
+        if name is None or any(p in ("", ".", "..") for p in parts) or path[:1] == "/":
             dropped.append(scrape.Dropped(game.gamelist, "has a path warpzone will not stage"))
             continue
         target = library.joinpath(*parts)
-        primary = next((p for p in game.parts if p.path == game.primary), None)
-        if primary is not None and primary.type == catalog.DIR and name.lower().endswith(".m3u"):
+        if part is not None and part.type == catalog.DIR and name.lower().endswith(".m3u"):
             target = target / parts[-1]
         if not target.exists():
             dropped.append(scrape.Dropped(name, "is not on the share any more; skipped"))
@@ -694,6 +697,7 @@ def _scrape_system(run: Run, system: str) -> scrape.Selection | None:
         if missing:
             run.fail(_missing_message(system, missing), system)
         games = [g for g in games if scrape.is_placed(g, opts.only)]
+    games = sorted(scrape.frontend_games(system, games), key=lambda g: g.gamelist)
     try:
         hub = read_hub_gamelist(gamelist_path(opts.root, system))
     except HubError as exc:
@@ -854,7 +858,7 @@ def select_all(
             problems.append(scrape.gamelist_message(system, str(exc)))
             continue
         found[system] = scrape.select(
-            sorted(doc.games.values(), key=lambda g: g.gamelist),
+            sorted(scrape.frontend_games(system, doc.games.values()), key=lambda g: g.gamelist),
             hub.entries,
             list_hub_media(media_path(opts.root, system)),
             not_found=not_found.get(system, {}),

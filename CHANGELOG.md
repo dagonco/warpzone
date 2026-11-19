@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ## [Unreleased]
 
+### Added
+
+- `warpzone scrape` (and the scrape of `warpzone inbox --apply` and of `warpzone scrape --unattended`) now also scrapes the PS4, PS Vita, Wii U and Xbox 360 games. A PS4 or Vita game is looked up by the name of its launcher (`<Title>.desktop` in `roms/ps4/shortcuts/`, `<Title>.psvita` in `roms/psvita/`), and the entry and media are written under the paths ES-DE uses for them (`./Bloodborne.desktop`, `covers/Bloodborne.png`; `./Halo 3 (World).iso` for the Xbox 360, whose games ES-DE reads from `roms/xbox360/roms/`). A PS4 or Vita game with no launcher is not listed by ES-DE and is not scraped. `--system ps4`, `psvita`, `wiiu` and `xbox360` are accepted. See [Scraping](https://dagonco.github.io/warpzone/setup/scrape/).
+
 ### Changed
 
 - The library UI lists the makers of the systems in alphabetical order, with Arcade and then Other last, and the systems of each maker by name.

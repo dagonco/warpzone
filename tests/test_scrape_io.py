@@ -8,6 +8,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from library_support import game
 from scrape_support import (
     CHRONO,
     FAKE_CONFIG,
@@ -17,6 +18,8 @@ from scrape_support import (
     TODAY,
     Hub,
     HubCase,
+    ps4_game,
+    vita_game,
 )
 from test_cli import run as run_cli
 from warpzone import artwork, inbox_lock, safefile, scrape, scrape_io
@@ -543,6 +546,116 @@ class StageTest(HubCase):
         self.assertEqual((staged, len(dropped)), ({}, 1))
 
 
+class FrontendSystemsTest(HubCase):
+    """The systems whose games are launchers or live below a folder the frontend reads as the
+    system's own: the link Skyscraper is given, and the entry and media the hub gets."""
+
+    def ps4(self, title="Bloodborne", **kwargs):
+        return self.hub.add_catalog_game(
+            ps4_game(title, **kwargs),
+            "roms/ps4/games/CUSA00000/eboot.bin",
+            f"roms/ps4/shortcuts/{title}.desktop",
+        )
+
+    def library_file(self, path):
+        return os.path.realpath(self.hub.root / "library" / path)
+
+    def run_system(self, system, **overrides):
+        return self.hub.run(systems=(system,), **overrides)
+
+    def test_ps4_is_staged_as_its_launcher_and_merged_under_the_shortcuts_base(self):
+        self.ps4()
+        self.hub.canned({"known": ["Bloodborne"]})
+        code, out, _ = self.run_system("ps4")
+        self.assertEqual(code, 0, out)
+        (seen,) = self.hub.gathers()
+        self.assertEqual(
+            seen["targets"],
+            {"Bloodborne.desktop": self.library_file("roms/ps4/shortcuts/Bloodborne.desktop")},
+        )
+        gather = self.hub.calls()[1]
+        self.assertEqual(gather[gather.index("--addext") + 1], "*.desktop")
+        entries = {e.path for e in artwork.parse_gamelist(self.hub.gamelist("ps4").read_text())}
+        self.assertEqual(entries, {"./Bloodborne.desktop"})
+        for kind in scrape.MEDIA_KINDS:
+            ext = "mp4" if kind == "videos" else "png"
+            self.assertTrue(self.hub.media(kind, "Bloodborne", ext, "ps4").is_file(), kind)
+        self.assertIn("  added      Bloodborne.desktop: covers, screenshots, miximages", out[1])
+        self.assertEqual(out[-1], "scrape: ps4: 1 added")
+        # a second run finds the entry and the media where the frontend names them
+        self.hub.calls()
+        code, again, _ = self.run_system("ps4")
+        self.assertEqual((code, again[-1]), (0, "scrape: ps4: nothing to do"))
+
+    def test_a_ps4_game_with_no_shortcut_is_not_in_the_frontend_and_not_scraped(self):
+        self.hub.add_catalog_game(
+            ps4_game("Bloodborne", launcher=False), "roms/ps4/games/CUSA00000/eboot.bin"
+        )
+        code, out, _ = self.run_system("ps4", dry_run=True)
+        self.assertEqual(code, 0)
+        self.assertEqual(out[0], "scrape: ps4: would scrape 0 games")
+
+    def test_psvita_is_staged_as_its_launcher_with_no_base(self):
+        self.hub.add_catalog_game(
+            vita_game("Rayman Legends"),
+            "roms/psvita/app/PCSA00000/eboot.bin",
+            "roms/psvita/Rayman Legends.psvita",
+        )
+        self.hub.canned({"known": ["Rayman Legends"]})
+        code, out, _ = self.run_system("psvita")
+        self.assertEqual(code, 0, out)
+        (seen,) = self.hub.gathers()
+        self.assertEqual(
+            seen["targets"],
+            {"Rayman Legends.psvita": self.library_file("roms/psvita/Rayman Legends.psvita")},
+        )
+        self.assertNotIn("--addext", self.hub.calls()[1])
+        entries = {e.path for e in artwork.parse_gamelist(self.hub.gamelist("psvita").read_text())}
+        self.assertEqual(entries, {"./Rayman Legends.psvita"})
+        self.assertTrue(self.hub.media("covers", "Rayman Legends", "png", "psvita").is_file())
+
+    def test_wiiu_and_xbox360_are_staged_and_merged_without_the_roms_folder(self):
+        for system, name in (("wiiu", "Mario Maker (Europe).wua"), ("xbox360", "Halo 3.iso")):
+            path = f"roms/{system}/roms/{name}"
+            raw = game(system, path, name, gamelist=f"./roms/{name}")
+            self.hub.add_catalog_game(raw, path)
+            stem = name.rsplit(".", 1)[0]
+            self.hub.canned({"known": [stem]})
+            code, out, _ = self.run_system(system)
+            self.assertEqual(code, 0, out)
+            self.assertEqual(self.hub.gathers()[-1]["targets"], {name: self.library_file(path)})
+            entries = artwork.parse_gamelist(self.hub.gamelist(system).read_text())
+            self.assertEqual([e.path for e in entries], [f"./{name}"])
+            self.assertTrue(self.hub.media("covers", stem, "png", system).is_file(), system)
+
+    def test_the_not_found_memory_is_keyed_by_the_frontend_path(self):
+        self.ps4()
+        code, out, _ = self.run_system("ps4")
+        self.assertEqual((code, out[-1]), (0, "scrape: ps4: 1 not found"))
+        records = scrape.parse_not_found(
+            safefile.read_json_cache(self.hub.cache / scrape_io.NOT_FOUND_FILE)
+        )
+        self.assertEqual(set(records["ps4"]), {"./Bloodborne.desktop"})
+        code, out, _ = self.run_system("ps4", dry_run=True)
+        self.assertEqual(out[0], "scrape: ps4: would scrape 0 games")
+
+    def test_select_all_sees_the_frontend_paths(self):
+        self.ps4()
+        found, problems = scrape_io.select_all(self.hub.options(systems=("ps4",)), {})
+        self.assertEqual(problems, [])
+        (pick,) = found["ps4"].picks
+        self.assertEqual(pick.game.gamelist, "./Bloodborne.desktop")
+        self.assertEqual(pick.game.primary, "roms/ps4/games/CUSA00000")
+
+    def test_only_a_game_placed_through_its_update_or_dlc_is_found(self):
+        self.ps4(update=True, dlc=True)
+        self.hub.canned({"known": ["Bloodborne"]})
+        placed = frozenset({"roms/ps4/games/CUSA00000-UPDATE", "roms/ps4/dlc/CUSA00000/pack"})
+        code, out, _ = self.run_system("ps4", only=placed)
+        self.assertEqual(code, 0, out)
+        self.assertEqual(out[-1], "scrape: ps4: 1 added")
+
+
 class CommandTest(HubCase):
     def config(self, extra: str = "") -> str:
         path = self.hub.base / "config.toml"
@@ -571,11 +684,6 @@ class CommandTest(HubCase):
         self.assertEqual((code, err), (0, ""))
         self.assertIn("scrape: snes: 1 added", out)
         self.assertTrue(self.hub.media("covers", "Kirby Super Star (USA)").is_file())
-
-    def test_a_system_that_is_left_out_is_a_usage_error_with_the_reason(self):
-        code, _, err = self.scrape("--system", "ps4")
-        self.assertEqual(code, 2)
-        self.assertIn("launcher", err)
 
     def test_an_unknown_system_is_a_usage_error(self):
         code, _, err = self.scrape("--system", "amiga")

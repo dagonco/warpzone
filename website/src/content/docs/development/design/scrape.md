@@ -198,14 +198,41 @@ against Skyscraper's `peas.json` (the platform list it ships; 3.21.1 at the time
 | `n3ds` | `3ds` | |
 | `mame` | `mame` | ScreenScraper matches arcade sets by set name |
 | `ps3`, `xbox`, `switch` | same name | matched by name; `inbox` keeps the file's own name for these |
+| `ps4`, `psvita`, `wiiu`, `xbox360` | same name | see below: the launcher of a PS4 or Vita game, and the folder the frontend reads |
 
-Left out for now: `ps4` and `psvita` (the gamelist entry is a launcher, a `.desktop` or `.psvita`
-file, whose name ScreenScraper cannot match), and `xbox360` and `wiiu` (their games live below
-`roms/<system>/roms/`, which the frontend reads as the system folder, so their gamelist paths
-need the same shift as in [Frontend artwork](/warpzone/development/design/frontend-artwork/)).
-They are in `scrape.UNSCRAPED` with that reason, and a test checks that every system `inbox` can
-place (the values of `dat.SYSTEMS` and the systems of the kind handlers) is in exactly one of the
-two. A new system in `inbox` therefore fails the test until it is given a platform or a reason.
+A test checks that every system `inbox` can place (the values of `dat.SYSTEMS` and the systems of
+the kind handlers) is in `PLATFORMS`, so a new system in `inbox` fails it until it is given a
+platform.
+
+**Launchers and folders the frontend reads.** Four systems are scraped by what the frontend lists
+and not by what the catalog holds as the game (decided 2026-11-19; they were left out before):
+
+- *A PS4 or Vita game is a folder* (`roms/ps4/games/<CUSA>`, `roms/psvita/app/<TITLEID>`): Skyscraper
+  cannot compute a cache id for a folder, and the folder's name says nothing ScreenScraper knows.
+  The game's entry is its launcher, a part of the game: `roms/ps4/shortcuts/<Title>.desktop` or
+  `roms/psvita/<Title>.psvita`, the file the catalog's `gamelist` path names
+  (`scrape.entry_part`: the part the path ends with, the primary first). Staging links that file
+  and not the primary, and ScreenScraper is asked by its name, which `inbox` writes from the
+  game's title. A game with no launcher is not in the frontend, so it is not selected
+  (`scrape.LAUNCHER_SYSTEMS`).
+- *The frontend reads a folder below the system's one*: ES-DE lists PS4 from `roms/ps4/shortcuts/`
+  and Wii U and Xbox 360 from `roms/<system>/roms/`, so its gamelist says `./Bloodborne.desktop` and
+  `./Halo 3 (World).iso` where the catalog says `./shortcuts/Bloodborne.desktop` and
+  `./roms/Halo 3 (World).iso` (the same shift as in
+  [Frontend artwork](/warpzone/development/design/frontend-artwork/) and
+  [Metadata and media](/warpzone/development/design/library-ui/#metadata-and-media)). The hub has
+  no system list, so the library UI tries the shorter paths; a scrape cannot guess, because it
+  writes. It uses `scrape.FRONTEND_BASES`: `roms/` for the systems of `whitelist.SUBROOT_SYSTEMS`
+  (the ones `inbox` files below `roms/<system>/roms/`) and `shortcuts/` for PS4, the one fact
+  that has no other source on the hub. `scrape.frontend_games` applies it to a system's games
+  before anything else: the `gamelist` of each is cut to the frontend's path, and a game outside
+  the folder (a PS4 package filed at the top, a PS4 game without a launcher) is dropped. From
+  there the staged name, the entry's `<path>`, the media stem and the memory keys are all that
+  path, and the catalog file is untouched. The Vita folder has no base.
+- *Extensions.* Skyscraper's `ps4` platform lists no `.desktop`, so its calls also get
+  `--addext '*.desktop'` (`scrape.EXTRA_EXTENSIONS`, like `.zcci`); its `psvita` platform lists
+  `*.psvita`, `wiiu` lists `*.wua` among its formats and `xbox360` `*.iso`.
+
 Skyscraper adds `.zip`, `.7z` and `.m3u` to every platform's formats, which covers the zips
 `inbox` writes and the `.m3u` folders below.
 
@@ -214,7 +241,10 @@ Skyscraper adds `.zip`, `.7z` and `.m3u` to every platform's formats, which cove
 Both entry points run the same function on a list of games, one system at a time. A game is a
 catalog entry (see [The catalog index](/warpzone/development/design/library-ui/#the-catalog-index)):
 its `primary` part and its `gamelist` path. `inbox --apply` updates the catalog before it
-scrapes, so the games it placed are there.
+scrapes, so the games it placed are there. For a system the frontend reads from a folder below its
+own, or whose games are launchers (`ps4`, `psvita`, `wiiu`, `xbox360`), the `gamelist` of each game
+is first replaced by the frontend's path (`scrape.frontend_games`, see
+[Systems and platforms](#systems-and-platforms)); everything below goes by that path.
 
 1. **Select** (pure, `scrape.select`). From the catalog's games of the system, the hub gamelist
    and the media files present, it returns the games to scrape: those without an entry, and those
@@ -222,7 +252,8 @@ scrapes, so the games it placed are there.
    [Media kinds](#media-kinds). `inbox` passes only the games it placed in this run; `scrape`
    passes all of the system's.
 2. **Stage.** In `<work_dir>/scrape/<system>/input/`, each game gets a symbolic link at its
-   `gamelist` path (subfolders kept) to the file on the share. Nothing is copied: a CHD is
+   `gamelist` path (subfolders kept) to the file on the share (for a PS4 or Vita game, its
+   launcher and not its folder). Nothing is copied: a CHD is
    hundreds of MB and Skyscraper only reads it. An `.m3u` folder is staged as a file, a link named
    after the folder that points at the playlist inside it (`Game.m3u` -> `.../Game.m3u/Game.m3u`),
    so Skyscraper sees one game, searches by the name without disc tags and writes one entry. The
@@ -266,11 +297,12 @@ entries, escaped, for the indentation and newline style the writer copies from t
 - **Matching Skyscraper's entries.** An entry's `<path>` is taken as relative to the staged
   folder: `./Game.zip`, `Game.zip` and an absolute path inside the staged folder all mean
   `Game.zip`. A path outside it, one with `..`, or one not in the staged map is dropped with a
-  warning. The entry written to the hub has the catalog's `gamelist` path, never Skyscraper's.
+  warning. The entry written to the hub has the game's `gamelist` path (the frontend's, for the systems of
+  [Systems and platforms](#systems-and-platforms)), never Skyscraper's.
 - **Existing entries.** A `<game>` or `<folder>` of the hub gamelist whose `<path>` is the game's
   (`./` or not) is existing: nothing of it is changed, and only media are considered. One marked
   `<nomultiscrape>true</nomultiscrape>` gets nothing at all.
-- **New entries.** For a game without one: a `<game>` with the catalog's path and, from
+- **New entries.** For a game without one: a `<game>` with the game's path and, from
   Skyscraper's entry, `name`, `desc`, `rating`, `releasedate`, `developer`, `publisher`, `genre`
   and `players` (the fields the library UI reads), when present and not empty. Nothing else is
   copied: no user field, no media path (ES-DE does not keep them in the gamelist). Text comes from
@@ -493,9 +525,10 @@ changes the exit code and never undoes a placement. The report ends with the lin
 How it is done (`inbox_scrape.py`, called from `inbox._run` right after `_update_catalog`):
 
 - **The games.** The units with outcome `placed` whose library folder is `roms/<system>` and whose
-  system is in `scrape.PLATFORMS` (extras such as Switch updates, and the systems in `UNSCRAPED`,
-  are left out). `scrape.is_placed` keeps the catalog games whose primary path is one of those
-  entries or lies inside one (an `.m3u` folder's playlist); `scrape_io.Options.only` carries them,
+  system is in `scrape.PLATFORMS` (extras such as Switch updates are left out). `scrape.is_placed`
+  keeps the catalog games whose primary path is one of those entries or lies inside one (an
+  `.m3u` folder's playlist), or that has the entry as one of its parts or has it inside one (the
+  update or the DLC folder of a PS4 game, placed for a game that is already there); `scrape_io.Options.only` carries them,
   so `select` sees nothing else of the library.
 - **The lock.** `inbox` already holds `inbox/.warpzone.lock`, so it calls `scrape_io.run_placed`,
   which is `run_scrape` without taking the lock. `warpzone scrape` is the only caller that takes it.
@@ -531,8 +564,7 @@ How it is done (`inbox_scrape.py`, called from `inbox._run` right after `_update
 
 `warpzone scrape [--root PATH] [--system NAME ...] [--retry-not-found] [--dry-run] [--force-lock]` scrapes the games of the library
 that have no gamelist entry or lack media, for every system in the platform table, or only the
-ones named with `--system` (a name not in the table is a usage error, exit 2, which says why a
-system is left out when it is in `UNSCRAPED`). It reads `[inbox]` only, like `inbox`, and needs
+ones named with `--system` (a name not in the table is a usage error, exit 2). It reads `[inbox]` only, like `inbox`, and needs
 the catalog: a system without a catalog file is skipped with the hint to run `warpzone catalog`.
 It takes the inbox lock (`inbox/.warpzone.lock`, with its heartbeat, its stale rules and
 `--force-lock`, see `development/design/inbox.md`), so it never runs while `inbox --apply`
@@ -616,7 +648,7 @@ stop at start), so there is no account line. It is optional, `[--]` and not a pr
 
 ## Code and testing
 
-`scrape.py` holds the pure part: `PLATFORMS` and `UNSCRAPED`, `select`, `skyscraper_args`,
+`scrape.py` holds the pure part: `PLATFORMS`, `FRONTEND_BASES`, `frontend_games`, `select`, `skyscraper_args`,
 `classify_output`, `plan_merge` and the report. `scrape_io.py` stages, runs Skyscraper through
 `runners.run_tool` (its own session, killed with its group at the time limit or on Ctrl-C), reads
 the output and writes to the hub. The doctor's presence check is a pure function of the file's
@@ -624,8 +656,11 @@ lines plus a `Probes` read.
 
 Unit tests, with no network and no Skyscraper:
 
-- The platform table covers every system `inbox` places, in `PLATFORMS` or `UNSCRAPED`, and has no
-  system twice.
+- The platform table covers every system `inbox` places and has no other.
+- `frontend_games` for each of the four systems: the shifted path, the games it drops, and that
+  the staged name, the entry, the media stem and the not-found key all come out as the frontend
+  names them; `select` and `plan_merge` then work as for any system. `scrape_io` tests stage a PS4
+  and a Vita game as their launcher and run the stand-in tool over the four systems.
 - `skyscraper_args` gives the exact command lines above, never `-u`, `-c` or `-t`, and no word
   from a fake `config.ini` holding credentials (`# gitleaks:allow`).
 - The presence check finds `userCreds` only in `[screenscraper]`, handles comments, quotes and
@@ -657,11 +692,3 @@ anonymous and with an account, on a few games of different systems (a cartridge 
 multi-disc `.m3u` folder, a NES or Atari 7800 dump with a header); the miximage and the 3D box
 next to ES-DE's own; ES-DE on a console and the library UI showing the merged entries and media;
 a run stopped half-way and resumed.
-
-## Deferred
-
-Decided by the maintainer to leave for later (2026-11-13):
-
-1. **`xbox360`, `wiiu`, `ps4` and `psvita`.** Scraping them needs the frontend-base shift and, for
-   the launchers, a name to search by (the shortcut's or launcher's title). They stay in
-   `UNSCRAPED` until then.

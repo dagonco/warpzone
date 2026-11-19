@@ -447,7 +447,7 @@ news. Other NAS systems use their own scheduler or root's crontab with the same 
 - A "last nightly scrape" line in the library UI.
 - A catch-up scrape inside the first inbox tick after 03:00, which would break the inbox's "empty
   is cheap" rule.
-- Scraping on a console, and the systems in `UNSCRAPED`.
+- Scraping on a console.
 
 ## Code and testing
 

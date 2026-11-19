@@ -35,7 +35,7 @@ class CandidateTests(unittest.TestCase):
             unit("nes", "B.zip"),
             unit("nes", "C.zip", "already"),
             unit("psx", "D.m3u"),
-            unit("ps4", "E", folder="roms/ps4"),
+            unit("amiga", "E", folder="roms/amiga"),
             unit("switch", "U.nsp", folder="extras/switch/updates"),
         ]
         self.assertEqual(
@@ -43,6 +43,35 @@ class CandidateTests(unittest.TestCase):
             {"nes": ["roms/nes/A.zip", "roms/nes/B.zip"], "psx": ["roms/psx/D.m3u"]},
         )
         self.assertEqual(inbox_scrape.candidates(results, "planned"), {})
+
+    def test_the_launcher_systems_are_taken_with_the_folder_they_were_placed_in(self) -> None:
+        results = [
+            unit("ps4", "CUSA00000", folder="roms/ps4/games"),
+            unit("ps4", "CUSA00000-UPDATE", folder="roms/ps4/games"),
+            unit("psvita", "PCSA00000", folder="roms/psvita/app"),
+        ]
+        self.assertEqual(
+            inbox_scrape.candidates(results, "placed"),
+            {
+                "ps4": ["roms/ps4/games/CUSA00000", "roms/ps4/games/CUSA00000-UPDATE"],
+                "psvita": ["roms/psvita/app/PCSA00000"],
+            },
+        )
+
+    def test_a_ps4_game_is_placed_through_its_folder_update_or_dlc(self) -> None:
+        from scrape_support import ps4_game
+
+        found = ps4_game(update=True, dlc=True)
+        other = ps4_game("Other", "CUSA11111")
+        for path in (
+            "roms/ps4/games/CUSA00000",
+            "roms/ps4/games/CUSA00000-UPDATE",
+            "roms/ps4/dlc/CUSA00000/pack",
+            "roms/ps4/shortcuts/Example PS4.desktop",
+        ):
+            with self.subTest(path=path):
+                self.assertTrue(scrape.is_placed(found, [path]))
+                self.assertFalse(scrape.is_placed(other, [path]))
 
     def test_a_game_is_placed_when_its_primary_is_the_entry_or_inside_it(self) -> None:
         from library_support import game

@@ -125,6 +125,36 @@ else:
 """
 
 
+def ps4_game(title="Example PS4", cusa="CUSA00000", *, launcher=True, update=False, dlc=False):
+    """A PS4 game as the catalog has it: the folder is the primary, the shortcut a part and
+    the gamelist path (below the hub's system folder) names the shortcut."""
+    extra = [(f"roms/ps4/shortcuts/{title}.desktop", "file", 100)] if launcher else []
+    if update:
+        extra.append((f"roms/ps4/games/{cusa}-UPDATE", "dir", 5))
+    if dlc:
+        extra.append((f"roms/ps4/dlc/{cusa}", "dir", 5))
+    return game(
+        "ps4",
+        f"roms/ps4/games/{cusa}",
+        title,
+        kind="dir",
+        extra=extra,
+        gamelist=f"./shortcuts/{title}.desktop" if launcher else f"./games/{cusa}",
+    )
+
+
+def vita_game(title="Example Vita", title_id="PCSA00000", *, launcher=True):
+    extra = [(f"roms/psvita/{title}.psvita", "file", 10)] if launcher else []
+    return game(
+        "psvita",
+        f"roms/psvita/app/{title_id}",
+        title,
+        kind="dir",
+        extra=extra,
+        gamelist=f"./{title}.psvita" if launcher else f"./app/{title_id}",
+    )
+
+
 class Hub:
     """A temporary hub with a `snes` library, its catalog, and the stand-in tool."""
 
@@ -165,6 +195,21 @@ class Hub:
         g = game(system, path, name.rsplit(".", 1)[0], size=len(content))
         self.games.append(g)
         self.write_catalog(system)
+        return g
+
+    def add_catalog_game(self, g: catalog.Game, *files: str) -> catalog.Game:
+        """Put a game made elsewhere in the library: its parts that are folders, and `files`
+        (paths below `library/`; the parts that are files are among them), then write its
+        system's catalog."""
+        library = self.root / "library"
+        for part in g.parts:
+            if part.type == catalog.DIR:
+                (library / part.path).mkdir(parents=True, exist_ok=True)
+        for path in files:
+            (library / path).parent.mkdir(parents=True, exist_ok=True)
+            (library / path).write_bytes(b"x")
+        self.games.append(g)
+        self.write_catalog(g.primary.split("/")[1])
         return g
 
     def write_catalog(self, system: str = "snes") -> None:
