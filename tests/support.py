@@ -165,6 +165,8 @@ class FakeSyncthing:
         self.completion: dict[tuple[str, str], dict[str, Any]] = {}
         # db/remoteneed: (folder, device ID) -> the names the device needs; absent is a 404.
         self.remote_need: dict[tuple[str, str], list[str]] = {}
+        # db/remoteneed: name -> the `type` it is listed with, when it is not a directory.
+        self.remote_need_types: dict[str, str] = {}
         # db/status: folder -> keys that replace the default answer (idle, nothing needed).
         self.status: dict[str, dict[str, Any]] = {}
         # Seconds a full scan takes to answer: Syncthing holds it while the folder pulls.
@@ -288,7 +290,10 @@ class FakeSyncthing:
                 return 404, "no such folder or device"
             page, perpage = int(query.get("page", "1")), int(query.get("perpage", "100"))
             chunk = names[(page - 1) * perpage : page * perpage]
-            files = [{"name": n, "type": "FILE_INFO_TYPE_DIRECTORY"} for n in chunk]
+            files = [
+                {"name": n, "type": self.remote_need_types.get(n, "FILE_INFO_TYPE_DIRECTORY")}
+                for n in chunk
+            ]
             return 200, {"files": files, "page": page, "perpage": perpage}
         if path == "/rest/db/browse":
             if folder not in self.browse and folder not in self.folders:
