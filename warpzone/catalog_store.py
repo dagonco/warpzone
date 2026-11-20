@@ -211,16 +211,14 @@ def update_system(
     ra_tried: set[str] | None = None,  # games RAHasher failed on during this run
     out: Callable[[str], None] = lambda text: None,
 ) -> SystemResult:
-    """Bring `catalog/systems/<system>.json` in line with the library.
-
-    The write is guarded by the stamp of the file as it was read: when the file changed in
-    between it is read again, the change applied again and the write retried. A file whose
-    games would not change is not written. `dry_run` hashes nothing and writes nothing.
+    """Bring `catalog/systems/<system>.json` in line with the library, with the guarded write
+    (read again and retried when the file changed). A file whose games would not change is not
+    written. `dry_run` hashes nothing and writes nothing.
 
     `ra_known` is what `inbox` just filed (see `RaKnown`). With `ra_hasher`, at most
-    `ra_limit` games whose part has no current RA hash are hashed (those in `ra_tried`, which
-    RAHasher already failed on in this run, are left alone); `ra_left` in the result says how
-    many more can be tried, so the caller calls again until it is 0.
+    `ra_limit` games whose part has no current RA hash are hashed (those in `ra_tried` are
+    left alone); `ra_left` in the result says how many more can be tried, so the caller calls
+    again until it is 0.
     """
     library = root / "library"
     path = system_path(root, system)
@@ -309,8 +307,7 @@ def _rewrite(
 
 
 def remove_game(root: Path, system: str, game_id: str, *, now: datetime | None = None) -> str:
-    """Take one game's record out of its system file (the library UI's deletion: the files are
-    gone from `library/`, and the next `catalog` run would drop the record anyway). Nothing
+    """Take one game's record out of its system file (the library UI's deletion). Nothing
     else in the file changes and nothing is walked or hashed."""
 
     def change(games: dict[str, catalog.Game]) -> dict[str, catalog.Game] | None:
@@ -320,10 +317,9 @@ def remove_game(root: Path, system: str, game_id: str, *, now: datetime | None =
 
 
 def put_game(root: Path, system: str, game: catalog.Game, *, now: datetime | None = None) -> str:
-    """Put a game back into its system file (a restore from the trash). A record of the same id
-    that a catalog run made in the meantime keeps what it has and gains what only the old
-    record knew: the day it was added, the DAT name, the serials, the RA entry, the flags and
-    the SHA-1 of a part whose size and mtime are the same."""
+    """Put a game back into its system file (a restore from the trash); a record of the same id
+    made in the meantime keeps what it has and gains what only the old one knew (see "Deleting
+    a game" in development/design/library-ui.md)."""
 
     def change(games: dict[str, catalog.Game]) -> dict[str, catalog.Game] | None:
         found = games.get(game.id)
@@ -559,9 +555,9 @@ def run_ra_lists(
     now: datetime | None = None,
 ) -> list[ListResult]:
     """`warpzone catalog --ra-lists`: refresh `catalog/ra/<console id>.json` for each console
-    of `ra.CONSOLE_IDS` the library has. A list younger than 7 days is not downloaded again
-    unless `force`. A failed download keeps the cached file and is reported by kind only. The
-    caller exits 1 when any result `failed` (a console left with no list at all)."""
+    of `ra.CONSOLE_IDS` the library has. A fresh list (`catalog.RA_LIST_DAYS`) is not
+    downloaded again unless `force`. A failed download keeps the cached file and is reported
+    by kind only. The caller exits 1 when any result `failed`."""
     if not key:
         raise CatalogError(f"no RetroAchievements key: set {ra.KEY_ENV} in the environment")
     if not (root / "library" / "roms").is_dir():
@@ -644,12 +640,10 @@ def update_serials(
     force: bool = False,
     dry_run: bool = False,
 ) -> SerialsResult:
-    """Fill `serials` in `catalog/systems/<system>.json` from the system's DATs.
-
-    Only games with no serials are looked at, unless `force`. The write is guarded like the
-    scan's: when the file changed since it was read it is read again and the decision made
-    again, up to `WRITE_TRIES` times. A file that would not change is not written, and
-    `dry_run` writes nothing."""
+    """Fill `serials` in `catalog/systems/<system>.json` from the system's DATs. Only games
+    with no serials are looked at, unless `force`. The write is guarded like the scan's (up
+    to `WRITE_TRIES`); a file that would not change is not written, and `dry_run` writes
+    nothing. See "DAT serials" in development/design/library-ui.md."""
     path = system_path(root, system)
     library = root / "library"
     index: catalog.SerialIndex | None = None
@@ -718,10 +712,8 @@ def run_dats(
     now: datetime | None = None,
 ) -> list[SerialsResult]:
     """`warpzone catalog --dats`: for each system with a catalog file, fill the `serials` of
-    the games that have none from its DATs (see `update_serials`), and say per system how
-    many were filled, already had them, matched nothing, or had no DAT with serials. The
-    caller exits 1 when any result `failed`. `load` is called only for a system with a game
-    to look at."""
+    the games that have none from its DATs (see `update_serials`). The caller exits 1 when any
+    result `failed`. `load` is called only for a system with a game to look at."""
     if not (root / "library" / "roms").is_dir():
         raise CatalogError(f"{root} has no library/roms/ folder; is --root the hub root?")
     _, updated = _clock(now)
@@ -754,9 +746,8 @@ def update_after_inbox(
     now: datetime | None = None,
 ) -> None:
     """What `inbox --apply` runs after filing: the same derivation as `catalog` for each
-    system it placed something in, merged with the DAT names, serials and RA hashes it knows (by
-    primary path; see `RaKnown`).
-    A failure is a warning: the next `catalog` run picks the game up."""
+    system it placed something in, merged with what `inbox` knows (by primary path; see
+    `RaKnown`). A failure is a warning: the next `catalog` run picks the game up."""
     today, updated = _clock(now)
     for system in sorted(systems):
         result = update_system(

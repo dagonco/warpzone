@@ -416,16 +416,10 @@ def match_dat(dat: Dat, files: Sequence[FileInfo]) -> Identified:
 
 
 def _match_headerless(dat: Dat, files: Sequence[FileInfo]) -> Identified:
-    """Match headered files by the data after the header against the DAT's headerless
-    entries (No-Intro lists NES ones as `.unh`, 16 bytes smaller than the iNES dump, and
-    Atari 7800 ones as `.bin`, 128 bytes smaller than the A78 dump). The headers of
-    the same verified dump differ between dumpers (iNES against NES 2.0 fields, junk in the
-    reserved bytes), the data does not. Only a SHA-1 equal to the DAT's counts, so a CRC32
-    collision cannot place a wrong game.
-
-    The match describes the file as it is: the DAT roms are replaced by roms with the size,
-    hashes and `.nes` or `.a78` name of the file, so the library keeps the file with its own
-    header and everything downstream checks the bytes that are placed."""
+    """Match headered files by the data after the header against the DAT's headerless entries.
+    Only a SHA-1 equal to the DAT's counts. The match describes the file as it is (its size,
+    hashes and `.nes` or `.a78` name), so the library keeps its own header. See
+    development/design/inbox.md, "NES and Atari 7800 dumps with a header"."""
     real = {f.path: f for f in files}
     views = [FileInfo(f.path, *f.without_header) for f in files if f.without_header is not None]
     found, _ = _resolve(dat, views)

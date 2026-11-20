@@ -1,25 +1,12 @@
 """`warpzone doctor`: check this machine and say how to fix what is missing.
 
-Offline and read-only: it never installs or changes anything. The only network-like
-probe is one request to the local Syncthing REST API on the loopback address.
-
-Each check is a small function that takes a `Context` and returns `Result` records.
-Everything it needs from the machine (`which`, running a tool, the environment, the
-filesystem, the clock, the HTTP probe) is a field of `Probes`, so the tests run with
-fakes and no real tools. `render` turns the results into text and `exit_code` into the
-process status; both are pure.
-
-Statuses and what they mean for the exit code:
-
-    ok        [ok]  fine
-    warn      [! ]  works, but worth a look (old DATs, little free space); exit code unaffected
-    fail      [!!]  a problem: something this machine needs is missing or broken; exit 1
-    optional  [--]  not set up; only matters for the feature named in the line; exit 0
-
-The checks live in the `doctor_*` modules, by area (see "Code layout" in
-development/design/code-and-testing.md); this module is the name `cli` and the tests import. It
-holds the list of checks (`CHECKS`, run in this order), the runner and the output. To add a
-check, write it in the module of its area (or a new `doctor_*` module) and add it to `CHECKS`.
+Offline and read-only: it never installs or changes anything. Each check is a small function that
+takes a `Context` and returns `Result` records; everything it needs from the machine is a field of
+`Probes`, so the tests run with fakes. `render` and `exit_code` are pure. The checks live in the
+`doctor_*` modules, by area (see "Code layout" in development/design/code-and-testing.md); this
+module is the name `cli` and the tests import. It holds the list of checks (`CHECKS`, run in this
+order), the runner and the output. To add a check, write it in the module of its area (or a new
+`doctor_*` module) and add it to `CHECKS`. Statuses and the exit code: development/design/doctor.md.
 """
 
 from __future__ import annotations

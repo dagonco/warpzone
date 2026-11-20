@@ -1,32 +1,11 @@
 """PS Vita games for `warpzone inbox`: a decrypted dump filed as a game folder plus a launcher.
 
-Vita3K runs the games it finds in `ux0/app/<TITLEID>`, and ES-DE lists only `.psvita` files,
-whose launch command (`%INJECT%=%BASENAME%.psvita` in EmuDeck's system) passes the file's
-content to Vita3K as the title to run. So a game dump found in a folder or an archive, either
-at its root or inside one top folder, becomes:
-
-- `library/roms/psvita/app/<TITLEID>/`: the dump as it is (`eboot.bin`, `sce_sys/param.sfo`
-  and the data), copied beside the final name and renamed, so the destination never holds a
-  partial game. A console links it into Vita3K's `ux0/app` (`[links.vita3k]` in the profile,
-  run by `provision device` and at ES-DE's startup).
-- `library/roms/psvita/<Title>.psvita`: a file whose whole content is the title id.
-- `library/roms/psvita/license/<TITLEID>/<CONTENT_ID>.rif`: the game's 512-byte licence, when
-  the dump brings one (`sce_sys/package/work.bin`, or a `.rif` in the item). A game whose
-  `eboot.bin` is still an encrypted SELF cannot start in Vita3K without it, so one that needs
-  a licence and has none goes to review. A console links the folder into `ux0/license`.
-
-A dump is recognised by `sce_sys/param.sfo` next to `eboot.bin` with a Vita title id
-(`PCS[A-I]nnnnn`). Category `gd` and `gdc` are games; updates (`gp`) and DLC (`ac`) go to
-review, and so does a dump that Vita3K would have to install (an `sce_pfs` folder). A Vitamin
-dump (it holds `sce_module/steroid.suprx`) always goes to review: Vita3K rejects that module,
-so it is never placed even if the game might start. A PS3 `PS3_GAME/PARAM.SFO` is not this
-layout. A game already in the library is reported and never overwritten. `.vpk` files
-are reported as unsupported; a Vita `.pkg` is installed with Vita3K by `inbox_vita_pkg`, which
-hands the result to `install`.
-
-The decisions (`is_title_id`, `category_kind`, `game_roots`, `is_vitamin`, `file_name`,
-`eboot_needs_license`, `parse_license`, `license_sources`, `choose_license`) are pure;
-`install` touches the disk. See development/design/inbox.md.
+A dump (a folder or archive with `sce_sys/param.sfo` next to `eboot.bin`) becomes
+`library/roms/psvita/app/<TITLEID>/`, a `<Title>.psvita` launcher and, when it needs or brings
+one, a licence. A Vita `.pkg` is installed with Vita3K by `inbox_vita_pkg`, which hands the result
+to `install`. The decisions (`is_title_id`, `category_kind`, `game_roots`, `is_vitamin`,
+`file_name`, `eboot_needs_license`, `parse_license`, `license_sources`, `choose_license`) are
+pure; `install` touches the disk. See development/design/inbox.md, "PS Vita games".
 """
 
 from __future__ import annotations
@@ -121,15 +100,10 @@ class License(NamedTuple):
 
 
 def eboot_needs_license(head: bytes) -> bool:
-    """Whether Vita3K needs the game's licence to run this `eboot.bin`, from its first bytes.
-
-    Vita3K (`decrypt_fself`, `packages/src/sce_utils.cpp`) reads a file that starts with
-    `SCE\\0` as a SELF: its first segment is plain when the segment info at the header's
-    offset 0x58 has `encryption == 2` (field at +0x18). It logs "No klic provided for
-    encrypted App" and fails when that segment is not plain, the app info (offset 0x38,
-    `self_type` at +12) says APP (8) and the key of the licence is all zeros. The magic alone
-    does not tell: a decrypted dump keeps it. Not a SELF (no magic): no licence. A SELF whose
-    header cannot be read raises `ValueError`."""
+    """Whether Vita3K needs the game's licence to run this `eboot.bin`, from its first bytes: an
+    encrypted SELF of an APP needs one; a file without the `SCE\\0` magic needs none. A SELF whose
+    header cannot be read raises `ValueError`. See development/design/inbox.md, "PS Vita games"
+    (Licence)."""
     if head[:4] != _SELF_MAGIC:
         return False
     bad = ValueError("eboot.bin starts like a SELF (SCE header) but its header cannot be read")
@@ -157,10 +131,8 @@ def parse_license(data: bytes) -> License:
 
 
 def license_sources(names: Sequence[str], root: str, title_id: str) -> list[str]:
-    """The files of an item that may be the game's licence, sorted: the game's
-    `sce_sys/package/work.bin`, and a `.rif` directly in the game folder or beside it (the
-    item's top), or in `license/<TITLEID>/` at either place. `names` have `/` separators and
-    `root` is `""` or `Top/`."""
+    """The files of an item that may be the game's licence, sorted (see development/design/inbox.md,
+    "PS Vita games", Licence). `names` have `/` separators and `root` is `""` or `Top/`."""
     places = {"", root}
     homes = places | {f"{p}license/{title_id}/" for p in places}
     found = set()

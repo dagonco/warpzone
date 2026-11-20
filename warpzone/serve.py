@@ -1,11 +1,8 @@
 """`warpzone serve`: the library UI's page and JSON API on one port (`http.server`).
 
-The decisions are in `library_api.py` and `progress.py` (pure). Here is what touches the
-world: the sockets, the token and the session cookie, the reads of the hub root with their
-caches, the lock that serializes whitelist writes, the questions to the hub's Syncthing and
-the background `catalog` runs. See "HTTP API" in development/design/library-ui.md.
-
-The token is never printed, logged or echoed.
+The decisions are in `library_api.py` and `progress.py` (pure); this module touches the
+sockets, the hub root, the Syncthing API and the background `catalog` runs. See "HTTP API" in
+development/design/library-ui.md.
 """
 
 from __future__ import annotations
@@ -86,11 +83,7 @@ RA_LISTS_PERIOD = 24 * 3600.0
 UI_DIR = Path(__file__).resolve().parent / "data" / "ui"
 CSP = "default-src 'self'"
 CHUNK = 64 * 1024  # bytes of a media file read and sent at a time
-# Total time to receive one request body, the read and the discard alike. The per-read timeout
-# above only bounds the silence between two reads, so a client sending a byte just inside it, again
-# and again, would keep a thread for as long as it liked. Four times that timeout lets a body
-# of the biggest size that is discarded (1 MiB) arrive at 18 KiB/s and one that is read (64 KiB)
-# at about 1 KiB/s: slower than any real client on a LAN or a phone link.
+# Seconds to receive one request body, the read and the discard alike (see "HTTP API").
 BODY_SECONDS = 4.0 * SOCKET_TIMEOUT
 MAX_DRAIN = 1024 * 1024  # bytes of a rejected request body read and thrown away before the answer
 LIBRARY_FOLDER = "wz-library"
@@ -154,13 +147,9 @@ class QueueFull(Exception):
 
 
 class FailureLimiter:
-    """One limiter for every authentication attempt, whichever thread it comes from: the
-    failures are answered `interval` seconds apart, so parallel guesses queue up behind each
-    other instead of each sleeping on its own. At most `max_waiting` wait at once, each one
-    holding a connection. Checking the queue, comparing the offered token and taking a place
-    are one step under the lock (`attempt`), so while the queue is full no token is compared
-    at all: the guesses leave one per `interval` however many arrive together, and the
-    sleepers cannot take every connection of the server."""
+    """One limiter for every authentication attempt: failures are answered `interval` seconds
+    apart, at most `max_waiting` wait at once. See development/design/library-ui.md,
+    "Authentication"."""
 
     def __init__(
         self,
@@ -184,16 +173,14 @@ class FailureLimiter:
         return max(1, math.ceil(self.interval))
 
     def full(self) -> bool:
-        """Whether the queue is full now. Only a shortcut for a caller that can refuse before
-        it does other work; `attempt` is what guarantees that nothing is compared."""
+        """Whether the queue is full now (a shortcut: `attempt` is what guarantees no compare)."""
         with self._lock:
             return self._waiting >= self.max_waiting
 
     def attempt(self, right: Callable[[], bool]) -> bool:
         """Make one attempt. Raises `QueueFull`, without calling `right`, when `max_waiting`
-        failures already wait. Otherwise calls `right()` (the comparison of the offered
-        token, a few microseconds, done under the lock) and returns True if it is true. If
-        not, this failure takes a place in the queue, waits for its turn and returns False."""
+        failures already wait. Otherwise returns True if `right()` is, else waits its turn in
+        the queue and returns False."""
         if not self.interval:
             return right()
         with self._lock:
@@ -214,26 +201,22 @@ class FailureLimiter:
 
 
 def session_cookie(token: str, expires: int) -> str:
-    """The value of the session cookie: `<expires>.<mac>`, where `expires` is the Unix time the
-    session ends and `mac` the HMAC-SHA256 of a fixed message and `expires` under the token. It
-    needs no server state: the server checks the mac and the time (`session_valid`)."""
+    """The session cookie value `<expires>.<mac>`; `expires` is a Unix time. It needs no server
+    state (`session_valid`). See development/design/library-ui.md, "Authentication"."""
     message = SESSION_MESSAGE + b"." + str(expires).encode("ascii")
     mac = hmac.new(token.encode("utf-8"), message, hashlib.sha256).hexdigest()
     return f"{expires}.{mac}"
 
 
 def forwarded_https(header: str | None) -> bool:
-    """Whether the `X-Forwarded-Proto` header of a request says the client reached a proxy over
-    TLS: its first comma-separated value is `https`, in any case. Any client can send the
-    header, which is acceptable here: it is used only to add `Secure` to the session cookie,
-    so a client that lies over plain HTTP only stops its own browser from sending the cookie
-    back."""
+    """Whether the first comma-separated value of `X-Forwarded-Proto` is `https`, in any case.
+    It only decides `Secure` on the cookie (see "Authentication" in
+    development/design/library-ui.md)."""
     return (header or "").split(",")[0].strip().lower() == "https"
 
 
 def session_cookie_line(value: str, *, secure: bool) -> str:
-    """The `Set-Cookie` line of a new session; `secure` adds the attribute that keeps the
-    browser from sending the cookie over plain HTTP."""
+    """The `Set-Cookie` line of a new session; `secure` adds the `Secure` attribute."""
     line = f"{COOKIE}={value}; HttpOnly; SameSite=Strict; Path=/; Max-Age={COOKIE_MAX_AGE}"
     return line + "; Secure" if secure else line
 
@@ -253,9 +236,8 @@ def _same(a: str, b: str) -> bool:
 
 
 def cookie_values(header: str, name: str) -> list[str]:
-    """Every value of the cookie `name` in a `Cookie` header, parsed by hand: other
-    applications on the same host share the cookie jar, and their odd values must not hide
-    ours."""
+    """Every value of the cookie `name` in a `Cookie` header, parsed by hand (a shared jar can
+    hold odd values of other applications)."""
     found = []
     for part in header.split(";"):
         key, sep, value = part.partition("=")
@@ -327,9 +309,9 @@ class InboxFiles:
 
 
 class HubFiles:
-    """The hub root's files, read and kept in memory. A file is read again when its size or
-    mtime changed, and checked for that at most every `interval` seconds. The whitelists are
-    small and decide a write, so they are read on every request."""
+    """The hub root's files, read and kept in memory: read again when the size or mtime
+    changed, checked at most every `interval` seconds. The whitelists are read on every
+    request, since they decide a write."""
 
     def __init__(
         self,
@@ -532,15 +514,14 @@ class HubFiles:
             return found
 
     def game_saves(self, lib: library_api.Library, game_id: str) -> dict[str, Any]:
-        """The `saves` object of a game (an empty one for an unknown id)."""
         found = lib.by_id.get(game_id)
         if found is None:
             return saves_index.saves_response(saves_index.GameSaves())
         return self._saves.game(lib, found[0], found[1].primary, found[1].serials)
 
     def media_path(self, system: str, kind: str, name: str) -> Path | None:
-        """The image file, or None when it is not a regular file inside its kind's folder.
-        A symlink anywhere between `frontend/media/` and the file is refused."""
+        """The image file, or None when it is not a regular file inside its kind's folder
+        (`safe_file`)."""
         parts = library_api.safe_parts("/" + name)
         if parts is None or not parts:
             return None
@@ -550,11 +531,8 @@ class HubFiles:
     # ------------------------------------------------------------- play state
 
     def play_ledgers(self) -> tuple[playstate.Ledger, ...]:
-        """The ledgers in `frontend/play-state/`, one per device, in device order. A file is
-        parsed again when its size or mtime changed (checked at most every `interval`
-        seconds); one that cannot be read, or trusted, or is over 32 MiB, is left out. Conflict
-        copies are ignored, and the devices that left the config still count: their plays
-        happened."""
+        """The ledgers in `frontend/play-state/`, one per device, in device order; one that
+        cannot be read or trusted is left out. See development/design/play-state.md."""
         with self._lock:
             if self.clock() - self._ledgers_checked >= self.interval:
                 self._ledgers_checked = self.clock()
@@ -593,8 +571,7 @@ class HubFiles:
     # ------------------------------------------------------------- the queue
 
     def queue(self) -> queue_store.Loaded:
-        """The queue file, read again when its size or mtime changed (checked at most every
-        `interval` seconds). A write of the server drops it (`invalidate_queue`)."""
+        """The queue file, cached like the other hub files; a write drops it."""
         with self._lock:
             if self._queue is not None and self.clock() - self._queue_checked < self.interval:
                 return self._queue[1]
@@ -613,8 +590,7 @@ class HubFiles:
 
     def _inbox_file(self, path: Path | None, parse: Callable[[str | None], Any]) -> Any:
         """`parse` of a file's text (None when there is no file), read again only when its size
-        or mtime changed. A file over `INBOX_FILE_MAX` or one that cannot be read is damaged:
-        `parse` gets None for it, as for a missing one."""
+        or mtime changed. A damaged file (over `INBOX_FILE_MAX` or unreadable) gets None."""
         if path is None:
             return parse(None)
         stamp = self._stat(path)
@@ -638,8 +614,6 @@ class HubFiles:
         return found
 
     def inbox(self) -> InboxFiles:
-        """The state file, the newest run records and the lock, checked at most every
-        `interval` seconds."""
         with self._lock:
             if self._inbox is not None and self.clock() - self._inbox_checked < self.interval:
                 return self._inbox
@@ -674,9 +648,8 @@ class HubFiles:
             return self._busy()
 
     def _busy(self) -> dict[str, str | None] | None:
-        """`busy`: null without a lock file. A lock that is a link, not a regular file, too big
-        or unreadable is busy with an unknown mode: it is never followed or waited on (a named
-        pipe in its place must not block the server)."""
+        """`busy`: null without a lock file; an odd or unreadable lock is busy with mode
+        `unknown` (see "The inbox" in development/design/library-ui.md)."""
         lock = self.root / "inbox" / inbox_lock.LOCK_NAME
         try:
             info = os.lstat(lock)
@@ -705,13 +678,9 @@ class HubFiles:
 
 def safe_file(root: Path, base: Path, parts: tuple[str, ...]) -> Path | None:
     """`base` (a folder below `root`) joined with `parts`, when that is a regular file and no
-    symbolic link lies anywhere between `root` and the file; else None.
-
-    `root` is the folder that must contain everything and it is resolved once; the chain below
-    it has to be made of real folders, so a link (even one that points inside `root`) in `base`
-    or in `parts` makes the answer None, and the file cannot be outside `root`. The returned
-    path is the resolved one. A caller that opens it must do so without following a final link
-    (`open_regular`): the check and the open are two steps."""
+    symbolic link lies anywhere between `root` and the file; else None. The returned path is
+    the resolved one; open it with `open_regular`. See "Symbolic links in the media folder" in
+    development/design/library-ui.md."""
     real_root = os.path.realpath(root)
     try:
         below = base.relative_to(root)
@@ -724,13 +693,9 @@ def safe_file(root: Path, base: Path, parts: tuple[str, ...]) -> Path | None:
 
 
 def open_regular(path: Path) -> tuple[BinaryIO, int] | None:
-    """The file open for reading and its size, or None when `path` is not a regular file or
-    its last component is a link. The size is that of the open file, so it matches the bytes
-    read. `O_NONBLOCK` keeps a FIFO put in its place from blocking the open (it is refused
-    right after), and has no effect on a regular file.
-
-    This narrows the gap after `safe_file`, it does not close it: only the last component is
-    not followed, so a folder above it swapped for a link in between is still followed."""
+    """The file open for reading and its size (that of the open file), or None when `path` is
+    not a regular file or its last component is a link. It narrows the gap after `safe_file`,
+    it does not close it (see "Symbolic links in the media folder")."""
     try:
         fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK)
     except OSError:
@@ -768,8 +733,7 @@ class Refresher:
     """The `catalog` runs of the server: one at a time, in a thread of their own.
 
     `job(ra_lists)` does the work and returns a short message (or raises). `trigger` starts
-    a run unless one is running; `schedule` is the loop that runs at start and then every six
-    hours, with the RetroAchievements lists once a day."""
+    a run unless one is running; `schedule` is the loop that repeats them."""
 
     def __init__(
         self,
@@ -832,9 +796,8 @@ class Refresher:
         return True
 
     def request(self, ra_lists: bool = False) -> bool:
-        """Ask for a run that sees what changed just now (a game moved to the trash or back):
-        start one, or, when one is running (it may have listed the system before the move),
-        make one more start when it ends. True when one started now."""
+        """Ask for a run that sees what changed just now: start one, or make one more start
+        when the running one ends. True when one started now."""
         with self._state_lock:
             self._again = True
         if self.trigger(ra_lists):
@@ -881,9 +844,9 @@ def catalog_job(
     log: Callable[[str], None],
     ra_user: str | None = None,
 ) -> Callable[[bool], str]:
-    """The work of one background run: `catalog` (with RAHasher when one is set) and, when
-    asked and a key is set, `catalog --ra-lists`. With a key, every run also does a bounded
-    share of `catalog --ra-achievements` (what is fresh costs no call)."""
+    """The work of one background run: `catalog` (with RAHasher when one is set) and, with a
+    RetroAchievements key, the `--ra-lists` and a bounded share of the `--ra-achievements`
+    work (see "RetroAchievements" in development/design/library-ui.md)."""
     hasher = catalog_store.rahasher_runner(rahasher) if rahasher else None
 
     def job(ra_lists: bool) -> str:
@@ -1007,11 +970,9 @@ class App:
     # ------------------------------------------------------------- authentication
 
     def _authenticated(self, request: Request) -> str | None:
-        """`access` when the request carries a valid Cloudflare Access token, else `bearer` or
-        `cookie` when it carries the UI token in one of the two ways. A valid Access token next
-        to the right bearer is the bearer (a client that is not a browser keeps its exemption
-        from the `Origin` check); next to a wrong one it is just the Access token, with no wait,
-        because the token already answered."""
+        """`access` for a valid Cloudflare Access token, else `bearer` or `cookie` for the UI
+        token, else None. A valid Access token next to the right bearer is the bearer. See
+        development/design/library-ui.md, "Authentication" and "Cloudflare Access"."""
         auth = request.headers.get("authorization", "")
         scheme, _, given = auth.partition(" ")
         given = given.strip()
@@ -1042,8 +1003,7 @@ class App:
 
     def _access_valid(self, request: Request) -> bool:
         """Whether the `Cf-Access-Jwt-Assertion` header, when Access is set up, is a valid token.
-        An invalid or absent one is no credential and costs no wait: it is not a guess at the
-        UI token, so the request goes on to the cookie and bearer checks as if it had none."""
+        An invalid or absent one is no credential and costs no wait."""
         if self.access is None:
             return False
         header = request.headers.get(ACCESS_HEADER)
@@ -1598,8 +1558,8 @@ class App:
     # ------------------------------------------------------------- disks
 
     def _disks(self) -> dict[str, dict[str, Any]]:
-        """The disk each device reported through the play state folder (small files, read on
-        every request; a missing or stale one is null fields)."""
+        """The disk each device reported through the play state folder (a missing or stale
+        one is null fields)."""
         names = [d.name for d in library_api.library_devices(self.cfg)]
         folder = self.root / "frontend" / "play-state"
         return diskstatus_io.read_all(folder, names, int(self.now().timestamp()))
@@ -1663,7 +1623,7 @@ class App:
     @staticmethod
     def _only_folders(client: Client, device_id: str) -> bool | None:
         """Whether everything the device still needs is a directory; None when the hub could
-        not list it (no list, too many names, an error)."""
+        not list it."""
         try:
             items = client.remote_need_items(LIBRARY_FOLDER, device_id)
         except SyncthingError:
@@ -1733,9 +1693,9 @@ def _printable(text: str) -> str:
 def body_budget(
     left: int, started: float, now: float, limit: float, per_read: float
 ) -> tuple[int, float] | None:
-    """How much of a request body may be read next and for how long: at most one chunk of the
-    `left` bytes, waiting the per-read timeout or what remains of the total `limit` that began at
-    `started`, whichever is less. None once the limit has run out."""
+    """How many bytes of a body and how long to wait for them next: at most one chunk of the
+    `left` bytes, within the per-read timeout or what remains of `limit` since `started`.
+    None once the limit has run out."""
     remaining = limit - (now - started)
     if remaining <= 0:
         return None
@@ -1798,10 +1758,9 @@ class _Handler(BaseHTTPRequestHandler):
 
     def _receive(self, length: int, keep: bool) -> bytes | None:
         """Read `length` bytes of the body within the total time limit. Returns what arrived
-        (less than `length` if the client closed first), empty when `keep` is false: a body that
-        is refused is read and thrown away so the client has sent all of it before the answer and
-        the close of the socket cannot reset the connection with its answer still unread. None
-        when the client stalled, went away or ran past the limit: the connection is dropped."""
+        (less than `length` if the client closed first), empty when `keep` is false (a refused
+        body is read and discarded, see "HTTP API" in development/design/library-ui.md). None
+        when the client stalled, went away or ran past the limit."""
         app = self.server.app
         started = app.clock()
         kept = bytearray()

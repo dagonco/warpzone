@@ -2,10 +2,9 @@
 
 Four pairs of a one-shot service and a timer run a warpzone command in the background: the
 frontend refresh, the play state sync, the unattended prune and the ES-DE settings. `provision
-device` writes them (see `provision_timers.py`); `doctor` and `health` look for them by name. The
-updater's own pair is apart, in `updatetimer.py`, but quotes its `ExecStart=` words with the same
-`exec_word`. See development/design/code-and-testing.md, "Code layout", and the page of each
-command for what its timer runs.
+device` writes them (see `provision_timers.py`); `doctor` and `health` look for them by name.
+The updater's own pair is in `updatetimer.py`. See development/design/code-and-testing.md,
+"Code layout".
 """
 
 from __future__ import annotations

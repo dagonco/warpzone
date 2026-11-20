@@ -1,14 +1,9 @@
 """`warpzone health`: does this version of warpzone work on this device? Writes no user data.
 
-The third step of verifying a version after an update (development/design/autonomous-updates.md).
-It loads the config and the profiles, runs as dry runs what ES-DE and the timers
-run on their own (`settings apply`, `play-state sync`, `links sync`, `frontend refresh`) and
-checks that the startup scripts and the units are there and run a working interpreter.
-
-It is not `doctor`: nothing here depends on DATs or optional tools, and it does not prove that
-a game starts or that Syncthing syncs. The decisions are pure (`plan_steps`, `expected_files`,
-`judge_step`, `judge_file`, `exit_code`); `run_health` is the thin layer that touches the disk
-and the local Syncthing.
+The third step of verifying a version after an update. The decisions are pure (`plan_steps`,
+`expected_files`, `judge_step`, `judge_file`, `exit_code`); `run_health` is the thin layer that
+touches the disk and the local Syncthing. See development/design/autonomous-updates.md,
+"`warpzone health`".
 """
 
 from __future__ import annotations

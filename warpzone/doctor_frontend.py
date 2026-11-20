@@ -362,11 +362,8 @@ def judge_shadps4_version(
     """Verdict on the shadPS4 emulator version the launch script would run.
 
     `emulator` is what `shadps4.select_version` finds (None when no version is installed or
-    selected), `games` whether the device holds PS4 games and `log` the file the script
-    appends its failures to. Without a version PS4 games do not start, and ES-DE shows
-    nothing of the script's error: a warning while there are no PS4 games yet, a problem when
-    there are.
-    """
+    selected), `games` whether the device holds PS4 games and `log` the file the script appends
+    its failures to. See development/design/doctor.md, "shadPS4 version"."""
     if emulator is not None:
         return OK, f"the launch script would run {emulator}", ""
     why = (

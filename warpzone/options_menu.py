@@ -1,22 +1,8 @@
 """The "Warpzone" entry `provision device` adds to the ArkOS "Options" menu. Pure: no I/O.
 
-ArkOS lists every executable `.sh` in `/opt/system` in its Options menu. The entry is a bash
-script that reads warpzone's local files (never the network) and offers, with `dialog` and
-ArkOS's controller-to-keyboard helper `gptokeyb` (what ArkOS's own `msgbox` uses), a menu that
-comes back after every item until "Exit":
-
-- the status: version, channel, pin, the version known to work, a new release the timer found
-  (`available`), the last result and the last fetch;
-- the doctor: `warpzone doctor`, in a box that scrolls;
-- "Install <tag>", only when there is a new release: the live updater's `tick --now` (or
-  `warpzone self-update --now` with an older updater), an update asked for by hand, with a
-  progress bar fed from the updater's `progress` file;
-- the channel: `warpzone self-update --channel stable|rc`, after a yes/no question.
-
-Without `dialog` or a writable terminal it shows the status the old way (`msgbox`, or standard
-output), with the problems `warpzone doctor` reports, and does nothing else. It never fails
-hard: whatever is missing shows as `unknown`. See development/design/profiles.md, "Options
-menu".
+The entry is a bash script that reads warpzone's local files (never the network) and offers
+a menu with the status, the doctor, "Install <tag>" and the channel. It never fails hard:
+whatever is missing shows as `unknown`. See development/design/profiles.md, "Options menu".
 """
 
 from __future__ import annotations
@@ -337,7 +323,6 @@ exit 0
 
 
 def render_script() -> str:
-    """The bash script of the "Warpzone" entry."""
     return _COMMON + _STATUS + _MENU + _DIALOG
 
 

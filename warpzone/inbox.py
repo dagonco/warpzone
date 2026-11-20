@@ -1,11 +1,8 @@
 """Process new games dropped in `inbox/`: identify, convert, file into the library.
 
-Report only by default; `apply` converts, places and moves the originals. Each item
-(a file or folder at the top of `inbox/`) is unpacked into a local work folder, every
-file is identified by content against Redump / No-Intro DATs (`dat.py`), converted to
-the library's format and copied into `library/roms/<system>/` without ever replacing
-an existing file. Originals go to `inbox/_done/<date>/` (purged after 7 days), items
-that could not be placed go to `inbox/_revisar/` with a `<item>.reason.txt`.
+Report only by default; `apply` converts, places and moves the originals. Each item is
+unpacked into a local work folder, identified by content against the DATs (`dat.py`), converted
+and copied into `library/roms/<system>/` without ever replacing an existing file.
 
 The decisions (`select_purge`, `plan_units`, `cue_refs`, `gdi_refs`, `resolve_refs`) are
 pure; the rest touches the disk. What the kind handlers share (errors, options, results,
@@ -272,9 +269,8 @@ def fingerprint(path: Path, rel: str) -> FileInfo:
 
 
 def gcz_data_size(path: Path) -> int | None:
-    """The size of the image inside a GCZ, from its header (little-endian: u32 magic
-    0xB10BC001, u32 sub type, u64 compressed size, u64 data size, ...), or None when the
-    file does not start with the magic, which `dolphin-tool` then rejects."""
+    """The size of the image inside a GCZ, from its header (u64 data size at 0x10), or None when
+    the file does not start with the GCZ magic, which `dolphin-tool` then rejects."""
     try:
         with path.open("rb") as f:
             head = f.read(24)

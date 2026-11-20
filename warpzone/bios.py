@@ -1,14 +1,9 @@
 """Check a game library's BIOS and firmware files against a shipped manifest.
 
-warpzone never downloads or ships BIOS files. The manifest (`data/bios.toml`) holds
-public metadata only: file names, sizes, hashes and file signatures. The decisions
-(`judge_*`, `settle`, `unknown_files`, `render`) are pure; `Library` and `check_library`
-are the only parts that touch the disk. See development/design/bios.md.
-
-A file entry has one of four kinds of check: `hash` (size and md5, the default),
-`magic` (it starts with fixed bytes, for official firmware and disk images that have no
-fixed hash), `present` (it exists and is not empty) and `keys` (a secret keys file: it
-must look like one, and its content is never printed, hashed or put in a message).
+warpzone never downloads or ships BIOS files; the manifest (`data/bios.toml`) holds public
+metadata only. The decisions (`judge_*`, `settle`, `unknown_files`, `render`) are pure; `Library`
+and `check_library` are the only parts that touch the disk. A keys file's content is never
+printed, hashed or put in a message. See development/design/bios.md.
 """
 
 from __future__ import annotations
@@ -531,9 +526,8 @@ def unknown_files(present: Sequence[str], known: set[str]) -> tuple[str, ...]:
 
 
 def judge_firmware(entries: Mapping[str, bool]) -> tuple[str, ...]:
-    """Warnings about the Eden firmware folder; `entries` maps each name directly inside
-    it to whether it is a folder. Eden reads only loose .nca files in that folder: a
-    firmware release left in a subfolder or in an archive is never loaded."""
+    """Warnings about the Eden firmware folder; `entries` maps each name directly inside it to
+    whether it is a folder. See development/design/bios.md, "Eden firmware layout"."""
     folder = f"bios/{FIRMWARE_DIR}"
     subfolders = sorted(name for name, is_dir in entries.items() if is_dir)
     archives = sorted(

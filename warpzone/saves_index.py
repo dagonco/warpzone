@@ -1,16 +1,10 @@
 """Which emulator saves on the hub belong to which game (see "Saves per game" in
 development/design/library-ui.md).
 
-The matching is pure: `build_index` takes the listing of the hub's `saves/` folder (paths below
-it, modification times) and `match_game` takes a game's system and primary path, and neither
-touches the disk. `scan` lists the folders and `SavesCache` keeps the index for a short time;
-those are the only parts that read the disk. Nothing here writes below `saves/`, and a symlink
-is never followed.
-
-Only exact matches count: a ROM stem for the emulators that name their files after it, a
-title ID for the ones that keep one folder per title, and for Flycast the file name of the
-content (arcade) or the disc's product number (Dreamcast). Shared memory cards and anything
-named by an ID the catalog does not record are left out.
+The matching is pure: `build_index` takes the listing of the hub's `saves/` folder and
+`match_game` a game's system and primary path. `scan` lists the folders and `SavesCache` keeps
+the index for a short time; those are the only parts that read the disk. Nothing here writes
+below `saves/`, and a symlink is never followed. Only exact matches count.
 """
 
 from __future__ import annotations
@@ -131,12 +125,9 @@ class Context:
 
 
 def flycast_id(game_id: str) -> str:
-    """The product number of a disc as a comparison key: letters and digits only.
-
-    Flycast names a console game's card after the number in the disc's header, with each of
-    ` /\\:*?|<>"` replaced by `_`. Redump writes the same number with other separators
-    (`T-45001D05` in the header, `T-45001D-05` in the DAT), so both sides drop everything
-    that is not a letter or a digit."""
+    """The product number of a disc as a comparison key: letters and digits only, since
+    Flycast's file name and Redump spell the same number with other separators (see "Saves
+    per game" in development/design/library-ui.md)."""
     return _NOT_ALNUM.sub("", game_id)
 
 
@@ -266,12 +257,9 @@ def _belongs(hit: Hit, system: str, stem: str, ctx: Context) -> bool:
 
 
 def flycast_hits(index: Index, system: str, primary: str, serials: Iterable[str]) -> list[Hit]:
-    """The Flycast files of one game, each once.
-
-    Port A1's card is named after the content's file name with its extension (an arcade game;
-    also a Dreamcast game whose disc header has no product number) or, for a Dreamcast game,
-    after the product number of the disc; the catalog's DAT serials give the numbers. Arcade
-    flash is named after the file name too, with `.nvmem`, `.nvmem2` or `-main.nvmem`."""
+    """The Flycast files of one game, each once: named after the content's file name or, for
+    a Dreamcast game, the disc's product number (the catalog's DAT serials give the numbers).
+    See the `flycast/saves` row of "Saves per game" in development/design/library-ui.md."""
     name = posixpath.basename(primary)
     keys = [f"vmu:{name}"]
     if system in FLYCAST_ARCADE:

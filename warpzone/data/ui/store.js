@@ -1,10 +1,9 @@
 /*
  * warpzone library UI: the data the page shows and the changes it sends.
  *
- * State lives here, in memory only. All decisions (what a change does, what it would download,
- * which error applies) belong to the API in development/design/library-ui.md; this file loads
- * the answers, keeps them in step after a write and sends the changes. The views (app.js) draw
- * what is here and register the few hooks below to be told when it changed.
+ * State lives here, in memory only: this file loads the answers (the decisions belong to the
+ * API, see app.js), keeps them in step after a write and sends the changes. The views (app.js)
+ * draw what is here and register the few hooks below to be told when it changed.
  */
 (function () {
   'use strict';

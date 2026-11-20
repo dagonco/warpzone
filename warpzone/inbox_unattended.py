@@ -1,18 +1,10 @@
 """The pure decisions of the unattended inbox (`warpzone inbox --apply --unattended`).
 
-What a scheduled run decides without touching anything: the fingerprint of an item and whether
-it is ready, waiting or held; which loose disc files to hold; the state file (render, parse, and
-the changes made to it); the free space an item needs; whether a work folder is on memory; which
-leftover work folders are stale; what counts as news and the exit code; the record of a run
-and its webhook payload. Everything arrives as an argument (a listing, the text of a file, the
-time now): no filesystem, network, thread or clock is read here. The thin layer that touches the
-disk is `inbox_unattended_io.py` (the walk of an item, the state file and the record writes).
-See development/design/inbox-unattended.md.
-
-A change to the state is a function `State -> State` (`Change`). The writer reads the file,
-applies the changes, writes against the stamp it read, and when the file changed in between it
-reads again and applies the same changes to what it read: each change is therefore a pure
-function of the state it is given.
+Fingerprint and readiness of an item, the state file (render, parse and its changes), space, memory
+and leftovers, news and the exit code, the run record and its webhook payload. Everything arrives
+as an argument: no filesystem, network, thread or clock is read here. The disk side is
+`inbox_unattended_io.py`. A change to the state is a function `State -> State` (`Change`), a pure
+function of the state it is given. See development/design/inbox-unattended.md.
 """
 
 from __future__ import annotations
@@ -270,13 +262,8 @@ def decide(
     now: datetime,
     hold_reason: str | None = None,
 ) -> tuple[Verdict, Entry]:
-    """Judge one item: the verdict and the entry to record.
-
-    No entry, or another fingerprint: waiting, with `seen` now and attempts back to zero (a
-    held item whose fingerprint changed is new again, so `first` restarts too). The same
-    fingerprint: held stays held; two attempts that died hold it; a clock that went back waits
-    and restarts `seen`; ready once `STABLE_SECONDS` have passed since `seen`. `hold_reason`
-    (loose disc files) holds an item at the moment it would be ready."""
+    """Judge one item: the verdict and the entry to record. See
+    development/design/inbox-unattended.md, "The stable-size rule"."""
     if entry is None:
         return Verdict.WAITING, _new_entry(observed, now, now)
     if entry.fingerprint != observed.fingerprint:
@@ -309,9 +296,8 @@ def _track(ref: str, lowered: Mapping[str, str]) -> str | None:
 def loose_sheets(top_names: Sequence[str], refs: Mapping[str, Sequence[str]]) -> dict[str, str]:
     """The top-level files of `inbox/` to hold, with the reason: every `.cue` or `.gdi`, and each
     top-level file it names. `top_names` are the names of the files at the root (not folders,
-    not `_`-prefixed ones); `refs` maps a sheet's name to the file names written in it. A name a
-    sheet gives that is not there, or sits in a folder, is ignored; a loose `.bin` that no sheet
-    names is left alone."""
+    not `_`-prefixed ones); `refs` maps a sheet's name to the file names written in it. See
+    development/design/inbox-unattended.md, "Items of several files"."""
     lowered = {n.lower(): n for n in top_names}
     held: dict[str, str] = {}
     for name in top_names:
@@ -568,11 +554,9 @@ class News:
 
 
 def news(before: State, after: State, reviewed: Sequence[str] = ()) -> News:
-    """What a person has not been told yet: `before` is the state as the run read it at its
-    start, `after` the one it writes, `reviewed` the items this run sent to review. A held
-    item is news when it was not held before with the same fingerprint; an error is news when
-    its message differs from the stored one (a run that meets the same message only raised
-    `count`, and one that got past the step cleared it, so the same error later is news)."""
+    """What a person has not been told yet: `before` is the state as the run read it at its start,
+    `after` the one it writes, `reviewed` the items this run sent to review. See
+    development/design/inbox-unattended.md, "Logging and exit codes"."""
     held = []
     for name, entry in sorted(after.items.items()):
         if entry.held is None:

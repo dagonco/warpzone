@@ -3,11 +3,9 @@ locks and its rollback, the restore, Delete now, and the background task (the wh
 cleanups and the purge of expired entries). See "Deleting a game" in
 development/design/library-ui.md.
 
-The decisions are in `trash.py` (pure) and the disk work in `trash_store.py`. Here the two meet
-the locks and the hub's Syncthing. Two locks, always taken in this order: the hub lock
-(`inbox/.warpzone.lock`, shared with `inbox --apply` and `scrape`), then the server's write lock
-(the one of every whitelist and queue write). The purge and the cleanup take only the second,
-and no pass holds it while it asks the hub's Syncthing anything.
+The decisions are in `trash.py` (pure) and the disk work in `trash_store.py`; here the two meet
+the locks (the hub lock, then the server's write lock) and the hub's Syncthing. See "Concurrency"
+in the same page.
 """
 
 from __future__ import annotations
@@ -84,8 +82,7 @@ class Trasher:
 
     @contextmanager
     def _hub_lock(self) -> Iterator[None]:
-        """The hub lock for the body, or `409 hub-busy` when `inbox/.warpzone.lock` exists,
-        whoever holds it and however old it is (a stale lock is for a person to take over)."""
+        """The hub lock for the body, or `409 hub-busy` when `inbox/.warpzone.lock` exists."""
         inbox_dir = self.root / "inbox"
         busy = ApiError(
             "hub-busy",
@@ -585,11 +582,8 @@ class Trasher:
 
     def cleanup_pass(self) -> list[str]:
         """Remove the whitelist lines of deleted games from the consoles that have received
-        the deletion. Returns the devices whose whitelist was written.
-
-        The hub's Syncthing is asked first, with no lock held: has its index recorded each
-        deletion, and what does it say of each console that waits. The decision and the
-        writes are made under the write lock, from the cleanups file read again."""
+        the deletion. Returns the devices whose whitelist was written. The hub is asked first
+        with no lock held; the writes are made under the write lock (see "Whitelist cleanup")."""
         try:
             items, _ = trash_store.read_cleanups(self.root)
         except trash_store.CleanupsReadError as exc:
@@ -690,9 +684,8 @@ class Trasher:
         now: datetime,
         written: list[str],
     ) -> trash.Cleanup | None:
-        """One cleanup after this pass: what it still waits for, or None when nothing is left.
-        A console that left, a path that exists again and a console whose lines can go are
-        settled here, in that order."""
+        """One cleanup after this pass: what it still waits for, or None when nothing is left
+        (a console that left, a path that exists again, a console whose lines can go)."""
         left = trash.only_devices(c, set(valid))
         if left is None:
             return None

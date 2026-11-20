@@ -1,50 +1,11 @@
 """PS Vita `.pkg` packages for `warpzone inbox`: installed with Vita3K, filed like a dump.
 
-`inbox_console_iso` claims every `.pkg`; one that is not a PS4 package comes here. A package
-whose header says PSP/Vita (magic `\\x7fPKG`, type 2, the `\\x7fext` header at 0xC0) and whose
-content type is a Vita one is handled; any other `\\x7fPKG` is reported as "not supported by
-inbox yet" (`inbox_core.unsupported_reason`).
-
-Before anything runs, and also without `--apply`, the package is checked from its header and
-its unencrypted metadata alone (all big-endian, as `pkg2zip` and Vita3K's `PkgHeader` read
-them): the content id at 0x30, the total size at 0x18 (it must be the file's size), the
-content type (metadata entry 2: 0x15 a Vita app, 0x16 DLC, 0x1F a theme, 0x18 and 0x1D
-PlayStation Mobile) and the `param.sfo` (metadata entry 14, an offset and a size in the
-file). Only an app whose `CATEGORY` is `gd` or `gdc` goes on: an update (`gp`), DLC, a theme
-or PSM goes to review with the reason. Then the game's zRIF is looked up by content id in the
-file named by `[inbox] vita_zrif` (lines of `CONTENT_ID<TAB>zRIF`, or a NoPayStation-style
-TSV whose header names the columns `Content ID` and `zRIF`; nothing else is read) and decoded:
-base64 of a zlib stream made with a fixed 1024-byte dictionary (`zrif_dict` of
-`pkg2zip_zrif.c`, adler32 0x627d1d5d), which must give the game's 512-byte licence
-(`inbox_vita.parse_license`) with the package's content id. A package without its zRIF goes
-to review. warpzone never downloads keys or packages.
-
-With `--apply`, Vita3K installs it (`--pkg <file> --zrif <zRIF>`) in a folder of its own in
-the local work folder, in Vita3K's portable mode. The configured tool (`[inbox] vita3k`,
-default `/Applications/Vita3K.app` on macOS) is resolved through links first, and Vita3K is
-run only when its portable folder is known to be the work folder's (`vita3k_problem`): on
-macOS it must be the app bundle, which gets a symbolic link in the work folder next to a
-`portable/` folder; on Linux it must be a plain ELF binary, run with `APPIMAGE` pointing
-into the work folder (Vita3K's `init_paths` takes the portable folder next to `$APPIMAGE`).
-An AppImage is refused (its runtime sets `APPIMAGE` to its own path), and so is anything
-else, without running it. `Vita3K --version` runs first: it writes `portable/config.yml`,
-without which `--pkg` fails, and if that file does not appear nothing is installed. Vita3K
-deletes `ux0/app/<TITLEID>` before installing, so it must never run against its own data.
-Vita3K exits 0 even when the install fails, so the result is judged on disk:
-`ux0/app/<TITLEID>` with `eboot.bin` and a `sce_sys/param.sfo` whose title id, category and
-content id match the package, no `sce_pfs`, and `ux0/license/<TITLEID>/<CONTENT_ID>.rif`
-equal to the decoded zRIF. The game folder and that licence are then filed by
-`inbox_vita.install`, and the work folder is deleted.
-
-A zRIF is a key: it is never printed, logged or written to a reason file; the command line
-shown has it redacted. It is passed to Vita3K on the command line, the only way Vita3K
-takes it, so it is visible in the process list while Vita3K runs (under a second).
-
-The decisions (`parse_header`, `parse_meta`, `vita_kind`, `pkg_problem`, `parse_zrif_table`,
-`decode_zrif`, `license_for`, `vita3k_problem`, `launch_plan`, `shown_command`,
-`judge_installed`) are pure, and
-`read_pkg` reads only small bounded pieces of a file object; the rest touches the disk, and
-Vita3K runs through `RUN`, which tests replace. See development/design/inbox.md.
+`inbox_console_iso` claims every `.pkg`; one that is not a PS4 package comes here. The decisions
+(`parse_header`, `parse_meta`, `vita_kind`, `pkg_problem`, `parse_zrif_table`, `decode_zrif`,
+`license_for`, `vita3k_problem`, `launch_plan`, `shown_command`, `judge_installed`) are pure,
+and `read_pkg` reads only small bounded pieces of a file object; the rest touches the disk, and
+Vita3K runs through `RUN`, which tests replace. A zRIF is a key: it is never printed, logged or
+written to a reason file. See development/design/inbox.md, "PS Vita packages".
 """
 
 from __future__ import annotations
@@ -280,11 +241,8 @@ def _cell(text: str) -> str:
 
 
 def parse_zrif_table(text: str) -> ZrifTable:
-    """The zRIFs of a key file: `CONTENT_ID<TAB>zRIF` lines (blank lines and `#` comments skipped),
-    or a TSV whose first line names the columns `Content ID` and `zRIF`, of which only those two
-    are read. Fields may be quoted with double quotes. Rows whose zRIF is empty, `MISSING` or
-    `NOT REQUIRED` are left out. A line that cannot be read raises `ValueError` naming its
-    number, never its text."""
+    """The zRIFs of a key file. A line that cannot be read raises `ValueError` naming its number,
+    never its text. See development/design/inbox.md, "PS Vita packages" (zRIF)."""
     lines = text.lstrip("﻿").splitlines()
     first = next((n for n, line in enumerate(lines) if line.strip()), None)
     columns = [_cell(c) for c in lines[first].split("\t")] if first is not None else []
@@ -391,13 +349,8 @@ def resolve_tool(tool: str) -> str:
 
 def vita3k_problem(tool: str, system: str, head: bytes) -> str | None:
     """Why Vita3K at `tool` (resolved) cannot be run in a work folder of its own, or None.
-    `system` is `sys.platform`; `head` is the start of the program that would run.
-
-    From Vita3K's `init_paths` (`app/src/app_init.cpp`): on macOS the portable folder is four
-    levels above `Contents/Resources` of the bundle it runs from, so only the bundle can be
-    pointed at the work folder; on Linux it is the folder next to `$APPIMAGE` when that is set,
-    which an AppImage's runtime overwrites with its own path, and when it is a folder every
-    other path (fs, config, cache, log) goes there and none comes from XDG or `HOME`."""
+    `system` is `sys.platform`; `head` is the start of the program that would run. See
+    development/design/inbox.md, "PS Vita packages" (Vita3K)."""
     bundle = _bundle_of(tool)
     if system == "darwin":
         if bundle:
@@ -426,10 +379,8 @@ def vita3k_problem(tool: str, system: str, head: bytes) -> str | None:
 
 
 def launch_plan(tool: str, run: Path) -> Launch:
-    """How to run Vita3K at `tool` (resolved, and with no `vita3k_problem`) in `run`. On macOS
-    Vita3K takes its portable folder four levels above `Contents/Resources` of the bundle it
-    runs from, and does not resolve a link to the bundle, so a link in `run` makes
-    `run/portable` its folder. On Linux it takes the folder next to `$APPIMAGE`."""
+    """How to run Vita3K at `tool` (resolved, and with no `vita3k_problem`) in `run`: a link to the
+    bundle on macOS, `APPIMAGE` in the environment on Linux."""
     bundle = _bundle_of(tool)
     portable = run / PORTABLE
     if bundle:

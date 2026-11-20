@@ -257,13 +257,10 @@ def ensure_shadps4_dirs(
 ) -> None:
     """List the profile's install folders in shadPS4's config files and set its DLC folder.
 
-    Each file of `shadps4.config` that exists gets the folders it lacks, next to the entries
-    it already has, and the DLC folder (`addon_dir`) set to the profile's when it differs;
-    every other byte is kept, and both go in one edit and one backup. A DLC folder that was
-    in use and holds entries is not moved: the run warns that DLC put there by hand is no
-    longer seen. A file that is missing is never created (shadPS4 writes it on its first
-    start); one that does not read as expected is left alone. The old file is backed up
-    before each edit and a second run changes nothing.
+    Each file of `shadps4.config` that exists gets the folders it lacks and the DLC folder
+    (`addon_dir`) set to the profile's, in one edit and one backup; a missing file is never
+    created and one that does not read as expected is left alone. A second run changes
+    nothing. See development/design/profiles.md, "shadPS4 install directories".
     """
     rule = profile.shadps4
     if rule is None or "library" not in profile.paths:
@@ -354,11 +351,9 @@ def ensure_cemu_paths(
 ) -> None:
     """Set Cemu's MLC path and add the library's Wii U folder to its game paths.
 
-    Only an existing `settings.xml` is edited (Cemu writes it on its first start, and its
-    first-start dialog shows only while there is none), only while Cemu is closed, and only
-    those two elements; every other byte is kept. The MLC path stays as it is while the folder
-    Cemu uses now holds saves, which would vanish from its view. The old file is backed up
-    before the edit and a second run changes nothing.
+    Only an existing `settings.xml` is edited, only while Cemu is closed, and only those two
+    elements; every other byte is kept. The old file is backed up before the edit and a
+    second run changes nothing. See development/design/profiles.md, "Cemu paths".
     """
     rule = profile.cemu
     if rule is None or "library" not in profile.paths:

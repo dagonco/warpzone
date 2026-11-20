@@ -1,16 +1,8 @@
 """The disk side of the unattended inbox: the walk of an item, the state file, the run records
 under `catalog/inbox/runs/`, the work folder and the free space.
 
-The record writer, the purge and the state's read-modify-write take the folder, or a `StateFile`
-(its path, its parse and render functions), so the nightly scrape reuses them for
-`catalog/scrape/state.json` and `catalog/scrape/runs/`; with no such argument they are the
-inbox's.
-
-A record is written atomically (a name that exists is never replaced: the id gets `-2`, `-3`),
-mode 0644, and the writer then deletes the records beyond the newest 50. The state file is
-changed by read, modify, write: the changes are pure functions (`inbox_unattended.update`), and
-a file that changed between the read and the write is read again and the same changes applied
-to it. The decisions (the id, the text, what to purge, what is stale) are pure and live in
+The record writer, the purge and the state's read-modify-write take the folder, or a `StateFile`,
+so the nightly scrape reuses them for `catalog/scrape/`. The decisions are pure and live in
 `inbox_unattended.py`. See development/design/inbox-unattended.md.
 """
 

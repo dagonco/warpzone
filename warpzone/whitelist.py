@@ -1,10 +1,8 @@
 """Managed device whitelists: the model, its file format, the changes and the migration (pure).
 
-A managed `patterns-<device>.stignore` is fully determined by three sets: the systems that are
-on as a whole, the includes (paths that are on) and the excludes (paths that are off inside
-something that is on). Nothing here touches the disk or the network; `whitelist_store.py` reads
-and writes the files. Paths are relative to the library folder, with `/` separators and no
-leading slash (`roms/psx/Some Game (Europe).chd`). See "The whitelist model" in
+Nothing here touches the disk or the network; `whitelist_store.py` reads and writes the files.
+Paths are relative to the library folder, with `/` separators and no leading slash
+(`roms/psx/Some Game (Europe).chd`). See "The whitelist model" in
 development/design/library-ui.md.
 """
 
@@ -74,11 +72,8 @@ def covers(parent: str, path: str) -> bool:
 
 
 def system_roots(system: str) -> tuple[str, ...]:
-    """The paths a whole system is whitelisted by, in the order the file lists them.
-
-    `roms/<system>`, `roms/<system>/roms` for the systems of `SUBROOT_SYSTEMS`, and for
-    `switch` the three paths of its games, updates and DLC. `catalog.system_roots` uses this.
-    """
+    """The paths a whole system is whitelisted by, in the order the file lists them
+    (`catalog.system_roots` uses this)."""
     if system == "switch":
         return ("roms/switch", "extras/switch/updates", "extras/switch/dlc")
     if system in SUBROOT_SYSTEMS:
@@ -197,13 +192,9 @@ def decide(model: Model, path: str) -> bool:
 
 
 def normalize(model: Model) -> Model:
-    """The one model for a set of paths on: redundant includes and excludes are dropped.
-
-    An include below a system root or another include goes, and so does one below an exclude;
-    an exclude that no root or surviving include covers goes (`*` already leaves it out), and
-    so does one below another exclude. The order matters: the includes an exclude shadows are
-    dropped before the exclude itself is judged.
-    """
+    """The one model for a set of paths on: redundant includes and excludes are dropped (see
+    "The whitelist model" in development/design/library-ui.md). The includes an exclude
+    shadows are dropped before the exclude itself is judged."""
     roots = model.roots
     includes = {
         i
@@ -229,13 +220,9 @@ def _game_path(path: str) -> bool:
 
 
 def parents(model: Model) -> list[str]:
-    """The folders the file's `// Folders` section delivers, deepest first (pure).
-
-    Every proper ancestor of a system root or include that is on, when the ancestor is not on
-    itself: Syncthing creates such a folder for the files below it but, matched only by the
-    final `*`, never takes the hub's record for it, and the hub counts it as needed forever.
-    Sorted by depth, deepest first, then by the code point order of the unescaped path.
-    """
+    """The folders the file's `// Folders` section delivers: every proper ancestor of a system
+    root or include that is not on itself. Deepest first, then by the code point order of the
+    unescaped path. See "The file the UI writes" in development/design/library-ui.md."""
     model = normalize(model)
     found: set[str] = set()
     for path in model.roots | model.includes:
@@ -271,13 +258,9 @@ def render(model: Model) -> str:
 
 
 def parse(text: str) -> Model:
-    """The model of a file in the managed shape; `ParseError` for anything else.
-
-    The shape is strict (header, include, sections in order, a final `*`), but not
-    canonical: `is_managed` also demands that the model renders back to the same bytes. The
-    lines of the `Folders` section are checked for shape and left out of the model, since
-    `parents` derives them from it.
-    """
+    """The model of a file in the managed shape; `ParseError` for anything else. The shape is
+    strict but not canonical: `is_managed` also demands that it renders back to the same bytes.
+    The `Folders` lines are checked for shape and left out, since `parents` derives them."""
     if not text.endswith("\n"):
         raise ParseError(0, "the file does not end with a newline")
     lines = text[:-1].split("\n")
@@ -335,11 +318,7 @@ def parse(text: str) -> Model:
 
 
 def _check_folder_line(number: int, line: str) -> None:
-    """A line of the `// Folders` section must be `/<folder>/*` or `!/<folder>`.
-
-    The lines are derived from the model, so they are not read into it; `is_managed` proves
-    them byte for byte against what `render` writes.
-    """
+    """A line of the `// Folders` section must be `/<folder>/*` or `!/<folder>`."""
     try:
         if line.startswith("!"):
             path = unescape(line[1:])
@@ -378,9 +357,9 @@ def is_managed(text: str) -> bool:
 class Reading:
     """What a whitelist file is: `managed`, or `needs-migration` (the API's words).
 
-    `model` is what the file means when it can be known: its own for a managed file, the
-    migration's classification (without the proof) for a hand-written one that parses. It is
-    None for a file the migration's parser refuses, whose reasons are in `errors`.
+    `model` is what the file means when it can be known (for a hand-written one, the migration's
+    classification without the proof); None for a file the migration's parser refuses, whose
+    reasons are in `errors`.
     """
 
     status: Literal["managed", "needs-migration"]
@@ -477,11 +456,7 @@ def set_game(model: Model, parts: Sequence[str], on: bool) -> Model:
 
 
 def set_system(model: Model, system: str, on: bool) -> Model:
-    """Turn a system on or off; what is below its roots (includes and holes) falls away.
-
-    On: every game of the system is on, including games added later. Off: the roots go and so
-    does everything below them.
-    """
+    """Turn a system on or off; what is below its roots (includes and holes) falls away."""
     roots = system_roots(system)
 
     def below(path: str) -> bool:
@@ -507,8 +482,7 @@ def lines_below(model: Model, parts: Sequence[str]) -> tuple[tuple[str, ...], tu
 
 def drop_lines(model: Model, includes: Iterable[str], excludes: Iterable[str]) -> Model:
     """`model` without the given includes and excludes (those it does not hold are ignored),
-    normalized. Nothing is added: this is for the paths of a game that left the hub, where
-    `set_game(model, parts, False)` would add an exclude under a system that is on."""
+    normalized. Nothing is added (see "Changes" in development/design/library-ui.md)."""
     return normalize(
         Model(
             model.systems,
@@ -561,12 +535,10 @@ def apply(
     games: Collection[Game],
     excluded_systems: Collection[str] = (),
 ) -> Applied:
-    """Apply one change and check its effect; `Refused` (nothing to write) when it does not hold.
-
-    The change is applied only when the target reached the state asked for and no other game
-    changed state (for a system change, only games of that system). The codes are `unsupported`
-    (turning on something in `excluded_systems`), `unlistable`, `covered` and `cannot-apply`.
-    """
+    """Apply one change and check its effect; `Refused` (nothing to write) when it does not
+    hold. The codes are `unsupported` (turning on something in `excluded_systems`),
+    `unlistable`, `covered` and `cannot-apply`; see "Changes" in
+    development/design/library-ui.md."""
     if isinstance(change, GameChange):
         target_system = change.game.system
         if change.on and target_system in excluded_systems:
@@ -637,12 +609,8 @@ class HandParse:
 
 
 def parse_hand(text: str) -> HandParse:
-    """Read a hand-written whitelist with the migration's strict rules.
-
-    Accepted: blank lines, `//` comments, `#include patterns-common.stignore` (once, before
-    any pattern), anchored literal patterns with or without `!` (escapes allowed) and a final
-    `*`. Anything else, a missing include or a missing `*` is an error, listed with its line.
-    """
+    """Read a hand-written whitelist with the migration's strict rules; every line it refuses
+    is an error with its number. See "The migration" in development/design/library-ui.md."""
     errors: list[str] = []
     lines: list[HandLine] = []
     included = star = False
@@ -723,13 +691,8 @@ class MigrationPlan:
 
 
 def plan_migration(hand: HandParse) -> MigrationPlan:
-    """Drop the lines with no effect, classify the rest and normalize (no proof yet).
-
-    A line at or below an earlier line's path is shadowed. A plain line with no later `!`
-    line at its path or above is redundant with the final `*`. When every root of a system
-    appears as a `!` line the system is on; every other `!` line is an include and every
-    other plain line an exclude.
-    """
+    """Drop the lines with no effect, classify the rest and normalize (no proof yet; see
+    "The migration" in development/design/library-ui.md)."""
     patterns = [line for line in hand.lines if line.path]
     seen: set[str] = set()
     kept: list[HandLine] = []

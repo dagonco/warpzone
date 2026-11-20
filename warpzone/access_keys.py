@@ -71,9 +71,8 @@ def _reason(exc: BaseException) -> str:
 
 class AccessGate:
     """Whether a request's `Cf-Access-Jwt-Assertion` is a valid Access token for this team and
-    application. The key set is fetched on first use, again after an hour, and again when a
-    token names a key that is not in it, at most once a minute. A failure is logged once per
-    streak of failures; the keys of an earlier fetch keep working for 24 hours."""
+    application. When the key set is fetched, and how a failure is logged, is in
+    development/design/library-ui.md, "Cloudflare Access" ("Keys of the team")."""
 
     def __init__(
         self,
@@ -112,9 +111,8 @@ class AccessGate:
             return Verdict(False, "internal error")
 
     def _note(self, verdict: Verdict) -> None:
-        """Log why a token was refused, once per reason until a token is accepted, so a wrong
-        `access_aud` or team domain or a clock that is off shows in the log. The reason never
-        holds the token."""
+        """Log why a token was refused, once per reason until a token is accepted. The reason
+        never holds the token."""
         with self._lock:
             if verdict.ok:
                 self._refused.clear()

@@ -54,11 +54,10 @@ def _runs_syncthing(text: str) -> bool:
 def judge_game_mode(
     units: Mapping[str, str], enabled: Collection[str], autostart: Mapping[str, str]
 ) -> tuple[str, str, str]:
-    """(status, detail, fix) for "will Syncthing run in Game Mode?". Game Mode starts no
-    desktop session, so only a systemd user unit that is enabled keeps Syncthing running
-    there. `units` maps the .service files of ~/.config/systemd/user to their text,
-    `enabled` holds the names linked in its default.target.wants, and `autostart` maps
-    the .desktop files of ~/.config/autostart to their text."""
+    """(status, detail, fix) for "will Syncthing run in Game Mode?". `units` maps the .service
+    files of ~/.config/systemd/user to their text, `enabled` holds the names linked in its
+    default.target.wants, and `autostart` maps the .desktop files of ~/.config/autostart to their
+    text. See development/design/doctor.md, "Game Mode (SteamOS)"."""
     running = sorted(name for name, text in units.items() if _runs_syncthing(text))
     on = [name for name in running if name in enabled]
     autostarted = sorted(name for name, text in autostart.items() if _runs_syncthing(text))
@@ -116,10 +115,8 @@ def judge_unit_state(
 ) -> tuple[str, str, str] | None:
     """(status, detail, fix) for the Syncthing user unit, from `systemctl --user show -p
     ActiveState,SubState`. None when there is nothing to say (no such unit, or stopped).
-    A unit stuck in `activating (auto-restart)` is a start that keeps failing; with the
-    flatpak the usual cause is the old process still holding the port, because `flatpak
-    run` runs it in a scope of its own and `systemctl --user stop` does not reach it.
-    `stops_flatpak`: the unit already has an `ExecStop` that kills the flatpak."""
+    `stops_flatpak`: the unit already has an `ExecStop` that kills the flatpak. See
+    development/design/doctor.md, "Flatpak access"."""
     values = parse_show(output)
     state, sub = values.get("ActiveState", ""), values.get("SubState", "")
     if state == "active":
@@ -360,12 +357,9 @@ def check_syncthing_unit(ctx: Context) -> list[Result]:
 def check_undescribed_folders(ctx: Context) -> list[Result]:
     """On a configured device: `wz-*` folders in its Syncthing that its config no longer describes.
 
-    A console that stops subscribing to a group keeps that folder in its own Syncthing, and
-    `provision device` only walks the folders the config describes. Doctor is offline, so it
-    finds the device in the local `config.xml` the way `local_device` does: the configured
-    device whose ID is listed there and one of whose folders is there at the path the config
-    gives it (the hub lists the same IDs but keeps its folders under its own root). Any other
-    machine says nothing. The text comes from `provision_folders.undescribed`."""
+    The device is found in the local `config.xml` the way `local_device` does (doctor is offline);
+    any other machine says nothing. The text comes from `provision_folders.undescribed`. See
+    development/design/doctor.md, "Leftover folders"."""
     p = ctx.probes
     if not ctx.config.device_folders:
         return []

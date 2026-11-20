@@ -43,10 +43,8 @@ def ensure_updater(
     """Put `source` (the script that ships with this version) in place as the live copy
     outside the clone, and say whether there is a usable live copy afterwards.
 
-    The copy is written next to the live one and replaces it atomically (a tick that is running
-    keeps reading the file it started with), only after `sh -n` and `sh <copy> selftest` pass,
-    and the old one stays as `updater.sh.prev`. A copy of a lower `UPDATER_ABI` than the live
-    one is never installed: a rollback to an older release must not downgrade the script.
+    See development/design/self-update.md, "The live copy" (`selfupdate.install_decision`
+    is the rule).
     """
     live = selfupdate.live_path(home)
     check = probes.script_check
@@ -228,10 +226,10 @@ def ensure_self_update(
     """Everything the autonomous update needs on this device: the settings file written from
     the config, the live copy of the updater script and the timer that starts it.
 
-    It needs a git clone (the device install: `updater.sh install`) and a Python that imports
-    warpzone from outside the current folder (the venv); without them it installs nothing and
-    says so. A device with `self_update = false` gets no updater; one that already has settings
-    gets `enabled=false`, so its timer's ticks stop.
+    It needs a git clone and a Python that imports warpzone from outside the current folder;
+    without them it installs nothing and says so. A device with `self_update = false` gets no
+    updater; one that already has settings gets `enabled=false`. See
+    development/design/self-update.md, "The settings".
     """
     python = python or sys.executable
     clone = clone if clone is not None else selfupdate.package_root()

@@ -1,29 +1,10 @@
 """Compressed Wii and GameCube images (`.rvz`, `.wia`) for `warpzone inbox`.
 
-Dolphin's WIA and RVZ containers keep a copy of the disc header, so the inbox tells a Wii
-disc from a GameCube one, and reads the game ID and the title, from the first 0xD8 bytes of
-the file. No tool is run and no DAT is used: the compressed data cannot be hashed without
-expanding it, so the name comes from the header instead.
-
-- The container header: the magic `RVZ\\x01` or `WIA\\x01` at 0, and at 0x2C the size of the
-  file as the writer saw it (u64, big-endian; 0 means "not recorded"), which must equal the
-  real size (a smaller file is a copy that stopped early).
-- The disc: at 0x48 the disc type (u32, big-endian; 1 GameCube, 2 Wii) and at 0x58 the first
-  0x80 bytes of the disc: the game ID (6 ASCII characters), at +0x18 the Wii magic
-  `5D1C9EA3`, at +0x1C the GameCube magic `C2339F3D`, and the title (64 bytes) at +0x20. The
-  disc type and the magic must agree.
-
-A recognised image is filed in `roms/wii/` or `roms/gc/` (the ES-DE systems, which Dolphin
-opens as they are, compressed) as `<name> [<GAME ID>].rvz` (or `.wia`), where the name is
-the file's own and the header's title stands in when the file name says nothing; the bytes
-are not changed. Nothing is ever replaced: the same content already in the library is reported,
-different content under that name goes to review. `.gcz` is another format with no copy of
-the disc header and is not handled here.
-
-How the module hooks into `inbox.py`: `HANDLER` is a kind handler that claims an item whose
-file names end in `.rvz` or `.wia`, loose, in a folder or in an archive. The decisions
-(`claimed_name`, `judge`, `target_name`) are pure functions of bytes; `detect` and
-`place_image` touch the disk. See development/design/inbox.md.
+Dolphin's WIA and RVZ containers keep a copy of the disc header, so the image is identified, and
+named, from the first 0xD8 bytes of the file: no tool is run and no DAT is used. `HANDLER` is a
+kind handler; the decisions (`claimed_name`, `judge`, `target_name`) are pure functions of bytes;
+`detect` and `place_image` touch the disk. See development/design/inbox.md, "Compressed Wii and
+GameCube images".
 """
 
 from __future__ import annotations

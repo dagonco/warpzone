@@ -1,9 +1,8 @@
 """Inbox: a `.chd` dropped for a CHD system is extracted so its image can be identified.
 
-A CHD's own SHA1s describe the compressed container, not the disc, so they cannot be compared
-with Redump (which lists the images). `expand_chds` reads each CHD with `chdman info`, extracts
-it to the work folder (`extractcd` for a CD or GD-ROM, `extractdvd` for a DVD) and hands the
-extracted files to the same identification, grouping and conversion as dropped images.
+A CHD's own SHA1s describe the compressed container, not the disc, so `expand_chds` extracts
+each one with chdman to the work folder and hands the files to the same identification, grouping
+and conversion as dropped images.
 
 The decisions (`parse_info`, `plan_extraction`, `file_stem`, `split_unmatched`) are pure; the
 rest runs chdman. See "CHD images" in development/design/inbox.md.
@@ -83,13 +82,9 @@ def describe(info: ChdInfo) -> str:
 
 
 def plan_extraction(info: ChdInfo, stem: str) -> tuple[str, list[str]]:
-    """(chdman command, its output options) to extract a CHD. File names are relative: the
-    caller puts them in a folder.
-
-    A one-track CD is written as one file (`-ob`), an `.iso` when the track is a 2048-byte data
-    one (a PS2 disc made into a CD-mode CHD from its `.iso` comes back as that `.iso`, which is
-    what Redump lists). A CD with several tracks is split in one file per track (`-sb`, which
-    cannot be combined with `-ob`) because Redump lists each track; a GD-ROM always is."""
+    """(chdman command, its output options) to extract a CHD. File names are relative: the caller
+    puts them in a folder. See development/design/inbox.md, "CHD images" (the table of what is
+    extracted)."""
     if info.kind == "dvd":
         return "extractdvd", ["-o", f"{stem}.iso"]
     if info.kind == "gd":

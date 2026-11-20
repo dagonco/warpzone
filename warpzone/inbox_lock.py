@@ -1,19 +1,10 @@
 """The lock that keeps two `warpzone inbox --apply` runs off the same hub inbox.
 
-`inbox/.warpzone.lock` is created atomically (O_CREAT | O_EXCL) and holds the host name, the pid,
-the start time, the heartbeat interval (`beat`), the mode of the run and, when the run is not the
-inbox itself, its `task` (`scrape`, or `delete` for the library UI). While a run holds it, a
-`Heartbeat` thread touches the file's modification time every `BEAT_SECONDS`, and only while the
-file still holds this run's identity.
-
-A lock in the way is live or stale (`judge`, pure). An attended run looks once: a lock with a
-heartbeat is stale when its modification time is older than `STALE_BEAT_SECONDS` by this machine's
-clock; a lock of an older warpzone (no `beat`) is stale when older than `LOCK_MAX_AGE`; both are
-stale when held by a pid that is not running on this same host. An unattended run compares two
-readings of the file instead, never its time against the clock, and never takes over a lock
-without `beat`. A stale lock is taken over with `--force-lock`, or by an unattended run when it has
-a heartbeat; never silently otherwise. See development/design/inbox.md and
-development/design/inbox-unattended.md.
+`inbox/.warpzone.lock` is created atomically and holds the run's identity (host, pid, start time,
+heartbeat interval, mode and, for a run that is not the inbox itself, its `task`); a `Heartbeat`
+thread touches it while the run lives. `judge` (pure) decides whether a lock in the way is live
+or stale. See development/design/inbox.md ("One writer at a time") and
+development/design/inbox-unattended.md, "Locking".
 """
 
 from __future__ import annotations
@@ -180,16 +171,9 @@ def judge(
     unattended: bool = False,
     previous: LockReading | None = None,
 ) -> Verdict:
-    """Whether a lock that is in the way is live or stale, and why (pure).
-
-    Attended (one look): a lock with a heartbeat is stale when its modification time is more than
-    STALE_BEAT_SECONDS old by this clock, or its pid is not running on this host; a lock without
-    one keeps the rules of an older warpzone (LOCK_MAX_AGE, the pid).
-
-    Unattended: only two readings of the same lock count. A modification time that moved is live;
-    the same one at least STALE_BEAT_SECONDS later by this clock is silence (stale). With no
-    earlier reading of this lock, or too short a gap, the verdict is UNKNOWN. A lock without a
-    heartbeat is never judged stale here: when the old rules say it is, the verdict is LEGACY."""
+    """Whether a lock that is in the way is live or stale, and why (pure). Attended runs look
+    once; unattended ones compare `reading` with `previous` and never judge a lock without a
+    heartbeat stale (LEGACY instead). See development/design/inbox-unattended.md, "Locking"."""
     info, mtime, now = reading.info, reading.mtime, reading.looked
     if info is None or info.beat is None:
         reason = _legacy_reason(info, mtime, now, here, alive)
