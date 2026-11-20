@@ -69,5 +69,5 @@ Each quirk is explained on the page named; read it before changing Syncthing cod
 - `main` is protected: changes land through pull requests, squash-merged, with all CI checks green. No force pushes.
 - Commit messages are a single imperative title line in sentence case, no body and no trailers. Match `git log --oneline`.
 - User-visible changes get an entry under `[Unreleased]` in [CHANGELOG.md](CHANGELOG.md) (Keep a Changelog). The guides and the reference pages in `website/src/content/docs/` are updated with new commands or options.
-- Releases follow [website/src/content/docs/development/releasing.md](website/src/content/docs/development/releasing.md); the maintainer signs and pushes the tag.
+- Releases follow [website/src/content/docs/development/releasing.md](website/src/content/docs/development/releasing.md); the maintainer signs the tag, and a tag is pushed only with their explicit OK.
 - Do not change `.github/workflows/` unless the task is about CI. Third-party actions stay pinned by commit SHA.
