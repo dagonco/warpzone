@@ -1,24 +1,12 @@
 """Nintendo Switch support for `warpzone inbox`: identify, decompress, name and place.
 
-A Switch dump (`.nsp`, or `.nsz` which is compressed) is identified by its TitleID and
-version, named after blawar/titledb and filed in the library:
-
-    roms/switch/<Title> [<TitleID>][v<version>][BASE].nsp
-    extras/switch/updates/<Title>/<Title> [<UpdateTitleID>][v<version>][UPD].nsp
-    extras/switch/dlc/<Title>/<Title> - <DLC name> [<DlcTitleID>][v<version>][DLC].nsp
-
-The TitleID and version live in the CNMT, which sits inside an encrypted NCA, so they are
-read with `nsz --info` (needs the console keys file). Without `nsz` or the keys, an `.nsp`
-falls back to the `[TitleID][vN]` in its file name and the report says so. `.nsz` files are
-decompressed with `nsz -D`, checked with `nsz -V` and by parsing the PFS0 header, and only
-the `.nsp` reaches the library. `.xci` is never converted: it goes to review.
-
-`inbox.py` registers `HANDLER` (`kind_handlers`). The decisions (`classify`,
-`base_title_id`, `normalize_text`, `dlc_display_name`, `build_names`, `parse_nsz_info`,
-`parse_pfs0`, `nsp_size`, `ids_from_filename`, `verdict`) are pure; the rest touches the disk
-or runs `nsz`.
-The keys file is only passed to `nsz` by path: its content is never read, printed or logged.
-See development/design/inbox.md.
+A Switch dump (`.nsp`, or `.nsz` which is compressed) is identified by its TitleID and version
+(read with `nsz --info`), named after blawar/titledb and filed in the library. `HANDLER` is
+registered in `kind_handlers`. The decisions (`classify`, `base_title_id`, `normalize_text`,
+`dlc_display_name`, `build_names`, `parse_nsz_info`, `parse_pfs0`, `nsp_size`,
+`ids_from_filename`, `verdict`) are pure; the rest touches the disk or runs `nsz`. The keys file
+is only passed to `nsz` by path: its content is never read, printed or logged. See
+development/design/inbox.md, "Switch games".
 """
 
 from __future__ import annotations
@@ -111,10 +99,8 @@ def classify(title_id: str) -> str:
 
 
 def base_title_id(title_id: str) -> str:
-    """The TitleID of the game an update or DLC belongs to (the TitleID itself for a game).
-
-    An update is its game's id plus 0x800; a DLC lives in the id range right after its
-    game's (the game's id plus 0x1000, plus the DLC index)."""
+    """The TitleID of the game an update or DLC belongs to (the TitleID itself for a game). See
+    development/design/inbox.md, "Switch games" (Kind)."""
     kind = classify(title_id)
     if kind == BASE:
         return title_id
@@ -332,11 +318,9 @@ def parse_pfs0(head: bytes, file_size: int) -> list[str]:
 
 
 def ncz_nca_size(section_head: bytes) -> int:
-    """The size of the NCA that `nsz -D` rebuilds from a `.ncz`, from the bytes that follow
-    the `.ncz`'s first 0x4000 (the NCA header, stored as it is): `NCZSECTN`, the section
-    count and one 64-byte record per section (offset, size, crypto type, padding, key,
-    counter). Same sum as nsz: the header plus the size of every section. A first section
-    that does not start right after the header makes nsz count a gap, so it is refused."""
+    """The size of the NCA that `nsz -D` rebuilds from a `.ncz`, from the bytes that follow the
+    `.ncz`'s first 0x4000 (the `NCZSECTN` table); a first section that does not start right after
+    the header is refused. See development/design/inbox.md, "Switch games" (Compressed files)."""
     if len(section_head) < 16 or section_head[:8] != b"NCZSECTN":
         raise SwitchError("no NCZSECTN section table in a .ncz")
     (count,) = struct.unpack("<Q", section_head[8:16])
@@ -355,12 +339,10 @@ def ncz_nca_size(section_head: bytes) -> int:
 
 
 def nsp_size(head: bytes, file_size: int, ncz_heads: Mapping[str, bytes]) -> int:
-    """The exact size of the `.nsp` that `nsz -D` (without `-F`) writes for the `.nsz`
-    whose PFS0 header is `head`. `ncz_heads` maps the name of each `.ncz` member to the
-    bytes that follow its first 0x4000 (see `ncz_nca_size`). nsz writes the new header into
-    the room the old one took (the names keep their length, `.ncz` to `.nca`), then the
-    members one after the other with no gap: the other members as they are, each `.ncz`
-    as the NCA it holds."""
+    """The exact size of the `.nsp` that `nsz -D` (without `-F`) writes for the `.nsz` whose PFS0
+    header is `head`. `ncz_heads` maps the name of each `.ncz` member to the bytes that follow its
+    first 0x4000 (see `ncz_nca_size`). See development/design/inbox.md, "Switch games"
+    (Compressed files)."""
     members = _pfs0_members(head, file_size)
     total = min(offset for _, offset, _ in members)
     for name, _, size in members:
@@ -396,12 +378,9 @@ class Region:
 
 
 def parse_region(data: object) -> Region:
-    """Names and bundle membership from one titledb region file (keyed by nsuId).
-
-    An entry with no `ids`, or only its own, is standalone. An entry whose `ids` lists
-    several is a bundle: when its own id comes first it is the pack itself and is left out
-    of the parts, otherwise it is one of them; the parts are numbered in listed order.
-    A title listed twice keeps its first full-game entry over a demo."""
+    """Names and bundle membership from one titledb region file (keyed by nsuId). See
+    development/design/inbox.md, "Switch games" (Bundle parts). A title listed twice keeps its
+    first full-game entry over a demo."""
     region = Region()
     if not isinstance(data, dict):
         return region
@@ -626,11 +605,8 @@ _NSZ_BAD = re.compile(r"CORRUPTED|MISMATCH|Traceback|^\[?error\b", re.IGNORECASE
 
 
 def judge_nsz_verify(code: int, text: str) -> tuple[bool, str | None]:
-    """(accepted, note) for the exit code and output of `nsz -V` on a decompressed NSP.
-    Accepted when nsz exited 0, printed no `CORRUPTED`, `MISMATCH` or error line, and reported
-    at least one NCA, every one of them `[VERIFIED]` or `[TICKETLESS]`. nsz skips the hash of
-    an NCA of a ticketless dump and prints `[TICKETLESS]` for it; any such NCA gives the note
-    that the file was not hash-checked. All `[VERIFIED]` is accepted with no note."""
+    """(accepted, note) for the exit code and output of `nsz -V` on a decompressed NSP. See
+    development/design/inbox.md, "Switch games" (Compressed files)."""
     if code != 0 or _NSZ_BAD.search(text):
         return False, None
     results = _NSZ_NCA_RESULT.findall(text)
@@ -640,10 +616,9 @@ def judge_nsz_verify(code: int, text: str) -> tuple[bool, str | None]:
 
 
 def decompress(env: SwitchEnv, source: Path, scratch: Path, notes: list[str]) -> Path:
-    """`nsz -D` into `scratch`, then proof that the result is sound: nsz exited cleanly and
-    reported DONE, the PFS0 header parses, and `nsz -V` verifies every NCA hash
-    (`judge_nsz_verify`; a ticketless dump is accepted with a note appended to `notes`). (nsz
-    exits 0 on some corrupted inputs, which is why it is checked a second time.)"""
+    """`nsz -D` into `scratch`, then proof that the result is sound (`judge_nsz_verify`; a
+    ticketless dump is accepted with a note appended to `notes`). nsz exits 0 on some corrupted
+    inputs, which is why it is checked a second time."""
     assert env.nsz and env.keys
     out = scratch / "dec"
     out.mkdir(parents=True, exist_ok=True)

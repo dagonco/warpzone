@@ -1,17 +1,10 @@
 """Arcade (MAME) sets for `warpzone inbox`.
 
-An arcade zip is identified by the CRC32 and size of its members against up to three
-set databases in XML (MAME's `-listxml`, the FinalBurn Neo arcade DAT and the MAME
-2003-Plus DAT). A set "fits" an emulator when every required ROM of the set, of its
-parent, of its BIOS and of its devices is present, in the dropped zip or in the BIOS and
-device zips already in `library/roms/mame/`. The first emulator that fits wins: FinalBurn
-Neo, then MAME (the ES-DE default, so no `<altemulator>`), then MAME 2003-Plus; the others
-are recorded as a per-game `<altemulator>` in the hub's ES-DE gamelist. Sega Atomiswave
-and Naomi games, which hang in MAME, go to Flycast instead. See development/design/inbox.md.
-
-The decisions (`evaluate`, `best_fit`, `decide`, `update_gamelist`, `parse_sets`,
-`describe_miss`) are pure; `MameHandler` and the cache and gamelist file helpers touch
-the disk. The module plugs into `inbox.py` through `inbox.kind_handlers()`.
+An arcade zip is identified by the CRC32 and size of its members against up to three set
+databases in XML, and placed for the first emulator it fits (FinalBurn Neo, MAME, MAME
+2003-Plus; Atomiswave and Naomi games go to Flycast). The decisions (`evaluate`, `best_fit`,
+`decide`, `update_gamelist`, `parse_sets`, `describe_miss`) are pure; `MameHandler` and the cache
+and gamelist file helpers touch the disk. See development/design/inbox.md, "Arcade sets".
 """
 
 from __future__ import annotations
@@ -421,11 +414,9 @@ def _cloneof_chain(db: SetDb, name: str) -> Iterable[str]:
 
 
 def best_fit(db: SetDb, own: frozenset[Key], stem: str, support: Support) -> Fit | None:
-    """The set of `db` the dropped zip is. A file named like a set that shares members
-    with it is that set, fit or not (a clone that fits does not make `galpanic.zip` a
-    different game). Otherwise the sets that fit come first: the top parent of them (a
-    merged zip fits its parent and every clone), the one that explains most members,
-    games before BIOS and devices. When none fits, the one lacking the fewest files."""
+    """The set of `db` the dropped zip is: a file named like a set that shares members with it is
+    that set, fit or not; otherwise the best of the sets that fit, or the one lacking the fewest
+    files. See development/design/inbox.md, "Arcade sets"."""
     hits: Counter[str] = Counter()
     for key in own:
         hits.update(db.by_key.get(key, ()))
@@ -500,10 +491,10 @@ def describe_miss(outcome: Outcome) -> str:
 
 
 def decide(outcomes: Sequence[Outcome]) -> Decision:
-    """The first emulator, in the order given (FinalBurn Neo, MAME, MAME 2003-Plus),
-    whose set has everything it needs; otherwise a review with what each one lacks. An
-    Atomiswave or Naomi game that is complete per MAME's database goes to Flycast whatever
-    the order, since MAME hangs on those boards."""
+    """The first emulator, in the order given (FinalBurn Neo, MAME, MAME 2003-Plus), whose set has
+    everything it needs; otherwise a review with what each one lacks. A complete Atomiswave or
+    Naomi game goes to Flycast whatever the order. See development/design/inbox.md, "Arcade
+    sets"."""
     for outcome in outcomes:
         fit = outcome.fit
         if outcome.emulator is None and fit is not None and fit.ok and fit.flycast_bios:

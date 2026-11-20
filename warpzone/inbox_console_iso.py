@@ -1,48 +1,12 @@
 """Console disc images that no DAT can match, for `warpzone inbox`.
 
-Five kinds of file have no Redump / No-Intro entry, so they are identified by their
-signature instead of by hash:
-
-- PS3 decrypted discs (`*.dec.iso`): ISO9660 with `PS3_DISC.SFB` and `PS3_GAME/PARAM.SFO`,
-  whose TITLE_ID and TITLE name the game. Filed in `roms/ps3/`.
-- Original Xbox XISO images (`*.xiso.iso`, `*.xiso`): an XDVDFS volume at offset 0 whose
-  root holds `default.xbe`. Filed in `roms/xbox/`.
-- Xbox 360 disc images (plain `.iso`): an XDVDFS game partition at 0xFDA0000 (XGD2) or
-  0x2080000 (XGD3), or an extracted XISO at offset 0, whose root holds `default.xex`.
-  Filed in `roms/xbox360/roms/` (the folder EmuDeck's ES-DE system for the 360 reads).
-- Wii U `.wua` archives (Cemu's ZArchive): the 144-byte footer at the end of the file ends
-  with the version 0x61bf3a01 and the magic 0x169f52d6 (big-endian), and its total-size field
-  equals the size of the file. Filed in `roms/wiiu/roms/` (where Cemu's game path points). A
-  `.wua` is only ever judged by that footer: it is never sniffed as a disc image, and a
-  `.iso` is never taken for a ZArchive.
-
-- PS4 `.pkg` files: the header starts with the magic `\x7fCNT` and holds a content id such
-  as `EP9000-CUSA07934_00-SCES503610000001` at 0x40 (only the first 0x80 bytes are read).
-  The title id (`CUSA07934`) is reported. With `orbis-pkg-util` configured the package is
-  extracted into `roms/ps4/games/<title id>/` with a shortcut in `roms/ps4/shortcuts/`
-  (see `inbox_ps4`); without it the `.pkg` is filed as it is in `roms/ps4/`. A PS Vita `.pkg`
-  (magic `\x7fPKG`, a PSP/Vita header and a Vita content type) is installed with Vita3K (see
-  `inbox_vita_pkg`). A PS3 `.pkg` or any other `.pkg` is reported as "not supported by
-  inbox yet" (`inbox_core.unsupported_reason`).
-
-A full Redump-style Xbox image (game partition at 0x18300000) is recognised but never
-placed: xemu cannot boot it, so it goes to review with the instruction to convert it with
-extract-xiso.
-
-How the module hooks into `inbox.py`: `HANDLER` is both a kind handler (it claims items
-whose file names end in `.dec.iso`, `.xiso.iso`, `.xiso`, `.wua` or `.pkg`, in a folder or an
-archive) and an `UnmatchedHandler` (a plain `.iso` that the DATs could not explain is sniffed,
-and if it is one of these formats it is placed instead of going to review). PS2, PSP and GameCube
-`.iso` files are therefore untouched: they are matched by the DATs first, and only an
-unmatched `.iso` is ever read for a signature.
-
-A PS3 `.iso` needs ES-DE's alternative emulator `RPCS3 ISO (Standalone)` (the system
-default is a shortcut launcher), which is written per game into the hub's ES-DE gamelist
-with `gamelist.update_entry`, written through the file helpers of `inbox_mame`.
-
-The decisions (`claimed_name`, `iso_records`, `xdvdfs_entries`, `detect`,
-`destination`) are pure functions of bytes or of a binary file object that is only read in
-small bounded pieces; the rest touches the disk. See development/design/inbox.md.
+PS3 decrypted discs, Xbox XISO and Xbox 360 images, Wii U `.wua` archives and `.pkg` files
+(PS4 packages, handed to `inbox_ps4`; Vita ones to `inbox_vita_pkg`) have no Redump or No-Intro
+entry, so they are identified by their signature. `HANDLER` is both a kind handler and an
+`UnmatchedHandler` (a plain `.iso` the DATs could not explain is sniffed). The decisions
+(`claimed_name`, `iso_records`, `xdvdfs_entries`, `detect`, `destination`) are pure functions of
+bytes or of a binary file object read in small bounded pieces; the rest touches the disk. See
+development/design/inbox.md, "Console disc images".
 """
 
 from __future__ import annotations
@@ -298,9 +262,8 @@ def is_wua(name: str) -> bool:
 
 
 def detect_wua(f: BinaryIO) -> Detected | None:
-    """A Cemu ZArchive, from its footer alone: the last 16 bytes are the total size, the
-    version and the magic, and the size must be the file's own (so a truncated or a padded
-    file is not recognised). Reads 16 bytes from the end."""
+    """A Cemu ZArchive, from the last 16 bytes of its footer alone (see development/design/inbox.md,
+    "Console disc images"); a truncated or padded file is not recognised."""
     size = f.seek(0, os.SEEK_END)
     if size < ZARCHIVE_FOOTER:
         return None

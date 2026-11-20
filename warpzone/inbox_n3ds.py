@@ -1,34 +1,9 @@
-"""Nintendo 3DS cartridge images for `warpzone inbox`.
+"""Nintendo 3DS cartridge images (`.3ds`, `.cci`, `.zcci`) for `warpzone inbox`.
 
-No DAT is needed: a `.3ds` or `.cci` file (the two names of one format, a CTR cartridge
-image) is identified by the headers at the start of the file, never by its name alone:
-
-- the NCSD container: the magic `NCSD` at 0x100 and, at 0x104, the image size (u32,
-  little-endian, in media units of 0x200 bytes), which must not be bigger than the file;
-- partition 0 (offset in media units at 0x120): an NCCH header (the magic `NCCH` at +0x100)
-  whose flags byte (+0x18F) has the NoCrypto bit (0x04) set.
-
-Azahar opens only decrypted images, so an encrypted one goes to review with that reason, and so
-does a file whose header is not valid. Only the two headers (0x200 bytes each) are read.
-
-A `.zcci` is Azahar's compressed form of the same image: a 0x20-byte Z3DS header (the magic
-`Z3DS`, the magic of the wrapped format, which must be `NCSD`, a version byte that must be 1,
-a reserved byte, the header size u16, the metadata size u32, the compressed size u64 and the
-uncompressed size u64, all little-endian), the metadata, then seekable zstd frames. It is checked
-from that header alone and filed as it is, never decompressed (the standard library has no zstd
-before Python 3.14), so whether it is encrypted cannot be seen.
-
-A recognised image is filed in `roms/n3ds/<name>.cci`: a `.3ds` is renamed on the way in (the
-bytes do not change), because both extensions are the same format; a `.zcci` keeps its name.
-Nothing is ever replaced: the same content already in the library is reported, different content
-under that name goes to review. The same game in the library in the other form (`<name>.cci`
-and `<name>.zcci`) is not placed a second time either: the two cannot be compared without
-decompressing, so it goes to review with that reason.
-
-How the module hooks into `inbox.py`: `HANDLER` is a kind handler that claims an item whose file
-names end in `.3ds`, `.cci` or `.zcci`, loose, in a folder or in an archive. The decisions
-(`claimed_name`, `target_name`, `game_key`, `partition0_offset`, `judge`, `judge_z3ds`) are pure
-functions of bytes; `detect` and `place_image` touch the disk. See development/design/inbox.md.
+No DAT is needed: an image is identified by its headers, never by its name alone. `HANDLER` is a
+kind handler; the decisions (`claimed_name`, `target_name`, `game_key`, `partition0_offset`,
+`judge`, `judge_z3ds`) are pure functions of bytes; `detect` and `place_image` touch the disk.
+See development/design/inbox.md, "3DS images".
 """
 
 from __future__ import annotations

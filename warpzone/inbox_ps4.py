@@ -1,33 +1,11 @@
 """PS4 packages for `warpzone inbox`: unpack a game into a folder shadPS4 can run.
 
-Current shadPS4 has no package installer. It runs extracted game folders found in its
-install directories, and ES-DE lists only the `.desktop` shortcuts of `roms/ps4/shortcuts`,
-which EmuDeck's `shadps4.sh` launcher reads. So, when `orbis-pkg-util` is configured
-(`[inbox] orbis_pkg_util`, or on PATH), a base-game `.pkg` becomes:
-
-- `library/roms/ps4/games/<CUSAxxxxx>/`: the folder `orbis-pkg-util extract` produces
-  (`eboot.bin`, `sce_sys/param.sfo` and the game data), copied beside the final name and
-  renamed, so the destination never holds a partial game. Consoles point shadPS4's
-  `installDirs` at it (`[shadps4]` in the profile, set by `provision device`).
-- `library/roms/ps4/shortcuts/<Title>.desktop`: the entry ES-DE lists. The launcher takes
-  the one quoted string of its `Exec=` line as the game, and runs
-  `Shadps4-qt.AppImage -d -g <path>`, which boots the version chosen in the Qt launcher.
-  The path is absolute (nothing expands `~` or `$HOME` there), under the SteamOS home.
-
-An update (patch) package becomes `library/roms/ps4/games/<CUSAxxxxx>-UPDATE/`, which shadPS4
-overlays on the base game file by file; the base game must already be in the library. A newer
-update replaces the one in the library (the only case where inbox replaces anything: the
-original package of the old one was filed in `inbox/_done` by its own run), the same version
-is kept and an older one goes to review. A DLC package becomes
-`library/roms/ps4/dlc/<CUSAxxxxx>/<entitlement label>/`, the layout of shadPS4's
-`addon_install_dir`, for a game that is in the library: the game named by the item folder
-when that folder is called after a title id (`inbox/CUSA03173/`), else the DLC's own title. A
-game already in the library is reported and never overwritten. Without the tool the package is
-placed as it is.
-
-The decisions (`pkg_kind`, `parse_header`, `category_kind`, `entitlement_label`,
+With `orbis-pkg-util` configured, a base-game, update or DLC `.pkg` is extracted into
+`library/roms/ps4/` (with a `.desktop` shortcut for a game); without it the package is placed as
+it is. The decisions (`pkg_kind`, `parse_header`, `category_kind`, `entitlement_label`,
 `app_version_key`, `update_action`, `item_title_id`, `shortcut_name`, `desktop_text`) are pure
-functions of bytes or text; `install` touches the disk. See development/design/inbox.md.
+functions of bytes or text; `install` touches the disk. See development/design/inbox.md, "PS4
+packages".
 """
 
 from __future__ import annotations

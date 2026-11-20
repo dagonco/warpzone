@@ -1,16 +1,10 @@
 """The doctor checks of scraping: Skyscraper, the ScreenScraper account and the nightly scrape.
 
-Like the other optional inbox tools, Skyscraper is `[ok]` with its version when found, `[--]`
-when it is not (`inbox` then does not scrape), and a problem when a configured path is wrong.
-The hub image ships it and keeps its `config.ini` and cache on the volume mounted at
-`/skyscraper` (named by `WARPZONE_SKYSCRAPER_DIR`): without the volume the line is `[--]`.
-The account line says whether `userCreds` is set in `[screenscraper]` of Skyscraper's
-`config.ini`; the judgment is a pure function of the file's lines (`scrape.has_user_creds`)
-and the value is never kept, printed or logged. See development/design/scrape.md ("Doctor").
-
-The `Nightly scrape` line (`check_nightly_scrape`, with its pure judge `judge_nightly`) reads
-the state and the newest run record of the unattended scrape on the hub. See
-development/design/scrape-unattended.md ("Doctor").
+The account line judges the lines of Skyscraper's `config.ini` (`scrape.has_user_creds`) and the
+value is never kept, printed or logged. The `Nightly scrape` line (`check_nightly_scrape`, with its
+pure judge `judge_nightly`) reads the state and the newest run record of the unattended scrape on
+the hub. See development/design/scrape.md ("Doctor") and development/design/scrape-unattended.md
+("Doctor").
 """
 
 from __future__ import annotations
@@ -228,12 +222,10 @@ OUTCOME_WORDS: Mapping[str, str] = {
 
 
 def _last_night(state: State, record: Mapping[str, Any] | None, now: datetime) -> str:
-    """The ok text: when the last run was, what it did and what is left. The date is the state's
-    (the last run that wrote its end); the counts are the record's only when the record is that
-    same run, since busy and empty nights write no record and the newest one may be an older
-    night's: otherwise the outcome is told in words. The nights it still takes come from the size
-    of the last night (the games Skyscraper was asked about) and only when that night ended on its
-    cap or its time budget: a night ended by a stop does not show what a night can do. Pure."""
+    """The ok text: when the last run was, what it did and what is left. See
+    development/design/doctor.md, "Nightly scrape". The counts are the record's only when the
+    record is that same run, since busy and empty nights write no record: otherwise the outcome is
+    told in words."""
     if record is None and state.last is None:
         ago = f"last check {_ago(now - state.checked)} ago; " if state.checked else ""
         return f"{ago}no night has scraped anything yet"
