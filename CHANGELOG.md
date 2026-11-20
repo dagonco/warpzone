@@ -16,6 +16,7 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ### Fixed
 
+- The library UI no longer lists EmuDeck's `readme.txt` ("place your roms here") in `roms/wiiu/roms/` as a Wii U game, and `warpzone scrape` no longer asks ScreenScraper for it.
 - A game deleted from the library UI now has its whitelist lines removed from a console once that console has received the deletion, also when the console keeps empty system folders its whitelist does not take, as EmuDeck creates them (a bug of 0.4.0rc5). The hub counts those folders as items the console still needs, so the lines waited for ever; the server now asks the hub which items they are and waits only for those at or below the deleted game.
 - `warpzone inbox --apply` files the first game of a system. Before, a system with no `library/roms/<system>/` folder yet sent its game to review with "No such file or directory".
 

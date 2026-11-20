@@ -95,6 +95,19 @@ class SystemRootsTests(unittest.TestCase):
             ["roms/switch", "extras/switch/updates", "extras/switch/dlc"],
         )
 
+    def test_the_readme_emudeck_leaves_in_a_system_folder_is_not_a_game(self) -> None:
+        games = catalog.derive(
+            "wiiu",
+            listing(
+                {
+                    "roms/wiiu/roms/Example (Europe).wua": 100,
+                    "roms/wiiu/roms/readme.txt": 21,
+                    "roms/wiiu/roms/metadata.txt": 1,
+                }
+            ),
+        )
+        self.assertEqual([g.primary for g in games], ["roms/wiiu/roms/Example (Europe).wua"])
+
 
 PLAYLIST = "# playlist\nSample (Disc 1).chd\nSample (Disc 2).chd\nGone.chd\n"
 
