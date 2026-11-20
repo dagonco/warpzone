@@ -3,12 +3,12 @@
 `warpzone scrape` and `inbox --apply` run Skyscraper (ScreenScraper as the source) on a staged
 copy of the games and merge what it produced into the hub's ES-DE gamelists and media. This
 module holds the parts that need no filesystem and no subprocess: which systems are scraped
-and under which Skyscraper platform (`PLATFORMS`, `UNSCRAPED`), which games need a scrape
-(`select`), the command lines (`skyscraper_args`), what Skyscraper's output says
-(`classify_output`), what to merge into the hub (`plan_merge`, `add_entries`), what is
-remembered about the not-found and incomplete memories, the presence check of the account in
-Skyscraper's config, and what the run prints (`render_report`, `stop_message`). The disk and
-the tool are in `scrape_io`. See development/design/scrape.md.
+and under which Skyscraper platform (`PLATFORMS`), how the frontend names their games
+(`frontend_games`), which games need a scrape (`select`), the command lines (`skyscraper_args`),
+what Skyscraper's output says (`classify_output`), what to merge into the hub (`plan_merge`,
+`add_entries`), what is remembered about the not-found and incomplete memories, the presence
+check of the account in Skyscraper's config, and what the run prints (`render_report`,
+`stop_message`). The disk and the tool are in `scrape_io`. See development/design/scrape.md.
 """
 
 from __future__ import annotations
@@ -16,14 +16,14 @@ from __future__ import annotations
 import posixpath
 import re
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date
 from enum import Enum
 from pathlib import Path, PurePath
 from typing import Any, Literal
 
-from warpzone import artwork, gamelist
-from warpzone.catalog import DIR, Game
+from warpzone import artwork, gamelist, whitelist
+from warpzone.catalog import DIR, FILE, Game, Part
 from warpzone.errors import UsageError
 
 # The version the flags below were tested with.
@@ -61,19 +61,30 @@ PLATFORMS: dict[str, str] = {
             "ps3",
             "xbox",
             "switch",
+            "ps4",
+            "psvita",
+            "wiiu",
+            "xbox360",
         )
     },
     "genesis": "megadrive",
     "n3ds": "3ds",
 }
 
-# Systems `inbox` places that are not scraped yet, with the reason `scrape --system` gives.
-UNSCRAPED: dict[str, str] = {
-    "ps4": "its gamelist entry is a launcher whose name ScreenScraper cannot match",
-    "psvita": "its gamelist entry is a launcher whose name ScreenScraper cannot match",
-    "xbox360": "its games live below roms/xbox360/roms/, so their gamelist paths need a base shift",
-    "wiiu": "its games live below roms/wiiu/roms/, so their gamelist paths need a base shift",
+# The folder below a hub system folder that the frontend reads as the system's own, where it is
+# not the system folder itself: ES-DE lists PS4 from `roms/ps4/shortcuts/` and Wii U and Xbox 360
+# from `roms/<system>/roms/` (`whitelist.SUBROOT_SYSTEMS`, the systems `inbox` files below
+# `roms/`). A gamelist entry and a media file of such a system are named without it
+# (`./Example.desktop`, `covers/Example.png`), as `artwork.FrontendSystem.base` has it on a
+# device; the hub has no system list, so this is the hub's copy of that fact.
+FRONTEND_BASES: dict[str, str] = {
+    **{system: "roms/" for system in whitelist.SUBROOT_SYSTEMS},
+    "ps4": "shortcuts/",
 }
+# The systems whose game is a folder and whose gamelist entry is a launcher file in another place
+# (`catalog._ps4_games`, `_vita_games`): what Skyscraper is given is that file, and a game with no
+# launcher is not in the frontend at all.
+LAUNCHER_SYSTEMS: frozenset[str] = frozenset({"ps4", "psvita"})
 
 # The hub's media kinds a scrape fills (`titlescreens` and `physicalmedia` are not available
 # from Skyscraper's ScreenScraper module) and the extensions the library UI reads for each.
@@ -110,14 +121,11 @@ def batch_fits(now: float, deadline: float, games: int) -> bool:
 
 def choose_systems(requested: Sequence[str] | None) -> list[str]:
     """The systems a `scrape` run goes through: the ones named (once each, in the order
-    given) or every scraped system. `UsageError` for a name that is not scraped, with the
-    reason when it is one `inbox` places that is left out."""
+    given) or every scraped system. `UsageError` for a name that is not scraped."""
     if not requested:
         return sorted(PLATFORMS)
     chosen: list[str] = []
     for name in requested:
-        if name in UNSCRAPED:
-            raise UsageError(f"--system {name}: not scraped yet: {UNSCRAPED[name]}")
         if name not in PLATFORMS:
             raise UsageError(f"--system {name}: not a system warpzone scrapes")
         if name not in chosen:
@@ -158,8 +166,52 @@ class Selection:
 def is_placed(game: Game, placed: Collection[str]) -> bool:
     """Whether a catalog game is one of the entries `inbox` placed, given as library paths
     (`roms/<system>/<name>`): the game's primary file is the entry, or lies inside it (the
-    primary of an `.m3u` folder is the playlist in it)."""
-    return any(game.primary == p or game.primary.startswith(p + "/") for p in placed)
+    primary of an `.m3u` folder is the playlist in it), or the entry is one of the game's
+    parts or lies inside one (a PS4 update folder, a DLC folder or a Vita licence is placed
+    for a game that is already there)."""
+    paths = {game.primary, *(part.path for part in game.parts)}
+    return any(
+        q == p or q.startswith(p + "/") or p.startswith(q + "/") for p in placed for q in paths
+    )
+
+
+def entry_part(game: Game) -> Part | None:
+    """The part of a game its gamelist path names: the one whose path ends with the path
+    (below `./`), the primary first, else the primary. It is the primary for almost every game;
+    a PS4 or Vita game's primary is its folder and its gamelist path names the launcher file."""
+    rel = artwork.relative(game.gamelist)
+    ordered = sorted(game.parts, key=lambda p: p.path != game.primary)
+    if rel is not None:
+        for part in ordered:
+            if part.path.endswith("/" + rel):
+                return part
+    return next((p for p in ordered if p.path == game.primary), None)
+
+
+def frontend_games(system: str, games: Iterable[Game]) -> list[Game]:
+    """The games of a system as the frontend lists them, for a scrape: the games whose
+    `gamelist` is shifted to the folder the frontend reads (`FRONTEND_BASES`), so the entry
+    and the media are named as the frontend names them, and without the games it does not
+    list: the ones outside that folder (a PS4 game with no shortcut) and, for
+    `LAUNCHER_SYSTEMS`, the ones with no launcher file. Everything else about a game, its
+    `primary` included, is as in the catalog."""
+    base = FRONTEND_BASES.get(system, "")
+    found: list[Game] = []
+    for game in games:
+        rel = artwork.relative(game.gamelist)
+        if rel is None:
+            found.append(game)  # staging reports it
+            continue
+        if system in LAUNCHER_SYSTEMS:
+            part = entry_part(game)
+            if part is None or part.type != FILE:
+                continue
+        if base:
+            if not rel.startswith(base) or len(rel) == len(base):
+                continue
+            game = replace(game, gamelist="./" + rel[len(base) :])
+        found.append(game)
+    return found
 
 
 def media_stem(game: Game) -> str:
@@ -169,8 +221,8 @@ def media_stem(game: Game) -> str:
     `.m3u` folder, a PS3 `.ps3` folder) keeps its whole name, as the library UI reads it.
     """
     rel = artwork.relative(game.gamelist) or game.gamelist
-    primary = next((p for p in game.parts if p.path == game.primary), None)
-    if primary is not None and primary.type == DIR:
+    part = entry_part(game)
+    if part is not None and part.type == DIR:
         return rel
     return posixpath.splitext(rel)[0]
 
@@ -298,8 +350,9 @@ _FLAGS: dict[str, tuple[str, ...]] = {
 
 # Extensions Skyscraper's platform does not list but warpzone stages (`--addext`), by Skyscraper
 # platform. Its `3ds` platform lists only `*.3ds` and `*.cci`, so Azahar's compressed image would
-# be skipped, and a batch that names it is refused as not found.
-EXTRA_EXTENSIONS: dict[str, tuple[str, ...]] = {"3ds": ("*.zcci",)}
+# be skipped, and a batch that names it is refused as not found; its `ps4` platform lists no
+# `.desktop`, the launcher a PS4 game is staged as.
+EXTRA_EXTENSIONS: dict[str, tuple[str, ...]] = {"3ds": ("*.zcci",), "ps4": ("*.desktop",)}
 
 
 def skyscraper_args(

@@ -328,7 +328,7 @@ Fills in the hub's ES-DE gamelists and media (`frontend/es-de/gamelists/<system>
 |---|---|---|
 | `--config PATH` | see above | The private config file; only its `[inbox]` table is read. |
 | `--root PATH` | `[inbox] root` | The hub root as mounted on this machine, holding `inbox/` and `library/`. |
-| `--system NAME ...` | every scraped system | Scrape only these systems. A system `inbox` places that is not scraped yet (`ps4`, `psvita`, `xbox360`, `wiiu`) or an unknown name is a usage error that says why. |
+| `--system NAME ...` | every scraped system | Scrape only these systems. A name that is not a scraped system is a usage error. |
 | `--retry-not-found` | off | Also try the games ScreenScraper did not know in the last 30 days. They are remembered in `$XDG_CACHE_HOME/warpzone/scrape-not-found.json` on this machine, with the file's size, and tried again after 30 days or when the file changes size. |
 | `--dry-run` | off | Run no Skyscraper and write nothing: list, per system, the games it would scrape ("no entry" and "missing media" with the kinds) and the totals. |
 | `--force-lock` | off | Take over a stale `inbox/.warpzone.lock`: one whose heartbeat has been silent for 10 minutes, or held by a process that is gone from this machine; a lock of an older warpzone, which has no heartbeat, is stale after 12 hours or by that process rule. A live lock is never taken. |

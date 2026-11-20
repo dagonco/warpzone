@@ -37,7 +37,9 @@ SWITCH_EXTRAS = whitelist.system_roots("switch")[1:]
 # Files whose text derive reads (a launcher, a shortcut, a cue sheet).
 TEXT_SUFFIXES = (".desktop", ".psvita", ".cue", ".gdi", ".m3u")
 SIDECAR_SUFFIXES = (".m3u", ".cue", ".gdi")  # claim order: playlists first
-JUNK_NAMES = frozenset({"@eaDir", "Thumbs.db", "systeminfo.txt", "metadata.txt"})
+# EmuDeck leaves `systeminfo.txt`, `metadata.txt` and a `readme.txt` ("place your roms here") in
+# system folders; none of them is a game.
+JUNK_NAMES = frozenset({"@eaDir", "Thumbs.db", "systeminfo.txt", "metadata.txt", "readme.txt"})
 
 
 @dataclass(frozen=True)

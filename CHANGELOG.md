@@ -6,12 +6,17 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ## [Unreleased]
 
+### Added
+
+- `warpzone scrape` (and the scrape of `warpzone inbox --apply` and of `warpzone scrape --unattended`) now also scrapes the PS4, PS Vita, Wii U and Xbox 360 games. A PS4 or Vita game is looked up by the name of its launcher (`<Title>.desktop` in `roms/ps4/shortcuts/`, `<Title>.psvita` in `roms/psvita/`), and the entry and media are written under the paths ES-DE uses for them (`./Bloodborne.desktop`, `covers/Bloodborne.png`; `./Halo 3 (World).iso` for the Xbox 360, whose games ES-DE reads from `roms/xbox360/roms/`). A PS4 or Vita game with no launcher is not listed by ES-DE and is not scraped. `--system ps4`, `psvita`, `wiiu` and `xbox360` are accepted. See [Scraping](https://dagonco.github.io/warpzone/setup/scrape/).
+
 ### Changed
 
 - The library UI lists the makers of the systems in alphabetical order, with Arcade and then Other last, and the systems of each maker by name.
 
 ### Fixed
 
+- The library UI no longer lists EmuDeck's `readme.txt` ("place your roms here") in `roms/wiiu/roms/` as a Wii U game, and `warpzone scrape` no longer asks ScreenScraper for it.
 - A game deleted from the library UI now has its whitelist lines removed from a console once that console has received the deletion, also when the console keeps empty system folders its whitelist does not take, as EmuDeck creates them (a bug of 0.4.0rc5). The hub counts those folders as items the console still needs, so the lines waited for ever; the server now asks the hub which items they are and waits only for those at or below the deleted game.
 - `warpzone inbox --apply` files the first game of a system. Before, a system with no `library/roms/<system>/` folder yet sent its game to review with "No such file or directory".
 

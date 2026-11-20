@@ -7,6 +7,7 @@ from datetime import date, timedelta
 from unittest import mock
 
 from library_support import game
+from scrape_support import ps4_game, vita_game
 from warpzone import artwork, inbox_dolphin, inbox_mame, inbox_n3ds, inbox_vita, scrape
 from warpzone.dat import SYSTEMS
 from warpzone.inbox_console_iso import FOLDERS as CONSOLE_FOLDERS
@@ -40,15 +41,12 @@ def media(stem: str, *kinds: str, ext: str = "png") -> set[str]:
 
 
 class PlatformTableTest(unittest.TestCase):
-    def test_every_inbox_system_is_in_exactly_one_table(self):
-        both = scrape.PLATFORMS.keys() & scrape.UNSCRAPED.keys()
-        self.assertEqual(both, set(), "a system is in PLATFORMS and in UNSCRAPED")
-        missing = inbox_systems() - scrape.PLATFORMS.keys() - scrape.UNSCRAPED.keys()
-        self.assertEqual(missing, set(), "give these a Skyscraper platform or a reason")
+    def test_every_system_inbox_places_has_a_platform(self):
+        missing = inbox_systems() - scrape.PLATFORMS.keys()
+        self.assertEqual(missing, set(), "give these a Skyscraper platform")
 
     def test_no_system_that_inbox_cannot_place(self):
-        extra = (scrape.PLATFORMS.keys() | scrape.UNSCRAPED.keys()) - inbox_systems()
-        self.assertEqual(extra, set())
+        self.assertEqual(scrape.PLATFORMS.keys() - inbox_systems(), set())
 
     def test_names_that_differ(self):
         self.assertEqual(scrape.PLATFORMS["genesis"], "megadrive")
@@ -57,12 +55,19 @@ class PlatformTableTest(unittest.TestCase):
         self.assertEqual(scrape.PLATFORMS["atarijaguar"], "atarijaguar")
 
     def test_extra_extensions_are_only_for_the_systems_that_need_them(self):
-        self.assertEqual(scrape.EXTRA_EXTENSIONS, {"3ds": ("*.zcci",)})
+        self.assertEqual(scrape.EXTRA_EXTENSIONS, {"3ds": ("*.zcci",), "ps4": ("*.desktop",)})
         self.assertLessEqual(set(scrape.EXTRA_EXTENSIONS), set(scrape.PLATFORMS.values()))
 
-    def test_left_out_systems_have_a_reason(self):
-        self.assertEqual(set(scrape.UNSCRAPED), {"ps4", "psvita", "xbox360", "wiiu"})
-        self.assertTrue(all(scrape.UNSCRAPED.values()))
+    def test_launcher_and_subfolder_systems_have_their_own_platform_name(self):
+        for system in ("ps4", "psvita", "wiiu", "xbox360"):
+            self.assertEqual(scrape.PLATFORMS[system], system)
+
+    def test_the_frontend_bases(self):
+        self.assertEqual(scrape.FRONTEND_BASES["ps4"], "shortcuts/")
+        self.assertEqual(scrape.FRONTEND_BASES["wiiu"], "roms/")
+        self.assertEqual(scrape.FRONTEND_BASES["xbox360"], "roms/")
+        self.assertNotIn("psvita", scrape.FRONTEND_BASES)
+        self.assertEqual(scrape.LAUNCHER_SYSTEMS, {"ps4", "psvita"})
 
 
 class ArgsTest(unittest.TestCase):
@@ -161,6 +166,15 @@ class ArgsTest(unittest.TestCase):
             other = scrape.skyscraper_args(step, "nes", input_dir="/i", batch="/b", **paths)
             self.assertNotIn("--addext", other, step)
 
+    def test_ps4_adds_the_desktop_extension_in_every_step(self):
+        paths = {"gamelist_dir": "/g", "media_dir": "/m", "artwork_file": "/a.xml"}
+        for step in ("gather", "main", "box"):
+            args = scrape.skyscraper_args(step, "ps4", input_dir="/i", batch="/b", **paths)
+            self.assertEqual(args[args.index("--addext") + 1], "*.desktop", step)
+        for system in ("psvita", "wiiu", "xbox360"):
+            args = scrape.skyscraper_args("gather", system, input_dir="/i", batch="/b")
+            self.assertNotIn("--addext", args, system)
+
     def test_several_extra_extensions_are_one_space_separated_value(self):
         with mock.patch.dict(scrape.EXTRA_EXTENSIONS, {"nes": ("*.a", "*.b")}):
             args = scrape.skyscraper_args("gather", "nes", input_dir="/i", batch="/b")
@@ -231,10 +245,100 @@ class ArgsTest(unittest.TestCase):
             scrape.skyscraper_args("pass", "nes", input_dir="/i", batch="/b")
 
 
+class FrontendGamesTest(unittest.TestCase):
+    def test_ps4_is_named_by_its_launcher_below_shortcuts(self):
+        (shifted,) = scrape.frontend_games("ps4", [ps4_game("Bloodborne")])
+        self.assertEqual(shifted.gamelist, "./Bloodborne.desktop")
+        self.assertEqual(shifted.primary, "roms/ps4/games/CUSA00000")  # the catalog's, kept
+        self.assertEqual(scrape.entry_part(shifted).path, "roms/ps4/shortcuts/Bloodborne.desktop")
+        self.assertEqual(scrape.media_stem(shifted), "Bloodborne")
+
+    def test_a_ps4_game_the_frontend_does_not_list_is_left_out(self):
+        pkg = game("ps4", "roms/ps4/Raw.pkg", "Raw", gamelist="./Raw.pkg")
+        self.assertEqual(scrape.frontend_games("ps4", [ps4_game(launcher=False), pkg]), [])
+
+    def test_vita_has_no_base_and_needs_a_launcher(self):
+        with_launcher, without = vita_game("Rayman Legends"), vita_game(launcher=False)
+        (kept,) = scrape.frontend_games("psvita", [with_launcher, without])
+        self.assertEqual(kept.gamelist, "./Rayman Legends.psvita")
+        self.assertEqual(scrape.media_stem(kept), "Rayman Legends")
+
+    def test_wiiu_and_xbox360_lose_the_roms_folder(self):
+        wua = game(
+            "wiiu",
+            "roms/wiiu/roms/Mario Maker (Europe).wua",
+            "M",
+            gamelist="./roms/Mario Maker (Europe).wua",
+        )
+        iso = game(
+            "xbox360",
+            "roms/xbox360/roms/Halo 3 (World).iso",
+            "H",
+            gamelist="./roms/Halo 3 (World).iso",
+        )
+        sub = game(
+            "xbox360", "roms/xbox360/roms/Disc/Game.iso", "G", gamelist="./roms/Disc/Game.iso"
+        )
+        self.assertEqual(
+            [g.gamelist for g in scrape.frontend_games("wiiu", [wua])],
+            ["./Mario Maker (Europe).wua"],
+        )
+        self.assertEqual(
+            [g.gamelist for g in scrape.frontend_games("xbox360", [iso, sub])],
+            ["./Halo 3 (World).iso", "./Disc/Game.iso"],
+        )
+        outside = game("xbox360", "roms/xbox360/Stray.iso", "S")
+        self.assertEqual(scrape.frontend_games("xbox360", [outside]), [])
+
+    def test_other_systems_and_their_folder_games_are_untouched(self):
+        plain = game("snes", "roms/snes/A.zip", "A")
+        folder = game("psx", "roms/psx/D.m3u", "D", kind="dir")
+        self.assertEqual(scrape.frontend_games("snes", [plain]), [plain])
+        (kept,) = scrape.frontend_games("psx", [folder])
+        self.assertIs(kept, folder)
+        self.assertEqual(scrape.media_stem(kept), "D.m3u")  # a folder keeps its whole name
+        self.assertEqual(scrape.entry_part(kept).path, "roms/psx/D.m3u")
+
+    def test_a_game_with_a_path_that_is_not_relative_is_kept_for_staging_to_report(self):
+        odd = game("ps4", "roms/ps4/x", "x", gamelist="/abs/x.desktop")
+        self.assertEqual(scrape.frontend_games("ps4", [odd]), [odd])
+
+
 class SelectTest(unittest.TestCase):
     def pick(self, games, entries=(), present=(), **kwargs):
         kwargs.setdefault("today", TODAY)
         return scrape.select(games, list(entries), set(present), **kwargs)
+
+    def test_a_launcher_game_is_picked_under_the_frontend_path(self):
+        (g,) = scrape.frontend_games("ps4", [ps4_game("Bloodborne")])
+        sel = self.pick([g])
+        self.assertFalse(sel.picks[0].has_entry)
+        entry_there = entry("./Bloodborne.desktop", name="Bloodborne")
+        sel = self.pick([g], [entry_there], media("Bloodborne", "covers"))
+        self.assertTrue(sel.picks[0].has_entry)
+        self.assertNotIn("covers", sel.picks[0].missing)
+        done = self.pick([g], [entry_there], media("Bloodborne", *ALL_KINDS))
+        self.assertEqual(done.picks, ())
+        # the media of the folder name (`games/CUSA00000`) or the full path do not count
+        sel = self.pick([g], [entry_there], media("shortcuts/Bloodborne", *ALL_KINDS))
+        self.assertEqual(len(sel.picks), 1)
+
+    def test_a_subfolder_system_game_is_picked_under_the_frontend_path(self):
+        raw = game(
+            "xbox360",
+            "roms/xbox360/roms/Halo 3 (World).iso",
+            "H",
+            gamelist="./roms/Halo 3 (World).iso",
+        )
+        (g,) = scrape.frontend_games("xbox360", [raw])
+        done = self.pick([g], [entry("./Halo 3 (World).iso")], media("Halo 3 (World)", *ALL_KINDS))
+        self.assertEqual(done.picks, ())
+
+    def test_not_found_is_keyed_by_the_frontend_path(self):
+        (g,) = scrape.frontend_games("psvita", [vita_game("Rayman Legends")])
+        records = {"./Rayman Legends.psvita": scrape.NotFound(g.size, TODAY)}
+        sel = self.pick([g], not_found=records)
+        self.assertEqual((sel.picks, sel.skipped_not_found), ((), 1))
 
     def test_game_without_entry(self):
         g = game("snes", "roms/snes/Game (USA).zip", "Game (USA)")
@@ -638,6 +742,59 @@ class RenderEntriesTest(unittest.TestCase):
             "\t<game>\n\t\t<path>./G.zip</path>\n\t\t<name>G</name>\n\t</game>\n" * 2,
         )
         self.assertEqual(scrape.render_entries([]), "")
+
+
+class MergeFrontendPathTest(unittest.TestCase):
+    """The entry and the media of a launcher or subfolder system are named as the frontend does."""
+
+    def merged(self, system, raw, name, sky_name=None):
+        (g,) = scrape.frontend_games(system, [raw])
+        self.assertEqual(artwork.relative(g.gamelist), name)
+        stem = name.rsplit(".", 1)[0]
+        return plan(
+            [g],
+            sky=[entry(f"./{name}", **SKY_FIELDS)],
+            main=files(f"covers/{stem}.png", f"screenshots/{stem}.png"),
+            box=files(f"covers/{stem}.png"),
+        )
+
+    def check(self, merge_plan, path, stem):
+        self.assertEqual([e.path for e in merge_plan.entries], [path])
+        self.assertEqual(
+            sorted(c.dest for c in merge_plan.copies),
+            sorted([f"covers/{stem}.png", f"screenshots/{stem}.png", f"3dboxes/{stem}.png"]),
+        )
+
+    def test_ps4(self):
+        self.check(
+            self.merged("ps4", ps4_game("Bloodborne"), "Bloodborne.desktop"),
+            "./Bloodborne.desktop",
+            "Bloodborne",
+        )
+
+    def test_psvita(self):
+        self.check(
+            self.merged("psvita", vita_game("Rayman Legends"), "Rayman Legends.psvita"),
+            "./Rayman Legends.psvita",
+            "Rayman Legends",
+        )
+
+    def test_wiiu_and_xbox360(self):
+        wua = game("wiiu", "roms/wiiu/roms/Mario Maker.wua", "M", gamelist="./roms/Mario Maker.wua")
+        iso = game("xbox360", "roms/xbox360/roms/Halo 3.iso", "H", gamelist="./roms/Halo 3.iso")
+        self.check(self.merged("wiiu", wua, "Mario Maker.wua"), "./Mario Maker.wua", "Mario Maker")
+        self.check(self.merged("xbox360", iso, "Halo 3.iso"), "./Halo 3.iso", "Halo 3")
+
+    def test_an_entry_the_hub_has_under_the_frontend_path_is_kept(self):
+        (g,) = scrape.frontend_games("ps4", [ps4_game("Bloodborne")])
+        p = plan(
+            [g],
+            hub=[entry("./Bloodborne.desktop", name="Mine")],
+            hub_media=media("Bloodborne", *ALL_KINDS),
+            sky=[entry("./Bloodborne.desktop", **SKY_FIELDS)],
+        )
+        self.assertEqual(only(p).result, scrape.Result.UNCHANGED)
+        self.assertEqual(p.entries, ())
 
 
 class MergeMediaTest(unittest.TestCase):

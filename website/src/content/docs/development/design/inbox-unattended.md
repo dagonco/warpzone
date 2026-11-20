@@ -710,7 +710,7 @@ that find it, which exit `0` as busy. `--no-scrape` is accepted with `--unattend
 pass it); nothing implies it.
 
 - **Empty stays cheap.** A run with no ready item, and a run that placed nothing scrapable (a
-  Switch update, a system in `UNSCRAPED`, only `already` games), starts no Skyscraper.
+  Switch update, only `already` games), starts no Skyscraper.
 - **A failure is a warning, never news.** The daily limit, a closed, busy or unreachable
   ScreenScraper, a Skyscraper that fails or hits the time limit, a missing `/skyscraper` volume,
   or a catalog that lacks the placed games: each is a warning line in the task's output, as in an

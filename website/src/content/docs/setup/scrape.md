@@ -107,7 +107,7 @@ The miximage follows the layout ES-DE itself makes by default. `scrape` only add
 
 A game takes about 10 to 18 seconds (18 on a NAS) and 2.6 MB of media, most of it the video, so a library of 1,000 games is about three to five hours and 2.6 GB on the hub (the videos stay on the hub; consoles ignore them) plus about as much in Skyscraper's cache on the machine that scrapes (in the container, `skyscraper/cache/` on the NAS's disk).
 
-Scraped systems: `nes`, `snes`, `n64`, `gb`, `gbc`, `gba`, `nds`, `genesis`, `mastersystem`, `gamegear`, `sega32x`, `atari2600`, `atari7800`, `atarilynx`, `atarijaguar`, `wonderswan`, `wonderswancolor`, `psx`, `ps2`, `psp`, `saturn`, `dreamcast`, `gc`, `wii`, `n3ds`, `mame`, `ps3`, `xbox` and `switch`. Not yet: `ps4`, `psvita`, `xbox360` and `wiiu`.
+Scraped systems: `nes`, `snes`, `n64`, `gb`, `gbc`, `gba`, `nds`, `genesis`, `mastersystem`, `gamegear`, `sega32x`, `atari2600`, `atari7800`, `atarilynx`, `atarijaguar`, `wonderswan`, `wonderswancolor`, `psx`, `ps2`, `psp`, `saturn`, `dreamcast`, `gc`, `wii`, `n3ds`, `mame`, `ps3`, `ps4`, `psvita`, `xbox`, `xbox360`, `wiiu` and `switch`. A PS4 or PS Vita game is scraped by the name of its launcher (`<Title>.desktop` in `shortcuts/` for PS4, `<Title>.psvita` for Vita), so a game with no launcher is not scraped; a Wii U or Xbox 360 game by the name of its file.
 
 ## Scraping what `inbox` places
 

@@ -7,6 +7,7 @@ from datetime import date, timedelta
 from pathlib import Path
 
 from library_support import game
+from scrape_support import ps4_game
 from test_scrape import (
     BUSY,
     FAKE_CONFIG,
@@ -93,6 +94,12 @@ class RememberNotFoundTest(unittest.TestCase):
         g = game("snes", "roms/snes/Hacks/A.zip", "A", gamelist="./Hacks/A.zip")
         merge = scrape.GameMerge(g, scrape.Result.NOT_FOUND, False)
         self.assertEqual(set(self.remember({}, [merge], asked=["A"])), {"./Hacks/A.zip"})
+
+    def test_a_launcher_game_is_remembered_under_the_frontend_path_by_its_launcher_name(self):
+        (g,) = scrape.frontend_games("ps4", [ps4_game("Bloodborne")])
+        merge = scrape.GameMerge(g, scrape.Result.NOT_FOUND, False)
+        out = self.remember({}, [merge], asked=["Bloodborne"])
+        self.assertEqual(out, {"./Bloodborne.desktop": scrape.NotFound(g.size, TODAY)})
 
 
 class NotFoundFileTest(unittest.TestCase):
@@ -233,10 +240,8 @@ class SystemsAndDryRunTest(unittest.TestCase):
         self.assertEqual(scrape.choose_systems(None), sorted(scrape.PLATFORMS))
         self.assertEqual(scrape.choose_systems(["snes", "nes", "snes"]), ["snes", "nes"])
 
-    def test_a_system_that_is_left_out_says_why(self):
-        with self.assertRaises(scrape.UsageError) as caught:
-            scrape.choose_systems(["ps4"])
-        self.assertIn("launcher", str(caught.exception))
+    def test_a_system_that_is_not_scraped_is_refused(self):
+        self.assertEqual(scrape.choose_systems(["ps4", "wiiu"]), ["ps4", "wiiu"])
         with self.assertRaises(scrape.UsageError) as caught:
             scrape.choose_systems(["amiga"])
         self.assertIn("not a system", str(caught.exception))
