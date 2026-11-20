@@ -1,8 +1,8 @@
 """Provisioning, as the commands call it: one name for what the `provision_*` modules do.
 
-`cli`, `health` and the updater script import this module; the work lives in
-`provision_hub`, `provision_device` and the modules `provision_device` calls (see "Code
-layout" in development/design/code-and-testing.md).
+`cli` and `health` import this module (the updater script is shell and only runs the CLI).
+The work lives in `provision_hub`, `provision_device` and the modules `provision_device` calls
+(see "Code layout" in development/design/code-and-testing.md).
 """
 
 from __future__ import annotations

@@ -79,7 +79,7 @@ plain name (`artwork.is_plain`: letters, digits, `.`, `_` and `-`, not starting 
 skipped. A system whose folder is below the hub's system folder (`pico-8` reads `pico8/carts/`)
 gets paths relative to it (the hub has no system list, so the library UI matches the same
 shift by trying shorter paths, see [Metadata and media](/warpzone/development/design/library-ui/#metadata-and-media)). When several hub folders carry one name (`snes` has two entries),
-the one the hub names alike wins and the rest are reported. One hub folder may feed several
+the one the hub names alike wins (else the first of the frontend's list) and the rest are reported. One hub folder may feed several
 names.
 
 **User data.** The frontend rewrites its gamelist (`SaveGamelistsMode` is `on exit` on dArkOS)

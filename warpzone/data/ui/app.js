@@ -112,7 +112,7 @@
     const qi = raw.indexOf('?');
     const path = (qi < 0 ? raw : raw.slice(0, qi)) || '/';
     const params = new URLSearchParams(qi < 0 ? '' : raw.slice(qi + 1));
-    const legacy = params.get('game'); // links of the first version of the page: ?game=system/id
+    const legacy = params.get('game'); // a `?game=system/id` parameter opens that game's page, as `#/game/system/id` does
     if (legacy && legacy.includes('/')) {
       const [system, id] = legacy.split('/');
       return { name: 'game', system: decodeURIComponent(system), id: decodeURIComponent(id) };

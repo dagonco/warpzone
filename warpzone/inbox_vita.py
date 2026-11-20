@@ -20,9 +20,9 @@ A dump is recognised by `sce_sys/param.sfo` next to `eboot.bin` with a Vita titl
 review, and so does a dump that Vita3K would have to install (an `sce_pfs` folder). A Vitamin
 dump (it holds `sce_module/steroid.suprx`) always goes to review: Vita3K rejects that module,
 so it is never placed even if the game might start. A PS3 `PS3_GAME/PARAM.SFO` is not this
-layout. A game already in the library is reported and never overwritten. `.vpk` files keep
-their outcome; a Vita `.pkg` is installed with Vita3K by `inbox_vita_pkg`, which hands the
-result to `install`.
+layout. A game already in the library is reported and never overwritten. `.vpk` files
+are reported as unsupported; a Vita `.pkg` is installed with Vita3K by `inbox_vita_pkg`, which
+hands the result to `install`.
 
 The decisions (`is_title_id`, `category_kind`, `game_roots`, `is_vitamin`, `file_name`,
 `eboot_needs_license`, `parse_license`, `license_sources`, `choose_license`) are pure;

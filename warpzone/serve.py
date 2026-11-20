@@ -1437,7 +1437,9 @@ class App:
         failure: ApiError | None = None
         queue_written = False
         with self.write_lock:
-            # Step 1: every file is checked before the first one is written.
+            # Check first: every file is checked before the first one is written (the write lock
+            # sequence of "Validation, the conflict check and writing" in
+            # development/design/play-queue.md).
             if queue_store.load(self.root).etag != loaded.etag:
                 raise ApiError("stale", "the queue changed since it was read", queue=True)
             todo = [dp for dp in plan.devices if dp.changed]
@@ -1447,11 +1449,11 @@ class App:
                     raise ApiError(
                         "stale", f"{name}: the whitelist changed since it was read", device=name
                     )
-            # Step 4: the queue first, so a failure after it leaves a claim the page can show.
+            # Queue write: the queue first, so a failure after it leaves a claim the page can show.
             if plan.first is not None:
                 self._write_queue(loaded.etag, plan.first, now)
                 queue_written = True
-            # Step 5: the whitelists.
+            # Whitelist writes.
             for dp in todo:
                 try:
                     text = dp.new_text.encode("utf-8")
@@ -1477,7 +1479,8 @@ class App:
                     failure = ApiError(code, message, device=dp.device)
                     break
                 written[dp.device] = True
-            # Step 6: a `remove` that ended claims deletes the entry once every whitelist is out.
+            # Second queue write: a `remove` that ended claims deletes the entry once every
+            # whitelist is out.
             if failure is None and plan.second is not None and plan.first is not None:
                 try:
                     self._write_queue(queue.etag_of(plan.first), plan.second, now)

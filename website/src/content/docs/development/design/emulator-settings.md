@@ -391,8 +391,9 @@ find the config. Provisioning again with another config rewrites the script.
   not `true` (`event_scripts_enabled`, pure), it sets it, only while ES-DE is not running:
   ES-DE keeps its settings in memory and rewrites the file when it quits, so an edit made
   while it runs would be lost. ES-DE is detected as `apply` detects an emulator (`comm` and
-  the base name of `argv[0]`, names in `esde.ESDE_PROCESSES`: `es-de` and `ES-DE.AppImage`).
-  The edit (`enable_event_scripts`, pure) changes only the
+  the base name of `argv[0]`, names in `esde.ESDE_PROCESSES`: `es-de`, the `comm` of the
+  unpacked binary, and `ES-DE.AppImage`, the `argv[0]` of the AppImage; both seen on a Steam
+  Machine). The edit (`enable_event_scripts`, pure) changes only the
   `value` of the existing `<bool name="CustomEventScripts" .../>` element, or adds that one
   line after the last `<bool .../>` line with its indentation and line ending; every other
   byte stays as it was, and the result must still parse as the same settings plus that one,

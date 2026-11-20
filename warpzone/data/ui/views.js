@@ -1258,8 +1258,6 @@
       })) : null);
   }
 
-  // What the hub holds of the game's saves. Nothing when it found none: that says "not found",
-  // not "the game has no save".
   // What one part of a game is, from where it lives: the base game, an update, a DLC, a disc
   // of a set, a playlist or cue sheet. A game of one part needs no label.
   function partRole(path) {
@@ -1302,6 +1300,8 @@
       h('ul', { class: 'parts-list pbody' }, rows));
   }
 
+  // What the hub holds of the game's saves. Nothing when it found none: that says "not found",
+  // not "the game has no save".
   function savesPanel(d) {
     const sv = d.saves;
     if (!sv || (!sv.data && !(sv.states > 0))) return null;

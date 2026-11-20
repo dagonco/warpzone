@@ -2,8 +2,8 @@
 
 `inbox_console_iso` claims every `.pkg`; one that is not a PS4 package comes here. A package
 whose header says PSP/Vita (magic `\\x7fPKG`, type 2, the `\\x7fext` header at 0xC0) and whose
-content type is a Vita one is handled; any other `\\x7fPKG` keeps the "not supported by inbox
-yet" outcome.
+content type is a Vita one is handled; any other `\\x7fPKG` is reported as "not supported by
+inbox yet" (`inbox_core.unsupported_reason`).
 
 Before anything runs, and also without `--apply`, the package is checked from its header and
 its unencrypted metadata alone (all big-endian, as `pkg2zip` and Vita3K's `PkgHeader` read
@@ -86,7 +86,7 @@ META_CONTENT_TYPE, META_SFO = 2, 14
 MAX_META_ENTRIES = 64
 MAX_META_BYTES = 0x10000
 # Content types of metadata entry 2 that are Vita's; PSP and PS1 ones (0x06, 0x07, 0x0E,
-# 0x0F, 0x10) and anything else keep the earlier outcome.
+# 0x0F, 0x10) and anything else are reported as unsupported.
 VITA_CONTENT_TYPES = {0x15: "app", 0x16: "dlc", 0x1F: "theme", 0x18: "psm", 0x1D: "psm"}
 
 # `zrif_dict` of pkg2zip_zrif.c (mmozeiko/pkg2zip): the preset dictionary every zRIF's zlib

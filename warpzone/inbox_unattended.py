@@ -6,8 +6,8 @@ the changes made to it); the free space an item needs; whether a work folder is 
 leftover work folders are stale; what counts as news and the exit code; the record of a run
 and its webhook payload. Everything arrives as an argument (a listing, the text of a file, the
 time now): no filesystem, network, thread or clock is read here. The thin layer that touches the
-disk is `inbox_unattended_io.py` (so far the record writes; the walk and the state file come with
-the unattended run). See development/design/inbox-unattended.md.
+disk is `inbox_unattended_io.py` (the walk of an item, the state file and the record writes).
+See development/design/inbox-unattended.md.
 
 A change to the state is a function `State -> State` (`Change`). The writer reads the file,
 applies the changes, writes against the stamp it read, and when the file changed in between it

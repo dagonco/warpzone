@@ -26,7 +26,7 @@ def judge_update_timer(
 ) -> tuple[str, str, str]:
     """(status, detail, fix) for the timer that starts the updater. `enabled` and `active` are
     None when systemd could not be asked; `command_ok` says the service runs the live copy of
-    the updater with `sh` (an old unit ran `python -m warpzone self-update`)."""
+    the updater with `sh`; a unit that runs `python -m warpzone self-update` instead is not."""
     timer = updatetimer.TIMER
     if not files:
         return (

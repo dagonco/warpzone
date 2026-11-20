@@ -311,7 +311,8 @@ def _unsafe(path: str, why: str) -> ApiError:
 def _check_parts(
     game: catalog.Game, system: str, lib: Library, facts: Facts
 ) -> tuple[list[PlanFile], list[str]]:
-    """Every refusal about the parts (the second of the design) and the parts to move."""
+    """Every refusal about the parts (the `unsafe-path` one of "Refusals" in the design) and the
+    parts to move."""
     others: set[str] = set()
     for _, other in lib.by_id.values():
         if other.id != game.id:

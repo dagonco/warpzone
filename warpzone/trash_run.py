@@ -202,7 +202,7 @@ class Trasher:
         self, game_id: str, expect: str, scans: list[Scan], warnings: list[str]
     ) -> dict[str, Any]:
         self.hub.invalidate()  # plan again from what is on disk now
-        plan, lib = self._plan(game_id)
+        plan, lib = self._plan(game_id)  # plan again and compare with `expect`
         try:
             trash.check_expect(plan, expect)
         except ApiError as exc:
@@ -216,12 +216,12 @@ class Trasher:
             raise ApiError("trash-unavailable", problem, game=game_id)
         now = self.now()
         entry = trash.entry_name(now, game_id, set(trash_store.entry_names(self.root)))
-        # 2. the whitelist lines wait in the pending cleanups before anything moves
+        # record the whitelist lines in the pending cleanups before anything moves
         cleanups, stamp = self._cleanups()
         cleanup = trash.new_cleanup(plan, entry, now)
         if cleanup is not None:
             self._write_cleanups([*cleanups, cleanup], stamp)
-        # 3. the entry and its manifest, with every path to move
+        # create the entry and its manifest, with every path to move
         ours = False  # whether the entry folder was made by this deletion
         try:
             try:
@@ -240,7 +240,7 @@ class Trasher:
             raise ApiError(
                 "write-failed", f"the trash entry could not be written ({reason})", game=game_id
             ) from None
-        # 4. the moves
+        # move the parts, then the media
         trash_dir = trash_store.entry_path(self.root, entry)
         try:
             trash_store.transfer(self.root, trash_dir, trash_store.moves_of_plan(plan), strict=True)
@@ -249,7 +249,7 @@ class Trasher:
         for item in plan.files:
             scans.append((LIBRARY_ID, item.path))
         scans.extend((MEDIA_ID, m.path) for m in plan.media)
-        # 5. the gamelist entry
+        # remove the gamelist entry
         status, edit = "none", None
         if plan.gamelist_failed:
             status = "failed"
@@ -260,7 +260,7 @@ class Trasher:
                 warnings.append(edit.warning)
         if status == "removed":
             scans.append((ESDE_ID, f"gamelists/{plan.system}/gamelist.xml"))
-        # 6. the manifest complete, then the catalog
+        # complete the manifest, then update the catalog
         done = trash.new_manifest(
             plan,
             entry,
