@@ -143,14 +143,14 @@ class ProfileTests(unittest.TestCase):
 
     def test_every_shipped_profile_is_valid(self) -> None:
         self.assertIn("steamos-emudeck", available_profiles())
-        self.assertIn("anbernic-rg351mp", available_profiles())
+        self.assertIn("darkos", available_profiles())
         for name in available_profiles():
             self.assertEqual(load_profile(name).name, name)
 
     def test_unknown_and_unsafe_names(self) -> None:
         with self.assertRaises(ProfileError) as ctx:
             load_profile("nope")
-        self.assertIn("available: anbernic-rg351mp, steamos-emudeck", str(ctx.exception))
+        self.assertIn("available: darkos, steamos-emudeck", str(ctx.exception))
         with self.assertRaises(ProfileError):
             load_profile("../config")
 
@@ -162,7 +162,7 @@ class ProfileTests(unittest.TestCase):
         self.assert_invalid({**base, "updater": {"install": "never"}}, "updater.install")
         self.assert_invalid({**base, "updater": {"when": 1}}, "updater.when: unknown key")
         self.assert_invalid({**base, "updater": 1}, "`updater` must be a table")
-        self.assertEqual(load_profile("anbernic-rg351mp").updater_install, "manual")
+        self.assertEqual(load_profile("darkos").updater_install, "manual")
         self.assertEqual(load_profile("steamos-emudeck").updater_install, "auto")
 
     def assert_invalid(self, data: dict, needle: str) -> None:

@@ -595,7 +595,7 @@ class CommandTests(Fixture):
             'api_key = "k"\n'
             "[devices.ark]\n"
             'device_id = "DDDDDDD-DDDDDDD-DDDDDDD-DDDDDDD-DDDDDDD-DDDDDDD-DDDDDDD-DDDDDDD"\n'
-            'profile = "anbernic-rg351mp"\n'
+            'profile = "darkos"\n'
             'folders = ["library", "saves"]\n'
         )
 
@@ -627,9 +627,7 @@ class CommandTests(Fixture):
         self.assertIn("'saves' folder group", err)
 
     def test_a_profile_without_a_rule_is_refused(self) -> None:
-        self.config.write_text(
-            self.config.read_text().replace("anbernic-rg351mp", "steamos-emudeck")
-        )
+        self.config.write_text(self.config.read_text().replace("darkos", "steamos-emudeck"))
         code, _, err = self.run_cli()
         self.assertEqual(code, 2)
         self.assertIn("save_convert", err)

@@ -99,7 +99,7 @@ class InstallTests(Install):
         self.assertIn(("disable", "--now", TIMER), self.calls)
 
     def test_a_profile_without_esde_settings_gets_none(self) -> None:
-        profile = load_profile("anbernic-rg351mp")
+        profile = load_profile("darkos")
         self.assertNotIn("esde", profile.settings)
         self.ensure(profile=profile)
         self.assertFalse(self.unit(TIMER).exists())

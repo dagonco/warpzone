@@ -1,4 +1,4 @@
-"""The `anbernic-rg351mp` profile: shipped data, folder specs, provisioning and doctor."""
+"""The `darkos` profile: shipped data, folder specs, provisioning and doctor."""
 
 import dataclasses
 import tempfile
@@ -29,7 +29,7 @@ setUpModule = stub_self_update
 
 
 ARK_ID = "DDDDDDD-DDDDDDD-DDDDDDD-DDDDDDD-DDDDDDD-DDDDDDD-DDDDDDD-DDDDDDD"
-PROFILE = load_profile("anbernic-rg351mp")
+PROFILE = load_profile("darkos")
 SOURCE = (
     '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
     "<systemList>\n"
@@ -53,7 +53,7 @@ def ark_config(folders=("library", "saves")):
     data["devices"] = {
         "ark": {
             "device_id": ARK_ID,
-            "profile": "anbernic-rg351mp",
+            "profile": "darkos",
             "folders": list(folders),
             "auto_prune": False,  # the prune timer has its own tests (test_prune_timer.py)
         }
@@ -63,7 +63,7 @@ def ark_config(folders=("library", "saves")):
 
 class ProfileTests(unittest.TestCase):
     def test_the_profile_is_shipped_under_its_exact_name(self) -> None:
-        self.assertEqual(PROFILE.name, "anbernic-rg351mp")
+        self.assertEqual(PROFILE.name, "darkos")
         self.assertEqual(PROFILE.paths["library"], "/roms/library")
 
     def test_only_the_folders_this_device_has_are_defined(self) -> None:
@@ -440,7 +440,7 @@ api_key = "{API_KEY}"
 
 [devices.ark]
 device_id = "{ARK_ID}"
-profile = "anbernic-rg351mp"
+profile = "darkos"
 folders = ["library", "saves"]
 """
 
@@ -500,7 +500,7 @@ folders = ["library", "saves"]
     def test_nothing_to_say_on_another_machine_or_another_profile(self) -> None:
         self.assertEqual(self.check(""), [])
         # the library folder of this machine is the dArkOS one, not the Steam profile's
-        other = self.CONFIG.replace("anbernic-rg351mp", "steamos-emudeck")
+        other = self.CONFIG.replace("darkos", "steamos-emudeck")
         ctx = context(Path(self._tmp.name), other, system="Linux")
         probes = dataclasses.replace(ctx.probes, home=self.home)
         results = check_frontend(Context(probes, ctx.config))

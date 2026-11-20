@@ -228,7 +228,7 @@ CONFIG = """# my consoles
 url = "https://hub.example:8384"
 
 [devices.ark]  # the handheld
-profile = "anbernic-rg351mp"
+profile = "darkos"
 folders = ["library", "saves"]
 channel = "stable"  # follow stable
 

@@ -378,7 +378,7 @@ class ConfigTests(unittest.TestCase):
         text = text.replace("~/.config/warpzone/hub.key", "fake-key")
         import tomllib
 
-        cfg = parse_config(tomllib.loads(text), {"steamos-emudeck", "anbernic-rg351mp"})
+        cfg = parse_config(tomllib.loads(text), {"steamos-emudeck", "darkos"})
         self.assertEqual(sorted(cfg.devices), ["deck", "machine", "rg351mp"])
 
 

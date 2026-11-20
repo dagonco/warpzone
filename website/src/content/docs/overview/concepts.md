@@ -43,7 +43,7 @@ Devices are only ever added to the hub's Syncthing, never removed; a device that
 
 ## Profiles
 
-A profile is a TOML file shipped with warpzone that describes one kind of device: the library path, the real directory of each emulator's saves, where BIOS files must land, which library paths the device must never receive. warpzone ships `steamos-emudeck` (Steam Deck and Steam Machine) and `anbernic-rg351mp`. Profiles are data, so supporting another setup is a small pull request ([Adding a new console](/warpzone/guides/new-console/)).
+A profile is a TOML file shipped with warpzone that describes one kind of device: the library path, the real directory of each emulator's saves, where BIOS files must land, which library paths the device must never receive. warpzone ships `steamos-emudeck` (Steam Deck and Steam Machine) and `darkos`. Profiles are data, so supporting another setup is a small pull request ([Adding a new console](/warpzone/guides/new-console/)).
 
 ## Syncthing folders
 

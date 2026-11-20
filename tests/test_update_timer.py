@@ -469,7 +469,7 @@ class EnsureSelfUpdateTests(FakeSource):
         self.assertTrue(any("settings: already current" in x for x in self.lines), self.lines)
 
     def test_a_frontend_that_the_profile_names_is_used(self) -> None:
-        self.profile = load_profile("anbernic-rg351mp")
+        self.profile = load_profile("darkos")
         self.ensure()
         frontend = selfupdate.parse_kv(self.conf.read_text())["frontend"]
         self.assertEqual(frontend, "emulationstatio emulationstation")
@@ -597,7 +597,7 @@ class ProvisionDeviceTests(FakeSource):
     def test_every_shipped_profile_gets_the_updater_and_the_timer(self) -> None:
         for profile, device_id in (
             ("steamos-emudeck", "BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB"),
-            ("anbernic-rg351mp", "DDDDDDD-DDDDDDD-DDDDDDD-DDDDDDD-DDDDDDD-DDDDDDD-DDDDDDD-DDDDDDD"),
+            ("darkos", "DDDDDDD-DDDDDDD-DDDDDDD-DDDDDDD-DDDDDDD-DDDDDDD-DDDDDDD-DDDDDDD"),
         ):
             with self.subTest(profile=profile):
                 home = Path(tempfile.mkdtemp(dir=self.home))

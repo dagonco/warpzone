@@ -2,7 +2,7 @@
 title: "Anbernic RG351MP (dArkOS)"
 ---
 
-The `anbernic-rg351mp` profile is for an Anbernic RG351MP that runs dArkOS: EmulationStation as the frontend, RetroArch for most systems, and a games partition (`/roms`) formatted as exFAT. It is a plain TOML file in [`warpzone/data/profiles/`](https://github.com/dagonco/warpzone/tree/main/warpzone/data/profiles).
+The `darkos` profile is for dArkOS, the successor of ArkOS, and it was checked on an Anbernic RG351MP. dArkOS also runs on other handhelds; the profile should work on them, but only the RG351MP has been checked. It describes dArkOS as that handheld runs it: EmulationStation as the frontend, RetroArch for most systems, and a games partition (`/roms`) formatted as exFAT. It is a plain TOML file in [`warpzone/data/profiles/`](https://github.com/dagonco/warpzone/tree/main/warpzone/data/profiles).
 
 ## What it does differently
 
@@ -15,7 +15,7 @@ The `anbernic-rg351mp` profile is for an Anbernic RG351MP that runs dArkOS: Emul
 ```toml
 [devices.rg351mp]
 device_id = "XXXXXXX-XXXXXXX-XXXXXXX-XXXXXXX-XXXXXXX-XXXXXXX-XXXXXXX-XXXXXXX"
-profile = "anbernic-rg351mp"
+profile = "darkos"
 folders = ["library", "saves", "frontend"]
 ```
 

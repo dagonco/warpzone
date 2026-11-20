@@ -1,5 +1,5 @@
-name = "anbernic-rg351mp"
-description = "Anbernic RG351MP running dArkOS (EmulationStation and RetroArch, ROMs on an exFAT card)"
+name = "darkos"
+description = "dArkOS (EmulationStation and RetroArch, ROMs on an exFAT card); checked on an Anbernic RG351MP"
 
 # /roms is exFAT: no POSIX permissions and no symlinks. Every folder of the device ignores
 # permissions (the hub's would otherwise show up as local changes on every file), and

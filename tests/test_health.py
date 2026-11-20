@@ -19,7 +19,7 @@ from warpzone.model import device_specs
 from warpzone.profiles import load_profile
 
 STEAM = load_profile("steamos-emudeck")
-ANBERNIC = load_profile("anbernic-rg351mp")
+ANBERNIC = load_profile("darkos")
 DECK_FOLDERS = ("library", "tools", "saves", "frontend", "settings", "play-state")
 
 
@@ -488,7 +488,7 @@ class RefreshTests(Art, Base, unittest.TestCase):
         self.local = None
         self.checked = []
         self.cfg = ark_config(("library", "frontend"))
-        self.profiles = {"anbernic-rg351mp": self.profile}
+        self.profiles = {"darkos": self.profile}
         self.state = Path(self._tmp.name) / "state/settings"
 
     def test_the_gamelists_are_planned_and_not_written(self) -> None:

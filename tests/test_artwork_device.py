@@ -685,7 +685,7 @@ api_key = "{API_KEY}"
 
 [devices.ark]
 device_id = "{ARK_ID}"
-profile = "anbernic-rg351mp"
+profile = "darkos"
 folders = ["library", "frontend"]
 """
 
@@ -833,7 +833,7 @@ class CliTests(unittest.TestCase):
         self.assertIn("saves drastic", out)
 
     def test_a_profile_without_artwork_is_refused_by_name(self) -> None:
-        self.write(DoctorArtTests.CONFIG.replace("anbernic-rg351mp", "steamos-emudeck"))
+        self.write(DoctorArtTests.CONFIG.replace("darkos", "steamos-emudeck"))
         code, _, err = self.run_cli("frontend", "refresh", "ark")
         self.assertEqual(code, 2)
         self.assertIn("artwork", err)
