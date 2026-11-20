@@ -150,12 +150,8 @@ def is_generated(path: str) -> bool:
     """Whether `path` (relative to the library root, "/" separated) is a file EmuDeck or an
     emulator writes by itself and the hub never has, so keeping it is expected.
 
-    The list mirrors the profile's library ignores, one for one: `roms/<system>/metadata.txt`
-    and `systeminfo.txt`; any `readme.txt` under `bios/`; everything under `bios/PPSSPP`,
-    `HdPacks`, `Mupen64plus`, `fbneo`, `kronos`, `same_cdi`, `ryujinx`, `shadps4` and `yuzu`;
-    RetroArch's Flycast files in `bios/dc` (`vmu_save_*.bin`, `dc_nvmem.bin`,
-    `vulkan_pipeline.cache`, `data/`); and the `hiscore.dat` and `artwork/` of mame2003-plus.
-    Matching is exact and case-sensitive, per path segment.
+    The list mirrors the profile's library ignores, one for one; see
+    development/design/prune.md, "Files the console generates".
     """
     parts = path.split("/")
     n = len(parts)
@@ -187,6 +183,7 @@ def guard(totals: Mapping[str, tuple[int, int]]) -> list[str]:
     `totals` maps a folder id to (bytes the run would delete, bytes the device holds in it).
     Exactly half passes; one byte over fails. A single name returned means the whole run
     deletes nothing, in any folder (the caller decides that, this only names the folders).
+    See development/design/prune.md, "Unattended runs".
     """
     return [folder for folder, (delete, held) in totals.items() if 2 * delete > held]
 
@@ -555,13 +552,10 @@ def prune_device(
 ) -> int:
     """Report (default) or delete leftovers in every whitelisted folder. Returns problems.
 
-    `unattended` is what the prune timer runs (development/design/prune.md, "Unattended
-    runs"): it has no size cap (`max_gib` and `force` do not apply), refuses to delete anything
-    when a folder would lose more than half of what the device holds in it, and treats a
-    folder that is still pulling as "try again later", not as a problem.
-
-    `state_base` (`~/.local/state/warpzone`) is where a guard refusal is recorded for `doctor`
-    and cleared by the next `--apply` run that is not refused; None records nothing.
+    `unattended` is what the prune timer runs: it has no size cap (`max_gib` and `force` do
+    not apply), has the half-of-device guard, and treats a folder that is still pulling as "try
+    again later". `state_base` is where a guard refusal is recorded; None records nothing. See
+    development/design/prune.md, "Unattended runs".
     """
     if unattended and not apply:
         raise UsageError("--unattended needs --apply")

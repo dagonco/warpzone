@@ -133,8 +133,7 @@ class _PinnedHTTPSHandler(urllib.request.HTTPSHandler):
 def _pinned_opener(pin_hex: str) -> urllib.request.OpenerDirector:
     """An opener that speaks only TLS to a server whose certificate hashes to `pin_hex`.
 
-    No redirect handler (a 3xx is an error), no proxy handler (it connects directly) and no
-    plain-HTTP handler (it cannot be downgraded).
+    See development/design/configuration.md, "The hub's API over the network".
     """
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
     context.check_hostname = False  # the pin replaces name checking
@@ -154,9 +153,8 @@ def _pinned_opener(pin_hex: str) -> urllib.request.OpenerDirector:
 
 def _direct_opener(context: ssl.SSLContext | None) -> urllib.request.OpenerDirector:
     """The opener of an unpinned client: plain HTTP and HTTPS (`context` for a loopback
-    https URL, else the default checks), with the two rules of the pinned one. No redirect
-    handler (a 3xx is an error, so the key cannot be copied to another host) and no proxy
-    from the environment (an empty `ProxyHandler` connects directly)."""
+    https URL, else the default checks), with no redirect and no proxy from the environment
+    (see development/design/configuration.md, "The hub's API over the network")."""
     opener = urllib.request.OpenerDirector()
     for handler in (
         urllib.request.ProxyHandler({}),

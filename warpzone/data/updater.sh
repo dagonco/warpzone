@@ -33,15 +33,13 @@
 #   WZ_FETCH_TIMEOUT   seconds for the fetch (default 120)
 #   WZ_MIN_FREE_KB     free space in KiB needed before switching (default 51200)
 #   WZ_PYTHON_FALLBACKS  interpreters to try after the one in the settings
-#   WZ_ALLOWED_SIGNERS   the allowed-signers file (ssh-keygen -Y format) that tags must be
-#                        signed against, for tests (default: the one in the version known to
-#                        work, warpzone/data/allowed_signers; empty or without keys, no
-#                        signature is required)
+#   WZ_ALLOWED_SIGNERS   the allowed-signers file that tags must be signed against, for
+#                        tests (default: the one of the version known to work; see
+#                        "Signed tags" in autonomous-updates.md)
 #   WZ_PROGRESS_LOG      a file that gets a copy of every line written to `progress`, for tests
 #
-# A tick that holds the lock writes what it is doing to $WZ_STATE_DIR/progress, one line
-# `PERCENT TEXT`, replaced atomically and set to `100 Done` when the tick ends: the Options
-# menu of the Anbernic shows it as a progress bar while "Install <tag> now" runs.
+# A tick that holds the lock writes what it is doing to $WZ_STATE_DIR/progress (see "Progress"
+# in autonomous-updates.md).
 
 # Every S_* variable is the state; state_save writes them to the file through eval, which
 # the linter cannot follow, so it takes them for unused.
@@ -86,9 +84,8 @@ export GIT_TERMINAL_PROMPT=0
 # ---- small helpers --------------------------------------------------------------------
 
 # real_now: seconds on a clock that only goes forward, whatever WZ_NOW says: the uptime
-# (first field of /proc/uptime) where there is one, because a device without a battery-backed
-# clock gets its date set by NTP in the middle of a tick, and the date otherwise. The time
-# budget is measured with it.
+# (first field of /proc/uptime) where there is one, the date otherwise. The tick's time budget
+# is measured with it (see "Verifying a version").
 real_now() {
 	if [ -r "$PROC/uptime" ]; then
 		IFS=' ' read -r _up _rest <"$PROC/uptime" 2>/dev/null
@@ -124,9 +121,8 @@ log() {
 	return 0
 }
 
-# progress PERCENT TEXT: what the tick is doing now, for the Options menu's progress bar (see
-# the top of this file). Tags and fixed words only, never a secret. It cannot fail: a progress
-# that cannot be written changes nothing in the tick.
+# progress PERCENT TEXT: what the tick is doing now (see the top of this file). Tags and fixed
+# words only, never a secret. It cannot fail.
 progress() {
 	{
 		printf '%s %s\n' "$1" "$2" >"$PROGRESS.tmp" && mv -f "$PROGRESS.tmp" "$PROGRESS"
@@ -141,9 +137,8 @@ verify_progress() {
 	[ "$PROGRESS_HOLD" = 1 ] || progress "$1" "$2"
 }
 
-# log_daily MESSAGE: a message about the state of the world (not about something this tick
-# did) that the next tick would only repeat: said when the remote was fetched, which is
-# once a day.
+# log_daily MESSAGE: a message about the state of the world that the next tick would only
+# repeat: said only when the remote was fetched.
 log_daily() {
 	[ "${FETCHED:-0}" = 1 ] || return 0
 	log "$*"
@@ -221,9 +216,7 @@ is_release_tag() {
 	rel_key "$1"
 }
 
-# ver_key VERSION: VK is the key of a package version, as versions.version_key gives it: an rcN or a
-# plain release as for a tag, any other suffix before every rcN, and one that cannot be read
-# before all.
+# ver_key VERSION: VK is the key of a package version, as versions.version_key gives it.
 VK=
 ver_key() {
 	if rel_key "v$1"; then
@@ -264,13 +257,11 @@ case $MIN_FREE_KB in '' | *[!0-9]*) MIN_FREE_KB=51200 ;; esac
 
 # ---- run with a time limit ------------------------------------------------------------
 # run_limited SECONDS COMMAND...: the command's exit status, or 124 when it ran out of
-# time (about: the wait is counted in naps). Every command runs in a process group of its
-# own (`setsid`, or job control where there is none) and a cut kills the whole group, so a
-# grandchild cannot outlive the step or hold a pipe. The output goes wherever the caller
-# redirects it, never to a `$(...)`. The seconds are cut down to what is left of the tick's
-# budget (DEADLINE); RL_BUDGET_CUT says that happened. Polls a status file, because neither
+# time (about: the wait is counted in naps). The output goes wherever the caller redirects
+# it, never to a `$(...)`. The seconds are cut down to what is left of the tick's budget
+# (DEADLINE); RL_BUDGET_CUT says that happened. Polls a status file, because neither
 # `timeout` nor a reliable `kill -0` on a child that has already ended is available
-# everywhere.
+# everywhere. Process groups and the budget: see "Verifying a version".
 
 SLEEP_FRACTIONS=0
 if sleep 0.01 2>/dev/null; then
@@ -616,11 +607,9 @@ release_lock() {
 # the rest of a command line. 1 when none is, 2 when /proc cannot be read.
 #
 # No fork for a process that cannot match (see development/design/autonomous-updates.md,
-# "Deferring while the menu is open"): `comm` is read with `read` and compared with the names
-# cut to 15 characters (cut once, up front); the cmdline is read the same way (`read` drops the
-# NULs, so what it gets is argv[0] followed by the other arguments run together, and the
-# basename of argv[0] is a piece of it) and only a process whose cmdline contains one of the
-# names pays for the fork that cuts argv[0] out.
+# "Deferring while the menu is open"). `read` drops the NULs of the cmdline, so what it gets is
+# argv[0] followed by the other arguments run together; only a process whose cmdline contains
+# one of the names pays for the fork that cuts argv[0] out.
 
 proc_has() {
 	[ -d "$PROC" ] && [ -r "$PROC" ] || return 2
@@ -737,9 +726,7 @@ EOF
 }
 
 # heal_is_ours PATH A B: a file that differs from HEAD is the update's own only if it is gone,
-# empty, or exactly the content it has in A or in B (what a checkout between them writes);
-# anything else is somebody's edit, however it came to be in a file that the update changes.
-# A path that git quotes (odd characters) is never taken for ours.
+# empty, or exactly the content it has in A or in B. A path that git quotes is never ours.
 heal_is_ours() {
 	case $1 in '"'*) return 1 ;; esac
 	[ -e "$CLONE/$1" ] || return 0
@@ -751,12 +738,10 @@ heal_is_ours() {
 	return 1
 }
 
-# heal_half_checkout A B TARGET: a checkout between the commits A and B was cut in the middle
-# (a power cut, a full disk), so the tree is neither one nor the other. When every file that
-# differs from HEAD is one that A and B differ in AND has the content of A or of B (or is
-# gone or empty), the change is the updater's own and the checkout is done again, forced,
-# onto TARGET; anything else is somebody's work and stays. Succeeds when the tree is
-# consistent afterwards.
+# heal_half_checkout A B TARGET: redo, forced, onto TARGET a checkout between the commits A
+# and B that was cut in the middle, when every change is the updater's own; anything else is
+# somebody's work and stays. Succeeds when the tree is consistent afterwards (see
+# autonomous-updates.md, "Bad versions and the loop").
 heal_half_checkout() {
 	[ -n "$1" ] && [ -n "$2" ] || return 1
 	_changed=$(g -c core.quotepath=off diff --name-only "$1" "$2" 2>/dev/null) || return 1
@@ -820,8 +805,8 @@ is_dirty() {
 	[ -n "$_st" ]
 }
 
-# A lock left by a git that died blocks every later checkout. Remove it only when it is more
-# than 10 minutes old and no git process is alive.
+# clear_stale_index_lock: remove an index.lock left by a git that died (see "Bad versions and
+# the loop" in autonomous-updates.md).
 clear_stale_index_lock() {
 	_lock=$(g rev-parse --git-path index.lock 2>/dev/null) || return 0
 	case $_lock in /*) ;; *) _lock="$CLONE/$_lock" ;; esac
@@ -840,23 +825,15 @@ clear_stale_index_lock() {
 
 # ---- retired releases and signed tags -------------------------------------------------
 
-# Retiring: a tag cannot be edited, so a release is withdrawn by another tag, an annotated
-# `retired/vX.Y.Z` (or `retired/vX.Y.ZrcN`) whose message is the reason. When the allowed
-# signers hold a key it only counts if it is signed by one, like any release (below); without
-# keys it counts as it is. A lightweight tag, one whose name is not a release or a candidate,
-# or one with a signature that does not verify, retires nothing and is logged. The reason is
-# text for the log, never run. A retirement is looked up by the name of the tag the tick asks
-# about (is_retired), never by going through the `retired/` tags: however many tags anyone
-# publishes there, they cannot hide a real retirement or use up the tick's time.
+# Retiring (see "Retiring" in autonomous-updates.md): a retirement is looked up by the name of
+# the tag the tick asks about (is_retired), never by going through the `retired/` tags.
 RETIRED_TAGS=' '
 RETIRED_NOT=' '
 RETIRED_INFO=
 
 # retired_ok TAG: the tag object retired/TAG sits on the commit of the release TAG (vX.Y.Z).
-# What it points at is peeled first, so `git tag -s retired/v1.2.3 v1.2.3`, which nests the
-# retirement in the release's own tag object, counts like one made on its commit. A signature
-# covers the object and not the ref it is published under, so without this a signed
-# retirement of one version could be published as the retirement of another.
+# What it points at is peeled first, so a retirement nested in the release's own tag object
+# counts like one made on its commit.
 retired_ok() {
 	_ro_obj=$(g cat-file tag "refs/tags/retired/$1" 2>/dev/null </dev/null | sed -n -e '/^$/q' -e 's/^object //p' | head -n 1)
 	[ -n "$_ro_obj" ] || return 1
@@ -872,8 +849,7 @@ retired_formed() {
 		retired_ok "$1" && release_ok "$1" && tag_signed "$1"
 }
 
-# retired_reset: forget what is_retired found out, for a tick whose keys are now known. Needs
-# signing_setup first.
+# retired_reset: forget what is_retired found out. Needs signing_setup first.
 retired_reset() {
 	RETIRED_TAGS=' '
 	RETIRED_NOT=' '
@@ -881,8 +857,7 @@ retired_reset() {
 }
 
 # is_retired TAG: retired/TAG is a retirement (retired_formed) with a good signature when one
-# is required. Looked up the first time the tick asks and remembered until retired_reset; a
-# `retired/TAG` that retires nothing is logged then.
+# is required. Looked up the first time the tick asks and remembered until retired_reset.
 is_retired() {
 	case $RETIRED_TAGS in *" $1 "*) return 0 ;; esac
 	case $RETIRED_NOT in *" $1 "*) return 1 ;; esac
@@ -913,13 +888,8 @@ retired_why() {
 }
 
 # ---- signed tags ----------------------------------------------------------------------
-# Whoever controls the maintainer's account could otherwise put code on every device. With an
-# allowed-signers file that holds at least one key, a tag counts (a release, a candidate, a
-# pin, a retirement) only when it carries one SSH signature that `git verify-tag` accepts
-# against that file. The file is warpzone/data/allowed_signers of the version known to work
-# (S_good_sha), read from git into a temporary file: the keys travel with the version that is
-# trusted, and a release cannot change the keys that check it. Without keys nothing is
-# required and the log says so.
+# See "Signed tags" in autonomous-updates.md. The keys are warpzone/data/allowed_signers of the
+# version known to work (S_good_sha), read from git into a temporary file.
 
 SIGN_ON=0
 SIGN_WHY=
@@ -927,7 +897,7 @@ SIGN_NODOWN=0
 SIGN_NODOWN_SAID=0
 
 # down_blocked TAG REV: TAG is below the version at REV and no move down is accepted in this
-# tick (the copy of the keys failed, see signing_setup). Says so once.
+# tick (see signing_setup). Says so once.
 down_blocked() {
 	[ "$SIGN_NODOWN" = 1 ] || return 1
 	rel_key "$1" || return 1
@@ -963,15 +933,10 @@ keys_older() {
 	key_gt "$VK" "$_ko_a"
 }
 
-# signing_setup: once a version with keys has been trusted (`signing` in the state, the keys it
-# had in allowed_signers.last and its version in `signers_version`), signatures stay required
-# for good and the keys never go back: a pin or a retirement that takes the device down to an
-# older release does not turn them off (that release has no file) or bring back the keys it
-# listed and a newer release dropped (it has an older file). The last keys are then the ones
-# used, and with none to use, every tag is refused. Keys are only replaced by those of a
-# version that is as new or newer. When the keys of the version in use could not be copied
-# (SIGN_NODOWN), `signers_version` may be older than that version, so no move down is accepted
-# in that tick (down_blocked above).
+# signing_setup: choose the keys for this tick (SIGNERS_FILE, SIGN_ON) from the state keys
+# `signing` and `signers_version` and allowed_signers.last; the keys never go back to an older
+# version's. SIGN_NODOWN=1 when the keys of the version in use could not be copied (see
+# "Signed tags" in autonomous-updates.md).
 signing_setup() {
 	SIGN_NODOWN=0
 	rm -f "$SIGNERS_TMP"
@@ -1021,10 +986,8 @@ signing_setup() {
 
 # tag_signed TAG: succeeds when no signature is required, or TAG is an annotated tag with
 # exactly one signature block, an SSH one, that verifies, made for a tag of that very name.
-# `verify-tag` chooses the verifier by
-# the block it finds, not by gpg.format: a tag signed with OpenPGP or X.509 would be checked
-# by gpg against the user's keyring and never reach the allowed signers. So any other block is
-# refused, the other verifiers are switched off, and the user's git configuration is not read.
+# `verify-tag` picks the verifier by the block it finds, so the others are switched off and
+# the user's git configuration is not read ("Signed tags" in autonomous-updates.md).
 tag_signed() {
 	[ "$SIGN_ON" = 1 ] || return 0
 	command -v ssh-keygen >/dev/null 2>&1 || return 1
@@ -1048,9 +1011,8 @@ release_ok() {
 	[ "$(version_at "refs/tags/$1")" = "${1#v}" ]
 }
 
-# tag_valid TAG: TAG is an ancestor of origin/main, its __version__ is the tag without the v,
-# and its signature verifies when one is required. Says why in the log when the signature
-# is what fails.
+# tag_valid TAG: release_ok TAG and its signature verifies when one is required. Says why in
+# the log when the signature is what fails.
 tag_valid() {
 	release_ok "$1" || return 1
 	if ! tag_signed "$1"; then
@@ -1079,11 +1041,9 @@ pick_pin() {
 	return 0
 }
 
-# target_ok TAG: TAG may be a target now. With a pin, only the pin (retired or not, of any
-# channel); otherwise it is of the channel, not retired and not bad. Either way it is a valid
-# tag (an ancestor of origin/main, its own version, signed when signatures are required).
-# What was chosen at one tick is asked again at the next, because a retirement, the channel and
-# the keys can change in between.
+# target_ok TAG: TAG may be a target now. With a pin, only the pin; otherwise it is of the
+# channel, not retired and not bad. Either way it is a valid tag (tag_valid). Asked again at
+# every tick, because a retirement, the channel and the keys can change in between.
 target_ok() {
 	if [ -n "$C_pin" ]; then
 		[ "$1" = "$C_pin" ] || return 1
@@ -1098,12 +1058,9 @@ target_ok() {
 	[ -n "$C_pin" ] || ! is_retired "$1"
 }
 
-# pick_target sets PICK to the best valid tag that is newer than what is checked out, or to
-# the pin when there is one. Valid: it is of the channel (stable: vX.Y.Z; rc: those and
-# vX.Y.ZrcN), not bad, not retired, an ancestor of origin/main, its __version__ is the tag
-# without the v, and its signature verifies when one is required. Best is the highest
-# version (rc1 < rc2 < the release). Never down, except when the running version is retired:
-# then the best valid one, wherever it is. Fails when there is none.
+# pick_target sets PICK to the best valid tag (target_ok) that is newer than what is checked
+# out, or to the pin when there is one. Never down, except when the running version is
+# retired: then the best valid one, wherever it is. Fails when there is none (see "Channels").
 PICK=
 pick_target() {
 	PICK=
@@ -1209,13 +1166,8 @@ find_python() {
 }
 
 # ---- the live copy of this script ----------------------------------------------------
-# While a release is under trial, its `provision device` installs its own updater as the live
-# copy (the file this script runs from). If the release is then rejected, the previous
-# version's `provision` would not put the old one back (a lower ABI is never installed over a
-# higher one, and a rollback may not run `provision` at all), and a script with a fault that
-# `selftest` does not see would stop the device from ever updating again. So the live copy
-# is kept in the state folder before a trial and put back, with no look at its ABI, whenever
-# the device goes back; it is dropped when no trial or probation is on.
+# The live copy is kept in the state folder before a trial and put back whenever the device
+# goes back (see "The live copy" in development/design/self-update.md).
 
 SELF=$0
 case $SELF in
@@ -1231,9 +1183,7 @@ resolve_file() {
 }
 
 # live_usable: this script is the live copy itself, WZ_LIVE or
-# ~/.local/share/warpzone/updater/updater.sh, compared by physical path. Anything else (the
-# clone's own script run by hand, a copy somewhere else, a path that reaches either through
-# a symlink) is never kept or replaced.
+# ~/.local/share/warpzone/updater/updater.sh, compared by physical path.
 live_usable() {
 	[ -f "$SELF" ] || return 1
 	_lu_live=${WZ_LIVE:-${HOME:-/nonexistent}/.local/share/warpzone/updater/updater.sh}
@@ -1242,8 +1192,8 @@ live_usable() {
 	[ "$_lu_self" = "$_lu_live" ]
 }
 
-# live_valid FILE: a script worth running: not empty (a power cut can leave a file of no
-# bytes), with its UPDATER_ABI line, and that `sh -n` parses.
+# live_valid FILE: a script worth running: not empty, with its UPDATER_ABI line, and that
+# `sh -n` parses.
 live_valid() {
 	[ -s "$1" ] || return 1
 	grep -q '^UPDATER_ABI=[0-9][0-9]*[[:space:]]*$' "$1" 2>/dev/null || return 1
@@ -1251,8 +1201,7 @@ live_valid() {
 }
 
 # live_save: keep the live copy as it is before the first switch of a trial. Not again while
-# a copy is kept: a trial that is resumed finds the candidate's script live by then. Written
-# to a temporary file, flushed and renamed, as the state is.
+# a copy is kept: a trial that is resumed finds the candidate's script live by then.
 live_save() {
 	[ ! -e "$LIVE_GOOD" ] || return 0
 	live_usable || return 0
@@ -1270,8 +1219,7 @@ live_save() {
 }
 
 # live_restore: put the kept copy back as the live one, atomically (a rename: this very run
-# keeps reading the file it started with), whatever the ABI of the one it replaces. A kept
-# copy that is empty or damaged is not put back, and the live one is left as it is.
+# keeps reading the file it started with), whatever the ABI of the one it replaces.
 live_restore() {
 	[ -f "$LIVE_GOOD" ] || return 0
 	live_usable || return 0
@@ -1292,16 +1240,9 @@ live_restore() {
 }
 
 # ---- the venv -------------------------------------------------------------------------
-# The venv has no pip and no copy of warpzone: a `.pth` file puts the clone on its path and
-# `bin/warpzone` is a shim that runs `python -m warpzone`. That needs no network and no
-# setuptools, so it can be made again whenever the interpreter it was made with is gone (an
-# operating system update), and the path of its Python, which units and ES-DE scripts hold,
-# stays the same. `--clear` is only ever run on a folder that is called `venv`, does not exist
-# or holds the mark `warpzone-venv` that this script writes when it makes one, or is noted in
-# `venv-owned` in the state folder (written before `--clear`, so a power cut between the clear
-# and the mark loses nothing, and dropped once the mark is there), so never a venv of the user's or the one of an older install;
-# is not a symlink, and does not hold the clone: never on the folder around it, where the play
-# state lives.
+# See "Python repair" in development/design/self-update.md: the venv has no pip and no copy
+# of warpzone, and `--clear` runs only on a folder that holds the mark `warpzone-venv` or is
+# noted in `venv-owned`.
 
 LOCATE_CODE='import importlib.util, os, sys; s = importlib.util.find_spec("warpzone"); root = os.path.realpath(sys.argv[1]); here = os.path.realpath(s.origin) if s is not None and s.origin else ""; sys.exit(0 if here.startswith(root + os.sep) else 7)'
 VENV_LOG=$STATE_DIR/last-venv.log
@@ -1320,10 +1261,9 @@ venv_note() {
 	printf '%s\n' "$1" >>"$VENV_OWNED" && sync
 }
 
-# venv_unnote VENV: the mark is written, so the note has done its work. Kept, it would let a
-# later venv of the user's own, made on this path after warpzone's was deleted, be cleared.
-# The mark is flushed first, so that a power cut cannot lose it after the note is gone; and a
-# note that cannot be rewritten (grep fails with more than 1) is left as it is.
+# venv_unnote VENV: the mark is written, so the note has done its work (kept, it would let a
+# later venv of the user's own on this path be cleared). The mark is flushed first; a note
+# that cannot be rewritten (grep fails with more than 1) is left as it is.
 venv_unnote() {
 	venv_noted "$1" || return 0
 	sync
@@ -1429,9 +1369,9 @@ make_venv() {
 	return 0
 }
 
-# repair_python: the interpreter of the settings is the venv's. When that does not work (it is
-# gone, or the venv no longer finds the clone) and another Python 3.11 or newer is there, make
-# the venv again. Sets PY to the venv's Python when it works afterwards.
+# repair_python: when the interpreter of the settings is a venv's and does not work, make the
+# venv again with another Python 3.11 or newer. Sets PY to the venv's Python when it works
+# afterwards.
 repair_python() {
 	case $C_python in
 	/*/bin/python | /*/bin/python3 | /*/bin/python3.*) ;;
@@ -1475,10 +1415,10 @@ verify_cut() {
 	return 0
 }
 
-# verify_version TAG: the three steps. TAG is empty when the version has no tag (then the
-# version at HEAD is expected). 0 passed, 3 deferred, 1 failed (VERIFY_WHY says why), 4 could
-# not be judged (out of time for the tick, or python imports another warpzone than the
-# checkout's: both the environment's doing, not the release's).
+# verify_version TAG: the three steps of "Verifying a version". TAG is empty when the version
+# has no tag (then the version at HEAD is expected). 0 passed, 3 deferred, 1 failed
+# (VERIFY_WHY says why), 4 could not be judged (out of time, or python imports another
+# warpzone than the checkout's: the environment's doing, not the release's).
 verify_version() {
 	VERIFY_WHY=
 	VERIFY_PARTIAL=0
@@ -1691,8 +1631,8 @@ promote() {
 }
 
 # differential SUSPECT_TAG SUSPECT_SHA REF_TAG REF_BRANCH REF_SHA: a check failed. Go back to
-# the reference and check it: if it passes the suspect is bad, if it fails too the
-# environment is at fault. Sets DV to bad, env, deferred or stuck. HEAD ends on the reference.
+# the reference and check it ("Differential verdict"). Sets DV to bad, env, budget, deferred or
+# stuck. HEAD ends on the reference.
 DV=
 SECOND_LOOK=0
 differential() {
@@ -1721,10 +1661,8 @@ keep_suspect() {
 	fi
 }
 
-# retry_suspect TAG SHA: the previous version passes and TAG did not. A failure that does not
-# repeat (a service that was slow to come up) must not burn a release for good, so check
-# it out and verify it once more. Returns the verification's status, or 5 when the checkout
-# failed.
+# retry_suspect TAG SHA: the previous version passes and TAG did not: check TAG out and verify
+# it once more. Returns the verification's status, or 5 when the checkout failed.
 retry_suspect() {
 	log "$1 failed once and the previous version passes; checking $1 once more before blaming it"
 	progress 95 "Checking $1 once more"
@@ -2122,18 +2060,15 @@ tick_start() {
 	state_drop_future
 }
 
-# tick_menu: the menu: wait for it to close, at most 72 hours from the first deferral. A menu
-# that is seen closed ends the deferral: the 72 hours are of an unbroken wait.
+# tick_menu: wait for the menu to close, at most 72 hours from the first deferral, which a menu
+# seen closed ends (see "Deferring while the menu is open").
 tick_menu() {
 	menu_open
 	_menu=$?
 	if [ "$MANUAL_TIMER" = 1 ]; then
-		# install=manual: the timer only finishes what an update by hand left, which that
-		# update did not wait for either. Waiting would last 72 hours where the menu is open
-		# whenever the device is on. A step held back by an open program counts as passed and
-		# leaves `pending` set, as by hand. It is said only when there is something to finish
-		# (a trial, or the probation check of a new boot), so not at every tick. `available`
-		# stays as it was until the watch looks again, also when the tick ends before that.
+		# install=manual: the timer only finishes what an update by hand left, and does not
+		# wait for the menu (see "Installing by hand"). It says so only when there is
+		# something to finish, so not at every tick.
 		if [ "$_menu" = 0 ] && { [ -n "$S_trying_tag" ] ||
 			{ [ "$S_probation" = 1 ] && [ "$(boot_id)" != "$S_last_boot_id" ]; }; }; then
 			log "install=manual: not waiting for the menu"
@@ -2144,9 +2079,8 @@ tick_menu() {
 	fi
 	S_available=
 	if [ "$BY_HAND" = 1 ]; then
-		# Asked for from the menu itself (the Options entry) or from a shell: the person is
-		# there and no game is running. A step that the menu still holds back counts as
-		# passed, as past the 72 hours, and leaves `pending` set.
+		# Asked for by hand: the person is there and no game is running (see "Installing by
+		# hand").
 		if [ "$_menu" = 0 ]; then
 			log "the update was asked for by hand: going on with the menu open"
 		fi
@@ -2297,10 +2231,8 @@ tick_finish() {
 }
 
 # tick_watch: install=manual and not asked for by hand: look for a release and note it in
-# `available`, nothing else. No menu wait, no verification and no reconcile: the person
-# installs from the menu (`updater.sh tick --now`), which does all of that. A trial or a
-# probation in progress is not only watched: it was asked for by hand and the timer finishes
-# it (see cmd_tick), so a release that no longer starts is still put back.
+# `available`, nothing else; a trial or a probation in progress is finished as well (see
+# "Installing by hand" and cmd_tick).
 tick_watch() {
 	WATCH=1
 	tick_checkout
@@ -2389,12 +2321,8 @@ install_fail() {
 }
 
 # cmd_install DEVICE [options]: the human install, from a git clone. Everything that can be
-# refused is refused before anything changes: the clone must be on a release tag or a clean
-# branch inside origin/main, a Python 3.11 or newer must exist, and a release must pass the
-# rules of a tick (channel, ancestor of origin/main, its own version, not retired, signed
-# when signatures are required) and carry this script. Then it checks the release out, makes
-# the venv (kept when it already works) and runs `provision device`, which installs the live
-# copy of this script, writes its settings and starts the timer.
+# refused is refused before anything changes (see "Install" in
+# development/design/self-update.md).
 cmd_install() {
 	_i_device=
 	_i_config=

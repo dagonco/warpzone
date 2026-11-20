@@ -39,12 +39,9 @@ def _bootstrap_hub_folder(
 ) -> bool:
     """A newly created whitelisted hub folder: let only the whitelists through first.
 
-    The first full scan of a big library can take hours, and devices wait for their
-    `patterns-<device>.stignore` to show up in the hub's index. With every other file
-    ignored the scan reaches the whitelists at once; once they are indexed the final
-    ignores go in and the full scan starts. If they never show up the final ignores
-    are set anyway, so the folder is never left half-configured. Returns True when the
-    whitelists were indexed (or, in dry-run, would be waited for).
+    Returns True when the whitelists were indexed (or, in dry-run, would be waited for); on
+    a timeout the final ignores are set anyway. See development/design/hub-and-folders.md,
+    "Ignore files and the bootstrap problem" ("Hub bootstrap").
     """
     assert spec.bootstrap_ignores is not None
     client.set_ignores(spec.id, list(spec.bootstrap_ignores))
@@ -239,12 +236,9 @@ def additive_plan(
 ) -> AdditivePlan:
     """Which hub folders an additive run creates (pure).
 
-    Only a folder that is not on the hub and is not whitelisted is created. A folder the hub
-    has is never touched, whatever it looks like: its differences are only reported. `names`
-    maps a device ID to its name, for the report; `only` limits the run to those folder IDs.
-    A missing folder whose path another hub folder already has (compared without a trailing
-    slash and in any case) is not created either: two folders on one directory would each
-    sync it their own way.
+    `names` maps a device ID to its name, for the report; `only` limits the run to those
+    folder IDs. See development/design/autonomous-updates.md, "Hub folders from a console
+    (`auto_hub`)".
     """
     create: list[FolderSpec] = []
     whitelisted: list[FolderSpec] = []
@@ -306,12 +300,9 @@ def provision_hub_additive(
 ) -> list[str]:
     """Create the `wz-*` folders the hub lacks, and change nothing else on it.
 
-    Used by `provision hub --additive` and by a device with `auto_hub = true`. A folder the
-    hub already has is never patched (so a console with an old config or channel reverts
-    nothing); a whitelisted folder is left to a person. The hub's folders are read again right
-    before each creation, and the API must answer as the hub. A new folder is created paused,
-    gets its ignores, and is resumed; if that fails the folder stays paused and a warning
-    says so (a later run warns about it too). Returns the IDs it created.
+    Used by `provision hub --additive` and by a device with `auto_hub = true`; see
+    development/design/autonomous-updates.md, "Hub folders from a console (`auto_hub`)".
+    Returns the IDs it created.
     """
     actual = client.my_id()
     if actual != cfg.hub.device_id:

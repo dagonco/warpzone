@@ -155,11 +155,10 @@ class RetroArchPins:
 class CemuPaths:
     """Cemu's MLC folder and game path, which `provision device` sets in its `settings.xml`.
 
-    `mlc` is where Cemu keeps installs and saves (the profile syncs its `usr/save`), and
-    `default_mlc` the folder Cemu uses while `mlc_path` is empty. `game_path` is added to the
-    game paths, keeping the ones already there. `mlc` and `game_path` may contain `{library}`,
-    replaced by the profile's library path. `process` names Cemu: the file is edited only
-    while none of them runs. See development/design/profiles.md, "Cemu paths".
+    `mlc` is where Cemu keeps installs and saves, `default_mlc` the folder it uses while
+    `mlc_path` is empty, `game_path` the one added to its game paths. `mlc` and `game_path`
+    may contain `{library}`. `process` names Cemu: the file is edited only while none of them
+    runs. See development/design/profiles.md, "Cemu paths".
     """
 
     settings: str
@@ -192,13 +191,10 @@ class ShadPS4Launch:
 class ShadPS4Dirs:
     """Install directories that `provision device` adds to shadPS4's config files.
 
-    shadPS4 runs the extracted games it finds in its install directories. `config` lists the
-    files that can hold them (`config.json` of v0.21 and later, the older `config.toml`),
-    each edited only if it exists; existing entries are kept. A directory may contain
-    `{library}`, replaced by the profile's library path. `addon_dir`, when set, is the one
-    folder shadPS4 reads DLC from (`<addon_dir>/<TITLE_ID>/<entry>/`); unlike the install
-    directories it replaces the value that is there. `process` names shadPS4 and its
-    launcher: a file is edited only while none of them runs.
+    `config` lists the files that can hold them, `install_dirs` the directories to add and
+    `addon_dir` (optional) the DLC folder; a path may contain `{library}`. `process` names
+    shadPS4 and its launcher: a file is edited only while none of them runs. See
+    development/design/profiles.md, "shadPS4 install directories".
     """
 
     config: tuple[str, ...]
@@ -223,8 +219,7 @@ class TitleLinks:
     whose name fully matches `match` and that holds every file of `require`. `process` names
     the emulator: nothing is changed while it runs. `noun` is what a title is called in
     messages (`game`, `license`). With `create_target`, a missing `target` folder is made
-    when its parent exists (the emulator has run, but does not make this folder until it
-    needs it). See development/design/title-links.md, "Title links".
+    when its parent exists. See development/design/title-links.md, "Title links".
     """
 
     source: str
@@ -246,11 +241,11 @@ class TitleLinks:
 class Artwork:
     """Scraped artwork and metadata for a frontend that is not ES-DE.
 
-    The hub's `wz-media` and `wz-esde` folders arrive receive-only at `media` and
-    `metadata`, limited to `kinds` of the systems selected by `systems`. A converter named
-    by `format` turns the ES-DE gamelists there into the frontend's own gamelists, written
-    below `gamelists`. With `refresh`, `provision device` installs a user timer that runs
-    `warpzone frontend refresh` at that interval (systemd syntax, like `15min`).
+    `media` and `metadata` receive the hub's folders, limited to `kinds` of the systems
+    selected by `systems`; the converter named by `format` writes the frontend's own
+    gamelists below `gamelists`. With `refresh`, a user timer runs `warpzone frontend
+    refresh` at that interval (systemd syntax, like `15min`). See
+    development/design/frontend-artwork.md.
     """
 
     format: str
@@ -288,9 +283,7 @@ class SaveConvert:
     `saves` is the key of the `[saves.*]` entry whose folder holds the raw `.sav` files the
     hub syncs, `path` the emulator's own folder and `format` how it stores a save
     (`warpzone.saveconvert.FORMATS`). Nothing is converted while a program of `process` runs.
-    With `es_system`, `provision device` wraps that system's `<command>` in the system list
-    copy so the saves are reconciled right before the emulator starts and right after it exits.
-    See development/design/save-conversion.md.
+    See development/design/save-conversion.md, "Profile".
     """
 
     key: str

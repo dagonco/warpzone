@@ -1,10 +1,8 @@
 """The systemd user timer that starts one tick of the updater. Pure: no I/O.
 
-`provision device` writes the two units and enables the timer on every device, whatever its
-profile; `doctor` looks for them. The unit keeps the name `warpzone-self-update`, so writing it
-leaves no orphan unit. The timer is a piece of its own, apart from the script it starts
-(`updater.sh tick` does not know what ran it): a platform without systemd can start the same
-tick from another launcher. See operation/self-update.md.
+`provision device` writes the two units and enables the timer on every device; `doctor`
+looks for them. See development/design/autonomous-updates.md, "One tick", and
+development/design/self-update.md, "Timer".
 """
 
 from __future__ import annotations
@@ -29,8 +27,7 @@ def expected_command(updater: str) -> list[str]:
 
 def render_service(updater: str) -> str:
     """The one-shot service: one tick of the live copy of the script, run by `sh` so that the
-    script needs no execute bit and no interpreter line. The tick keeps itself inside 25
-    minutes, under `TimeoutStartSec`."""
+    script needs no execute bit and no interpreter line."""
     return (
         "[Unit]\n"
         "Description=Keep warpzone on a release that works\n"
