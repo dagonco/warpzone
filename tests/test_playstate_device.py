@@ -32,7 +32,7 @@ from warpzone.provision_timers import ensure_play_state_timer
 from warpzone.syncthing import Client
 
 STEAM = load_profile("steamos-emudeck")
-ANBERNIC = load_profile("anbernic-rg351mp")
+ANBERNIC = load_profile("darkos")
 NOW = 1_800_000_000
 PAST = 1_700_000_000
 GAMELIST = (
@@ -530,7 +530,7 @@ class BothKindsTests(Art, unittest.TestCase):
         self.assertEqual(self.warned, [])
 
 
-PROFILES = {"steamos-emudeck": STEAM, "anbernic-rg351mp": ANBERNIC}
+PROFILES = {"steamos-emudeck": STEAM, "darkos": ANBERNIC}
 
 
 class ModelTests(unittest.TestCase):
@@ -540,7 +540,7 @@ class ModelTests(unittest.TestCase):
             "deck": {"device_id": ARK_ID, "profile": "steamos-emudeck", "folders": list(deck)},
             "ark": {
                 "device_id": "E" * 7 + ("-" + "E" * 7) * 7,
-                "profile": "anbernic-rg351mp",
+                "profile": "darkos",
                 "folders": list(ark),
             },
         }

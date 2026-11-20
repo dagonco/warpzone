@@ -181,7 +181,7 @@ warpzone/
   data/bios.toml     BIOS manifest (names, sizes, hashes, signatures only)
   data/allowed_signers  the keys that sign releases, in the format of `ssh-keygen -Y` (see "Autonomous updates")
   data/profiles/steamos-emudeck.toml
-  data/profiles/anbernic-rg351mp.toml
+  data/profiles/darkos.toml
 templates/
   patterns-common.stignore
   patterns-device.example.stignore
@@ -252,7 +252,7 @@ build the image; the `image` job of the weekly and manual runs does (see "CI" be
   home (both directions, kept footer, conflicts and backups, invalid and temporary files, the
   emulator running or starting, `--dry-run`, the state), the profile table, the doctor line and the
   command; the system list wrapper is covered by `test_frontend.py` and `test_anbernic.py`.
-- `anbernic-rg351mp` tests: the shipped profile and its parsing, `ignorePerms` in the folder
+- `darkos` tests: the shipped profile and its parsing, `ignorePerms` in the folder
   specs, the pure rewrite and key gap, `provision device` in a temporary home (backups,
   second run, frontend or RetroArch running, no `/proc`, dry-run) and the doctor lines.
 - `prune` unit tests with the fake Syncthing: the pure decision (`classify`),

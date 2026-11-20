@@ -323,7 +323,7 @@ class ProfileTests(unittest.TestCase):
             parse_profile({"name": "x", "shadps4": {**good, "install_dirs": ["{library}/g"]}}, "t")
 
     def test_the_other_shipped_profile_has_none(self) -> None:
-        self.assertIsNone(load_profile("anbernic-rg351mp").shadps4)
+        self.assertIsNone(load_profile("darkos").shadps4)
 
 
 class Device:

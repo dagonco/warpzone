@@ -12,6 +12,7 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ### Changed
 
+- **Breaking:** the `anbernic-rg351mp` profile is now called `darkos`, because it describes dArkOS (the successor of ArkOS), which runs on several handhelds, not one device; it was checked only on an Anbernic RG351MP. There is no alias: a config that still says `profile = "anbernic-rg351mp"` is refused with `unknown profile ... (available: ...)`. In the private config (`~/.config/warpzone/config.toml`, on the hub and on the device), change `profile = "anbernic-rg351mp"` to `profile = "darkos"` in each `[devices.<name>]` table that uses it; the device's own name does not change. Nothing on the device is named after the profile (the updater timer, the artwork timer and the state files use the device name), so there is nothing to migrate and no need to provision again, though running `warpzone provision device <name>` once confirms that nothing changes. See [Device profiles](https://dagonco.github.io/warpzone/reference/configuration/#device-profiles).
 - The library UI lists the makers of the systems in alphabetical order, with Arcade and then Other last, and the systems of each maker by name.
 
 ### Fixed

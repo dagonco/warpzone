@@ -160,7 +160,7 @@ class ProfileTests(unittest.TestCase):
         self.assertIn("/roms/wiiu/mlc01", PROFILE.library_ignore)
 
     def test_the_other_shipped_profile_has_none(self) -> None:
-        self.assertIsNone(load_profile("anbernic-rg351mp").cemu)
+        self.assertIsNone(load_profile("darkos").cemu)
 
     def parse(self, **table):
         return parse_profile({"name": "x", "paths": {"library": "~/lib"}, "cemu": table}, "t")

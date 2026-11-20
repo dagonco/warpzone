@@ -6,7 +6,7 @@ A profile describes where things live on one kind of device. Profiles are data
 files shipped in the repo (`warpzone/data/profiles/<name>.toml`), because they are
 the part other people can reuse and improve.
 
-warpzone ships `steamos-emudeck` and `anbernic-rg351mp` (see
+warpzone ships `steamos-emudeck` and `darkos` (see
 [Frontend and RetroArch overrides](#frontend-and-retroarch-overrides)). Those are the only
 profiles: `profiles.available_profiles` lists the files of `warpzone/data/profiles/` and there
 is no user profile folder, so a new profile is a pull request. `warpzone check` prints the
@@ -198,7 +198,7 @@ files no longer are; run it on the hub (`--root`) for keys and firmware.
 
 ## Frontend and RetroArch overrides
 
-The `anbernic-rg351mp` profile (an Anbernic RG351MP running dArkOS, with the ROMs on an
+The `darkos` profile (dArkOS, checked on an Anbernic RG351MP, with the ROMs on an
 exFAT card at `/roms`) needs three things that `steamos-emudeck` does not. All three are
 profile data, not code that tests the profile name.
 
@@ -422,7 +422,7 @@ to `library`, after the shadPS4 steps. The profile `steamos-emudeck` declares
 ## Options menu
 
 `[options_menu]` (`dir`, an absolute folder or one starting with `~/`) names the folder whose
-executable `.sh` files the device's Options menu lists. Only the `anbernic-rg351mp` profile sets
+executable `.sh` files the device's Options menu lists. Only the `darkos` profile sets
 it, to ArkOS's `/opt/system`. `provision device` writes one bash script there, `Warpzone.sh`,
 built by the pure function `options_menu.render_script` and installed by
 `provision_scripts.ensure_options_menu`, which also removes the entries of earlier versions
@@ -468,7 +468,7 @@ doctor's lines as above, and does nothing else.
 
 `[updater]` has one key, `install`: `"auto"` (the default; the timer installs a new release) or
 `"manual"` (the timer only looks for one and notes it; `warpzone self-update --now` installs it).
-`provision device` writes it to the updater's settings as `install=`. Only `anbernic-rg351mp`
+`provision device` writes it to the updater's settings as `install=`. Only `darkos`
 sets `"manual"`: EmulationStation is open whenever that console is on, so waiting for the menu
 to close would wait for days, and not waiting would update in the middle of a session.
 

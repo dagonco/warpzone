@@ -104,7 +104,7 @@ folders = ["library", "tools", "saves", "frontend", "songs", "bios"]
 # scraped covers and descriptions for its own frontend (see https://dagonco.github.io/warpzone/guides/anbernic/).
 [devices.rg351mp]
 device_id = "DDDDDDD-DDDDDDD-DDDDDDD-DDDDDDD-DDDDDDD-DDDDDDD-DDDDDDD-DDDDDDD"
-profile = "anbernic-rg351mp"
+profile = "darkos"
 folders = ["library", "saves", "frontend"]
 
 # Optional. Only `warpzone inbox` reads this table, and it works with just this table

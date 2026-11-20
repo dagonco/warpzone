@@ -15,7 +15,7 @@ from warpzone.model import ModelError, device_specs, hub_specs
 from warpzone.profiles import ARTWORK_FORMATS, ProfileError, load_profile, parse_profile
 
 ARK_ID = "DDDDDDD-DDDDDDD-DDDDDDD-DDDDDDD-DDDDDDD-DDDDDDD-DDDDDDD-DDDDDDD"
-PROFILE = load_profile("anbernic-rg351mp")
+PROFILE = load_profile("darkos")
 DECK = load_profile("steamos-emudeck")
 
 SYSTEM_LIST = """<?xml version="1.0"?>
@@ -38,7 +38,7 @@ def ark_config(folders=("library", "frontend")):
     data = config_data()
     data["devices"]["ark"] = {
         "device_id": ARK_ID,
-        "profile": "anbernic-rg351mp",
+        "profile": "darkos",
         "folders": list(folders),
     }
     return parse_config(data)
@@ -212,14 +212,14 @@ class ModelTests(unittest.TestCase):
         data = config_data()
         ark = {
             "device_id": ARK_ID,
-            "profile": "anbernic-rg351mp",
+            "profile": "darkos",
             "folders": ["library", "frontend"],
         }
         for order in (("ark", "deck", "machine"), ("deck", "machine", "ark")):
             data2 = dict(data)
             data2["devices"] = {n: ark if n == "ark" else data["devices"][n] for n in order}
             cfg = parse_config(data2)
-            profiles = {"steamos-emudeck": DECK, "anbernic-rg351mp": PROFILE}
+            profiles = {"steamos-emudeck": DECK, "darkos": PROFILE}
             got = {s.id: s for s in hub_specs(cfg, profiles)}
             for fid in ("wz-media", "wz-esde"):
                 with self.subTest(order=order, fid=fid):
