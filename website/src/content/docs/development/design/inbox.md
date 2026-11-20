@@ -82,8 +82,9 @@ The contract:
   levels). A member with an absolute path, a `..` component or a NUL byte, or a symbolic
   link, makes the whole item go to review, and nothing is extracted before every name is
   checked. The free space is checked before extracting too: the sum of the member sizes
-  (from the zip directory, or from the fifth column of `bsdtar -tvf`; the names are taken
-  from `-tf`, never from that listing) plus 5% must fit in the work folder, or the item
+  (from the zip directory, or from the fifth column of `bsdtar -tvf`, read without changing
+  the locale because in the C locale libarchive cannot convert a name that is not ASCII and
+  the listing fails; the names are taken from `-tf`, never from that listing) plus 5% must fit in the work folder, or the item
   goes to review, and so does an archive with a listing line that has no decimal size. A
   member name that is not UTF-8 is read with replacement characters and never stops the
   run. A cue or gdi is followed only if every file it names is a file of the item.
@@ -231,14 +232,16 @@ The contract:
   process it started (`SIGKILL` to the group), so nothing is left writing in the work folder
   when the item goes to review; the same happens when the run is interrupted (Ctrl-C
   included), because a session of its own no longer gets the terminal's signals and
-  `run_tool` kills it itself. A tool cannot prompt on the terminal, so one that needs an
-  answer fails at once instead of waiting. A process of the tool that left the group is out
+  `run_tool` kills it itself. A tool cannot prompt on the terminal (a session of its own has no controlling terminal),
+  so one that needs an answer fails at once instead of being stopped by `SIGTTIN` for the whole
+  limit. The kill ignores any `OSError` of `killpg`, because macOS answers `EPERM` for a group
+  that holds only a zombie (the tool ended just as the limit ran out). A process of the tool that left the group is out
   of reach, and collecting what is left of the pipes after the kill is bounded, so such a
   process cannot hold the run. Without a limit a hung tool would keep the run
   alive and the lock taken until it counts as stale. 240 minutes is generous for a conversion
   of several GB and stays well under the 12 hours after which a lock is stale. The exception
   is `RAHasher`, whose hash is optional: when it is killed the RA line says the hash is
-  unavailable (or, after a conversion, the item fails as for any RAHasher failure), as before.
+  unavailable (or, after a conversion, the item fails as for any RAHasher failure).
   Vita3K keeps its own, shorter limits (see [PS Vita packages](#ps-vita-packages)); it starts in
   a session of its own as well, and a Vita3K that runs past its limit is killed with every
   process it started.

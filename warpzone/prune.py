@@ -419,8 +419,8 @@ def apply_folder(
 
     # Deepest first, so a directory is looked at after its children. Only
     # directories Syncthing ignores are removed, and only when rmdir finds them empty.
-    # A full scan does not always flag a newly ignored directory (seen on Linux),
-    # so each one is scanned on its own before its record is trusted.
+    # Each directory is scanned on its own before its record is trusted (a full scan may not
+    # flag it; see development/design/prune.md).
     for rel in sorted(parents, key=lambda p: p.count("/"), reverse=True):
         if _protected(rel, marker):
             continue

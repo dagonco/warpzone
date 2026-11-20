@@ -60,10 +60,9 @@ without systemd can start the same `tick` from another launcher. Each tick, in t
 
 **The script lives outside warpzone.** The tick must be able to repair a warpzone that no
 longer starts, so the selection and the rollback are in `warpzone/data/updater.sh`, POSIX
-`sh`, standard tools and `git` only (about 250 lines), and not in Python. This is the one
+`sh`, standard tools and `git` only, and not in Python. This is the one
 exception to "decisions are pure Python"; tests run the script against real repositories
-with a fake Python. The script is far longer than the first estimate of 250 lines, because
-every decision above is spelled out in it. The live copy is `~/.local/share/warpzone/updater/updater.sh`, outside
+with a fake Python. The script is long because every decision above is spelled out in it. The live copy is `~/.local/share/warpzone/updater/updater.sh`, outside
 the clone, so checking out any tag cannot remove or replace it. `provision` renews it
 atomically, only after `sh -n` and `updater.sh selftest` pass, keeping the old file as
 `.prev`. The script carries `UPDATER_ABI`, and a copy with a lower ABI is never installed
@@ -243,8 +242,8 @@ number of failed checks. `--config` and `--syncthing-config` work as elsewhere. 
 
 **What each dry run does and does not write.** `settings apply --dry-run` takes no lock, writes
 no backup, snapshot or log line and no `last apply` record. `links sync --dry-run` only says
-what it would do. `play-state sync --dry-run` used to take the play state lock, which creates
-a lock file and its folder; a dry run now takes no lock. `frontend refresh` builds its local
+what it would do. `play-state sync --dry-run` takes no play state lock (the lock would create
+a lock file and its folder). `frontend refresh` builds its local
 Syncthing client with `dry_run=True`, which sends only `GET`, and its gamelist step takes the
 `dry_run` path, which also publishes no ledger. So the Syncthing configuration, the
 gamelists, the ledgers, the emulators' files and the state folders are the same before and
@@ -434,7 +433,10 @@ during a game, so nothing updates while playing either. When it is open the tick
 again. A tick that finds the menu closed clears `deferred_since`, so the 72 hours are of an
 unbroken wait and a menu that opens again days later starts a new one; an environment failure
 and a failed reconcile clear it too. The frontend's process names are split into words with
-pattern expansion off, so a name is never a glob. If it opens during the check, `--unattended` exits 3: `trying` is kept without a
+pattern expansion off, so a name is never a glob. `comm` holds only the first 15 characters of
+a name, so the names are cut the same way before they are compared. The scan forks nothing for
+a process that cannot match (a fork per process took over a second on a console with hundreds
+of them). If it opens during the check, `--unattended` exits 3: `trying` is kept without a
 rollback and the next tick continues. **The deferral lasts 72 hours at most**: once
 `deferred_since` is older than that, the update runs anyway, because on some devices the
 menu looks open for as long as the console is on, and every write is already guarded by
@@ -564,4 +566,8 @@ version is the user's choice and is only read. `ensure_flatpak_access` asks for 
 restart; unattended, that is a warning.
 
 **What a rollback does not undo.** It reverts code only: not what `provision` wrote, nor the
-data in `wz-settings`, `wz-play-state` and the saves.
+data in `wz-settings`, `wz-play-state` and the saves. Python trusts a `.pyc` whose recorded
+source size and modification second match the source, and a rollback often happens in the
+second of the checkout, with a version string of the same size; so the updater removes the
+bytecode caches under the package (`clear_pyc`) after a checkout, and the checks and the shim
+never run the bytecode of the release just rolled back.

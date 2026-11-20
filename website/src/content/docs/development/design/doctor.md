@@ -134,8 +134,9 @@ for every problem, the exact fix for this platform.
   `warpzone/flatpak.py` are pure. A native Syncthing is not checked.
 - **Flycast VMUs.** When RetroArch's `Flycast.opt` exists, `judge_flycast_vmus` (pure, over
   the file text) reads `reicast_per_content_vmus`: `VMU A1` and `All VMUs` are `[ok]`;
-  `disabled` or a missing key is `[! ]`, because the core then writes the shared VMUs into
-  `bios/dc`, which the profile's library ignores (`/bios/dc/vmu_save_*.bin`,
+  `disabled` (the core's default; the valid values are `disabled`, `VMU A1` and `All VMUs`, from
+  `libretro_core_options.h` in the upstream Flycast repository) or a missing key is `[! ]`,
+  because the core then writes the shared VMUs into `bios/dc`, which the profile's library ignores (`/bios/dc/vmu_save_*.bin`,
   `/bios/dc/dc_nvmem.bin`) keep out of sync. The fix names the core option to change.
 - **Vita3K user.** When `~/.config/Vita3K/config.yml` has a `user-id:`, `judge_vita3k_user`
   (pure) is `[ok]` for `00` and `[! ]` for anything else: the profile syncs

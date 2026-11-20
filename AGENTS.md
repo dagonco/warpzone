@@ -14,6 +14,7 @@ Guidance for coding agents working on this repository. Humans: see [README.md](R
 - Never print or log API keys or tokens. Redact them in dry-run output (`syncthing.redact`).
 - The repository is public: no personal data in code, docs, tests or commits (hostnames, IP addresses, device IDs, user names, home paths, real API keys). Test fixtures use obvious fakes; mark them for gitleaks with a trailing `# gitleaks:allow` comment.
 - warpzone never downloads BIOS files or games. Manifests hold names, sizes and hashes only.
+- The design pages are the source of truth for design. A docstring states the contract in one or two lines and, for a design rule, names the page and section instead of restating it; a longer comment is kept only for a workaround or constraint tied to that exact line. Comments describe what the code does now, never a change or its history, and refer to a design section by name, not by number.
 
 ## Layout
 

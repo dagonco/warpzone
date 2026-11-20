@@ -30,9 +30,10 @@ ID_LENGTH = 16
 FILE, DIR = "file", "dir"
 UNLISTABLE = "unlistable"
 UNVERIFIED = "unverified"  # filed by `inbox` from `_unverified/`: no DAT knows it
-# Systems whose games live one level down, in `roms/<system>/roms/`.
-# The whitelist model owns the rule of which paths a whole system is (`whitelist.system_roots`).
+# Systems whose games live one level down, in `roms/<system>/roms/` (defined by the whitelist
+# model, which also says which paths make up a whole system: `whitelist.system_roots`).
 INNER_ROMS = whitelist.SUBROOT_SYSTEMS
+# The Switch folders after `roms/switch`: the updates and DLC that a base game claims.
 SWITCH_EXTRAS = whitelist.system_roots("switch")[1:]
 # Files whose text derive reads (a launcher, a shortcut, a cue sheet).
 TEXT_SUFFIXES = (".desktop", ".psvita", ".cue", ".gdi", ".m3u")

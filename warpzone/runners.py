@@ -102,7 +102,7 @@ def kill_group(proc: subprocess.Popen[str], *, drain: bool) -> None:
     what is left in them when `drain`). The tool started in a session of its own, so its pid
     is the id of the group."""
     # OSError, not only ProcessLookupError: macOS answers EPERM for a group that holds only
-    # a zombie (the tool ended just as the limit ran out).
+    # a zombie (see development/design/inbox.md, "Time limit of the tools").
     with contextlib.suppress(OSError):
         os.killpg(proc.pid, signal.SIGKILL)
     try:
@@ -129,8 +129,8 @@ def run_tool(
     runs longer is killed with every process it started and `subprocess.TimeoutExpired` is
     raised. The group is killed too when the wait is interrupted (Ctrl-C included), because
     a session of its own no longer gets the terminal's signals; the exception is re-raised."""
-    # A session of its own has no controlling terminal: a tool that wants to prompt on it
-    # fails at once, where in our session it would be stopped (SIGTTIN) for the whole limit.
+    # A session of its own has no controlling terminal, so a tool that wants to prompt fails
+    # at once (development/design/inbox.md, "Time limit of the tools").
     proc = subprocess.Popen(
         list(cmd),
         stdin=stdin,

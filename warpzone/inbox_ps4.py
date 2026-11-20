@@ -23,7 +23,7 @@ is kept and an older one goes to review. A DLC package becomes
 `addon_install_dir`, for a game that is in the library: the game named by the item folder
 when that folder is called after a title id (`inbox/CUSA03173/`), else the DLC's own title. A
 game already in the library is reported and never overwritten. Without the tool the package is
-placed as it is, as before.
+placed as it is.
 
 The decisions (`pkg_kind`, `parse_header`, `category_kind`, `entitlement_label`,
 `app_version_key`, `update_action`, `item_title_id`, `shortcut_name`, `desktop_text`) are pure

@@ -615,12 +615,12 @@ release_lock() {
 # 15 characters) and the basename of argv[0] the way procs.running does; never by
 # the rest of a command line. 1 when none is, 2 when /proc cannot be read.
 #
-# A fork per process made a call take over a second on a console with hundreds of them, so
-# nothing forks for a process that cannot match: `comm` is read with `read` and compared with
-# the names cut to 15 characters (cut once, up front); the cmdline is read the same way (`read`
-# drops the NULs, so what it gets is argv[0] followed by the other arguments run together, and
-# the basename of argv[0] is a piece of it) and only a process whose cmdline contains one of
-# the names pays for the fork that cuts argv[0] out.
+# No fork for a process that cannot match (see development/design/autonomous-updates.md,
+# "Deferring while the menu is open"): `comm` is read with `read` and compared with the names
+# cut to 15 characters (cut once, up front); the cmdline is read the same way (`read` drops the
+# NULs, so what it gets is argv[0] followed by the other arguments run together, and the
+# basename of argv[0] is a piece of it) and only a process whose cmdline contains one of the
+# names pays for the fork that cuts argv[0] out.
 
 proc_has() {
 	[ -d "$PROC" ] && [ -r "$PROC" ] || return 2
@@ -698,11 +698,9 @@ version_at() {
 		sed -n 's/^__version__ = "\(.*\)"[[:space:]]*$/\1/p' | head -n 1
 }
 
-# clear_pyc: remove the bytecode caches under the package. Python takes a `.pyc` for the
-# source when the source has the size and the second of modification it was compiled from, so
-# the bytecode of a release that was just rolled back (a rollback is often in the second of
-# the checkout, and a version string has the same size) could run in place of the good source,
-# for the checks and for the shim alike. Python writes them again, from the right source.
+# clear_pyc: remove the bytecode caches under the package, so the bytecode of a release that was
+# just rolled back never runs in place of the good source (see development/design/
+# autonomous-updates.md, "What a rollback does not undo"). Python writes them again.
 clear_pyc() {
 	[ -n "$CLONE" ] && [ -d "$CLONE/warpzone" ] || return 0
 	find "$CLONE/warpzone" -name __pycache__ -type d -prune -exec rm -rf {} + >/dev/null 2>&1

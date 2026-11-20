@@ -22,8 +22,8 @@ signature instead of by hash:
   extracted into `roms/ps4/games/<title id>/` with a shortcut in `roms/ps4/shortcuts/`
   (see `inbox_ps4`); without it the `.pkg` is filed as it is in `roms/ps4/`. A PS Vita `.pkg`
   (magic `\x7fPKG`, a PSP/Vita header and a Vita content type) is installed with Vita3K (see
-  `inbox_vita_pkg`). A PS3 `.pkg` or any other `.pkg` keeps the "not supported by inbox yet"
-  outcome.
+  `inbox_vita_pkg`). A PS3 `.pkg` or any other `.pkg` is reported as "not supported by
+  inbox yet" (`inbox_core.unsupported_reason`).
 
 A full Redump-style Xbox image (game partition at 0x18300000) is recognised but never
 placed: xemu cannot boot it, so it goes to review with the instruction to convert it with
@@ -522,7 +522,7 @@ class ConsoleIsoHandler:
         if found is None and is_pkg(s.path.name):
             if inbox_vita_pkg.process(ctx, s.path, s.rel, result):
                 return
-            # PS3 and any other .pkg keep today's outcome
+            # PS3 and any other .pkg: reported as unsupported
             result.reasons.append(
                 inbox_core.unsupported_reason([s.rel]) or f"{s.rel}: not recognised as a PS4 .pkg"
             )

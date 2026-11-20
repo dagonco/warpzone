@@ -1,4 +1,5 @@
-"""The systemd user timers that run the frontend refresh, the play state sync and the prune."""
+"""The systemd user timers of the frontend refresh, the play state sync, the prune and the
+ES-DE settings."""
 
 from __future__ import annotations
 

@@ -371,8 +371,8 @@ def bsdtar_unpacked_size(bsdtar: str, archive: Path, timeout: float) -> int:
     column is the size. Names are never read from it: they may hold spaces and ` -> `. A
     line that has no decimal size fails the item.
 
-    The locale is left as it is: the columns before the name do not depend on it, and in the
-    C locale libarchive cannot convert a name that is not ASCII, which fails the listing."""
+    The locale is left as it is, because the C locale fails the listing on a name that is not
+    ASCII (see "Untrusted content" in development/design/inbox.md)."""
     try:
         listing = run_process([bsdtar, "-tvf", str(archive)], timeout)
     except ToolTimeout as exc:

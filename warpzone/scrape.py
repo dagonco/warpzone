@@ -835,8 +835,8 @@ def failed_message(system: str, log: str) -> str:
 
 
 def gamelist_message(system: str, reason: str) -> str:
-    """The line for a hub gamelist that cannot be written (it changed three times during the
-    write, or cannot be read): the entries wait for the next run."""
+    """The line for a hub gamelist that cannot be written (it kept changing during the
+    write, `scrape_io.WRITE_TRIES` times, or cannot be read): the entries wait for the next run."""
     return f"{system}: {reason}; the entries are left for the next run"
 
 
@@ -1196,7 +1196,7 @@ def config_ini_path(env: Mapping[str, str], home: Path, exists: Callable[[Path],
 
 def has_user_creds(lines: Iterable[str]) -> bool:
     """Whether `[screenscraper]` of a `config.ini` has a `userCreds` key. Pure, over the file's
-    lines, and the only code that looks into the file.
+    lines, and the only code that parses the file (`scrape_io.credentials_set` just opens it).
 
     It tracks the `[section]` it is in, ignores comment lines (`;` or `#`), and for a line
     `key = value` looks at the key alone: the value is never sliced out, stored, compared or

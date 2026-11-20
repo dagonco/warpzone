@@ -21,7 +21,7 @@ LINKS_SCRIPT = "warpzone-links.sh"
 SETTING = "CustomEventScripts"
 MENU_PATH = "Main menu > Other settings > Enable custom event scripts"
 # What the process list shows for ES-DE: `comm` of the unpacked binary, and `argv[0]` of the
-# AppImage (seen on a Steam Machine: comm `es-de` for the unpacked binary and `ES-DE.AppImage`).
+# AppImage (see development/design/emulator-settings.md, "Process detection").
 ESDE_PROCESSES = ("es-de", "ES-DE.AppImage")
 
 _ELEMENT = f'<bool name="{SETTING}" value="true" />'

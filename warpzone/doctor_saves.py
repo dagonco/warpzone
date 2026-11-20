@@ -10,8 +10,8 @@ import re
 
 from warpzone.doctor_core import G_SAVES, OK, WARN, Context, Result
 
-# RetroArch's Flycast core options. `reicast_per_content_vmus` is "disabled" (default),
-# "VMU A1" or "All VMUs" (libretro_core_options.h in github.com/flyinghead/flycast).
+# RetroArch's Flycast core options (the values of `reicast_per_content_vmus` are in
+# development/design/doctor.md, "Flycast VMUs").
 FLYCAST_OPT = ".var/app/org.libretro.RetroArch/config/retroarch/config/Flycast/Flycast.opt"
 FLYCAST_VMU_KEY = "reicast_per_content_vmus"
 FLYCAST_VMU_FIX = (

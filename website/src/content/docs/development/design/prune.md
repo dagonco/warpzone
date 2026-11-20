@@ -71,7 +71,9 @@ delete:
 Files that are ignored but fail 4 or 5 are listed as kept, with the reason; the expected
 ones are only counted (see [Files the console generates](#files-the-console-generates)). After
 deleting, directories that held deleted files, that Syncthing flags ignored, and
-that are now empty are removed (`rmdir`, so a non-empty one is never touched).
+that are now empty are removed (`rmdir`, so a non-empty one is never touched). A full scan does
+not always flag a directory that just became ignored (seen on Linux), so each candidate is
+scanned on its own (`POST /rest/db/scan?folder=...&sub=...`) before its record is trusted.
 
 The default is report only. `--apply` deletes. A run that would delete more than
 `--max-gib` (default 50) refuses to delete anything, exits 1, and needs

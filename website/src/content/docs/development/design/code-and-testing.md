@@ -64,7 +64,7 @@ warpzone/
   provision_emulators.py  device edits for ES-DE's system list, RetroArch, shadPS4, Cemu and title links
   provision_artwork.py  frontend artwork on a device: the scope of the artwork folders, the gamelists
   provision_scripts.py  the ES-DE startup scripts, turning ES-DE's event scripts on, the Options menu entries
-  provision_timers.py  the artwork, play state and unattended prune systemd user timers
+  provision_timers.py  the artwork, play state, unattended prune and ES-DE settings systemd user timers
   provision_updater.py  the autonomous update: settings file, live updater script, its timer
   prune.py           leftover detection (pure `classify`), the unattended guard (pure `guard`) and the state file of its refusal, delete
   notify.py          the webhook POST `prune` and `inbox` share: JSON body, the URL never echoed, `NotifyError`
