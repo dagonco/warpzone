@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ## [Unreleased]
 
+## [0.4.0rc6] - 2026-11-20
+
 ### Added
 
 - `warpzone scrape` (and the scrape of `warpzone inbox --apply` and of `warpzone scrape --unattended`) now also scrapes the PS4, PS Vita, Wii U and Xbox 360 games. A PS4 or Vita game is looked up by the name of its launcher (`<Title>.desktop` in `roms/ps4/shortcuts/`, `<Title>.psvita` in `roms/psvita/`), and the entry and media are written under the paths ES-DE uses for them (`./Bloodborne.desktop`, `covers/Bloodborne.png`; `./Halo 3 (World).iso` for the Xbox 360, whose games ES-DE reads from `roms/xbox360/roms/`). A PS4 or Vita game with no launcher is not listed by ES-DE and is not scraped. `--system ps4`, `psvita`, `wiiu` and `xbox360` are accepted. See [Scraping](https://dagonco.github.io/warpzone/setup/scrape/).
@@ -418,7 +420,8 @@ First public release. warpzone keeps one game library on a home server and deliv
 - `warpzone doctor` checks the tools, config, Syncthing, DATs and hub folder of a machine and prints the fix for each problem.
 - `warpzone status`, `check` and `render-ignores` to inspect folder state, validate the config and preview a device's ignore lines. `provision` supports `--dry-run`.
 
-[Unreleased]: https://github.com/dagonco/warpzone/compare/v0.4.0rc5...HEAD
+[Unreleased]: https://github.com/dagonco/warpzone/compare/v0.4.0rc6...HEAD
+[0.4.0rc6]: https://github.com/dagonco/warpzone/compare/v0.4.0rc5...v0.4.0rc6
 [0.4.0rc5]: https://github.com/dagonco/warpzone/compare/v0.4.0rc4...v0.4.0rc5
 [0.4.0rc4]: https://github.com/dagonco/warpzone/compare/v0.4.0rc3...v0.4.0rc4
 [0.4.0rc3]: https://github.com/dagonco/warpzone/compare/v0.4.0rc2...v0.4.0rc3
