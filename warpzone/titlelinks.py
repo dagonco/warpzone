@@ -1,15 +1,9 @@
 """Title links: a symlink per library game inside an emulator's own game folder.
 
-Vita3K reads games from `ux0/app/<TITLEID>`, while the library delivers each title to
-`<library>/roms/psvita/app/<TITLEID>`. A profile's `[links.<id>]` table names both folders;
-`provision device`, `warpzone links sync` and ES-DE's startup script keep one symlink per
-title in the second, so a game that was just whitelisted needs no manual step.
-
-The rules (`plan`) are pure. The links are the only thing ever changed: a real folder or file
-in the way is left alone, so is a link that points elsewhere, and only a dangling link that
-points into the library folder (one this module made for a game that is gone) is removed.
-Nothing is changed while the emulator runs, and `dry_run` changes nothing. No network code
-is imported, because ES-DE waits for the startup script. See development/design/title-links.md.
+A profile's `[links.<id>]` table names the emulator's game folder and the library's; the module
+keeps one symlink per title in the first. The rules (`plan`) are pure; `sync` does the I/O. No
+network code is imported, because ES-DE waits for the startup script. See
+development/design/title-links.md.
 """
 
 from __future__ import annotations

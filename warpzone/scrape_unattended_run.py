@@ -1,13 +1,8 @@
 """`warpzone scrape --unattended`: one night of the scheduled scrape, with nobody watching.
 
-The decisions are pure (`scrape_unattended`); the disk, the clock and the lock are handled here,
-with the state file, the run records and the webhook through the helpers the unattended inbox
-uses (`inbox_unattended_io`, `notify`). A night goes through the steps of "Run steps" in
-development/design/scrape-unattended.md and stops at the first that says so: the usage checks
-(made by `cli`), the hub layout, what the run needs, the plan without the lock (nothing to do
-exits at once, with no lock and no Skyscraper), the lock with its wait, the scrape under the lock
-and the finish. Every state change is a read-modify-write of `catalog/scrape/state.json`. The
-exit code is 0 unless the night has news (see `scrape_unattended.news`).
+The decisions are pure (`scrape_unattended`); the disk, the clock and the lock are handled here.
+A night goes through the steps of "Run steps" in development/design/scrape-unattended.md and
+stops at the first that says so. The exit code is 0 unless the night has news.
 """
 
 from __future__ import annotations

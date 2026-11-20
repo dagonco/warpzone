@@ -1,12 +1,9 @@
 """`settings apply` and `settings audit`: loading, I/O and output around the pure planning.
 
-The decisions live in `settings_plan`, the file formats in `settings_formats` and
-`settings_tree`, the layers in `settings_layers` and the device state in `settings_state`.
-This module reads the layers and the emulators' files, asks the plan what to do, and writes
-with a backup and an atomic replace. It imports no network code: `capture` is handed a client
-with two read calls and asks it whether the `wz-settings` folder is up to date. Messages, log
-lines and output name keys and ids, never values (a prompt shows a value, cut, for the keys the
-user is asked about; secret keys are never asked about). See "Emulator settings" in
+The decisions live in `settings_plan`; this module reads the layers and the emulators' files,
+asks the plan what to do, and writes with a backup and an atomic replace. It imports no network
+code: `capture` is handed a client with two read calls. Messages, log lines and output name keys
+and ids, never values (a prompt shows a cut value for the keys the user is asked about). See
 development/design/emulator-settings.md.
 """
 
@@ -659,11 +656,8 @@ def apply(
     """Write the layered keys into the emulators' files. Exit code: 0 ok, 1 on an invalid layer
     or a file that could not be read, parsed or written.
 
-    `when_idle` is the unattended run of the timer: the emulators that are running are left out
-    before anything is read, a run that writes nothing and fails nowhere leaves no trace (no
-    log line, no `last-apply.json`), and the exit code is 0 whatever happened (failures are in
-    the log and in `last-apply.json`, where `doctor` reads them), so the timer never shows as
-    failed.
+    `when_idle` is the unattended run of the timer (see development/design/emulator-settings.md,
+    "ES-DE settings"): its exit code is 0 whatever happened.
     """
     selected = select_emulators(ctx.profile, emulators)
     say, complain = (_quiet, _quiet) if quiet else (out, err)
