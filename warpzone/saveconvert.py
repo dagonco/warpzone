@@ -1,10 +1,8 @@
 """Save conversion between an emulator's own save files and the hub's raw ones. Pure: no I/O.
 
-The hub keeps cartridge saves as raw dumps (`<game>.sav`). An emulator that stores them in
-another shape needs a converter; the shape is the profile's `format`. The only one so far is
-`desmume-dsv`, the `.dsv` of DraStic: the raw dump plus a 122-byte DeSmuME footer. `decide`
-says what to do with one game from the two sides and the hash of the last reconciliation.
-The device layer (`saveconvert_device`) reads and writes the files. See
+The hub keeps cartridge saves as raw dumps; the emulator's shape is the profile's `format`
+(`desmume-dsv` so far). `decide` says what to do with one game from the two sides and the hash of
+the last reconciliation; `saveconvert_device` reads and writes the files. See
 development/design/save-conversion.md.
 """
 
@@ -75,12 +73,8 @@ class Dsv:
 
 
 def split_dsv(data: bytes) -> Dsv:
-    """The raw save and the footer of a `.dsv`; `SaveFormatError` when it is malformed.
-
-    A file that ends with the cookie must be a valid footer after a valid raw size. A file
-    that does not is accepted only as a raw dump of a valid size (what this tool writes when
-    it has no footer to keep, and what DraStic loads).
-    """
+    """The raw save and the footer of a `.dsv`; `SaveFormatError` when it is malformed (see
+    development/design/save-conversion.md, "Format")."""
     if data.endswith(COOKIE):
         if len(data) < FOOTER_LEN:
             raise SaveFormatError(f"{len(data)} bytes is shorter than a footer")
@@ -100,11 +94,8 @@ def check_raw(data: bytes) -> None:
 
 
 def build_dsv(raw: bytes, previous: Footer | None) -> bytes:
-    """The `.dsv` content for `raw`: with the footer the file had if it describes this size.
-
-    A footer whose `size` is another length belongs to another save, so it is dropped and the
-    raw dump is written alone, which DraStic loads as well.
-    """
+    """The `.dsv` content for `raw`: with the footer the file had if it describes this size,
+    else the raw dump alone (see development/design/save-conversion.md, "Format")."""
     check_raw(raw)
     if previous is not None and previous.size == len(raw):
         return raw + previous.raw
@@ -154,13 +145,8 @@ class Decision:
 
 def decide(raw: Side | None, emu: Side | None, base: str | None) -> Decision:
     """What to do with one game. `raw` and `emu` are None when that file does not exist.
-
-    `base` is the hash of the raw data at the last reconciliation. Only one side changed:
-    copy it over the other. Neither: nothing. Both: the most recently modified wins (a tie
-    goes to the raw side, the hub's copy). A side that exists alone is copied to the other
-    side; a missing file is never taken as a deletion. Sides of different sizes, and a side
-    with a `problem`, are skipped untouched. With no base, an erased side loses to one that
-    holds data, whatever the dates say.
+    `base` is the hash of the raw data at the last reconciliation. See
+    development/design/save-conversion.md, "Decision".
     """
     for label, side in (("hub file", raw), ("emulator file", emu)):
         if side is not None and side.problem:

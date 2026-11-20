@@ -1,12 +1,7 @@
 """Pure edits for shadPS4: its install and DLC directories and the launch script ES-DE runs.
 
-shadPS4 runs extracted games it finds in its install directories. Two config files can hold
-them, depending on the version: `config.json` (v0.21 and later: `General.install_dirs`, a
-list of `{"enabled": true, "path": "..."}`) and the older `config.toml` (`GUI.installDirs`,
-a list of strings). The same files hold the one folder it reads DLC from
-(`General.addon_install_dir` in JSON, `GUI.addonInstallDir` in TOML, a path string). A
-profile with `[shadps4]` has `provision device` add the install folders it declares to both
-and set the DLC folder, and `doctor` check them. No I/O here. See
+A profile with `[shadps4]` has `provision device` add the install folders it declares to
+`config.json` and `config.toml` and set the DLC folder, and `doctor` check them. No I/O here. See
 development/design/profiles.md, "shadPS4 install directories".
 """
 

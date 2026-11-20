@@ -1,13 +1,10 @@
 """Pure planning for the emulator settings layer: apply, capture and audit decisions.
 
-Nothing here touches a disk or a network. `plan_apply` and `plan_data` decide what `settings
-apply` writes, `candidates`, `preselect`, `decide` and `apply_decisions` decide what `settings
-capture` proposes and what each answer changes, and `audit_rows` and `render_audit` describe the
-state for `settings audit`. See "Emulator settings" in development/design/emulator-settings.md.
+Nothing here touches a disk or a network: what `settings apply` writes, what `settings capture`
+proposes and what `settings audit` shows. See development/design/emulator-settings.md.
 
 Values are `str | int | float | bool` and are compared by type and value (`1`, `1.0`, `true`
-and `"1"` all differ). Secret keys never appear in any result: they are filtered by `tracked`
-(and ignored when layered), so no value of one reaches a plan, a candidate, a snapshot or a row.
+and `"1"` all differ). Secret keys never reach a plan, a candidate, a snapshot or a row.
 """
 
 from __future__ import annotations
@@ -83,26 +80,15 @@ def plan_apply(
     overwrite_local: bool,
     spec: SettingsFile | None = None,
 ) -> tuple[list[KeyPlan], dict[str, Value]]:
-    """Decide every layered key of one file, and the snapshot to keep afterwards.
+    """Decide every layered key of one file, and the snapshot to keep afterwards (see
+    development/design/emulator-settings.md, "Apply", step 2, for the rules on C, L and S).
 
     `current` holds every value the handler read (noise included: a layered noise key is still
     applied), `layered` the effective layer values for this file, `snapshot` the values at the
     last sync (None when the file has no snapshot yet). With `spec`, noise and secret keys stay
-    out of the snapshot and a layered secret key is ignored.
-
-    For a layered key with layered value L, current value C and snapshot value S:
-
-    - C == L: nothing to write, S := C.
-    - C != L and (S absent or C == S): the console has not changed it since the last sync, so
-      write L, S := L.
-    - C != L and C != S: changed in the emulator and not captured yet: held, S kept; with
-      `overwrite_local` it is written, S := L.
-    - a fixed key, or a missing one where the format cannot add keys: cannot write.
-
-    A missing key that the format can add is written whatever the snapshot says. A tracked key
-    that is not layered gets S := C only where S is absent, so a change made in the interface
-    stays visible to `capture` through any number of applies. Keys the file no longer has are
-    dropped from the snapshot.
+    out of the snapshot and a layered secret key is ignored. A missing key that the format can
+    add is written whatever the snapshot says; keys the file no longer has are dropped from the
+    snapshot.
     """
     snap = snapshot or {}
     new: dict[str, Value] = {}
@@ -150,10 +136,9 @@ def plan_data(
     *,
     overwrite_local: bool,
 ) -> str:
-    """The same rules as `plan_apply`, on a whole system data file by hash.
-
-    Returns "none" (no hub copy), "ok", "write" or "held". A missing local file is "write": the
-    caller decides whether it may be created (`create_when`).
+    """The rules of `plan_apply` on a whole system data file by hash. Returns "none" (no hub
+    copy), "ok", "write" or "held". A missing local file is "write": the caller decides whether
+    it may be created (`create_when`).
     """
     if hub_hash is None:
         return "none"
@@ -167,9 +152,7 @@ def plan_data(
 def data_snapshot(
     action: str, current_hash: str | None, hub_hash: str | None, snapshot_hash: str | None
 ) -> str | None:
-    """The snapshot hash to keep after `plan_data` returned `action`: S := hub after a write,
-    S := C when in sync, S kept when held, and S := C for a file with no hub copy only where S is
-    absent."""
+    """The snapshot hash to keep after `plan_data` returned `action`."""
     if action == WRITE:
         return hub_hash
     if action == OK:
@@ -219,9 +202,8 @@ class Candidate:
 
 
 def preselect(key: str, spec: SettingsFile, in_common: bool, in_device: bool) -> str:
-    """The layer a changed key is pre-selected for: this device's layer when it has the key,
-    common when common has it, the device layer when the key matches a `device` pattern, common
-    otherwise."""
+    """The layer a changed key is pre-selected for ("device" or "common"; see
+    development/design/emulator-settings.md, "Capture", step 4)."""
     if in_device:
         return "device"
     if in_common:
@@ -292,17 +274,13 @@ def candidates(
     key_patterns: Iterable[str] = (),
     include_new: bool = False,
 ) -> tuple[list[Candidate], int]:
-    """The keys of one file that `capture` proposes, and how many new keys it only counts.
+    """The keys of one file that `capture` proposes, and how many new keys it only counts (see
+    development/design/emulator-settings.md, "Capture", step 3).
 
-    Among tracked keys (see `tracked`), a key is proposed when it is in the snapshot, differs
-    from it, and differs from the effective layered value (the device layer's, else common's).
-    A key new to the file (not in the snapshot) is only counted, unless `include_new`; a new key
-    equal to the layered value is not counted. With `seed`, every tracked key that matches the
-    file's `known` patterns, or a `key_patterns` entry (matched over
-    `<emulator>/<file_id>/<key>`), and differs from the effective layered value is also proposed,
-    snapshot or not. `key_patterns` do nothing without `seed`. A file with no snapshot proposes
-    nothing without `seed`. `common` and `device` are this file's keys in each layer; `device` is
-    this device's layer. Candidates follow the file's order.
+    `common` and `device` are this file's keys in each layer; `device` is this device's layer.
+    A new key equal to the layered value is not counted. `key_patterns` are matched over
+    `<emulator>/<file_id>/<key>` and do nothing without `seed`. Candidates follow the file's
+    order.
     """
     found, fresh = _scan(
         emulator,
@@ -418,23 +396,15 @@ def apply_decisions(
     dict[tuple[str, str], dict[str, Value]],
     list[str],
 ]:
-    """The effects of the decisions: (common', device', snapshot updates, notes).
+    """The effects of the decisions: (common', device', snapshot updates, notes). See
+    development/design/emulator-settings.md, "Capture", steps 6 and 7.
 
     `common` and `device` are layer entries (this device's layer for `device`); they are not
     modified. `decisions` maps a ref to "common", "device", "discard" or "skip" (a ref that is
-    absent is skipped too). The effects:
-
-    - common: the key is set in common and removed from this device's layer, where it would keep
-      winning. `others` (device name -> entries of that device's layer) gives the notes: one for
-      every other device layer that holds the key with a different value.
-    - device: the key is set in this device's layer.
-    - discard: no layer changes.
-    - skip: nothing.
-
-    The snapshot updates, `{(emulator, file): {key: value}}`, set S := here for every key decided
-    common, device or discard; for a data file the file is "data", the key is the data id and the
-    value its hash (a data file chosen for common is copied to the hub by the caller). A table
-    left empty is dropped from a layer.
+    absent is skipped too). `others` (device name -> entries of that device's layer) gives the
+    notes. The snapshot updates are `{(emulator, file): {key: value}}`; for a data file the file
+    is "data", the key is the data id and the value its hash. A table left empty is dropped from
+    a layer.
     """
     common_out, device_out = _copy(common), _copy(device)
     updates: dict[tuple[str, str], dict[str, Value]] = {}
@@ -493,10 +463,8 @@ def capture_snapshot(
     *,
     proposed: Iterable[str] = (),
 ) -> dict[str, Value]:
-    """The snapshot of one file after a capture: S := C for every decided key (`updates`, from
-    `apply_decisions`) and for every new key counted; a proposed key that was skipped keeps its
-    value (absent when new). A file with no snapshot gets one for all its tracked keys. Keys the
-    file no longer tracks are dropped."""
+    """The snapshot of one file after a capture, from `updates` (`apply_decisions`) and the
+    `proposed` keys (see development/design/emulator-settings.md, "Capture", step 7)."""
     now = tracked(current, fixed, spec)
     if snapshot is None:
         new = dict(now)
@@ -580,13 +548,10 @@ def audit_rows(
     *,
     can_add: bool,
 ) -> list[AuditRow]:
-    """The audit rows of one file that exists and was read.
-
-    Layered keys are classified like `apply` would (without `--overwrite-local`): `sync` (equal),
-    `pending` (apply writes it), `changed` (held: changed here and different from the hub) and
-    `cannot-write`. Tracked keys that are not layered are `changed` (hub None) when they differ
-    from the snapshot. Keys new to the file and files with no snapshot add no row. Rows come in the
-    order sync, pending, changed on the hub, cannot write, changed and not on the hub, each by key.
+    """The audit rows of one file that exists and was read: layered keys are classified like
+    `apply` would (without `--overwrite-local`). Rows come in the order sync, pending, changed on
+    the hub, cannot write, changed and not on the hub, each by key. See
+    development/design/emulator-settings.md, "Audit".
     """
     plans, _ = plan_apply(
         current,

@@ -1,14 +1,9 @@
 """Scraping game metadata and media with Skyscraper: the pure decisions.
 
-`warpzone scrape` and `inbox --apply` run Skyscraper (ScreenScraper as the source) on a staged
-copy of the games and merge what it produced into the hub's ES-DE gamelists and media. This
-module holds the parts that need no filesystem and no subprocess: which systems are scraped
-and under which Skyscraper platform (`PLATFORMS`), how the frontend names their games
-(`frontend_games`), which games need a scrape (`select`), the command lines (`skyscraper_args`),
-what Skyscraper's output says (`classify_output`), what to merge into the hub (`plan_merge`,
-`add_entries`), what is remembered about the not-found and incomplete memories, the presence
-check of the account in Skyscraper's config, and what the run prints (`render_report`,
-`stop_message`). The disk and the tool are in `scrape_io`. See development/design/scrape.md.
+Which games to scrape (`select`), the Skyscraper command lines, the reading of its output, the
+merge plan for the hub's gamelists and media, the not-found and incomplete memories and the
+report lines. No filesystem and no subprocess here: the disk and the tool are in `scrape_io`.
+See development/design/scrape.md.
 """
 
 from __future__ import annotations
@@ -71,12 +66,9 @@ PLATFORMS: dict[str, str] = {
     "n3ds": "3ds",
 }
 
-# The folder below a hub system folder that the frontend reads as the system's own, where it is
-# not the system folder itself: ES-DE lists PS4 from `roms/ps4/shortcuts/` and Wii U and Xbox 360
-# from `roms/<system>/roms/` (`whitelist.SUBROOT_SYSTEMS`, the systems `inbox` files below
-# `roms/`). A gamelist entry and a media file of such a system are named without it
-# (`./Example.desktop`, `covers/Example.png`), as `artwork.FrontendSystem.base` has it on a
-# device; the hub has no system list, so this is the hub's copy of that fact.
+# The folder below a system folder that the frontend reads as the system's own (see "Systems and
+# platforms" in development/design/scrape.md). The hub has no system list, so this is the hub's
+# copy of `artwork.FrontendSystem.base`.
 FRONTEND_BASES: dict[str, str] = {
     **{system: "roms/" for system in whitelist.SUBROOT_SYSTEMS},
     "ps4": "shortcuts/",
@@ -109,8 +101,8 @@ NOT_FOUND_DAYS = 30
 NO_MULTISCRAPE = "nomultiscrape"
 # Games per Skyscraper call.
 BATCH_SIZE = 100
-# What a game is assumed to cost in a time budget (see "Quota and time budget" in
-# development/design/scrape-unattended.md): measured on a NAS, 500 games in 148 minutes.
+# Seconds a game is assumed to cost in a time budget (see "Quota and time budget" in
+# development/design/scrape-unattended.md).
 EST_SECONDS_PER_GAME = 18
 
 
@@ -177,8 +169,8 @@ def is_placed(game: Game, placed: Collection[str]) -> bool:
 
 def entry_part(game: Game) -> Part | None:
     """The part of a game its gamelist path names: the one whose path ends with the path
-    (below `./`), the primary first, else the primary. It is the primary for almost every game;
-    a PS4 or Vita game's primary is its folder and its gamelist path names the launcher file."""
+    (below `./`), the primary first, else the primary. A PS4 or Vita game's primary is its
+    folder and its gamelist path names the launcher file."""
     rel = artwork.relative(game.gamelist)
     ordered = sorted(game.parts, key=lambda p: p.path != game.primary)
     if rel is not None:
@@ -189,12 +181,10 @@ def entry_part(game: Game) -> Part | None:
 
 
 def frontend_games(system: str, games: Iterable[Game]) -> list[Game]:
-    """The games of a system as the frontend lists them, for a scrape: the games whose
-    `gamelist` is shifted to the folder the frontend reads (`FRONTEND_BASES`), so the entry
-    and the media are named as the frontend names them, and without the games it does not
-    list: the ones outside that folder (a PS4 game with no shortcut) and, for
-    `LAUNCHER_SYSTEMS`, the ones with no launcher file. Everything else about a game, its
-    `primary` included, is as in the catalog."""
+    """The games of a system as the frontend lists them, for a scrape: `gamelist` shifted to the
+    folder the frontend reads (`FRONTEND_BASES`), without the games it does not list (outside
+    that folder, or with no launcher file for `LAUNCHER_SYSTEMS`). Everything else about a
+    game is as in the catalog. See development/design/scrape.md, "Systems and platforms"."""
     base = FRONTEND_BASES.get(system, "")
     found: list[Game] = []
     for game in games:
@@ -266,9 +256,9 @@ def select(
     paths of the hub's media files below the system's media folder in lower-case-extension
     form, `<kind>/<stem>.<ext>` with `/` (a file in another extension of the kind counts as
     present). A game is picked when it has no entry, or has one that is not marked
-    `<nomultiscrape>` and lacks a file of a kind in `MEDIA_KINDS`. A game picked that
-    ScreenScraper did not know less than `NOT_FOUND_DAYS` days ago, with the same size, is
-    left out and counted, unless `retry_not_found`; `not_found` is keyed by gamelist path.
+    `<nomultiscrape>` and lacks a file of a kind in `MEDIA_KINDS`. A game in `not_found` (keyed
+    by gamelist path) that is still within `NOT_FOUND_DAYS` is left out and counted, unless
+    `retry_not_found`. See development/design/scrape.md, "Flow" and "The cache".
     """
     by_path = _entries_by_path(entries)
     records = not_found or {}
@@ -367,21 +357,12 @@ def skyscraper_args(
     region: str | None = None,
     language: str | None = None,
 ) -> list[str]:
-    """The arguments of one Skyscraper call (without the program), for `step`:
-
-    - `gather`: ask ScreenScraper for the games of `batch` and fill Skyscraper's cache; it
-      writes nothing else.
-    - `main` and `box`: generate, from the cache and with no request, the ES-DE gamelist
-      (`gamelist_dir`) and media (`media_dir`) of the batch with the artwork file
-      `artwork_file` (`ARTWORK_ESDE` for `main`, `ARTWORK_3DBOX` for `box`).
-
-    A platform in `EXTRA_EXTENSIONS` also gets `--addext` with its extra extensions. `region` and
-    `language`, when set, go on the `gather` only as `--region` and `--lang`: Skyscraper picks the
-    media and the text out of ScreenScraper's answer when it gathers, and keeps one value in its
-    cache, so a generate pass has nothing left to choose (see "Language and region" in the design).
-
-    No credential option can be built here: warpzone never passes `-u`, `-c` or `-t`, so the
-    account stays in Skyscraper's own `config.ini` (see "Credentials" in the design).
+    """The arguments of one Skyscraper call (without the program), for `step`: `gather` fills
+    Skyscraper's cache from ScreenScraper; `main` and `box` generate the gamelist
+    (`gamelist_dir`) and media (`media_dir`) of the batch from the cache with `artwork_file`.
+    `region` and `language` go on the gather only. No credential option can be built here.
+    See development/design/scrape.md, "What warpzone passes", "Language and region" and
+    "Credentials".
     """
     if step not in _FLAGS:
         raise ValueError(f"unknown step {step!r}")
@@ -462,11 +443,8 @@ _NOT_FOUND = re.compile(
 
 def classify_output(text: str) -> Outcome:
     """Classify the output of a Skyscraper run. Text that matches nothing known gives an
-    `Outcome` with no stop and no games: an unknown output is not a failure.
-
-    A game answered "not found" after a retry line (the request was tried again, or
-    ScreenScraper said it was too busy) since the previous answer is in `retried`: with one
-    thread the output is in order, so those lines belong to that game."""
+    `Outcome` with no stop and no games: an unknown output is not a failure. See
+    development/design/scrape.md, "The cache" (games that stay incomplete) for `retried`."""
     lines = [_ANSI.sub("", line).strip() for line in text.splitlines()]
     joined = "\n".join(lines)
     stop: Stop | None = next((s for s, needle in _HARD_STOPS if needle in joined), None)
@@ -669,6 +647,7 @@ def plan_merge(
     box_files: Mapping[str, FileType],
 ) -> MergePlan:
     """What to add to the hub for one batch of staged games. Pure: nothing is read or written.
+    See development/design/scrape.md, "Merge" for the rules.
 
     - `staged` maps a staged name (the `gamelist` path below the staged folder) to its game,
       for the games of the batch; `staged_root` is the staged folder, to read absolute paths.
@@ -677,11 +656,6 @@ def plan_merge(
     - `skyscraper_entries` are the entries of the main pass's gamelist.
     - `main_files` and `box_files` list the files of the two passes' media folders,
       `<folder>/<name>.<ext>` with `/`, with their type.
-
-    It only adds: a game with an entry in the hub keeps it as it is and gets the media it lacks
-    (none at all when marked `<nomultiscrape>`); a game without one gets a new entry with the
-    fields in `ENTRY_FIELDS`, under the catalog's path. A media kind is never planned over a
-    file the hub has, in any extension the UI reads.
     """
     dropped: list[Dropped] = []
     source: dict[str, artwork.Entry] = {}
@@ -1015,14 +989,9 @@ def remember_not_found(
     retried: Collection[str],
     today: date,
 ) -> NotFoundRecords:
-    """The records of a system after a batch was merged.
-
-    A game whose merge found something (anything but `NOT_FOUND`) loses its record. A game
-    with the verdict `NOT_FOUND` gets one only when Skyscraper said so itself (its stem is in
-    `asked_not_found`: a game it never got to, after the quota, says nothing) and the answer
-    did not come after a retry line (`retried`: ScreenScraper may have been down, and
-    remembering that would hide the game for 30 days). The record keeps the file's size, so a
-    new dump under the same name is tried again."""
+    """The records of a system after a batch was merged: a game whose merge found something
+    loses its record; a `NOT_FOUND` one gets it only when its stem is in `asked_not_found` and
+    not in `retried`. See development/design/scrape.md, "The cache"."""
     result = dict(records)
     for merge in merges:
         key = merge.game.gamelist
@@ -1104,9 +1073,8 @@ def render_memory(
 
 
 def skip_incomplete(pick: Pick, record: Incomplete | None) -> bool:
-    """Whether the nightly run leaves a pick alone: it has an entry, its file has the size the
-    record was made for and every kind it lacks now was lacking then. A game with no entry is
-    never skipped (an entry that was deleted is a new game again). There is no time limit."""
+    """Whether the nightly run leaves a pick alone. See development/design/scrape-unattended.md,
+    "The incomplete memory"."""
     return (
         record is not None
         and pick.has_entry
@@ -1123,16 +1091,11 @@ def remember_incomplete(
     today: date,
     lost: Collection[str] = (),
 ) -> IncompleteRecords:
-    """The records of a system after a batch was merged.
-
-    `picks` are the batch's picks by gamelist path, `written` whether the gamelist write
-    succeeded (when it did not, the records stay as they were) and `lost` the gamelist paths of
-    games with a copy that was planned and did not land. A game is recorded only when the verdict
-    is `ADDED`, `FILLED` or `UNCHANGED`, the hub has an entry for it after the merge and none of
-    its copies was lost: `missing` is the kinds of its pick that the merge did not add
-    (`Pick.missing` is what the hub lacked when the game was selected, and the merge's copies are
-    what it added since). A game that lacks nothing now loses its record. Any other game keeps
-    the record it has, if any."""
+    """The records of a system after a batch was merged. `picks` are the batch's picks by
+    gamelist path, `written` whether the gamelist write succeeded (when not, the records stay as
+    they were) and `lost` the gamelist paths of games with a copy that did not land. `missing` is
+    the kinds of the pick that the merge did not add. See development/design/scrape.md, "The
+    cache" (games that stay incomplete) for when a game is recorded."""
     if not written:
         return dict(records)
     result = dict(records)
@@ -1195,12 +1158,9 @@ def config_ini_path(env: Mapping[str, str], home: Path, exists: Callable[[Path],
 
 
 def has_user_creds(lines: Iterable[str]) -> bool:
-    """Whether `[screenscraper]` of a `config.ini` has a `userCreds` key. Pure, over the file's
-    lines, and the only code that parses the file (`scrape_io.credentials_set` just opens it).
-
-    It tracks the `[section]` it is in, ignores comment lines (`;` or `#`), and for a line
-    `key = value` looks at the key alone: the value is never sliced out, stored, compared or
-    printed. A key with an empty value counts as present (it is what the question asks)."""
+    """Whether `[screenscraper]` of a `config.ini` has a `userCreds` key, over the file's lines.
+    The value is never sliced out, stored, compared or printed; a key with an empty value counts
+    as present. See development/design/scrape.md, "Credentials"."""
     section = ""
     for raw in lines:
         line = raw.strip()

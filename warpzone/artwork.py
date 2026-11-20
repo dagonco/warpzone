@@ -1,11 +1,9 @@
 """Scraped artwork and metadata for a frontend that is not ES-DE. Pure: no I/O but listing.
 
-The hub keeps ES-DE's gamelists and downloaded media. A device whose profile has `[artwork]`
-receives a slice of them (`media_ignores`, `metadata_ignores`) and a converter, picked by the
-profile's `format`, turns each ES-DE gamelist into the frontend's own (`build`, then the
-format's `render`). A frontend that reads another file shape is one more `Format` in
-`FORMATS`; the rest, including the profile and `provision`, does not change.
-See development/design/frontend-artwork.md, "Frontend artwork".
+A device whose profile has `[artwork]` receives a slice of the hub's ES-DE gamelists and media
+(`media_ignores`, `metadata_ignores`), and a converter picked by the profile's `format` turns
+each gamelist into the frontend's own (`build`, then the format's `render`). See
+development/design/frontend-artwork.md.
 """
 
 from __future__ import annotations
@@ -126,10 +124,8 @@ def _too_large(size: int) -> ArtworkError:
 
 
 def read_gamelist(path: Path) -> bytes:
-    """The bytes of a gamelist file; `ArtworkError` when it is over the size limit.
-
-    The size is read first, so a file that is too large is never loaded.
-    """
+    """The bytes of a gamelist file; `ArtworkError` when it is over the size limit (checked
+    before the file is loaded)."""
     size = path.stat().st_size
     if size > MAX_GAMELIST_BYTES:
         raise _too_large(size)
@@ -137,11 +133,8 @@ def read_gamelist(path: Path) -> bytes:
 
 
 def _block(raw: bytes) -> bytes | None:
-    """The `<gameList>` element of `raw` on its own, or None when there is not one.
-
-    From the first `<gameList` to the last `</gameList>`, or to the `/>` of an empty one. Found
-    with plain searches, so the cost is linear however the file is made.
-    """
+    """The `<gameList>` element of `raw` on its own, or None when there is not one. Found with
+    plain searches, so the cost is linear however the file is made."""
     start = 0
     while True:
         start = raw.find(b"<gameList", start)
@@ -170,8 +163,7 @@ def _root(data: str | bytes) -> ET.Element:
     try:
         return ET.fromstring(raw)
     except ET.ParseError as exc:
-        # ES-DE writes an `<alternativeEmulator>` element ahead of `<gameList>`, which makes
-        # the file two documents. Read the `<gameList>` on its own.
+        # `<alternativeEmulator>` ahead of `<gameList>` makes the file two documents.
         block = _block(raw)
         if block is None:
             raise ArtworkError(f"not valid XML ({exc})") from exc
@@ -210,9 +202,8 @@ def frontend_systems(
     """The systems of the frontend's system list that read from `target` (the library).
 
     `text` is the OS's list; it gets the same rewrite as the override, so `[es_systems.rename]`
-    (frontend folder -> hub folder) is honoured and entries outside `prefix` are left out.
-    The name is the `<name>` of the entry, which is also the folder the frontend keeps its
-    gamelist in, and it is not always the ROM folder (`ppsspp` reads `psp`).
+    is honoured and entries outside `prefix` are left out. See
+    development/design/frontend-artwork.md, "System names".
     """
     moved = frontend.rewrite_system_paths(text, prefix, target, renames)
     try:
@@ -237,12 +228,8 @@ def frontend_systems(
 def assign(
     systems: Sequence[FrontendSystem], hubs: Collection[str]
 ) -> tuple[dict[str, list[FrontendSystem]], list[FrontendSystem]]:
-    """The systems to write gamelists for, by hub folder, and those left out.
-
-    The frontend keeps one gamelist per system name. When several hub folders carry the same
-    name, the one the hub names alike wins, else the first of the list; the others are
-    returned as left out so the caller can say so.
-    """
+    """The systems to write gamelists for, by hub folder, and those left out (see
+    development/design/frontend-artwork.md, "System names")."""
     candidates = [s for s in systems if s.hub in hubs]
     winners: dict[str, FrontendSystem] = {}
     for system in candidates:
@@ -290,18 +277,15 @@ def build(
     media_path: Callable[[str, str], str | None],
     overlay: Mapping[str, Mapping[str, str]] | None = None,
 ) -> list[Entry]:
-    """The frontend's entries for one system.
+    """The frontend's entries for one system, in the hub's order, then the entries of `existing`
+    the hub does not know, by path. See development/design/frontend-artwork.md, "Converter" and
+    "User data".
 
     `rom_exists(rel)` and `media_path(kind, rel_without_extension)` take paths relative to the
     hub's system folder (the ES-DE gamelist's own); `media_path` returns an absolute path of
-    a file that exists, or None. An entry is kept only when its ROM exists. The user fields
-    come from `existing` (the file the frontend has been saving to), never from `source`.
-    Entries of `existing` that the hub does not know, with user data on a ROM that is still
-    there, are kept with just that data. The order is the hub's, then those, by path.
-
-    `overlay` holds, by hub-relative path, user fields merged from the other devices: they
-    replace the saved ones (an empty value removes the field). A game it names that has no
-    entry gets one when its ROM is here, after the rest.
+    a file that exists, or None. `overlay` holds, by hub-relative path, user fields merged from
+    the other devices: they replace the saved ones (an empty value removes the field), and a
+    game it names that has no entry gets one when its ROM is here, after the rest.
     """
     extra = overlay or {}
 

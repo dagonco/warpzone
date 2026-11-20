@@ -1,10 +1,8 @@
 """Save conversion on a device: the files, the state and the backups.
 
-`convert` reconciles, for each `[save_convert.*]` rule of the profile, the raw cartridge
-saves the hub syncs with the emulator's own files, as `saveconvert.decide` says. Nothing is
-written while the emulator runs (checked again right before each write), every file it
-replaces is backed up first, and a write is atomic. Deletions are never propagated. See
-development/design/save-conversion.md.
+`convert` reconciles, for each `[save_convert.*]` rule of the profile, the hub's raw saves with
+the emulator's own files, as `saveconvert.decide` says. See development/design/save-conversion.md,
+"Safety".
 """
 
 from __future__ import annotations

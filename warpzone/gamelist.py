@@ -1,12 +1,10 @@
 """Edits of ES-DE gamelists, as text. Pure: no I/O.
 
-ES-DE rewrites a gamelist whenever a game is launched, and a console receives it through
-Syncthing, so an edit keeps every byte it has no reason to touch: comments, unknown elements,
-the line endings and the file's own indentation. Two editors work on the same files and share
-what is here: the arcade emulator of a game (`update_entry`, used by `inbox_mame` and
-`inbox_console_iso`) and the play state of a device (`playstate`, which adds its own tags with
-`add_child`). They differ in how much of the file they trust, so the primitives take that as an
-argument (`game_blocks(skip_comments=...)`, `child_indent(line_start_only=...)`).
+An edit keeps every byte it has no reason to touch: comments, unknown elements, the line endings
+and the file's own indentation. Two editors share these primitives: the arcade emulator of a game
+(`update_entry`, used by `inbox_mame` and `inbox_console_iso`) and the play state of a device
+(`playstate`, via `add_child`). They differ in how much of the file they trust, so the primitives
+take that as an argument (`game_blocks(skip_comments=...)`, `child_indent(line_start_only=...)`).
 
 Nothing here imports the network: `playstate` runs on ES-DE's startup path (see "Speed" in
 development/design/emulator-settings.md), so `escape` and `unescape` are local instead of
