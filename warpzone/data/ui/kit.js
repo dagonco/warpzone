@@ -4,9 +4,7 @@
  * A DOM builder, the pixel icons, how systems and consoles are named, abbreviated and coloured,
  * and the title helpers. Nothing here talks to the server or keeps state.
  *
- * The page is served with Content-Security-Policy: default-src 'self', so there is no inline
- * style or script and no data: URL. Dynamic styling goes through custom properties and single
- * properties set with element.style, which the policy allows. Nodes are built, never parsed
+ * The page's Content-Security-Policy is described in app.js. Nodes are built, never parsed
  * from strings, so catalog and scrape text cannot inject markup.
  */
 (function () {

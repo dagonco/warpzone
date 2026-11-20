@@ -332,8 +332,8 @@ class Resolution:
 
 
 def resolve(ref: GameRef, lib: api.Library, taken: Collection[str] = ()) -> Resolution:
-    """Find a game reference in the catalog. `moved`: the id is gone but games with the same
-    title key exist (those of the same system first, at most 10, games in `taken` left out)."""
+    """Find a game reference in the catalog (`present`, `moved` or `missing`; games in `taken`
+    are not offered as candidates). See "Game references" in development/design/play-queue.md."""
     if ref.id in lib.by_id:
         return Resolution("present")
     same = [(s, g) for s, g in lib.by_key.get(ref.key, ()) if g.id not in taken]
@@ -347,9 +347,8 @@ def resolve(ref: GameRef, lib: api.Library, taken: Collection[str] = ()) -> Reso
 
 
 def shown_state(entry: Entry, play: Mapping[str, Any] | None, now: int) -> tuple[str, bool]:
-    """`(state shown, inferred)`. A `queued` entry is shown as `playing` when its game was
-    played (`play["last"]`, the totals' last time) at or after `added` and at most 14 days
-    before `now`; a stored `playing` or an ended state is shown as stored."""
+    """`(state shown, inferred)`: a `queued` entry may be shown as `playing` from `play["last"]`
+    (see "Inferred states" in development/design/play-queue.md); anything else as stored."""
     if entry.state != "queued":
         return entry.state, False
     last = play.get("last") if play else None
@@ -365,8 +364,8 @@ def shown_state(entry: Entry, play: Mapping[str, Any] | None, now: int) -> tuple
 
 
 def suggestion(entry: Entry, award: Mapping[str, str] | None) -> dict[str, str] | None:
-    """`{"state": "finished", "award", "date"}` for an active entry whose game has a
-    RetroAchievements award dated at or after `added` and later than `ra_dismissed`."""
+    """`{"state": "finished", "award", "date"}` for an active entry whose game has a new
+    RetroAchievements award (see "Inferred states"), else None."""
     if entry.state not in ACTIVE or not award or award.get("kind") not in AWARDS:
         return None
     date = award.get("date", "")
@@ -582,8 +581,8 @@ class _Work:
         return self.models.get(name) or self.ctx.views[name].model
 
     def pending(self, game: str, name: str, claim: Claim) -> bool:
-        """A claim ended `released` whose game is still on: the whitelist write after the queue
-        write failed, so the queue still owes the console a turn-off."""
+        """A claim ended `released` whose game is still on (the whitelist write failed): the
+        queue still owes the console a turn-off."""
         found = self.lib.by_id.get(game)
         if claim.end != "released" or claim.before != "off" or found is None:
             return False
@@ -644,8 +643,8 @@ class _Work:
     def turn_on(
         self, name: str, system: str, game: catalog.Game, prior: Claim | None = None
     ) -> str:
-        """Turn a game on for a console; the game's state there before. A game still on after a
-        release that did not reach the whitelist (`prior`) was the queue's: it stays `off`."""
+        """Turn a game on for a console; the game's state there before (`off` for a game still on
+        after a release that did not reach the whitelist, `prior`)."""
         device = self.devices[name]
         if system in device.exclude_systems:
             raise ApiError(
@@ -667,7 +666,8 @@ class _Work:
 
     def release(self, entry: Entry, name: str, claim: Claim) -> Claim:
         """End a held claim: the game goes off, unless another claim has the console or a part
-        stays on; then the claim ends `kept` and the console is reported in `skipped`."""
+        stays on; then the claim ends `kept` and the console is in `skipped` (see "Releasing
+        never takes what the user had" in development/design/play-queue.md)."""
         ref = entry.game
         found = self.lib.by_id.get(ref.id)
         if found is None:
@@ -700,9 +700,8 @@ class _Work:
         self, i: int, release: Sequence[str], keep: Sequence[str], *, complete: bool
     ) -> list[str]:
         """End claims of entry `i`: the `release` ones turn the game off, the `keep` ones leave
-        it. With `complete`, every console the queue owes (held, or pending after a failed
-        release) must be named and the open claims that hold nothing end `kept`. Returns the
-        consoles released."""
+        it. With `complete`, every console the queue owes must be named and the open claims that
+        hold nothing end `kept`. Returns the consoles released."""
         game = self.entries[i].game.id
         entry = self.entries[i]
         if set(release) & set(keep):
@@ -927,13 +926,10 @@ def _touched(request: Request, devices: Mapping[str, Device], ctx: Context) -> l
 def plan(
     body: object, reading: Reading, etag: str, size: int, ctx: Context, now: datetime
 ) -> QueuePlan:
-    """Check a queue request and compute the files it writes.
+    """Check a queue request and compute the files it writes; nothing is written here.
 
-    `etag` and `size` are the queue file's now. Raises the first `ApiError`: the shape of the
-    body and its limits; the queue is not damaged or newer; every game and device is known and
-    each whitelist managed; an `expect_queue` and an `expect` for every touched console that
-    equal the current etags; then the operations in order (each game, position and release
-    rule); the size limit last, since it needs the rendered file. Nothing is written here."""
+    `etag` and `size` are the queue file's now. Raises the first `ApiError`, in the order of
+    "Validation, the conflict check and writing" in development/design/play-queue.md."""
     request = parse_request(body)
     if reading.state in ("damaged", "newer"):
         raise ApiError("queue-damaged", f"queue.json: {reading.message}", queue=True)

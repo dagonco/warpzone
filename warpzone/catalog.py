@@ -1,12 +1,9 @@
 """The catalog index: games and their parts, derived from a listing of the library (pure).
 
 A game is what the library UI turns on or off; a part is one path below `library/` that the
-game needs on a console. This module decides everything that needs no disk: which entries
-of a system folder make up which game (`derive`), the roots a whole system is whitelisted
-by (`system_roots`), the title key that groups a title across systems (`title_key`), the
-search over keys, the JSON encoding of a system file and the merge that keeps what only
-`inbox` knows. `catalog_store.py` walks the disk and writes the files.
-See development/design/library-ui.md, "The catalog index".
+game needs on a console. This module decides everything that needs no disk (`derive`, the
+title key, the search, the JSON encoding of a system file, the merge); `catalog_store.py`
+walks the disk and writes the files. See development/design/library-ui.md, "The catalog index".
 """
 
 from __future__ import annotations
@@ -441,14 +438,13 @@ def merge(
     serials: Mapping[str, tuple[str, ...]] | None = None,
     unverified: Collection[str] = (),
 ) -> list[Game]:
-    """Derived games plus what only earlier runs and `inbox` know.
+    """Derived games plus what only earlier runs and `inbox` know (see "Building and updating
+    it" in development/design/library-ui.md).
 
-    A file part keeps its stored sha1 while its size and mtime are unchanged. `added`, `dat`,
-    `ra` and `serials` are kept for games that stay; a new game is `added` today. `dat` maps
-    the primary path of a game `inbox` just filed to its DAT name, `serials` to the DAT's
-    serials. `unverified` lists the primary paths of games `inbox` filed with no DAT match;
-    they get the `unverified` flag, which a game keeps until a DAT name is recorded for it.
-    Games no longer derived are dropped.
+    `dat` maps the primary path of a game `inbox` just filed to its DAT name, `serials` to the
+    DAT's serials. `unverified` lists the primary paths of games `inbox` filed with no DAT
+    match; they get the `unverified` flag, which a game keeps until a DAT name is recorded.
+    A new game is `added` today; games no longer derived are dropped.
     """
     out = []
     for game in derived:
@@ -491,8 +487,7 @@ def merge(
 class SerialIndex:
     """What `catalog --dats` looks games up in: every DAT game, by name and, for a game of
     one rom, by (size, SHA-1) of that rom. Each key holds every distinct serial list it has
-    (an empty one for a DAT game without serials), so a game the DAT knows but gives no serial
-    can be told from one it does not know, and a key that is not unique can be told too."""
+    (an empty one for a DAT game without serials)."""
 
     by_name: Mapping[str, frozenset[tuple[str, ...]]]
     by_rom: Mapping[tuple[int, str], frozenset[tuple[str, ...]]]
@@ -538,15 +533,8 @@ def _answer(options: frozenset[tuple[str, ...]]) -> tuple[str, ...] | None:
 def identify(game: Game, index: SerialIndex, discs: Sequence[str] = ()) -> tuple[str, ...] | None:
     """The DAT serials of a game by exact identity: the serials when it is identified, `()`
     when it is identified but the DAT lists no serial for it, None when it is not identified
-    or the DATs give two different answers.
-
-    In this order: the DAT name `inbox` stored, when the DAT has a game of that name (final,
-    even for a name the DATs have twice with different serials); else the SHA-1 and size of
-    the primary file part against the DAT games of one rom; else, for a single file, its name
-    without the extension against the DAT game names (`inbox` names a file after its DAT
-    game); else, for an `.m3u` folder, the union of the serials of its discs, each found by its
-    exact name (`discs`, see `m3u_disc_names`), which needs every disc to be found. Names are
-    compared as they are, with no case folding or cleaning."""
+    or the DATs give two different answers. The order of the checks is in
+    development/design/library-ui.md, "DAT serials" (`discs`: see `m3u_disc_names`)."""
     if game.dat and game.dat in index.by_name:
         return _answer(index.by_name[game.dat])
     primary = next((p for p in game.parts if p.path == game.primary), None)
@@ -593,11 +581,9 @@ def fill_serials(
     *,
     force: bool = False,
 ) -> SerialPlan:
-    """Give the games that have no serials the ones `identify` finds. A game that has
-    serials is left alone unless `force`; then a single exact match replaces them, and no
-    match (or a DAT game without serials) keeps them. A game with none that the DAT knows but
-    lists no serial for is `no_serial`, not `unmatched`. `discs` maps a game id to its
-    playlist's disc names."""
+    """Give the games that have no serials the ones `identify` finds (see "DAT serials" in
+    development/design/library-ui.md for `force` and the `no_serial` and `unmatched` counts).
+    `discs` maps a game id to its playlist's disc names."""
     out: list[Game] = []
     filled: list[str] = []
     had: list[str] = []
@@ -621,7 +607,6 @@ def fill_serials(
 
 
 def pending_hashes(games: Iterable[Game]) -> list[Part]:
-    """The file parts that have no sha1 yet."""
     return [p for g in games for p in g.parts if p.type == FILE and p.sha1 is None]
 
 
@@ -944,10 +929,8 @@ class RaState:
 
 
 def ra_state(system: str, stored: Mapping[str, Any] | None, lists: Mapping[int, RaList]) -> RaState:
-    """The badge state of a game from its stored `ra` and the cached lists (by console id).
-
-    `no-list` comes first: a console RA has no list for cannot say anything about a hash,
-    and a library system that is not in `ra.CONSOLE_IDS` is never waiting for one."""
+    """The badge state of a game from its stored `ra` and the cached lists (by console id);
+    `no-list` comes first (see "RetroAchievements" in development/design/library-ui.md)."""
     console = ra.CONSOLE_IDS.get(system)
     ra_list = lists.get(console) if console is not None else None
     if ra_list is None:
@@ -976,8 +959,7 @@ class Group:
 
 def search(query: str, games: Iterable[tuple[str, Game]], *, limit: int = 100) -> list[Group]:
     """Games whose title key has, for each word of the query, a word that starts with it,
-    grouped by key. Groups are ranked by key equal to the query, then key starting with it,
-    then the rest, and then by key."""
+    grouped by key and ranked (`GET /api/v1/search` in development/design/library-ui.md)."""
     wanted = _normalize(query, strip_groups=False)
     words = wanted.split()
     if not words:

@@ -5,8 +5,7 @@ purge. The decisions are in `trash.py` (pure); `trash_run.py` takes the locks an
 See "Deleting a game" in development/design/library-ui.md.
 
 Nothing here follows a symbolic link, and every path is looked at again with `lstat` right
-before it is moved or removed. Nothing is ever copied and then deleted: a move is a hard link
-and an unlink, or a `rename`, and never replaces what is at its target.
+before it is moved or removed. Nothing is ever copied and then deleted.
 """
 
 from __future__ import annotations
@@ -56,11 +55,8 @@ _NO_LINK = {errno.EPERM, errno.ENOTSUP, errno.ENOSYS, errno.EMLINK, errno.EACCES
 
 def _rename(src: Path, dst: Path) -> None:
     """The one place a deletion or a restore moves anything. It never replaces what is at
-    `dst` (`FileExistsError`), and it fails (rather than copying) when the two places are on
-    different filesystems. A file is moved by `os.link` and `os.unlink`, which refuse an
-    existing `dst` atomically: a file that appeared there since the caller looked is not lost.
-    A folder (or a file on a filesystem without hard links) is checked right before an
-    `os.rename`, which on its own would replace an empty folder. A test replaces this function
+    `dst` (`FileExistsError`) and fails rather than copy across filesystems. See
+    development/design/library-ui.md, "The order of a deletion". A test replaces this function
     to make a move fail."""
     if stat.S_ISREG(os.lstat(src).st_mode):
         try:
@@ -659,10 +655,8 @@ def _remove_purging(root: Path, name: str) -> int:
 
 
 def purge_entry(root: Path, entry: str) -> int:
-    """Remove a whole entry folder and return the bytes it held. The entry is first renamed
-    to `trash/.purging-<entry>` in one step, so a removal that fails partway leaves a folder
-    that is not an entry: it is never listed or restored, and the next purge (this call again,
-    or `finish_purges`) removes the rest. `OSError` when it cannot be removed whole;
+    """Remove a whole entry folder (renamed first to `trash/.purging-<entry>`, see "The trash")
+    and return the bytes it held. `OSError` when it cannot be removed whole;
     `FileNotFoundError` when there is neither an entry nor a leftover of that name."""
     purging = trash.purging_name(entry)
     if entry_kind(root, entry) == F_DIR:
@@ -717,11 +711,10 @@ def _edit_gamelist(
     *,
     create: Callable[[], tuple[str, GamelistEdit]] | None = None,
 ) -> GamelistEdit:
-    """Read the hub gamelist, apply `edit(text) -> (new text, result)`, copy the file as it was
-    to `tools/logs/gamelist-backups/` and write the new one unless the file changed since it was
-    read (read again, up to three times). The file is stamped before it is read and the text
-    must be what the stamp hashed. A file that is not there is made by `create` when given. Any
-    `OSError` on the way (the backup included) is a `failed` result, never an exception."""
+    """Read the hub gamelist, apply `edit(text) -> (new text, result)`, keep a backup and write
+    the new one unless the file changed since it was read. A file that is not there is made by
+    `create` when given. Any `OSError` on the way is a `failed` result, never an exception.
+    See development/design/library-ui.md, "What a deletion removes"."""
     path = root / trash.gamelist_path(system)
     for _ in range(TRIES):
         try:
@@ -770,7 +763,6 @@ def _stamp_or_none(path: Path) -> safefile.FileStamp | None:
 
 
 def drop_gamelist(root: Path, system: str, paths: Sequence[str], when: datetime) -> GamelistEdit:
-    """Take the entries of `paths` out of the hub gamelist of `system`, with the backup."""
 
     def edit(text: str) -> tuple[str, GamelistEdit]:
         new, blocks = gamelist.drop_entries(text, paths)

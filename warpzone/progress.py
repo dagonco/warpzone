@@ -109,15 +109,10 @@ def state(
     now: datetime,
     only_folders: bool | None = None,
 ) -> Progress:
-    """The one state of a device, by the order of the table in the design: `offline`,
-    `not-shared`, `paused`, `downloading` (bytes to fetch), `pending` (the whitelist was
-    written less than `rescan_seconds` plus 60 s ago, so the device may not have applied it),
-    `done` (completion 100). Anything else that is not complete (items and deletions to
-    apply, no bytes) is `downloading` as well, unless `only_folders` is True: the hub listed
-    what the device still needs (`remoteneed`) and all of it is directories, which a console
-    that ignores them (EmuDeck makes empty system folders the whitelist does not take) never
-    takes, so the hub counts them as needed for ever. Then, with no bytes and no deletions
-    left, the device is `done`. None is a list the hub could not give: nothing is known."""
+    """The one state of a device, by the order of the table in development/design/library-ui.md,
+    "Progress". `only_folders` is True when the hub listed what the device still needs
+    (`remoteneed`) and all of it is directories (see "Folders a console ignores"); None is a
+    list the hub could not give: nothing is known."""
     percent = max(0, min(100, math.floor(reading.completion)))
     need = (reading.need_bytes, reading.need_items)
     if not reading.connected:
@@ -138,8 +133,7 @@ def state(
 
 def wants_need_list(reading: Reading, current: Progress) -> bool:
     """Whether the hub should be asked what the device still needs (`remoteneed`) before the
-    state is final: the device is `downloading` with no bytes to fetch and no deletions to
-    apply, so only items are left, and they may all be folders it ignores."""
+    state is final: `downloading` with only items left (see "Folders a console ignores")."""
     return current.state == DOWNLOADING and reading.need_bytes == 0 and reading.need_deletes == 0
 
 

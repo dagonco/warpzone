@@ -97,9 +97,7 @@ def _sha(data: bytes) -> str:
 
 
 def backup(root: Path, device: str, data: bytes, now: datetime) -> Path:
-    """Copy `data` to `catalog/whitelists/<device>/<UTC time>.stignore`; keep the 50 newest.
-
-    The name is when the whitelist was written: `progress.written_at` reads it."""
+    """Copy `data` to `catalog/whitelists/<device>/<UTC time>.stignore`; keep the 50 newest."""
     directory = backups_dir(root, device)
     target = directory / (now.astimezone(UTC).strftime("%Y%m%dT%H%M%S.%fZ") + ".stignore")
     safefile.write_file(target, data, 0o644)
@@ -131,12 +129,10 @@ class Written:
 def write(
     root: Path, device: str, data: bytes, snapshot: Snapshot, *, now: datetime | None = None
 ) -> Written:
-    """Back up the file the snapshot holds, then replace it unless it changed since.
-
-    The atomic write compares the file with the snapshot's stamp once more right before the
-    rename. A missing file (`"absent"`) is created, and a file that appeared meanwhile is not
-    overwritten. A missing file leaves an empty backup: the backup's name is what records when
-    the whitelist was written (`progress.written_at`), so a new whitelist is `pending` too.
+    """Back up the file the snapshot holds, then replace it unless it changed since (a file
+    that appeared meanwhile is not overwritten). A missing file leaves an empty backup: its
+    name records when the whitelist was written (`progress.written_at`). See "Reading, the
+    conflict check and writing" in development/design/library-ui.md.
     """
     if snapshot.stamp is None:
         _require_library(snapshot.path)
@@ -185,9 +181,9 @@ def replace(
     scan when a client is given (the UI scans after releasing its lock, so it passes none).
 
     `build` gets the snapshot just read and returns the bytes to write (it may raise, and then
-    nothing is written). A missing file is created only inside an existing `library/`
-    (`NoLibrary` otherwise). Raises `Stale` when the file differs from `etag` or changes during the
-    write. Returns warnings (a failed scan). The caller holds the lock that serializes writes.
+    nothing is written). Raises `NoLibrary` for a missing file outside an existing `library/`
+    and `Stale` when the file differs from `etag` or changes during the write. Returns
+    warnings (a failed scan). The caller holds the lock that serializes writes.
     """
     snapshot = read(whitelist_path(root, device))
     if snapshot.etag != etag:
@@ -269,11 +265,8 @@ def restore_device(
     scan_client: Callable[[], Client] | None = None,
     warn: Callable[[str], None] = print,
 ) -> bool:
-    """List a device's backups (`ref` is None) or restore one; True when it was refused.
-
-    The restore shows the diff against the file as read now and the paths it turns on and off,
-    then writes through the same guarded write as every other change: the file it replaces is
-    backed up first, and nothing is written if that file changed since it was read here.
+    """List a device's backups (`ref` is None) or restore one; True when it was refused. See
+    "History and restore" in development/design/library-ui.md.
     """
     snapshot = read(whitelist_path(root, device))
     if ref is None:
