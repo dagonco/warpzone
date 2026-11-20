@@ -42,18 +42,13 @@ def replica_of(device: str, profile: Profile) -> str:
     return ESDE_ID if "esde" in profile.paths else device
 
 
-# The largest ledger read. A line is a system, a ROM path and a few numbers (about 150 bytes), so
-# this holds over 200000 games, more than a library has; and a console can write any file into
-# the shared folder, which the hub and every other device would then load whole.
+# The largest ledger read, in bytes (see development/design/play-state.md, "Transport").
 MAX_LEDGER_BYTES = 32 * 1024 * 1024
 
 
 def read_ledger(path: Path) -> str:
-    """The text of a ledger file; `LedgerError` when it is over the size limit.
-
-    At most one byte more than the limit is read, so a file that grows after it was looked at
-    is bounded too.
-    """
+    """The text of a ledger file; `LedgerError` when it is over the size limit (see
+    development/design/play-state.md, "Transport")."""
     with path.open("rb") as handle:
         raw = handle.read(MAX_LEDGER_BYTES + 1)
     if len(raw) > MAX_LEDGER_BYTES:

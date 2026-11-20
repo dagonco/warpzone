@@ -124,11 +124,8 @@ class Plan:
 
 def merge(ledgers: Sequence[Ledger], key: Key, replica: str, *, horizon: int) -> Merged:
     """The merged state of a game seen from `replica`. Independent of the order of `ledgers`.
-
-    Devices of one replica read the same gamelist, so their counters are views of one
-    counter: the highest counts. Replicas add up. The favourite with the latest change time
-    wins, and on equal times `true`. The latest last played time wins, ignoring those after
-    `horizon`.
+    `horizon` is the latest last played time that counts. See development/design/play-state.md,
+    "Replicas" and "Merge rules".
     """
     counters: dict[str, int] = {}
     included = 0
@@ -157,14 +154,8 @@ def merge(ledgers: Sequence[Ledger], key: Key, replica: str, *, horizon: int) ->
 
 
 def _observe(mine: Record, look: Seen | None, before: Merged) -> Record:
-    """The device's record after reading its gamelist.
-
-    The count minus what it holds of other replicas is what this replica has played; the
-    counter only grows, so an older file never takes plays back. A favourite that differs
-    from the device's record was changed: it is stamped with the time the file was saved,
-    and always after anything the device has seen, so a change made after seeing another
-    wins even on a device whose clock is behind.
-    """
+    """The device's record after reading its gamelist. See development/design/play-state.md,
+    "Merge rules" and "Clocks"."""
     if look is None:
         return mine
     included = before.included if look.included is None else look.included
@@ -394,12 +385,8 @@ def included_in(text: str, system: str) -> dict[Key, int] | None:
 
 
 def element(included: Mapping[str, int], eol: str = "\n") -> str:
-    """The element a shared gamelist carries: it says what its counts hold of other replicas.
-
-    It sits in the same file as the counts, so a device that receives the file knows how to
-    read them whichever Syncthing folder arrives first. ES-DE keeps unknown children of
-    `<gameList>` and reads only `game` and `folder`.
-    """
+    """The element a shared gamelist carries: it says what its counts hold of other replicas
+    (see development/design/play-state.md, "Merge rules", play count)."""
     lines = [f"\t<{ELEMENT}>"]
     for rel, plays in sorted(included.items()):
         path = gamelist.escape("./" + rel).replace('"', "&quot;")

@@ -70,9 +70,9 @@ def _hub_precheck(
 ) -> set[str]:
     """Fail early if a whitelist is missing on the hub (skipped if the hub is unreachable).
 
-    A folder named in `new` (not in this device's Syncthing yet) is not an error: it is
-    warned about and its id is returned, for the caller to leave out. That is what an
-    unattended run does when the config gained a folder the hub does not have yet.
+    A folder named in `new` (not in this device's Syncthing yet) is warned about and its id
+    returned, for the caller to leave out (an unattended run, see development/design/
+    autonomous-updates.md, "How `provision device --unattended` does that").
     """
     skipped: set[str] = set()
     for spec in specs:
@@ -121,10 +121,9 @@ def _auto_hub(
 ) -> None:
     """`auto_hub`: create on the hub the folders this run needs and it lacks.
 
-    Anything that goes wrong here is a warning, never a failure: the hub may be down or the
-    key may be wrong, and a console must not roll back its release for that. The rest of the
-    run then sees the hub as it is (a missing whitelisted folder is still reported by the
-    pre-check). A `--dry-run` of the device never writes to the hub.
+    Anything that goes wrong here is a warning, never a failure; a `--dry-run` never writes
+    to the hub. See development/design/autonomous-updates.md, "Hub folders from a console
+    (`auto_hub`)".
     """
     if dry_run and not hub.dry_run:
         rep.out("auto_hub: dry-run: the hub is not asked to create anything")
@@ -167,11 +166,8 @@ def _provision_whitelisted(
     """Bring a whitelisted device folder to its final ignores.
 
     A new folder starts on the bootstrap ignores and waits for the whitelists. Unattended, a
-    folder that already exists never goes through the bootstrap (its `*` would hide a
-    populated library from Syncthing if the hub could not be reached to deliver the lists):
-    it takes the final ignores when the lists are on disk and is otherwise left alone. A
-    new folder whose lists do not arrive in time stays on the bootstrap, with a warning
-    instead of an error.
+    folder that already exists never goes through the bootstrap (see development/design/
+    autonomous-updates.md, "How `provision device --unattended` does that").
     """
     assert spec.bootstrap_ignores is not None
     final, boot = list(spec.ignores), list(spec.bootstrap_ignores)
@@ -270,10 +266,8 @@ def ensure_flatpak_access(
 
     A flatpak cannot see `~/.var/app/<app>` of other apps, even with the `host`
     filesystem, so a save folder there looks empty to Syncthing. Does nothing unless the
-    local Syncthing is that flatpak (its `config.xml` is in the flatpak's own folder).
-    Only the overrides that are missing are added, so a second run changes nothing. An
-    unattended run grants nothing: the grant needs a Syncthing restart that nobody is there
-    to do, so it only warns with the command.
+    local Syncthing is that flatpak. Only the overrides that are missing are added. An
+    unattended run grants nothing and only warns with the command.
     """
     if config_path is None or not flatpak.is_syncthingy_config(config_path, home):
         return

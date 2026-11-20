@@ -1,10 +1,9 @@
 """The history of a device's whitelist: its backups listed, compared and checked (pure).
 
-Every write of a whitelist keeps the file it replaced in `catalog/whitelists/<device>/`
-(`whitelist_store.backup`). Nothing here touches the disk or the network: the names and bytes
-come in, the decisions go out. `whitelist_store.py` reads the files and writes the restore; the
-library UI's API (`library_api.py`) and `warpzone whitelist restore` show what is computed here.
-See "History and restore" in development/design/library-ui.md.
+Nothing here touches the disk or the network: the names and bytes come in, the decisions go
+out. `whitelist_store.py` reads the files and writes the restore; the library UI's API and
+`warpzone whitelist restore` show what is computed here. See "History and restore" in
+development/design/library-ui.md.
 """
 
 from __future__ import annotations
@@ -92,10 +91,8 @@ def text_of(data: bytes | None) -> str:
 def lines_of(text: str) -> tuple[frozenset[str], frozenset[str]]:
     """The paths a whitelist file names: (those it turns on with `!`, those it excludes).
 
-    Comments, `#include`, the final `*` and any line that is not an anchored path are not
-    paths. A path is shown unescaped when it can be. The lines of a managed file's
-    `// Folders` section (from that comment up to the `*`) are derived, not paths turned on
-    or off, so they are skipped.
+    Anything that is not an anchored path is skipped, and so is a managed file's `// Folders`
+    section (derived). A path is shown unescaped when it can be.
     """
     on: set[str] = set()
     off: set[str] = set()
@@ -121,12 +118,9 @@ def lines_of(text: str) -> tuple[frozenset[str], frozenset[str]]:
 
 @dataclass(frozen=True)
 class Delta:
-    """What writing a backup over the current file does to the paths the file names.
-
-    `included`: paths that become on (a `!` line that is added, or an exclusion that goes), so
-    the console downloads them again. `excluded`: paths that become off. Compared as lines, not
-    as files: a path under a folder that is on is not looked up.
-    """
+    """What writing a backup over the current file does to the paths the file names:
+    `included` become on (the console downloads them again), `excluded` become off. Compared
+    as lines, not as files (see "History and restore")."""
 
     included: tuple[str, ...] = ()
     excluded: tuple[str, ...] = ()
@@ -137,7 +131,6 @@ class Delta:
 
 
 def delta(current: str, backup: str) -> Delta:
-    """The paths `backup` turns on and off compared with `current`."""
     cur_on, cur_off = lines_of(current)
     new_on, new_off = lines_of(backup)
     return Delta(
@@ -188,9 +181,7 @@ def entry(name: str, data: bytes, current: bytes | None) -> Entry:
 
 
 def refusal(item: Entry) -> str | None:
-    """Why the backup cannot be restored, or None. An empty backup is the file as it was before
-    the whitelist existed; written back it would be an empty ignore file, which lets everything
-    through to the console."""
+    """Why the backup cannot be restored, or None (an empty backup: see "History and restore")."""
     if item.empty:
         return (
             "that backup is empty (the whitelist did not exist yet when it was taken); an empty "
@@ -216,8 +207,7 @@ def describe(item: Entry) -> str:
 
 
 def warning(change: Delta) -> str | None:
-    """The sentence to show before a restore that turns paths back on: the console will download
-    them again (when the library still holds them), and it may be games it no longer has."""
+    """The sentence to show before a restore that turns paths back on, or None."""
     if not change.included:
         return None
     return (

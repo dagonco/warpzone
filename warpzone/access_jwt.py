@@ -70,9 +70,8 @@ def decode_segment(text: str) -> bytes | None:
 
 
 def parse_jwks(data: object) -> dict[str, RsaKey]:
-    """The usable keys of a key set (`{"keys": [...]}`) by key id: RSA keys with a string `kid`
-    and a modulus and exponent that decode, a modulus of at least 2048 bits and an odd
-    exponent of at least 3. Anything else in the set is skipped."""
+    """The usable keys of a key set (`{"keys": [...]}`) by key id; anything else in the set is
+    skipped (see "Cloudflare Access" in development/design/library-ui.md)."""
     keys: dict[str, RsaKey] = {}
     entries = data.get("keys") if isinstance(data, dict) else None
     if not isinstance(entries, list):
@@ -95,10 +94,8 @@ def parse_jwks(data: object) -> dict[str, RsaKey]:
 
 
 def rsa_sha256_valid(key: RsaKey, message: bytes, signature: bytes) -> bool:
-    """RSASSA-PKCS1-v1_5 with SHA-256 (RFC 8017, 8.2.2): the signature raised to `e` modulo `n`
-    must be exactly `00 01 FF..FF 00 || DigestInfo || SHA-256(message)`, as long as `n`. The
-    whole block is rebuilt and compared, never parsed, so padding tricks have nothing to
-    exploit."""
+    """RSASSA-PKCS1-v1_5 with SHA-256 (RFC 8017, 8.2.2). The expected block is rebuilt and
+    compared, never parsed, so padding tricks have nothing to exploit."""
     size = (key.n.bit_length() + 7) // 8
     if len(signature) != size:
         return False
@@ -142,14 +139,9 @@ def verify_token(
     now: float,
 ) -> Verdict:
     """Whether `token` is a JWT that Access signed with one of `keys`, for this team
-    (`issuer`) and this application (`audience`), and is valid at `now` (Unix seconds).
-
-    The header must say `RS256` and name a `kid` among `keys`; `alg: none` and the HMAC
-    algorithms are refused before any key is looked at. The signature is checked before any
-    claim is believed. `exp` is required; `nbf` and `iat`, when present, may be at most
-    `LEEWAY` seconds ahead; a `type` claim other than `app` (an `org` token is the team's
-    global session) is refused. With `emails`, the `email` claim must be one of them, in any
-    case; without, the application's own Access policy is the only filter."""
+    (`issuer`) and this application (`audience`), and is valid at `now` (Unix seconds); with
+    `emails`, its `email` claim must be one of them. The checks and their order are in
+    development/design/library-ui.md, "Cloudflare Access"."""
     if len(token) > MAX_TOKEN:
         return Verdict(False, "the token is too long")
     parts = token.split(".")

@@ -1,9 +1,7 @@
 """ES-DE startup script and the `es_settings.xml` setting that turns scripts on. Pure: no I/O.
 
-ES-DE runs every file in `<application data>/scripts/<event>/` when that event fires, but only
-while *Enable custom event scripts* is on (`CustomEventScripts` in `es_settings.xml`, off by
-default). `provision device` writes the startup script and turns the setting on; `doctor`
-reads both. See development/design/emulator-settings.md, "ES-DE startup script".
+`provision device` writes the startup script and turns `CustomEventScripts` on; `doctor` reads
+both. See development/design/emulator-settings.md, "ES-DE startup script".
 """
 
 from __future__ import annotations

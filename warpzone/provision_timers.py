@@ -117,10 +117,9 @@ def ensure_prune_timer(
     """Install and start the `systemd --user` timer that runs `prune --apply --unattended`.
 
     Only for a device that lists `library` and does not set `auto_prune = false`; for any other
-    the units are removed if they exist. So a game turned off on the hub leaves the console by
-    itself (see development/design/prune.md, "Unattended runs"). Like the other timers the units
-    run the Python that runs this command, are rewritten only when their text differs, and a
-    second run makes no systemctl call.
+    the units are removed if they exist (see development/design/prune.md, "Unattended runs").
+    Like the other timers the units run the Python that runs this command, are rewritten only
+    when their text differs, and a second run makes no systemctl call.
     """
     if not device.prunes_unattended:
         _remove_timer(timers.PRUNE_UNIT, "prune", home, rep, dry_run, probes.user_systemctl)

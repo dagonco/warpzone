@@ -101,12 +101,10 @@ def fully_synced(status: dict[str, Any], completions: Sequence[dict[str, Any]]) 
 def can_move(client: Client, spec: FolderSpec, current: dict[str, Any]) -> bool:
     """Whether the folder can be pointed at its new path without risk to any file.
 
-    Changing a folder's path in place would look like a mass delete, so a move is done by
-    removing the folder from Syncthing (the files stay on disk) and adding it again at the
-    new path. That is safe when the retired path holds nothing, and when it holds files that
-    are all on the hub already (a folder another console moved first, whose saves this one
-    downloaded): the files then come back by themselves into the new directory. Anything
-    else could be read as deletions once the files are moved, so it is left to the user.
+    A move removes the folder from Syncthing and adds it again at the new path. That is safe
+    when the retired path holds nothing or only files that are all on the hub already;
+    anything else is left to the user. See development/design/profiles.md, "Frontend and
+    RetroArch overrides" (`previous_paths`).
     """
     if not is_move(spec, current):
         return False
@@ -143,11 +141,9 @@ def move_merge_warning(
     """What to warn about when a moved folder meets files on both sides (pure).
 
     `status` is `db/status` of the folder before it is removed: its global state counts the
-    files of the whole cluster, the hub's among them. If the new directory already holds
-    files and the hub has some too, each side gets the other's: a file that is on both with
-    other content is resolved by Syncthing (the newer one wins and the other is kept as a
-    `.sync-conflict` copy), which is how two consoles that moved the same folder with
-    different saves of one game end up."""
+    files of the whole cluster, the hub's among them. The warning is for the case where both
+    the new directory and the hub already hold files (see `previous_paths` in
+    development/design/profiles.md, "Frontend and RetroArch overrides")."""
     hub_files = status.get("globalFiles") or 0
     if not new_path_holds_files or not hub_files:
         return None
@@ -169,13 +165,11 @@ def hub_disconnected(
 ) -> Iterator[None]:
     """Keep the hub device paused while a folder is removed and added again.
 
-    A folder added again under the same ID, while the connection to the hub stays open, can
-    end up with the hub never receiving its index (the hub shows nothing in it, the device
-    shows the hub as having nothing, no error on either side) until the connection is made
-    again. With the hub paused over the change and resumed after, the connection that comes
-    back already finds the folder complete. Does nothing unless `active`, or when the hub is
-    not a running device here (a hub the user paused stays paused). If the hub cannot be
-    resumed the run fails, and says how to do it by hand."""
+    Without it a folder added again under the same ID can be left without the hub receiving
+    its index (see AGENTS.md, "Syncthing behaviour worth knowing", and `previous_paths` in
+    development/design/profiles.md, "Frontend and RetroArch overrides"). Does nothing unless
+    `active`, or when the hub is not a running device here (a hub the user paused stays
+    paused). If the hub cannot be resumed the run fails, and says how to do it by hand."""
     hold = active and hub_is_running(client.devices(), hub_id)
     if hold:
         client.set_device_paused(hub_id, True)

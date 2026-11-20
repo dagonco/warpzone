@@ -1,10 +1,8 @@
 """The two recommendation shelves of the library UI's home page (pure).
 
-"Unfinished" lists games the user started and left; "Because you play X" lists unplayed games
-that look like one the user played recently. Both read the same flat list of `Candidate`s, which
-`library_api` builds from the play-state ledgers, the cached RetroAchievements progress and the
-gamelist metadata, so nothing here touches a file or the network. The rules are in
-`development/design/library-ui.md` ("Recommendations").
+Both shelves read the same flat list of `Candidate`s, which `library_api` builds, so nothing
+here touches a file or the network. The rules are in `development/design/library-ui.md`
+("Recommendations").
 """
 
 import re
@@ -153,12 +151,8 @@ def _pick(ordered: Iterable[Candidate], skip: frozenset[str], limit: int) -> tup
 
 
 def unfinished(games: Sequence[Candidate], now: int, limit: int = CAP) -> tuple[Candidate, ...]:
-    """Games started and not finished, last touched at least `STALE_DAYS` ago.
-
-    A game qualifies when it was `started`, has a date (`activity`) at or before `now` minus
-    `STALE_DAYS`, and no version of its title (any system) is `finished`. Order: available
-    first (`tier`), then the most recently touched, then the most play time, then title and
-    id. One game per title key, the best placed."""
+    """Games started and not finished, last touched at least `STALE_DAYS` ago, in the order of
+    "Recommendations" in development/design/library-ui.md; one game per title key."""
     done = frozenset(_identity(g) for g in games if finished(g))
     cutoff = now - STALE_DAYS * DAY
     found: list[tuple[Candidate, int]] = []
@@ -179,8 +173,7 @@ def _tail(game: Candidate) -> tuple[str, str, str]:
 
 def pick_seed(games: Sequence[Candidate], now: int) -> Candidate | None:
     """The game a similarity shelf starts from: the one touched most recently (within
-    `RECENT_DAYS`) that has a genre or a developer to compare. Ties: most play time, then
-    title and id."""
+    `RECENT_DAYS`) that has a genre or a developer to compare, or None."""
     cutoff = now - RECENT_DAYS * DAY
     found: list[tuple[Candidate, int]] = []
     for game in games:
@@ -193,11 +186,9 @@ def pick_seed(games: Sequence[Candidate], now: int) -> Candidate | None:
 
 
 def resemblance(seed: Candidate, other: Candidate) -> Match | None:
-    """How much `other` looks like `seed`, or None when they share no genre and no developer.
-
-    Each shared genre is worth `GENRE_POINTS`, the same developer `DEVELOPER_POINTS`, and a
-    release year within `NEAR_YEARS` of the seed's 2 points (within `FAR_YEARS`, 1). The year
-    only adds to a match, it never makes one."""
+    """How much `other` looks like `seed`, or None when they share no genre and no developer
+    (the year only adds to a match). The points are `GENRE_POINTS`, `DEVELOPER_POINTS` and the
+    year bands above."""
     wanted = {g.casefold() for g in seed.genres}
     shared = tuple(g for g in other.genres if g.casefold() in wanted)
     same = bool(seed.developer) and developer_key(seed.developer) == developer_key(other.developer)
@@ -219,12 +210,9 @@ def similar(
     skip: frozenset[str] = frozenset(),
     limit: int = CAP,
 ) -> tuple[Match, ...]:
-    """Games that resemble `seed`, best first.
-
-    Left out: any game with a play, play time or achievement of its own, any title the user
-    already has activity in (on any system), the seed's title, and the title keys in `skip`
-    (the other shelf). Order: available first (`tier`), then the higher score, then title and
-    id. One game per title key, the best placed."""
+    """Games that resemble `seed`, best first, without the games the user has any activity in
+    and the title keys in `skip` (the other shelf); one per title key. See "Recommendations"
+    in development/design/library-ui.md."""
     touched = frozenset(_identity(g) for g in games if has_activity(g))
     excluded = touched | skip | {_identity(seed)}
     found = [m for g in games if _identity(g) not in excluded and (m := resemblance(seed, g))]

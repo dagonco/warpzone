@@ -1,18 +1,9 @@
 """The nightly scrape, the pure decisions: which games a night takes, what it leaves in the
 state, what it tells a person.
 
-`plan_night` takes what `scrape.select` found for every system, the incomplete memory and the
-not-found memory, and returns a `Night`: the games to scrape, in four tiers and under one cap
-across systems. After the run, `judge_night` maps its `scrape.Summary` to an outcome and a kind
-of trouble; the state (`State`, its pure `Change`s, `render_state` and `parse_state`) keeps the
-streaks across nights; `news` compares the state before and after and `exit_code` turns the news
-into the exit status; `build_record`, `notify_payload` and `should_notify` make the run record
-and the webhook. Everything arrives as an argument: nothing here reads a disk, a clock or the
-network. The disk side is `inbox_unattended_io`, which takes the folder and the functions
-defined here. See development/design/scrape-unattended.md.
-
-As in the inbox's state, a change to the state is a function `State -> State`: the writer applies
-the same changes again to what it read again when the file changed in between.
+Nothing here reads a disk, a clock or the network; the disk side is `inbox_unattended_io`. A
+change to the state is a function `State -> State`, so the writer can apply it again to what it
+read again. See development/design/scrape-unattended.md.
 """
 
 from __future__ import annotations
@@ -68,16 +59,15 @@ class Wave:
 
 @dataclass(frozen=True)
 class Night:
-    """What `plan_night` decided.
+    """What `plan_night` decided (see development/design/scrape-unattended.md, "What gets
+    picked each night").
 
     `systems` are the systems with a chosen game, in name order. `chosen` maps each to the
     primary paths (library paths, `roms/<system>/<name>`) of its chosen games. `waves` are the
-    chosen games by tier, in the order a run takes them: the run goes through one wave after the
-    other, so a night cut short has done the first tiers of every system before the later ones
-    of any. `deferred` counts, per system, the picks the cap left for another night; `backlog` is
-    their total. `skipped_not_found` and `skipped_incomplete` count, per system (only those with
-    some), the picks `select` left out because ScreenScraper did not know them recently and the
-    ones the incomplete memory covers: neither is ever chosen or uses the cap."""
+    chosen games by tier, in the order a run takes them. `deferred` counts, per system, the
+    picks the cap left for another night; `backlog` is their total. `skipped_not_found` and
+    `skipped_incomplete` count, per system (only those with some), the picks left out; neither
+    is ever chosen or uses the cap."""
 
     systems: tuple[str, ...] = ()
     chosen: Mapping[str, frozenset[str]] = field(default_factory=dict)
@@ -103,8 +93,7 @@ class Night:
 
 def tier_of(pick: scrape.Pick, record: scrape.NotFound | None, today: date) -> int:
     """The tier of a pick. `record` is the not-found record of its game, if any: one with the
-    same size whose `NOT_FOUND_DAYS` have passed puts the game in tier 3 (a game with no entry,
-    which a not-found game never has, would otherwise be a new one)."""
+    same size whose `NOT_FOUND_DAYS` have passed puts the game in `NOT_FOUND_AGAIN`."""
     if (
         record is not None
         and record.size == pick.game.size
@@ -146,10 +135,9 @@ def plan_night(
     today: date,
 ) -> Night:
     """The games a night scrapes: the first `max_games` of `rank_picks`, once the picks the
-    incomplete memory covers (`scrape.skip_incomplete`) are set aside and counted.
-
-    `selections` are the result of `scrape.select` per system, `incomplete` and `not_found` the
-    two memories by system and gamelist path."""
+    incomplete memory covers are set aside and counted. `selections` are the result of
+    `scrape.select` per system, `incomplete` and `not_found` the two memories by system and
+    gamelist path."""
     skipped: dict[str, int] = {}
     kept: dict[str, scrape.Selection] = {}
     for system, selection in selections.items():
@@ -279,20 +267,8 @@ _STOP_KINDS: Mapping[scrape.StopReason, str] = {
 
 def judge_night(summary: scrape.Summary | None, lock: LockOutcome = LockOutcome.TAKEN) -> Judged:
     """The outcome of a night and its kind of trouble, from the run's summary (None when no
-    Skyscraper ran) and what the wait for the lock came to.
-
-    - The lock stayed busy: `busy`, trouble `lock`.
-    - No summary (nothing to do): `nothing`.
-    - The quota was reached: `quota`, trouble `quota` (kept as a streak for doctor, never news).
-    - Any other stop of the run before every game was tried, except the time budget:
-      `stopped`, with the trouble named after it (`blacklisted`, `closed`, `busy`, `network`,
-      or `lock` when the lock was lost).
-    - No such stop but a system whose batches failed (or a run that counts as failed): `failed`,
-      trouble `failed`, with the systems. This holds when the time budget ran out too.
-    - The time budget ran out: `budget`, no trouble.
-    - Otherwise `done`, no trouble.
-
-    A stop wins over failed systems: the failures are most likely its effect."""
+    Skyscraper ran) and what the wait for the lock came to. See
+    development/design/scrape-unattended.md, "Outcome and trouble of a night" for the table."""
     if lock is LockOutcome.BUSY:
         return Judged(BUSY, LOCK)
     if summary is None:
@@ -420,11 +396,9 @@ def with_night(
     died: bool = False,
 ) -> Change:
     """The end of a night: `last`, the backlog (`left` games, kept as it was when None) and the
-    streak. A `kind` of trouble raises the streak of that kind, or starts one (and so replaces
-    a streak of another kind: any other trouble ends the quota's own streak this way). No kind
-    (`done`, `budget`, `nothing`) clears it, except that a night that found the run before it
-    dead (`died`) keeps the `died` count `with_started` made. The `running` note is cleared
-    only when it is this run's."""
+    streak (see development/design/scrape-unattended.md, "Outcome and trouble of a night").
+    `died` keeps the `died` count `with_started` made. The `running` note is cleared only when
+    it is this run's."""
 
     def change(state: State) -> State:
         trouble = state.trouble
@@ -474,8 +448,8 @@ def with_error(message: str, step: int, now: datetime, config: bool = True) -> C
 def with_error_cleared(reached: int, *, nothing_left: bool = False) -> Change:
     """Clear a stored error when this run got past its step (`reached` is the last step the run
     started, so an error of step `n` is cleared when `reached > n`). A night with `nothing_left`
-    to do also clears a runtime error of any step: nothing is left for that step to fail on, so
-    the problem is gone for now. A configuration error stays until a run gets past its step."""
+    also clears a runtime error of any step; see development/design/scrape-unattended.md,
+    "News and exit codes"."""
 
     def change(state: State) -> State:
         err = state.error
@@ -628,10 +602,7 @@ class NewsItem:
 
 def news(before: State, after: State) -> list[NewsItem]:
     """What a person has not been told yet: `before` is the state as the run read it, `after`
-    the one it writes. A new run-level error is news (one with the message already stored is
-    not: it only raised `count`, and one that got past its step was cleared, so the same error
-    later is news again). A streak is news once it reaches `NEWS_AFTER` nights and has not been
-    marked `notified`."""
+    the one it writes. See development/design/scrape-unattended.md, "News and exit codes"."""
     found: list[NewsItem] = []
     error = after.error
     if error is not None and (before.error is None or before.error.message != error.message):
@@ -685,12 +656,9 @@ def build_record(
     secrets: Sequence[str] = (),
 ) -> dict[str, Any]:
     """The run record, from the run's `Summary` and what the night's plan deferred and skipped
-    per system (the run only sees the games the plan chose, so it cannot count those). A system
-    that only has deferred or skipped games is in the record with zero counts. Pure.
-    The paths of the added and filled games are library paths below the hub root
-    (`library/roms/<system>/<name>`), `PATHS_MAX` of each; the warnings are the systems' and the
-    `warnings` given, `WARNINGS_MAX` of them. Every text goes through `clean_text`, so the
-    record holds no absolute path, no key and no URL a message carried."""
+    per system (the run only sees the games the plan chose, so it cannot count those). Pure.
+    Every text goes through `clean_text`. See development/design/scrape-unattended.md,
+    "Outcome and trouble of a night" for the fields."""
 
     def clean(text: str) -> str:
         return clean_text(text, roots, secrets)
@@ -814,10 +782,9 @@ def should_notify(found: Sequence[NewsItem]) -> bool:
 def notify_payload(
     record: Mapping[str, Any], found: Sequence[NewsItem], left: int | None
 ) -> dict[str, Any]:
-    """The JSON the webhook gets: the run, the counts over every system, what is `left` (None
-    when no night has counted it yet) and the `problem`, which is the kind of the first streak in
-    the news, or `error` for a run-level error. It is built from the record and the news kinds,
-    so it holds no URL, key or path (the text of an error is not in it)."""
+    """The JSON the webhook gets, built from the record and the news kinds, so it holds no URL,
+    key or path. `left` is None when no night has counted it yet. See
+    development/design/scrape-unattended.md, "News and exit codes"."""
     totals = {
         key: sum(counts[key] for counts in record["systems"].values())
         for key in ("added", "filled", "not_found")

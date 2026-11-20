@@ -291,13 +291,8 @@ def _system_devices(
 
 def gamelist_paths(game: catalog.Game) -> list[str]:
     """The `<path>` values a frontend may record for the game, best first: the catalog's own
-    `gamelist`, then the same path with its leading folders dropped one by one.
-
-    The catalog writes the path below the hub's system folder, but a frontend may read a
-    folder below it (`shortcuts/` for PS4, `carts/` for pico-8: `artwork.FrontendSystem.base`)
-    and then records, and names its media, without that part. The frontend's system list,
-    which says which folder, is on the devices and not on the hub, so the server tries the
-    shorter paths."""
+    `gamelist`, then the same path with its leading folders dropped one by one (see "Metadata
+    and media" in development/design/library-ui.md)."""
     rel = artwork.relative(game.gamelist)
     if rel is None:
         return [game.gamelist]
@@ -414,9 +409,8 @@ def name_tags(name: str) -> tuple[list[str], list[str]]:
 def game_facts(game: catalog.Game) -> dict[str, Any]:
     """`region` and `languages` from the name tags (the DAT's name when `inbox` recorded one,
     else the file name of the primary), and `verified: true` when `inbox` matched the dump to
-    a DAT by content (`dat` is set). `verified` is left out otherwise, not false: a game filed
-    before `inbox` kept the DAT name, or by hand, was not checked, which is not the same as
-    failing the check."""
+    a DAT by content. `verified` is left out otherwise, not false: an unchecked game is not a
+    failed one."""
     regions, languages = name_tags(game.dat or posixpath.basename(game.primary))
     out: dict[str, Any] = {"region": regions, "languages": languages}
     if game.dat:
@@ -481,11 +475,9 @@ class RangeNotSatisfiable(Exception):
 
 def parse_range(header: str | None, size: int) -> tuple[int, int] | None:
     """The `(first, last)` bytes (both inclusive) that a `Range` header asks of a file of
-    `size` bytes, or None to answer the whole file (no header, another unit, several ranges or
-    a header that is not a range: all of those are allowed to be ignored). One range only:
-    `bytes=a-b`, `bytes=a-` and `bytes=-n` (the last n bytes). A `last` past the end is cut to
-    the end. Raises `RangeNotSatisfiable` when the range starts at or past the end, or asks for
-    the last 0 bytes, or the file is empty."""
+    `size` bytes, or None to answer the whole file. Raises `RangeNotSatisfiable` when the
+    range starts at or past the end, or asks for the last 0 bytes, or the file is empty. See
+    "Media and byte ranges" in development/design/library-ui.md."""
     if header is None:
         return None
     unit, eq, spec = header.strip().partition("=")
@@ -772,12 +764,8 @@ class Plan:
 
 def plan_changes(body: object, cfg: Config, lib: Library, views: Mapping[str, DeviceView]) -> Plan:
     """Check a changes request and compute the new whitelist of each device it touches.
-
-    Raises the first `ApiError`, in the order of the design: the shape of the body; every
-    device, system and game is known; each device's whitelist is managed; an `expect` for
-    every touched device that equals its etag; nothing of an unsupported system turned on for
-    a named device; each change applies and has the effect asked for. Nothing is written
-    here, and a request that fails writes nothing."""
+    Raises the first `ApiError`, in the order of "Validation and errors" in
+    development/design/library-ui.md. Nothing is written here."""
     request = parse_changes(body)
     devices = {d.name: d for d in library_devices(cfg)}
     for item in request.changes:
@@ -1270,8 +1258,7 @@ def _ra_progress(
     lib: Library, cfg: Config, system: str, game: catalog.Game
 ) -> tuple[int, int, str, int | None]:
     """The user's achievements unlocked, the achievements available, the highest award and the
-    date of the last unlock, from the cached progress. Zeros when RetroAchievements has no
-    achievements for the game or the cache holds no progress of the configured user."""
+    date of the last unlock, from the cached progress (zeros when there is none)."""
     found = ra_data.ra_game(system, game.ra, lib.ra_lists)
     mine = lib.ra_cache.user
     if found is None or mine is None or not ra_data.same_user(mine.user, cfg.ra.user):
@@ -1296,8 +1283,7 @@ def candidates(
     disks: Mapping[str, Mapping[str, Any]],
 ) -> list[recommend.Candidate]:
     """Every game that has some activity or some metadata to compare, with what the shelves
-    read: its play totals, its RA progress, its genre, developer and year, and its availability.
-    A game with neither is left out (no shelf could use it)."""
+    read (see "Recommendations" in development/design/library-ui.md); the others are left out."""
     found: list[recommend.Candidate] = []
     for system, games in sorted(lib.systems.items()):
         extra = extras(system)

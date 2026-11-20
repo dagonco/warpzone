@@ -130,16 +130,10 @@ SCRAPE_LANGUAGES = frozenset(_LANGUAGE_CODES.split())
 @dataclass(frozen=True)
 class InboxSettings:
     """The optional `[inbox]` table: where the hub is mounted on this machine, the DATs
-    and the external tools `warpzone inbox` uses. A tool left unset is looked up on PATH
-    (RAHasher only when set). `titledb_dir` (a clone of blawar/titledb) and `switch_keys`
-    (the console keys file, default ~/.switch/prod.keys) are for Switch games. `orbis_pkg_util`
-    unpacks PS4 packages. `vita3k` (Vita3K.app or its binary) installs PS Vita packages with the
-    zRIF keys of `vita_zrif`, a file the user keeps. `skyscraper` is the Skyscraper program that
-    `warpzone scrape` runs (`Skyscraper` on PATH when unset). `tool_timeout_minutes` is how long any
-    one call of an external tool may run before it is killed and its item goes to review.
-    `chdman_threads` caps the threads of each chdman conversion (chdman's own count when unset).
-    `chdman_flac = false` makes `createcd` leave FLAC out of its codecs: FLAC makes chdman use
-    memory larger than the image (see development/design/inbox.md)."""
+    and the external tools `warpzone inbox` and `warpzone scrape` use. A tool left unset is
+    looked up on PATH (RAHasher only when set). `tool_timeout_minutes` is how long any one call
+    of an external tool may run before it is killed and its item goes to review. See
+    reference/configuration.md, "[inbox]"."""
 
     root: str | None = None
     dats_dir: str | None = None

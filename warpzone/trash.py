@@ -2,17 +2,10 @@
 development/design/library-ui.md).
 
 Nothing here touches the disk, the network or a lock. `trash_store.py` lists what a plan needs
-(the parts, the media, the gamelist, the arcade sets) and does the moves; `trash_run.py` takes
-the locks and drives them; `serve.py` routes the requests. This module decides:
-
-- `plan_delete`: what a deletion moves and what it refuses, in the order of the design, and the
-  `expect` hash that ties a confirmation to the plan the user saw;
-- the entry names, the manifest of an entry and the pending cleanups file (their encoding and
-  their validation: a manifest or a file that is not this shape is damaged);
-- which cleanup is ready (the hub has recorded the deletion and the console has received it),
-  which lines of it are still needed, what a restore moves and what it refuses, and which
-  entries are expired;
-- the shape of the answers (`plan_response`, `trash_response`).
+and does the moves; `trash_run.py` takes the locks and drives them; `serve.py` routes the
+requests. This module decides the plan and its `expect` hash, the entry names, the manifest and
+the pending cleanups (their validation), which cleanup is ready, what a restore moves and which
+entries are expired, and shapes the answers.
 """
 
 from __future__ import annotations
@@ -67,9 +60,9 @@ def safe_below(path: str, prefix: str) -> bool:
 
 
 def safe_part(path: str, system: str) -> bool:
-    """Whether a catalog part path may be moved: below `library/` as `roms/<system>/...` or
-    `extras/<system>/...`, with a name at least three components deep, and never a system root
-    (`roms/xbox360/roms`, `extras/switch/updates`): a line for one is not a game's to remove."""
+    """Whether a catalog part path may be moved: `roms/<system>/...` or `extras/<system>/...`
+    at least `MIN_PART_DEPTH` deep, never a system root (see "Refusals" in
+    development/design/library-ui.md)."""
     parts = path.split("/")
     if len(parts) < MIN_PART_DEPTH or any(p in ("", ".", "..") for p in parts) or "\0" in path:
         return False
@@ -118,8 +111,8 @@ def valid_entry(name: str) -> bool:
 
 
 def purging_name(entry: str) -> str:
-    """The name an entry is renamed to before it is removed: not an entry (listings, Restore
-    and the manifest reader never see it), so what a failed removal leaves cannot be restored."""
+    """The name an entry is renamed to before it is removed: not an entry, so what a failed
+    removal leaves cannot be restored (see "The trash")."""
     return PURGING_PREFIX + entry
 
 
@@ -203,8 +196,6 @@ class Arcade:
 
 @dataclass(frozen=True)
 class Facts:
-    """What the I/O layer read for a plan."""
-
     parts: Mapping[str, Found] = field(default_factory=dict)  # by the part's path
     media: Sequence[MediaFound] = ()  # the entries of the folders a stem could be in
     media_links: Sequence[str] = ()  # system or kind folders that are links, left alone
@@ -406,15 +397,8 @@ def plan_delete(
     views: Mapping[str, DeviceView],
     facts: Facts,
 ) -> DeletePlan:
-    """What deleting one catalog game does, or the first thing that refuses it (pure).
-
-    The refusals, in the order of the design: an unknown game (`not-found`); a part that is a
-    link, of another type than the catalog says, or that another game shares or contains
-    (`unsafe-path`); a device whose whitelist needs migration (`not-managed`); an arcade set
-    that others need (`has-dependants`, or `dats-missing` when nothing tells); a `trash/` that
-    cannot take a move (`trash-unavailable`); pending cleanups that cannot be read
-    (`read-failed`). A game none of whose files is on the hub is `not-found` too: the catalog
-    is out of date and a run drops it."""
+    """What deleting one catalog game does, or the first thing that refuses it (pure). The
+    refusals and their order are in development/design/library-ui.md, "Refusals"."""
     found = lib.by_id.get(game_id)
     if found is None:
         raise ApiError("not-found", f"no game {game_id!r}", game=game_id)
@@ -536,7 +520,6 @@ def plan_response(
     busy: Mapping[str, Any] | None,
     purge_after: str,
 ) -> dict[str, Any]:
-    """The answer of a dry run."""
     return {
         "dry_run": True,
         "game": {
@@ -726,8 +709,7 @@ def _moved(raw: object, prefix: str, *, media: bool) -> Moved | None:
 
 def parse_manifest(data: bytes, entry: str) -> Manifest | None:
     """The manifest in `data` for the entry folder named `entry`, or None when it is not one
-    (the entry is then damaged): not this format, another entry's, a path outside `library/`
-    and `frontend/media/`, a path inside another of its paths."""
+    (the entry is then damaged; see "The trash")."""
     try:
         doc = json.loads(data.decode("utf-8"))
     except (UnicodeDecodeError, ValueError):
@@ -831,8 +813,7 @@ def entry_state(item: Listed) -> str:
 
 
 def expired(item: Listed, now: datetime) -> bool:
-    """Whether the automatic purge removes the entry: complete, and past its `purge_after`.
-    An incomplete or damaged entry waits for Delete now."""
+    """Whether the automatic purge removes the entry: complete, and past its `purge_after`."""
     m = item.manifest
     if m is None or m.state != COMPLETE:
         return False
@@ -917,9 +898,8 @@ class RestorePlan:
 
 
 def plan_restore(m: Manifest, at_place: Collection[str], in_trash: Collection[str]) -> RestorePlan:
-    """What a restore does with each path of the manifest, from where `lstat` found it. A path
-    in both places is a conflict (a copy filed again, new art from a scrape); one in neither is
-    skipped (an incomplete entry); one only at its place never left and needs nothing."""
+    """What a restore does with each path of the manifest, from where `lstat` found it: in
+    both places is a conflict, in neither is skipped, only at its place needs nothing."""
     moves: list[str] = []
     skipped: list[str] = []
     conflicts: list[str] = []
@@ -1047,10 +1027,8 @@ def parse_cleanups(data: bytes | None) -> list[Cleanup]:
 
 
 def in_index(answers: Mapping[str, Mapping[str, Any] | None]) -> bool:
-    """Whether the hub's Syncthing has recorded the deletion of every path: `db/file` gave no
-    record (None: it does not know the path) or a global record that is `deleted`. An answer
-    that has no global record to read (none, not a mapping, an empty one) is not a recorded
-    deletion: this fails closed."""
+    """Whether the hub's Syncthing has recorded the deletion of every path: no record (None) or
+    a `deleted` global one. An answer with no global record to read fails closed."""
     for answer in answers.values():
         if answer is None:
             continue
@@ -1084,15 +1062,10 @@ def waiting(
     reading: progress.Reading | None,
     needed: bool | None = None,
 ) -> str | None:
-    """What a device's lines wait for, or None when they can go: the whitelist is managed, the
-    hub has recorded the deletion, and a fresh reading of the hub shows the device connected,
-    the folder shared and not paused, and nothing left to fetch or delete: completion 100,
-    `needBytes` 0 and `needDeletes` 0 (Syncthing counts a pending deletion only there, and caps
-    the completion at 95 while only deletions remain). A `needDeletes` the hub did not give is
-    unknown, so not ready. `needItems` must be 0 too, unless `needed` is False: the hub listed
-    what the device still needs (`remoteneed`) and none of it is a deleted path or below one.
-    A console keeps empty system folders its whitelist does not take (EmuDeck creates them),
-    which the hub counts as needed items for ever."""
+    """What a device's lines wait for, or None when they can go. `needed` is False when the
+    hub listed what the device still needs (`remoteneed`) and none of it is a deleted path or
+    below one. See development/design/library-ui.md, "Whitelist cleanup", "When a console has
+    received it"."""
     if not managed:
         return W_NOT_MANAGED
     if not recorded:
@@ -1116,8 +1089,8 @@ def waiting(
 
 
 def waiting_from_state(state: str | None, *, recorded: bool, managed: bool) -> str:
-    """The same words for the listing, from the cached progress state of the device (the
-    listing does not ask the hub again for every page); None is a hub that did not answer."""
+    """The same words for the listing, from the cached progress state of the device; None is
+    a hub that did not answer."""
     if not managed:
         return W_NOT_MANAGED
     if not recorded:
@@ -1153,9 +1126,8 @@ def pending_rows(
 
 
 def reappeared(c: Cleanup, existing: Collection[str]) -> Cleanup | None:
-    """The cleanup without the paths that exist on the hub again (restored, or filed again by
-    `inbox`) and the lines at or below them: those lines now serve the game that is there.
-    None when no line is left."""
+    """The cleanup without the paths that exist on the hub again and the lines at or below
+    them (see "Removing the lines" in "Whitelist cleanup"). None when no line is left."""
     back = [p for p in c.paths if p in existing]
     if not back:
         return c
@@ -1192,7 +1164,6 @@ def effect_holds(old: wl.Model, new: wl.Model, lib: Library) -> bool:
 
 
 def cleaned_model(model: wl.Model, c: Cleanup, device: str) -> wl.Model:
-    """The device's model without the lines recorded for the deleted game."""
     lines = c.devices[device]
     return wl.drop_lines(model, lines.include, lines.exclude)
 

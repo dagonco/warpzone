@@ -1,9 +1,8 @@
 """Pure rules for a device whose frontend and RetroArch are pointed at the library.
 
-A profile with `[es_systems]` gets a copy of the frontend's system list in which the ROM
-folders are moved to the library; a profile with `[retroarch]` gets a few keys of
-`retroarch.cfg` pinned. No I/O here: `provision device` reads and writes the files and
-`doctor` reads them. See development/design/profiles.md, "Frontend and RetroArch overrides".
+A profile with `[es_systems]` gets the frontend's system list with its ROM folders moved to the
+library; one with `[retroarch]` gets keys of `retroarch.cfg` pinned. No I/O here. See
+development/design/profiles.md, "Frontend and RetroArch overrides".
 """
 
 from __future__ import annotations

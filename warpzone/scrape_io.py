@@ -1,16 +1,10 @@
 """Scraping with Skyscraper, the edges: staging the games, running the tool, writing to the hub.
 
-`run_scrape` goes through the systems one by one. For each it picks the games that need a scrape
-(`scrape.select`), stages them as symbolic links outside the share, runs Skyscraper on batches
-of them (the gather, then the two generating passes, each in its own session through
-`runners.run_tool`), reads what Skyscraper left in a temporary folder, lets `scrape.plan_merge`
-decide what is new, and writes only that to the hub: the media first, never over a file, then
-the new gamelist entries with one atomic replace that is re-checked right before the rename.
-Skyscraper never writes to the hub. The decisions are in `scrape`; see
-development/design/scrape.md ("Flow", "Merge", "The cache", "Failures").
-
-Nothing here reads Skyscraper's credentials: the only look into its `config.ini` is
-`credentials_set`, which answers whether the `userCreds` key is there and keeps nothing else.
+Per system: select, stage as symbolic links outside the share, run Skyscraper on batches
+through `runners.run_tool`, and write to the hub what `scrape.plan_merge` decided. The
+decisions are in `scrape`; see development/design/scrape.md ("Flow", "Merge", "The cache",
+"Failures"). Nothing here reads Skyscraper's credentials: `credentials_set` only asks whether
+the `userCreds` key is there.
 """
 
 from __future__ import annotations
@@ -241,12 +235,9 @@ def skyscraper_version(program: str) -> str | None:
 def stage(
     library: Path, input_dir: Path, games: Sequence[Game]
 ) -> tuple[dict[str, Game], list[scrape.Dropped]]:
-    """Link each game into `input_dir` at its `gamelist` path (subfolders kept) to the file on
-    the share: its primary, or the part its gamelist path names when that is another one (the
-    launcher file of a PS4 or Vita game, whose primary is a folder Skyscraper cannot read).
-    Nothing is copied. An `.m3u` folder is linked as a file named after the folder that points
-    at the playlist inside it. Returns the map from staged name to game and the games that could
-    not be staged, each with the reason."""
+    """Link each game into `input_dir` at its `gamelist` path to the file on the share (see
+    development/design/scrape.md, "Flow", step "Stage"). Returns the map from staged name to
+    game and the games that could not be staged, each with the reason."""
     staged: dict[str, Game] = {}
     dropped: list[scrape.Dropped] = []
     for game in games:
@@ -297,12 +288,8 @@ def _present(media_root: Path, dest: str) -> bool:
 
 def copy_media(source: Path, media_root: Path, dest: str) -> bool:
     """Copy one file of Skyscraper's output into the hub's media folder without ever replacing a
-    file. It goes to `.<name>.wz-tmp` beside the target, is compared with the source by size,
-    and enters under its name only when no file of that kind and stem is there: right before
-    that the folder is checked again, and the name is taken with a hard link where the file
-    system has them (which cannot replace a file), else with a rename after the check. Returns
-    False when a file appeared first and the copy was dropped; `OSError` when it cannot be
-    copied."""
+    file (see development/design/scrape.md, "Merge"). Returns False when a file appeared first
+    and the copy was dropped; `OSError` when it cannot be copied."""
     target = media_root / dest
     target.parent.mkdir(parents=True, exist_ok=True)
     tmp = target.with_name(f".{target.name}{safefile.TMP_SUFFIX}")
@@ -357,11 +344,9 @@ def _rel_paths(entries: Sequence[artwork.Entry]) -> set[str]:
 def write_entries(
     run: Run, system: str, entries: Sequence[artwork.Entry]
 ) -> tuple[frozenset[str], str | None]:
-    """Add `entries` to the hub gamelist. The gamelist is read with its stamp, edited as text
-    and replaced atomically; the replace refuses when the file changed since the read, and then
-    the plan is made again from the new content (entries a console wrote in the meantime are
-    left as they are). After `WRITE_TRIES` tries the entries wait for the next run. Returns the
-    relative paths written and the reason when they were not."""
+    """Add `entries` to the hub gamelist, re-reading it when it changed under the write (see
+    development/design/scrape.md, "Merge"). Returns the relative paths written and the reason
+    when they were not."""
     if not entries:
         return frozenset(), None
     path = gamelist_path(run.opts.root, system)
@@ -806,16 +791,11 @@ def run_held(
     skip_incomplete: Callable[[scrape.Pick], bool] | None = None,
     batches: int = 0,
 ) -> scrape.Summary:
-    """The scrape with the lock already held by the caller, which gets a summary of the run
-    instead of an exit code (`Summary.exit_code` is the attended command's).
-
-    `deadline` is an absolute time on `opts.now`: a batch that `scrape.batch_fits` says will not
-    end by then is not started (the first batch of the run always is, unless `batches` says this
-    call continues a run that already started that many; `Summary.batches` is what a call
-    started). `still_mine` is asked before each batch, and a false answer ends the run.
-    `skip_incomplete` is applied to the selection of each system: the picks it accepts are not
-    scraped, only counted. `opts.only` restricts the selection to the games under those library
-    paths."""
+    """The scrape with the lock already held by the caller, which gets a `scrape.Summary`
+    instead of an exit code. `deadline` is an absolute time on `opts.now`, `batches` how many
+    batches an earlier call of the same run started; `still_mine` is asked before each batch;
+    the picks `skip_incomplete` accepts are only counted. See development/design/scrape.md,
+    "In `inbox --apply`"."""
     return _run(
         opts,
         rep,

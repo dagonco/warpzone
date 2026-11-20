@@ -1,10 +1,7 @@
 """Format handler `esde-xml` of the settings layer: ES-DE's `es_settings.xml`. Pure.
 
-The file is a flat list of `<bool name="Key" value="true" />`, `<int ...>`, `<float ...>` and
-`<string ...>` elements after an XML declaration (see `esde.parse_elements`). The canonical
-key is the `name` attribute and the value is the `value` attribute read as the tag says. A
-write replaces only the text of that attribute, so every other byte stays. See "Format
-handlers" in development/design/emulator-settings.md.
+A write replaces only the text of the `value` attribute, so every other byte stays (see
+`esde.parse_elements`). See "Format handlers" in development/design/emulator-settings.md.
 """
 
 from __future__ import annotations

@@ -32,10 +32,9 @@ def publish(
 ) -> bool:
     """Write this device's disk report when it moved enough; True when it was written.
 
-    Nothing happens without the play state folder (Syncthing has not set it up, or a card is
-    not mounted) or the library folder's marker, because the disk of a path that is not the
-    library would be the wrong one. A failure is a warning: the report never stops the job it
-    rides on. With `dry_run` nothing is written.
+    Nothing happens without the play state folder or the library folder's marker. A failure
+    is a warning: the report never stops the job it rides on. With `dry_run` nothing is
+    written. See "Disk space" in development/design/library-ui.md.
     """
     where = playstate_device.folder(profile, home)
     raw = profile.paths.get("library")

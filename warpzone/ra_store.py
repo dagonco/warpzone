@@ -2,10 +2,8 @@
 user's progress in them and the badge images into `catalog/ra/`.
 
 What to keep and how to merge it is in `ra_data.py` (pure); the web API is parsed by `ra.py`.
-Here is what touches the disk and the network, politely: one call at a time with a pause
-between two, a failure that never fails the whole pass (three in a row stop the pass, since
-the cause - a wrong key, a rate limit - will not go away by itself), and the key kept out of
-every message. See "Achievements and progress" in development/design/library-ui.md.
+This module touches the disk and the network, and keeps the key out of every message. See
+"Achievements and progress" in development/design/library-ui.md.
 """
 
 from __future__ import annotations
@@ -203,9 +201,9 @@ def run_ra_achievements(
     call_limit: int | None = None,
     badge_limit: int | None = None,
 ) -> AchievementsResult:
-    """Download what the library's RA games lack: the achievements of each (kept 14 days), the
-    user's completion progress (kept 5 hours), the unlock dates of each game the user has
-    played (again when the progress says something new happened) and the badge images.
+    """Download what the library's RA games lack: the achievements, the user's completion
+    progress, the unlock dates and the badge images (see "Achievements and progress" in
+    development/design/library-ui.md).
 
     `call_limit` and `badge_limit` bound a run; what is left is done by the next one. Without
     `user` there is no progress. A failed call is reported by kind only and the pass goes on;
