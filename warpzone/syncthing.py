@@ -19,6 +19,7 @@ from typing import Any
 from warpzone.errors import WarpzoneError
 
 REDACTED = "***"
+TYPE_DIRECTORY = "FILE_INFO_TYPE_DIRECTORY"  # `type` of a directory in the file listings
 _SECRET_KEYS = {"apikey", "api_key", "x-api-key", "password", "encryptionpassword", "token"}
 
 
@@ -346,7 +347,17 @@ class Client:
     def remote_need(self, folder_id: str, device_id: str, limit: int = 1000) -> list[str] | None:
         """`GET /rest/db/remoteneed`: the names `device_id` still needs, page by page, or None
         when the answer has no list or holds more than `limit` names."""
-        names: list[str] = []
+        found = self.remote_need_items(folder_id, device_id, limit)
+        return None if found is None else [name for name, _ in found]
+
+    def remote_need_items(
+        self, folder_id: str, device_id: str, limit: int = 1000
+    ) -> list[tuple[str, bool]] | None:
+        """`GET /rest/db/remoteneed`: what `device_id` still needs as (name, is a directory)
+        pairs, or None when the answer has no list or holds more than `limit` names. Only the
+        exact type Syncthing gives a directory counts as one; a file, a symlink or a type
+        this does not know is not."""
+        items: list[tuple[str, bool]] = []
         perpage = 500
         page = 1
         while True:
@@ -364,11 +375,11 @@ class Client:
                 name = f.get("name") if isinstance(f, dict) else None
                 if not isinstance(name, str):
                     return None
-                names.append(name)
-            if len(names) > limit:
+                items.append((name, f.get("type") == TYPE_DIRECTORY))
+            if len(items) > limit:
                 return None
             if len(files) < perpage:
-                return names
+                return items
             page += 1
 
     def browse(self, folder_id: str) -> list[str]:

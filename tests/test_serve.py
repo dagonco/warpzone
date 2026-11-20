@@ -1827,6 +1827,75 @@ class ProgressTests(ServeCase):
         )
         self.assertEqual(found["machine"]["state"], "offline")
 
+    def left(self, *, items: list[str], needed: int | None = None) -> None:
+        """The deck has every byte and no deletion left, only `items` it still "needs"."""
+        self.fake.completion[("wz-library", DECK_ID)] = {
+            "completion": 99.9,
+            "needBytes": 0,
+            "needItems": len(items) if needed is None else needed,
+            "needDeletes": 0,
+            "remoteState": "valid",
+        }
+        self.fake.remote_need[("wz-library", DECK_ID)] = items
+        self.start(progress_seconds=0)
+
+    def asked_remote_need(self) -> bool:
+        return any(r[1].startswith("/rest/db/remoteneed") for r in self.fake.requests)
+
+    def test_a_device_with_only_folders_left_is_done(self) -> None:
+        self.left(items=["roms/ps2", "roms/ps3"])
+        found = self.get("/api/v1/progress").json[0]
+        self.assertEqual((found["state"], found["percent"], found["need_items"]), ("done", 100, 2))
+        self.assertTrue(self.asked_remote_need())
+
+    def test_a_file_among_the_items_left_keeps_it_downloading(self) -> None:
+        self.fake.remote_need_types["roms/ps3/game.iso"] = "FILE_INFO_TYPE_FILE"
+        self.left(items=["roms/ps2", "roms/ps3/game.iso"])
+        found = self.get("/api/v1/progress").json[0]
+        self.assertEqual((found["state"], found["percent"]), ("downloading", 99))
+
+    def test_a_symlink_or_an_unknown_type_is_not_a_folder(self) -> None:
+        self.fake.remote_need_types["roms/a"] = "FILE_INFO_TYPE_SYMLINK"
+        self.left(items=["roms/ps2", "roms/a"])
+        self.assertEqual(self.get("/api/v1/progress").json[0]["state"], "downloading")
+        self.fake.remote_need_types["roms/a"] = "directory"
+        self.start(progress_seconds=0)
+        self.assertEqual(self.get("/api/v1/progress").json[0]["state"], "downloading")
+
+    def test_no_list_of_the_items_left_keeps_it_downloading(self) -> None:
+        self.left(items=["roms/ps2"])
+        del self.fake.remote_need[("wz-library", DECK_ID)]  # a 404
+        self.assertEqual(self.get("/api/v1/progress").json[0]["state"], "downloading")
+        self.assertTrue(self.asked_remote_need())
+
+    def test_more_items_than_the_limit_keep_it_downloading(self) -> None:
+        self.left(items=[f"roms/s{i}" for i in range(1001)])
+        self.assertEqual(self.get("/api/v1/progress").json[0]["state"], "downloading")
+
+    def test_the_list_is_asked_only_when_only_items_are_left(self) -> None:
+        self.assertEqual(self.get("/api/v1/progress").json[0]["state"], "downloading")  # bytes
+        self.assertFalse(self.asked_remote_need())
+        self.fake.completion[("wz-library", DECK_ID)] = {"completion": 100, "needBytes": 0}
+        self.start(progress_seconds=0)
+        self.assertEqual(self.get("/api/v1/progress").json[0]["state"], "done")
+        self.assertFalse(self.asked_remote_need())
+        self.fake.completion[("wz-library", DECK_ID)] = {
+            "completion": 95,
+            "needBytes": 0,
+            "needItems": 2,
+            "needDeletes": 3,
+        }
+        self.fake.remote_need[("wz-library", DECK_ID)] = ["roms/ps2"]
+        self.start(progress_seconds=0)
+        self.assertEqual(self.get("/api/v1/progress").json[0]["state"], "downloading")
+        self.assertFalse(self.asked_remote_need())  # deletions to apply
+
+    def test_a_recent_write_is_pending_without_asking_for_the_list(self) -> None:
+        self.left(items=["roms/ps2"])
+        self.change([{"device": "deck", "system": "psx", "on": True}])
+        self.assertEqual(self.get("/api/v1/progress").json[0]["state"], "pending")
+        self.assertFalse(self.asked_remote_need())
+
     def test_a_device_the_hub_does_not_share_the_folder_with(self) -> None:
         self.fake.connections[MACHINE_ID] = {"connected": True}  # no completion: a 404
         found = {p["device"]: p["state"] for p in self.get("/api/v1/progress").json}

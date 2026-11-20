@@ -1941,13 +1941,28 @@ again. `progress.state` (pure) turns them into one state per device:
 | `not-shared` | `remoteState` is `notSharing` or the folder is not shared with the device |
 | `paused` | `remoteState` is `paused` |
 | `pending` | connected, nothing to download, and the device's whitelist was written less than its `rescan_seconds` plus 60 s ago (it has not applied it yet) |
-| `downloading` | `needBytes` > 0; with `percent`, the floor of `completion` |
-| `done` | connected and `completion` is 100 |
+| `downloading` | `needBytes` > 0, or anything else that is not complete (items and deletions to apply, no bytes); with `percent`, the floor of `completion` |
+| `done` | connected and `completion` is 100, or only folders are left (below) |
 
 ```json
 [{"device": "deck", "state": "downloading", "percent": 42, "need_bytes": 31000000000,
   "need_items": 812, "checked": "2026-11-06T10:00:00Z"}]
 ```
+
+**Folders a console ignores.** EmuDeck creates `roms/<system>` folders for systems the console's
+whitelist does not take. The console ignores them, so it never takes the hub's record of those
+directories, and the hub's completion for it stays a little below 100 with `needItems` above 0,
+`needBytes` 0 and `needDeletes` 0, for ever. When a device is `downloading` with no bytes and no
+deletions left (and so would be neither `pending` nor `done`), the server asks `GET
+/rest/db/remoteneed?folder=wz-library&device=<id>` for what it still needs, and `progress.state`
+(given `only_folders`, a tri-state like the `needed` of the whitelist cleanup) makes the device
+`done` (`percent` 100) when the list arrived, is not empty, and every item is a directory (the
+exact `type` `FILE_INFO_TYPE_DIRECTORY`). A file, a symlink or any other type among them, a
+list that is empty, longer than 1000 names or not answered (404, an error) leaves it
+`downloading`. A device with bytes or deletions left, or already `done`, `pending`, offline,
+paused or not shared, costs no extra request. `need_items` is always the hub's own count, so
+a `done` device can show a `need_items` above 0 (the folders it ignores); the UI draws only
+`state`, `percent` and `need_bytes`.
 
 The write time comes from the newest backup in `catalog/whitelists/<device>/` (the server keeps
 no other state); a whitelist the UI created has an empty backup for that. Progress is per console, not per game. Before this is relied on, the e2e test
