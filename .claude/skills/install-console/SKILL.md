@@ -29,15 +29,13 @@ git clone https://github.com/dagonco/warpzone.git src
 sh src/warpzone/data/updater.sh install <device>
 ```
 
-Options of `install` (from `updater.sh`): `[--config FILE] [--venv DIR] [--channel stable|rc] [-- ARGS...]`. Everything after `--` goes to `provision device`. Use `--channel rc` only if the user wants release candidates, and tell them to also set `channel = "rc"` under `[devices.<name>]` in the config so `provision device` keeps it.
+Options and what `install` does (it refuses a dirty clone or a missing Python before changing anything, checks out the newest release tag, makes the venv, then runs `provision device <device>`) are in [Installing a device](../../../website/src/content/docs/operation/self-update.md#installing-a-device) and [`updater.sh install`](../../../website/src/content/docs/reference/commands.md#updatersh-install). Everything after `--` goes to `provision device`. Running `install` again is safe. Use `--channel rc` only if the user wants release candidates, and tell them to also set `channel = "rc"` under `[devices.<name>]` in the config so `provision device` keeps it.
 
-What it does: refuses a dirty clone or a missing Python 3.11, checks out the newest release tag, makes a venv next to the clone, then runs `provision device <device>`, which also installs the updater's live copy, its settings and the systemd timer (45 seconds after boot, then every 15 minutes). Running `install` again is safe.
-
-Reading the result of `provision device`:
+Reading the result (exit codes in [commands.md](../../../website/src/content/docs/reference/commands.md#exit-codes)):
 
 - Exit `0`: done. Warnings are not failures; read them to the user.
-- Exit `3`: something was deferred because ES-DE, an emulator or a file ES-DE rewrites was open. This is not a failure. Ask the user to close it and run `provision device <device>` again. Exit `3` only comes from `provision device --unattended` (what the updater runs); the install runs it without `--unattended` unless you pass it after `--`.
-- Exit `1` or `2`: a real failure. Run through `updater.sh install`, any non-zero exit of `provision device` makes install stop with `provision device failed (exit N)` and exit `1`: read `N` and the message above it, fix the cause, and run the install again. Do not retry blindly.
+- Exit `3`: something was deferred because ES-DE, an emulator or a file ES-DE rewrites was open. Not a failure: ask the user to close it and run `provision device <device>` again.
+- Any other exit: `install` stops with `provision device failed (exit N)` and exits `1`. Read `N` and the message above it, fix the cause, and run the install again. Do not retry blindly.
 
 To preview a re-run once the install has made the venv: `~/.local/share/warpzone/venv/bin/warpzone provision device <device> --dry-run` (it prints the REST calls it would make and sends none).
 
@@ -49,7 +47,7 @@ To preview a re-run once the install has made the venv: `~/.local/share/warpzone
 ~/.local/share/warpzone/venv/bin/warpzone health <device>
 ```
 
-`doctor` prints `[ok]`, `[! ]`, `[!!]` and `[--]` lines with a fix for each problem. `health` ends with `health: ok` and exits `0` when this version works. Interpret problems with the `diagnose` skill. Optionally put `~/.local/share/warpzone/venv/bin` on `PATH`.
+`health` ends with `health: ok` and exits `0` when this version works; `doctor` lines are explained in [doctor.md](../../../website/src/content/docs/operation/doctor.md). Interpret problems with the `diagnose` skill. Optionally put `~/.local/share/warpzone/venv/bin` on `PATH`.
 
 On a systemd device, check the timer: `systemctl --user status warpzone-self-update.timer`.
 
