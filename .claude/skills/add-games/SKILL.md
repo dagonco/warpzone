@@ -5,7 +5,7 @@ description: Use when the user wants to add new games, ROMs, disc images, Switch
 
 # Add games through the inbox
 
-Every new game goes through `warpzone inbox`, without exception. It identifies the dump by content, converts it to the format the library holds, verifies it, places it and files the original. Reference: [inbox.md](../../../website/src/content/docs/setup/inbox.md).
+Every new game goes through `warpzone inbox`, without exception. What it does for each item is in [inbox.md](../../../website/src/content/docs/setup/inbox.md).
 
 `inbox` reports first and acts only with `--apply`. It runs on a computer that mounts the hub's share (the usual way, since a NAS is slow at conversions) or in the hub's container, not on a console; the two ways and their tools are in [inbox.md](../../../website/src/content/docs/setup/inbox.md#where-inbox-runs), and `warpzone doctor` checks the one in use.
 
@@ -19,7 +19,7 @@ Every new game goes through `warpzone inbox`, without exception. It identifies t
 
 ## Steps
 
-1. Check the setup with `warpzone doctor`. `inbox` needs the `[inbox]` table in the config (`root`, `dats_dir`, optional tool paths) or `--root` and `--dats`. Missing tools are shown with their fix; installing them changes the machine, so ask the user first and install only what the dumps need (for example `chdman` for discs, `nsz` plus the user's keys for Switch `.nsz`, `orbis-pkg-util` for PS4 `.pkg`, Vita3K plus the user's zRIF file in `[inbox] vita_zrif` for PS Vita `.pkg`).
+1. Check the setup with `warpzone doctor`. `inbox` needs the `[inbox]` table in the config or `--root` and `--dats` ([Configuration](../../../website/src/content/docs/setup/inbox.md#configuration)). Missing tools are shown with their fix; installing them changes the machine, so ask the user first and install only what the dumps need.
 2. Make sure the dumps are in `inbox/` on the hub's share (the user drops them there). Items modified in the last 30 seconds are skipped on purpose; wait for copies to finish.
 3. Report, which changes nothing:
 
@@ -28,16 +28,16 @@ Every new game goes through `warpzone inbox`, without exception. It identifies t
    ```
 
    Add `--root PATH`, `--dats PATH` or `--work-dir PATH` only when the config does not hold them. Show the user the output.
-4. Go through the report with the user. For each item it states the system, the destination path and the whitelist line (`!/roms/...`). Items for review (no DAT match, unless the user dropped the file in `_unverified/<system>/`: then it shows `would place (unverified)` when it looks like a rom of that system, incomplete multi-disc, encrypted 3DS, `.xci`, update or DLC packages (a PS4 one is placed when its base game is in the library; it goes to review when the game is missing, or when the update is older than the one in the library), a Vita `.pkg` with no zRIF in the `vita_zrif` file, "not supported by inbox yet") are not placed. A Vita `.pkg` without its zRIF needs the user to add the line to their key file ([PS Vita packages](../../../website/src/content/docs/setup/inbox.md#ps-vita-packages)); do not search for keys yourself. If the format is unsupported, apply the hard rule above; once support has been added, the user moves the item from `inbox/_revisar/` back to `inbox/` to try again.
+4. Go through the report with the user. For each item it states the system, the destination path and the whitelist line (`!/roms/...`). Items for review are not placed; the reasons are listed in [What it does for each item](../../../website/src/content/docs/setup/inbox.md#what-it-does-for-each-item). A Vita `.pkg` without its zRIF needs the user to add the line to their key file ([PS Vita packages](../../../website/src/content/docs/setup/inbox.md#ps-vita-packages)); do not search for keys yourself. If the format is unsupported, apply the hard rule above; once support has been added, the user moves the item from `inbox/_revisar/` back to `inbox/` to try again.
 5. After the user's explicit OK:
 
    ```bash
    warpzone inbox --apply
    ```
 
-   When Skyscraper is set up (`warpzone doctor` shows it), `--apply` also scrapes the games it placed, adding their description, covers and videos to the hub; a failure there is only a warning and `--no-scrape` skips it. To fill in the rest of the library, or games it could not scrape (daily limit, Skyscraper missing), run `warpzone scrape --dry-run` and then `warpzone scrape` on a computer that mounts the share ([scrape.md](../../../website/src/content/docs/setup/scrape.md)). On the hub container a nightly task, `scrape --unattended`, fills in what the inbox did not scrape (see "Filling art every night" in the same guide). Never put ScreenScraper credentials anywhere but Skyscraper's own `config.ini`.
+   With Skyscraper set up, `--apply` also scrapes the games it placed (a failure there is only a warning; `--no-scrape` skips it). To fill in what it could not scrape, use `warpzone scrape --dry-run` and then `warpzone scrape` ([scrape.md](../../../website/src/content/docs/setup/scrape.md)). Never put ScreenScraper credentials anywhere but Skyscraper's own `config.ini`.
 
-   Exit code `1` means some item needs review; read its `inbox/_revisar/<item>.reason.txt` to the user. Nothing is overwritten: the same content is "already in the library", different content under the same name goes to review.
+   Exit code `1` means some item needs review; read its `inbox/_revisar/<item>.reason.txt` to the user.
 6. Arcade sets and PS3 games can get an ES-DE `<altemulator>` entry, which `--apply` writes into the hub's gamelist. Ask the user to quit ES-DE on the consoles first, or the edit may be overwritten ([Gamelist edits](../../../website/src/content/docs/setup/inbox.md#gamelist-edits)).
 7. warpzone does not edit whitelists. Hand the printed `whitelist:` lines to the `edit-whitelist` skill for the consoles that should get the games.
 
