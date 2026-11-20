@@ -1644,8 +1644,30 @@ class App:
             state = progress.state(
                 reading, wrote_at=wrote, rescan_seconds=device.rescan_seconds, now=now
             )
+            if progress.wants_need_list(reading, state):
+                # Only items are left: a console that ignores the empty folders EmuDeck makes
+                # never takes them, so ask whether they are all that is left.
+                state = progress.state(
+                    reading,
+                    wrote_at=wrote,
+                    rescan_seconds=device.rescan_seconds,
+                    now=now,
+                    only_folders=self._only_folders(client, device.device_id),
+                )
             entries.append(progress.entry(device.name, state, now))
         return entries
+
+    @staticmethod
+    def _only_folders(client: Client, device_id: str) -> bool | None:
+        """Whether everything the device still needs is a directory; None when the hub could
+        not list it (no list, too many names, an error)."""
+        try:
+            items = client.remote_need_items(LIBRARY_FOLDER, device_id)
+        except SyncthingError:
+            return None
+        if not items:  # no list, or an empty one that does not explain what is missing
+            return None
+        return all(is_dir for _, is_dir in items)
 
 
 def _reason(exc: BaseException) -> str:

@@ -7,8 +7,14 @@ from warpzone.progress import Reading
 NOW = datetime(2026, 11, 6, 10, 0, 0, tzinfo=UTC)
 
 
-def state(reading: Reading, wrote_at: datetime | None = None, rescan: int = 300):
-    return progress.state(reading, wrote_at=wrote_at, rescan_seconds=rescan, now=NOW)
+def state(
+    reading: Reading,
+    wrote_at: datetime | None = None,
+    rescan: int = 300,
+    only_folders: bool | None = None,
+):
+    extra = {} if only_folders is None else {"only_folders": only_folders}
+    return progress.state(reading, wrote_at=wrote_at, rescan_seconds=rescan, now=NOW, **extra)
 
 
 class StateTests(unittest.TestCase):
@@ -50,6 +56,48 @@ class StateTests(unittest.TestCase):
     def test_items_to_apply_without_bytes_are_not_done(self) -> None:
         found = state(Reading(True, 97.5, 0, 12))
         self.assertEqual((found.state, found.percent), ("downloading", 97))
+
+    def test_items_that_are_all_folders_are_done(self) -> None:
+        # EmuDeck's empty system folders, which the console ignores, stay "needed" for ever.
+        found = state(Reading(True, 99.9, 0, 12), only_folders=True)
+        self.assertEqual((found.state, found.percent, found.need_items), ("done", 100, 12))
+
+    def test_a_file_among_the_items_stays_downloading(self) -> None:
+        found = state(Reading(True, 99.9, 0, 12), only_folders=False)
+        self.assertEqual((found.state, found.percent), ("downloading", 99))
+
+    def test_no_list_of_the_items_stays_downloading(self) -> None:
+        self.assertEqual(state(Reading(True, 99.9, 0, 12), only_folders=None).state, "downloading")
+
+    def test_folders_do_not_make_a_device_with_deletions_or_bytes_done(self) -> None:
+        self.assertEqual(
+            state(Reading(True, 95, 0, 12, need_deletes=2), only_folders=True).state, "downloading"
+        )
+        self.assertEqual(
+            state(Reading(True, 95, 0, 12, need_deletes=None), only_folders=True).state,
+            "downloading",
+        )
+        self.assertEqual(state(Reading(True, 95, 10, 12), only_folders=True).state, "downloading")
+
+    def test_folders_do_not_override_the_states_before_done(self) -> None:
+        self.assertEqual(state(Reading(False, 99, 0, 12), only_folders=True).state, "offline")
+        self.assertEqual(
+            state(Reading(True, 99, 0, 12, "paused"), only_folders=True).state, "paused"
+        )
+        young = NOW - timedelta(seconds=10)
+        self.assertEqual(state(Reading(True, 99, 0, 12), young, only_folders=True).state, "pending")
+
+    def test_only_a_device_that_could_be_done_by_its_folders_is_asked(self) -> None:
+        def asks(reading: Reading, wrote_at: datetime | None = None) -> bool:
+            return progress.wants_need_list(reading, state(reading, wrote_at))
+
+        self.assertTrue(asks(Reading(True, 99.9, 0, 12)))
+        self.assertFalse(asks(Reading(True, 100)))  # done already
+        self.assertFalse(asks(Reading(True, 42, 10, 12)))  # bytes to fetch
+        self.assertFalse(asks(Reading(True, 95, 0, 12, need_deletes=2)))
+        self.assertFalse(asks(Reading(True, 95, 0, 12, need_deletes=None)))
+        self.assertFalse(asks(Reading(False, 99, 0, 12)))
+        self.assertFalse(asks(Reading(True, 99, 0, 12), NOW - timedelta(seconds=10)))  # pending
 
     def test_a_write_in_the_future_does_not_count(self) -> None:
         self.assertEqual(state(Reading(True, 100), NOW + timedelta(hours=1)).state, "done")
