@@ -9,7 +9,7 @@ from unittest import mock
 
 from support import API_KEY, DECK_ID, HUB_ID, MACHINE_ID, FakeSyncthing, config_data
 from test_cli import run
-from warpzone import safefile, whitelist_store
+from warpzone import safefile, trash_record, whitelist_store
 from warpzone import whitelist as wl
 from warpzone.config import parse_config
 from warpzone.profiles import available_profiles, load_profile
@@ -642,6 +642,17 @@ folders = ["saves"]
         self.assertNotIn(API_KEY, out + err)
         # The hub is not reachable here: the scan is a warning, never a failure.
         self.assertIn("warning: could not ask the hub to scan", err)
+
+    def test_the_record_of_deleted_games_is_not_a_whitelist(self) -> None:
+        config = self.write_config()
+        self.put("deck", HAND)
+        record = self.root / "library" / trash_record.FILE
+        text = trash_record.encode([]).decode()
+        record.write_text(text)
+        _code, out, err = run("whitelist", "migrate", "--config", config)
+        self.assertNotIn("_deleted", out + err)
+        self.assertIn("deck: migrated", out)  # the proof walks the library with the record in it
+        self.assertEqual(record.read_text(), text)
 
     @NOT_ROOT
     def test_an_unreadable_whitelist_is_an_error_not_a_traceback(self) -> None:

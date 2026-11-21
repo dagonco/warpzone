@@ -20,7 +20,15 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Protocol
 
-from warpzone import catalog_store, inbox_lock, library_api, progress, trash, trash_store
+from warpzone import (
+    catalog_store,
+    inbox_lock,
+    library_api,
+    progress,
+    trash,
+    trash_record,
+    trash_store,
+)
 from warpzone import whitelist as wl
 from warpzone import whitelist_store as store
 from warpzone.config import Config
@@ -31,6 +39,7 @@ from warpzone.model import ESDE_ID, LIBRARY_ID, MEDIA_ID
 from warpzone.syncthing import Client, SyncthingError
 
 Scan = tuple[str, str]  # (Syncthing folder id, path below its root)
+RECORD_SCAN: Scan = (LIBRARY_ID, trash_record.FILE)
 
 
 class Hub(Protocol):
@@ -171,6 +180,110 @@ class Trasher:
             purge_after=trash.when_text(trash.purge_time(self.now())),
         )
 
+    # ------------------------------------------------------------- the record
+
+    def _update_record(
+        self,
+        change: Callable[[list[trash_record.RecordEntry]], list[trash_record.RecordEntry]],
+    ) -> bool:
+        """Apply `change` to the record of deleted games and write it compacted (see "The record
+        of deleted games"). False when nothing changed, so nothing was written. The caller holds
+        the write lock. `RecordReadError` or `OSError` when it cannot be read or written."""
+        entries, stamp = trash_store.read_record(self.root)
+        new = change(entries)
+        if new == entries:
+            return False
+        new = trash_record.compact(
+            new,
+            self.now(),
+            trash_store.paths_at(self.root / "library", trash_record.paths(new)),
+        )
+        if new == entries or (not new and stamp is None):
+            return False
+        trash_store.write_record(self.root, new, stamp)
+        return True
+
+    def _with_trash_entry(
+        self,
+        entries: list[trash_record.RecordEntry],
+        entry: str,
+        manifest: trash.Manifest | None,
+    ) -> list[trash_record.RecordEntry]:
+        """`entries` with the files under `trash/<entry>/library/` added, unless the entry is
+        there already. The deletion time is the manifest's, or the one in the entry's name for
+        a damaged entry."""
+        if any(e.entry == entry for e in entries):
+            return entries
+        files = trash_store.trash_files(self.root, entry)
+        if files is None:
+            return entries
+        when = trash_record.parse_when(manifest.deleted) if manifest is not None else None
+        when = when or trash_record.name_time(entry) or self.now()
+        parts = manifest.game.parts if manifest is not None else ()
+        return trash_record.with_entry(
+            entries, trash_record.entry_from_trash(entry, when, files, parts)
+        )
+
+    def _record_add(self, entry: str, manifest: trash.Manifest | None) -> bool:
+        """Record one trash entry (see `_with_trash_entry`)."""
+        return self._update_record(lambda es: self._with_trash_entry(es, entry, manifest))
+
+    def _record_failure(self, exc: BaseException) -> str:
+        return f"the record of deleted games could not be written ({_reason(exc)})"
+
+    def _record_for_purge(self, entry: str, manifest: trash.Manifest | None) -> bool:
+        """Record an entry before it is removed for good. `ApiError` (`write-failed`) when the
+        record cannot be written: nothing is removed then."""
+        try:
+            return self._record_add(entry, manifest)
+        except (trash_store.RecordReadError, OSError) as exc:
+            raise ApiError(
+                "write-failed", f"{self._record_failure(exc)}; nothing was removed", entry=entry
+            ) from None
+
+    def _record_deletion(
+        self, entry: str, manifest: trash.Manifest, scans: list[Scan], warnings: list[str]
+    ) -> None:
+        """Add a finished deletion to the record. A failure is a warning: the background pass
+        adds the entry."""
+        try:
+            if self._record_add(entry, manifest):
+                scans.append(RECORD_SCAN)
+        except (trash_store.RecordReadError, OSError) as exc:
+            note = f"{self._record_failure(exc)}; the next background pass will add it"
+            warnings.append(note)
+            self.log(f"warning: {note}")
+
+    def _unrecord(self, entry: str, scans: list[Scan]) -> trash_record.RecordEntry | None:
+        """Take an entry out of the record before its files move back: the entry as it was, or
+        None when it was not recorded. `ApiError` (`write-failed`) when the record cannot be
+        written; nothing has moved then."""
+        taken: list[trash_record.RecordEntry] = []
+
+        def remove(entries: list[trash_record.RecordEntry]) -> list[trash_record.RecordEntry]:
+            taken.extend(e for e in entries if e.entry == entry)
+            return trash_record.without_entry(entries, entry)
+
+        try:
+            if self._update_record(remove):
+                scans.append(RECORD_SCAN)
+        except (trash_store.RecordReadError, OSError) as exc:
+            raise ApiError(
+                "write-failed", f"{self._record_failure(exc)}; nothing was restored", entry=entry
+            ) from None
+        return taken[0] if taken else None
+
+    def _put_back(self, removed: trash_record.RecordEntry | None, scans: list[Scan]) -> None:
+        """Record an entry again after a restore gave up (logged when it fails: the background
+        pass adds a complete entry that is still in the trash)."""
+        if removed is None:
+            return
+        try:
+            if self._update_record(lambda es: trash_record.with_entry(es, removed)):
+                scans.append(RECORD_SCAN)
+        except (trash_store.RecordReadError, OSError) as exc:
+            self.log(f"warning: {self._record_failure(exc)}; {removed.entry} is not in it")
+
     # ------------------------------------------------------------- the dry run
 
     def dry_run(self, game_id: str) -> dict[str, Any]:
@@ -275,6 +388,8 @@ class Trasher:
             )
             warnings.append(note)
             self.log(f"warning: {note}")
+        else:
+            self._record_deletion(entry, done, scans, warnings)
         try:
             catalog_store.remove_game(self.root, plan.system, game_id, now=now)
         except OSError as exc:
@@ -376,9 +491,11 @@ class Trasher:
         self._require_entry(entry)
         scans: list[Scan] = []
         warnings: list[str] = []
-        with self._hub_lock(), self.write_lock:
-            answer = self._restore_locked(entry, scans, warnings)
-        self._scan(scans, warnings)
+        try:
+            with self._hub_lock(), self.write_lock:
+                answer = self._restore_locked(entry, scans, warnings)
+        finally:
+            self._scan(scans, warnings)  # a refusal may have touched the record
         self._ask_run()
         answer["warnings"] = list(warnings)
         return answer
@@ -415,9 +532,11 @@ class Trasher:
         for path in plan.skipped:
             warnings.append(f"{path} is in neither place and was skipped")
         now = self.now()
+        unrecorded = self._unrecord(entry, scans)  # before the first move back
         try:
             trash_store.write_manifest(self.root, trash.with_state(manifest, trash.RESTORING))
         except OSError as exc:
+            self._put_back(unrecorded, scans)
             raise ApiError(
                 "write-failed",
                 f"the trash entry could not be written ({_reason(exc)})",
@@ -427,7 +546,7 @@ class Trasher:
         try:
             trash_store.transfer(trash_dir, self.root, moves, strict=False)
         except trash_store.MoveError as exc:
-            raise self._restore_failed(manifest, trash_dir, exc) from None
+            raise self._restore_failed(manifest, trash_dir, exc, unrecorded, scans) from None
         library_moved = [p for p in plan.moves if p.startswith(trash.LIBRARY)]
         media_moved = [p for p in plan.moves if p.startswith(trash.MEDIA)]
         scans.extend((LIBRARY_ID, p.removeprefix(trash.LIBRARY)) for p in library_moved)
@@ -459,10 +578,17 @@ class Trasher:
         )
 
     def _restore_failed(
-        self, manifest: trash.Manifest, trash_dir: Path, exc: trash_store.MoveError
+        self,
+        manifest: trash.Manifest,
+        trash_dir: Path,
+        exc: trash_store.MoveError,
+        removed: trash_record.RecordEntry | None,
+        scans: list[Scan],
     ) -> ApiError:
-        """Move the paths a failed restore put back into the trash again; the error to answer."""
+        """Move the paths a failed restore put back into the trash again and record the entry
+        again; the error to answer."""
         stuck = trash_store.undo(trash_dir, self.root, exc.done)
+        self._put_back(removed, scans)
         if stuck:
             return ApiError(
                 "move-failed",
@@ -524,23 +650,36 @@ class Trasher:
 
     def purge(self, entry: str) -> dict[str, Any]:
         """Delete now: the whole entry folder, under the write lock only (nothing outside
-        `trash/` changes). It also finishes the leftover of a purge that failed partway."""
-        with self.write_lock:
-            try:
-                size = trash_store.purge_entry(self.root, entry)
-            except FileNotFoundError:
-                raise ApiError("not-found", "no such trash entry", entry=entry) from None
-            except OSError as exc:
-                raise ApiError(
-                    "purge-failed",
-                    f"the entry could not be removed whole ({_reason(exc)}); what is left stays",
-                    entry=entry,
-                ) from None
+        `trash/` changes but the record of deleted games, which gets the entry first). It also
+        finishes the leftover of a purge that failed partway."""
+        scans: list[Scan] = []
+        try:
+            with self.write_lock:
+                manifest = trash_store.read_manifest(self.root, entry)
+                if self._record_for_purge(entry, manifest):
+                    scans.append(RECORD_SCAN)
+                try:
+                    size = trash_store.purge_entry(self.root, entry)
+                except FileNotFoundError:
+                    raise ApiError("not-found", "no such trash entry", entry=entry) from None
+                except OSError as exc:
+                    raise ApiError(
+                        "purge-failed",
+                        f"the entry could not be removed whole ({_reason(exc)}); "
+                        "what is left stays",
+                        entry=entry,
+                    ) from None
+        finally:
+            self._scan(scans, [])
         return {"entry": entry, "purged": True, "bytes": size}
 
     def purge_pass(self) -> None:
-        """Finish what a failed purge left (`trash/.purging-*`), then remove each complete entry
-        whose `purge_after` has passed. Incomplete and damaged entries wait for Delete now."""
+        """Record each complete entry the record lacks, finish what a failed purge left
+        (`trash/.purging-*`), then remove each complete entry whose `purge_after` has passed
+        (recorded first: it stays when the record cannot be written). Incomplete and damaged
+        entries wait for Delete now."""
+        scans: list[Scan] = []
+        self._record_pass(scans)
         with self.write_lock:
             for name, exc in trash_store.finish_purges(self.root):
                 self.log(f"warning: the purge of {name} failed ({_reason(exc)})")
@@ -553,11 +692,49 @@ class Trasher:
                 if not trash.expired(fresh, now):
                     continue
                 try:
+                    if self._record_add(item.entry, fresh.manifest):
+                        scans.append(RECORD_SCAN)
+                except (trash_store.RecordReadError, OSError) as exc:
+                    self.log(f"warning: {self._record_failure(exc)}; {item.entry} stays")
+                    continue
+                try:
                     trash_store.purge_entry(self.root, item.entry)
                 except FileNotFoundError:
                     continue
                 except OSError as exc:
                     self.log(f"warning: the purge of {item.entry} failed ({_reason(exc)})")
+        self._scan(scans, [])
+
+    def _record_pass(self, scans: list[Scan]) -> None:
+        """Add to the record each complete entry of the trash it does not have (the entries a
+        hub made before it kept a record, and those whose deletion could not record them)."""
+        with self.write_lock:
+            try:
+                complete = [
+                    item
+                    for item in trash_store.list_entries(self.root)
+                    if item.manifest is not None and item.manifest.state == trash.COMPLETE
+                ]
+                known = (
+                    {e.entry for e in trash_store.read_record(self.root)[0]} if complete else set()
+                )
+                missing = [item for item in complete if item.entry not in known]
+                if not missing:
+                    self._said.discard("record")
+                    return
+                manifests = {item.entry: item.manifest for item in missing}
+
+                def add(entries: list[trash_record.RecordEntry]) -> list[trash_record.RecordEntry]:
+                    for entry, manifest in manifests.items():
+                        entries = self._with_trash_entry(entries, entry, manifest)
+                    return entries
+
+                if self._update_record(add):
+                    scans.append(RECORD_SCAN)
+            except (trash_store.RecordReadError, OSError) as exc:
+                self._once("record", f"warning: {self._record_failure(exc)}")
+                return
+            self._said.discard("record")
 
     # ------------------------------------------------------------- the cleanup
 

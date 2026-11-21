@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
-from warpzone import artwork, catalog, gamelist, inbox_mame, safefile, trash
+from warpzone import artwork, catalog, gamelist, inbox_mame, safefile, trash, trash_record
 from warpzone.config import InboxSettings
 from warpzone.errors import WarpzoneError
 from warpzone.library_api import Library
@@ -44,6 +44,7 @@ from warpzone.trash import (
 CATALOG_DIR = "catalog"
 BACKUPS = "tools/logs/gamelist-backups"
 MANIFEST_LIMIT = 16 * 1024 * 1024  # a manifest or a cleanups file over this is damaged
+RECORD_LIMIT = 128 * 1024 * 1024  # the record of deleted games over this is not read
 TRIES = 3  # a gamelist that keeps changing under a write is given up after this many
 
 Rename = Callable[[Path, Path], None]
@@ -330,6 +331,92 @@ def write_cleanups(root: Path, items: Sequence[Cleanup], stamp: safefile.FileSta
         return
     if not safefile.atomic_write(path, trash.encode_cleanups(items), expect=stamp):
         raise OSError(f"{CATALOG_DIR}/{trash.CLEANUPS_FILE} changed while it was being written")
+
+
+# --------------------------------------------------------------------------- the record
+
+
+class RecordReadError(WarpzoneError):
+    """The record of deleted games exists and cannot be read; the message names the file. It is
+    never overwritten."""
+
+
+def record_path(root: Path) -> Path:
+    return root / "library" / trash_record.FILE
+
+
+def read_record(
+    root: Path,
+) -> tuple[list[trash_record.RecordEntry], safefile.FileStamp | None]:
+    """The record's entries and the stamp the file had when it was read (None: no file).
+    `RecordReadError` when it is there and is not a record this version reads."""
+    path = record_path(root)
+    shown = f"library/{trash_record.FILE}"
+    try:
+        info = os.lstat(path)
+    except FileNotFoundError:
+        return [], None
+    except OSError as exc:
+        raise RecordReadError(f"{shown} could not be read ({_reason(exc)})") from exc
+    if not stat.S_ISREG(info.st_mode):
+        raise RecordReadError(f"{shown} could not be read (it is not a regular file)")
+    if info.st_size > RECORD_LIMIT:
+        raise RecordReadError(f"{shown} could not be read (it is over 128 MiB)")
+    try:
+        stamp = safefile.stamp(path)
+        data = path.read_bytes()
+    except OSError as exc:
+        raise RecordReadError(f"{shown} could not be read ({_reason(exc)})") from exc
+    entries = trash_record.parse(data)
+    if entries is None:
+        raise RecordReadError(
+            f"{shown} could not be read (it is not a record this version understands; "
+            "it is left as it is: move it away to start a new one)"
+        )
+    return entries, stamp
+
+
+def write_record(
+    root: Path, entries: Sequence[trash_record.RecordEntry], stamp: safefile.FileStamp | None
+) -> None:
+    """Write the record, refused when the file changed since `stamp` (None: there was none).
+    `OSError` when it cannot be written. The caller holds the server's write lock."""
+    path = record_path(root)
+    done = safefile.guarded_edit(
+        path, trash_record.encode(entries), expect=stamp, busy=lambda: False
+    )
+    if done is not safefile.Edit.WRITTEN:
+        raise OSError(f"library/{trash_record.FILE} changed while it was being written")
+
+
+def trash_files(root: Path, entry: str) -> list[trash_record.DeletedFile] | None:
+    """Every regular file below `trash/<entry>/library/` (or below the leftover of a purge that
+    failed partway), by `lstat` and without following a link: `None` when there is neither an
+    entry nor a leftover of that name. The files carry no `sha1`. `OSError` when a folder
+    cannot be read."""
+    if not trash.valid_entry(entry):
+        return None
+    base = entry_path(root, entry)
+    if entry_kind(root, entry) != F_DIR:
+        base = trash_path(root) / trash.purging_name(entry)
+        if not _real_dir(base):
+            return None
+    top = base / "library"
+    if not _real_dir(top):
+        return []
+    found: list[trash_record.DeletedFile] = []
+    stack = [(top, "")]
+    while stack:
+        folder, rel = stack.pop()
+        with os.scandir(folder) as it:
+            for item in it:
+                path = f"{rel}/{item.name}" if rel else item.name
+                if item.is_dir(follow_symlinks=False):
+                    stack.append((Path(item.path), path))
+                elif item.is_file(follow_symlinks=False):
+                    info = item.stat(follow_symlinks=False)
+                    found.append(trash_record.DeletedFile(path, info.st_size, info.st_mtime_ns))
+    return sorted(found, key=lambda f: f.path)
 
 
 class ArcadeCache:

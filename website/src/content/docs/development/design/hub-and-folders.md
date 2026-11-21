@@ -11,7 +11,8 @@ title: "Hub, folders and ignores"
 │   ├── bios/                some subfolders are also separate `wz-bios-*` folders (see Profiles)
 │   ├── extras/              switch/{updates,dlc,mods,misc}, amiibo/, texturepacks/
 │   ├── patterns-common.stignore
-│   └── patterns-<device>.stignore
+│   ├── patterns-<device>.stignore
+│   └── patterns-_deleted.stignore   warpzone's own record of deleted games (JSON), see below
 ├── saves/<emulator>/<kind>/ hub: send-receive ⇄ devices: send-receive, hub keeps history
 ├── frontend/
 │   ├── media/               ES-DE downloaded media     ⇄
@@ -157,6 +158,15 @@ changes after provisioning:
 `patterns-<device>.stignore` starts with `#include patterns-common.stignore`,
 lists what the device wants, and ends with `*` if it is a whitelist. The
 hub's own `.stignore` is `#include patterns-common.stignore`.
+
+**The record of deleted games.** `library/patterns-_deleted.stignore` is not a whitelist: it is
+the JSON file `serve` writes on the hub when a game is deleted from the library UI (see
+[The record of deleted games](/warpzone/development/design/library-ui/#the-record-of-deleted-games)).
+It travels as a `patterns-*.stignore` file: the `!/patterns-*.stignore` line of
+`patterns-common.stignore` and of the bootstrap ignores lets it through on every console that has
+`wz-library`, so it needs no ignore or config change. A device name starts with `[a-z0-9]`, so
+`_deleted` is never a device, and no `#include` names the file, so Syncthing never parses it.
+Nothing that lists devices reads the folder: they come from the config.
 
 **Bootstrap.** Syncthing refuses to sync a folder whose `.stignore` includes a
 file that does not exist yet, and on a fresh device the whitelist has not
