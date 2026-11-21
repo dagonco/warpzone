@@ -187,27 +187,53 @@ exactly and checks that no credential option can appear in it.
 
 ## Systems and platforms
 
-`scrape.PLATFORMS` maps a hub system folder to Skyscraper's platform name. It is data checked
-against Skyscraper's `peas.json` (the platform list it ships; 3.21.1 at the time of writing):
+`scrape.PLATFORMS` maps a hub system folder (ES-DE's system names, which is what `inbox` and the
+frontend use) to Skyscraper's platform name. It is data, checked against Skyscraper's `peas.json`
+and `platforms_idmap.csv` (3.21.1, the pinned `scrape.SKYSCRAPER_VERSION`; a test holds the 126
+platform names and the ones with no ScreenScraper id). Every ES-DE system that has a usable
+platform is in it; the setup guide lists them by maker in [Scraped systems](/warpzone/setup/scrape/#scraped-systems).
+The rules that decide a system:
 
-| Hub system | Skyscraper platform | Note |
+| Case | Platform | Note |
 |---|---|---|
-| `nes`, `snes`, `n64`, `gb`, `gbc`, `gba`, `nds`, `mastersystem`, `gamegear`, `atari2600`, `atari7800`, `atarilynx`, `wonderswan`, `wonderswancolor` | same name | |
-| `genesis` | `megadrive` | the one cartridge system whose name differs |
-| `sega32x` | `sega32x` | same name in both, though other tools say `32x` |
-| `atarijaguar` | `atarijaguar` | same name in both, though dArkOS says `jaguar`; its formats are `.j64` and `.jag`, plus `.zip` |
-| `psx`, `ps2`, `psp`, `saturn`, `dreamcast`, `gc`, `wii` | same name | CHD, ISO and RVZ are in Skyscraper's formats |
-| `n3ds` | `3ds` | |
-| `mame` | `mame` | ScreenScraper matches arcade sets by set name |
-| `ps3`, `xbox`, `switch` | same name | matched by name; `inbox` keeps the file's own name for these |
-| `ps4`, `psvita`, `wiiu`, `xbox360` | same name | see below: the launcher of a PS4 or Vita game, and the folder the frontend reads |
+| ES-DE's name is a platform | the same name | most of the table: `nes`, `snes`, `psx`, `c64`, `pokemini`, `3do`, `msx`, `atarist`, ... |
+| A regional or variant folder of one platform | that platform | `genesis`, `megadrivejp` -> `megadrive`; `famicom` -> `nes`; `sfc`, `snesna` -> `snes`; `sega32xjp`, `sega32xna` -> `sega32x`; `megacd`, `megacdjp` -> `segacd`; `saturnjp` -> `saturn`; `tg16`, `supergrafx` -> `pcengine`; `tg-cd` -> `pcenginecd`; `neogeocdjp` -> `neogeocd`; `mark3` -> `mastersystem` (the DAT `Sega - Master System - Mark III` is the same folder); `amiga600`, `amiga1200` -> `amiga`; `msx1` -> `msx`; `msxturbor` -> `msx2`; `tanodragon` -> `dragon32`; `to8` -> `moto` |
+| ES-DE spells it differently | the platform's name | `n3ds` -> `3ds`, `cdimono1` -> `cdi`, `colecovision` -> `coleco`, `astrocde` -> `astrocade`, `amigacd32` -> `cd32`, `odyssey2` -> `videopac` (its alias `odyssey 2`) |
+| A set of the MAME family | `mame` | `arcade`, `mame`, `mame-advmame`, `fba`, `fbneo`, `cps`, `cps1`, `cps2`, `cps3`, `model2`, `model3`, `stv`: ScreenScraper matches arcade sets by set name, `mame` lists the Capcom boards, Model 2, Model 3 and ST-V as aliases, and `arcade` has the same ScreenScraper system id (75) |
+| An arcade board with a platform of its own | that platform | `neogeo`, `naomi`, `atomiswave`; `naomigd` -> `naomi` (the same ScreenScraper system) |
+
+`mame` and not Skyscraper's `arcade` or `fba` platform for the family, so the library's arcade
+folders get the same kind of cover (`mame` asks for the box art, `arcade` and `fba` for the
+flyer). Folders are not mixed up in the cache either: a platform keeps its own.
+
+**Left out** (57 of the 195 systems of ES-DE 3.5; a system is added only when its games are one
+file or a playlist the catalog already reads, and Skyscraper 3.21.1 has a platform for it):
+
+- *No platform of its own*: `adam`, `android`, `androidapps`, `androidgames`, `archimedes`,
+  `atarixe`, `electron`, `flash`, `fpinball`, `gamate`, `gx4000`, `lcdgames`, `lowresnx`, `lutro`,
+  `mess`, `mugen`, `multivision`, `satellaview`, `sgb`, `spectravideo`, `sufami`, `supracan`,
+  `uzebox`, `vpinball`, `wasm4`, `xboxone`, `zxnext`. Where `peas.json` names one as an alias of
+  another platform (`satellaview`, `sufami` of `snes`) the alias only widens a name search; the
+  request still goes to that platform's ScreenScraper system, so the games are not mapped.
+- *A platform but no ScreenScraper id* (`platforms_idmap.csv` has none or `-1`): `chailove`
+  (`love`), `j2me`, `ngage` and `symbian` (`symbian`), `naomi2`.
+- *Games that are folders, launchers or scripts*, which the catalog would list as many files or as
+  a launcher Skyscraper does not read: `ags`, `consolearcade`, `daphne`, `desktop`, `doom`, `dos`,
+  `easyrpg`, `emulators`, `epic`, `kodi`, `laserdisc`, `lutris`, `openbor`, `pc`, `pcarcade`,
+  `ports`, `quake`, `scummvm`, `solarus`, `steam`, `triforce`, `type-x`, `windows`, `windows3x`,
+  `windows9x`. Each needs its own handling (like `ps4` below) before it can be added.
+
+A file named in `--includefrom` is scraped whatever its extension (Skyscraper's `formats` only
+filter a scan of the folder: the named files replace the scan), so an ES-DE extension a platform
+does not list, such as a disk image format of `c64`, needs nothing extra.
 
 A test checks that every system `inbox` can place (the values of `dat.SYSTEMS` and the systems of
 the kind handlers) is in `PLATFORMS`, so a new system in `inbox` fails it until it is given a
-platform.
+platform, and that every platform in the table is one Skyscraper 3.21.1 defines and can ask
+ScreenScraper about.
 
-**Launchers and folders the frontend reads.** Four systems are scraped by what the frontend lists
-and not by what the catalog holds as the game (decided 2026-11-19; they were left out before):
+**Launchers and folders the frontend reads.** Five systems are scraped by what the frontend lists
+and not by what the catalog holds as the game:
 
 - *A PS4 or Vita game is a folder* (`roms/ps4/games/<CUSA>`, `roms/psvita/app/<TITLEID>`): Skyscraper
   cannot compute a cache id for a folder, and the folder's name says nothing ScreenScraper knows.
@@ -218,14 +244,15 @@ and not by what the catalog holds as the game (decided 2026-11-19; they were lef
   game's title. A game with no launcher is not in the frontend, so it is not selected
   (`scrape.LAUNCHER_SYSTEMS`).
 - *The frontend reads a folder below the system's one*: ES-DE lists PS4 from `roms/ps4/shortcuts/`
-  and Wii U and Xbox 360 from `roms/<system>/roms/`, so its gamelist says `./Bloodborne.desktop` and
+  and Wii U, Xbox 360 and Model 2 from `roms/<system>/roms/`, so its gamelist says `./Bloodborne.desktop` and
   `./Halo 3 (World).iso` where the catalog says `./shortcuts/Bloodborne.desktop` and
   `./roms/Halo 3 (World).iso` (the same shift as in
   [Frontend artwork](/warpzone/development/design/frontend-artwork/) and
   [Metadata and media](/warpzone/development/design/library-ui/#metadata-and-media)). The hub has
   no system list, so the library UI tries the shorter paths; a scrape cannot guess, because it
   writes. It uses `scrape.FRONTEND_BASES`: `roms/` for the systems of `whitelist.SUBROOT_SYSTEMS`
-  (the ones `inbox` files below `roms/<system>/roms/`) and `shortcuts/` for PS4, the one fact
+  (the ones whose games are kept below `roms/<system>/roms/`: Wii U, Xbox 360 and Model 2) and
+  `shortcuts/` for PS4, the one fact
   that has no other source on the hub. `scrape.frontend_games` applies it to a system's games
   before anything else: the `gamelist` of each is cut to the frontend's path, and a game outside
   the folder (a PS4 package filed at the top, a PS4 game without a launcher) is dropped. From
@@ -244,7 +271,7 @@ Both entry points run the same function on a list of games, one system at a time
 catalog entry (see [The catalog index](/warpzone/development/design/library-ui/#the-catalog-index)):
 its `primary` part and its `gamelist` path. `inbox --apply` updates the catalog before it
 scrapes, so the games it placed are there. For a system the frontend reads from a folder below its
-own, or whose games are launchers (`ps4`, `psvita`, `wiiu`, `xbox360`), the `gamelist` of each game
+own, or whose games are launchers (`ps4`, `psvita`, `wiiu`, `xbox360`, `model2`), the `gamelist` of each game
 is first replaced by the frontend's path (`scrape.frontend_games`, see
 [Systems and platforms](#systems-and-platforms)); everything below goes by that path.
 

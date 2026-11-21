@@ -107,7 +107,40 @@ The miximage follows the layout ES-DE itself makes by default. `scrape` only add
 
 A game takes about 10 to 18 seconds (18 on a NAS) and 2.6 MB of media, most of it the video, so a library of 1,000 games is about three to five hours and 2.6 GB on the hub (the videos stay on the hub; consoles ignore them) plus about as much in Skyscraper's cache on the machine that scrapes (in the container, `skyscraper/cache/` on the NAS's disk).
 
-Scraped systems: `nes`, `snes`, `n64`, `gb`, `gbc`, `gba`, `nds`, `genesis`, `mastersystem`, `gamegear`, `sega32x`, `atari2600`, `atari7800`, `atarilynx`, `atarijaguar`, `wonderswan`, `wonderswancolor`, `psx`, `ps2`, `psp`, `saturn`, `dreamcast`, `gc`, `wii`, `n3ds`, `mame`, `ps3`, `ps4`, `psvita`, `xbox`, `xbox360`, `wiiu` and `switch`. A PS4 or PS Vita game is scraped by the name of its launcher (`<Title>.desktop` in `shortcuts/` for PS4, `<Title>.psvita` for Vita), so a game with no launcher is not scraped; a Wii U or Xbox 360 game by the name of its file.
+## Scraped systems
+
+Every system folder that [ES-DE](https://es-de.org) 3.5 names and that Skyscraper 3.21.1 has a platform for is scraped: 138 folders. A regional or variant folder is scraped as the platform it shares (`megadrivejp` and `genesis` as `megadrive`, `famicom` as `nes`, `sfc` and `snesna` as `snes`). `warpzone scrape --system NAME` takes any of these names.
+
+| Maker | System folders |
+|---|---|
+| Nintendo | `nes`, `famicom`, `fds`, `snes`, `sfc`, `snesna`, `n64`, `n64dd`, `gb`, `gbc`, `gba`, `nds`, `n3ds`, `gc`, `wii`, `wiiu`, `switch`, `virtualboy`, `pokemini`, `gameandwatch` |
+| Sega | `mastersystem`, `mark3`, `sg-1000`, `genesis`, `megadrive`, `megadrivejp`, `segacd`, `megacd`, `megacdjp`, `sega32x`, `sega32xjp`, `sega32xna`, `saturn`, `saturnjp`, `dreamcast`, `gamegear` |
+| Sony | `psx`, `ps2`, `ps3`, `ps4`, `psp`, `psvita` |
+| Microsoft | `xbox`, `xbox360` |
+| Atari | `atari2600`, `atari5200`, `atari7800`, `atari800`, `atarijaguar`, `atarijaguarcd`, `atarilynx`, `atarist` |
+| NEC | `pcengine`, `tg16`, `supergrafx`, `pcenginecd`, `tg-cd`, `pcfx`, `pc88`, `pc98` |
+| SNK | `neogeo`, `neogeocd`, `neogeocdjp`, `ngp`, `ngpc` |
+| Bandai | `wonderswan`, `wonderswancolor` |
+| Arcade | `arcade`, `mame`, `mame-advmame`, `fba`, `fbneo`, `cps`, `cps1`, `cps2`, `cps3`, `model2`, `model3`, `stv`, `naomi`, `naomigd`, `atomiswave` |
+| Commodore | `c64`, `plus4`, `vic20`, `amiga`, `amiga600`, `amiga1200`, `amigacd32`, `cdtv` |
+| Other computers | `amstradcpc`, `apple2`, `apple2gs`, `bbcmicro`, `coco`, `dragon32`, `tanodragon`, `fm7`, `fmtowns`, `macintosh`, `moto`, `to8`, `msx`, `msx1`, `msx2`, `msxturbor`, `oric`, `samcoupe`, `ti99`, `trs-80`, `x1`, `x68000`, `zx81`, `zxspectrum`, `zmachine` |
+| Other consoles and handhelds | `3do`, `cdimono1`, `colecovision`, `intellivision`, `vectrex`, `channelf`, `arcadia`, `astrocde`, `odyssey2`, `videopac`, `crvision`, `gamecom`, `gmaster`, `megaduck`, `pv1000`, `scv`, `supervision`, `vsmile` |
+| Fantasy consoles and others | `pico8`, `tic80`, `arduboy`, `vircon32`, `palm` |
+
+Notes:
+
+- **Arcade.** The folders with sets named like MAME's (`arcade`, `mame`, `fba`, `fbneo`, the Capcom and Sega board folders) are asked of ScreenScraper as MAME sets, by set name, the same way `mame` always was. `neogeo`, `naomi`, `naomigd` and `atomiswave` have a platform of their own and use it.
+- **PS4 and PS Vita.** A game is scraped by the name of its launcher (`<Title>.desktop` in `shortcuts/` for PS4, `<Title>.psvita` for Vita), so a game with no launcher is not scraped. A Wii U, Xbox 360 or Model 2 game is scraped by the name of its file, which ES-DE reads from `roms/<system>/roms/`.
+- **Only systems with games.** A folder with no games, or no catalog yet, is skipped (`warpzone catalog` makes the catalog).
+
+Not scraped, because Skyscraper 3.21.1 cannot do it for them:
+
+- **No platform of its own:** `adam`, `android`, `androidapps`, `androidgames`, `archimedes`, `atarixe`, `electron`, `flash`, `fpinball`, `gamate`, `gx4000`, `lcdgames`, `lowresnx`, `lutro`, `mess`, `mugen`, `multivision`, `satellaview`, `sgb`, `spectravideo`, `sufami`, `supracan`, `uzebox`, `vpinball`, `wasm4`, `xboxone` and `zxnext`. For a few of them Skyscraper lists the name as an alias of another platform, which does not make ScreenScraper treat the games as that platform's.
+- **A platform ScreenScraper has no system id for:** `chailove`, `j2me`, `naomi2`, `ngage` and `symbian`.
+- **Games that are folders, launchers or scripts** (a game is not one file Skyscraper can read, so warpzone does not guess): `ags`, `consolearcade`, `daphne`, `desktop`, `doom`, `dos`, `easyrpg`, `emulators`, `epic`, `kodi`, `laserdisc`, `lutris`, `openbor`, `pc`, `pcarcade`, `ports`, `quake`, `scummvm`, `solarus`, `steam`, `triforce`, `type-x`, `windows`, `windows3x` and `windows9x`.
+
+`warpzone scrape --system` with one of these is a usage error. The design behind the table is in [Systems and platforms](/warpzone/development/design/scrape/#systems-and-platforms).
+
 
 ## Scraping what `inbox` places
 

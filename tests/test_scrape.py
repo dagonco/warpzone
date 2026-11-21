@@ -8,6 +8,7 @@ from unittest import mock
 
 from library_support import game
 from scrape_support import ps4_game, vita_game
+from skyscraper_platforms import NO_SCREENSCRAPER_ID, PEAS
 from warpzone import artwork, inbox_dolphin, inbox_mame, inbox_n3ds, inbox_vita, scrape
 from warpzone.dat import SYSTEMS
 from warpzone.inbox_console_iso import FOLDERS as CONSOLE_FOLDERS
@@ -45,14 +46,79 @@ class PlatformTableTest(unittest.TestCase):
         missing = inbox_systems() - scrape.PLATFORMS.keys()
         self.assertEqual(missing, set(), "give these a Skyscraper platform")
 
-    def test_no_system_that_inbox_cannot_place(self):
-        self.assertEqual(scrape.PLATFORMS.keys() - inbox_systems(), set())
+    def test_every_entry_is_a_name_to_a_platform_skyscraper_has(self):
+        for system, platform in scrape.PLATFORMS.items():
+            self.assertRegex(system, r"^[a-z0-9-]+$")
+            self.assertTrue(platform, system)
+            self.assertIn(platform, PEAS, f"{system}: no such platform in Skyscraper 3.21.1")
+
+    def test_no_platform_screenscraper_cannot_be_asked_about(self):
+        self.assertEqual(set(scrape.PLATFORMS.values()) & NO_SCREENSCRAPER_ID, set())
+
+    def test_the_priority_systems_are_covered(self):
+        self.assertEqual(scrape.PLATFORMS["c64"], "c64")
+        self.assertEqual(scrape.PLATFORMS["pokemini"], "pokemini")
+        self.assertEqual(scrape.PLATFORMS["arcade"], scrape.PLATFORMS["mame"])
 
     def test_names_that_differ(self):
         self.assertEqual(scrape.PLATFORMS["genesis"], "megadrive")
         self.assertEqual(scrape.PLATFORMS["n3ds"], "3ds")
         self.assertEqual(scrape.PLATFORMS["sega32x"], "sega32x")
         self.assertEqual(scrape.PLATFORMS["atarijaguar"], "atarijaguar")
+
+    def test_regional_variants_map_to_their_base_platform(self):
+        families = {
+            "megadrive": ("genesis", "megadrive", "megadrivejp"),
+            "nes": ("nes", "famicom"),
+            "snes": ("snes", "sfc", "snesna"),
+            "sega32x": ("sega32x", "sega32xjp", "sega32xna"),
+            "segacd": ("segacd", "megacd", "megacdjp"),
+            "saturn": ("saturn", "saturnjp"),
+            "pcengine": ("pcengine", "tg16", "supergrafx"),
+            "pcenginecd": ("pcenginecd", "tg-cd"),
+            "neogeocd": ("neogeocd", "neogeocdjp"),
+            "amiga": ("amiga", "amiga600", "amiga1200"),
+            "msx": ("msx", "msx1"),
+            "videopac": ("videopac", "odyssey2"),
+            "naomi": ("naomi", "naomigd"),
+            "mame": (
+                "mame",
+                "arcade",
+                "fba",
+                "fbneo",
+                "mame-advmame",
+                "cps",
+                "cps1",
+                "cps2",
+                "cps3",
+                "model2",
+                "model3",
+                "stv",
+            ),
+        }
+        for platform, systems in families.items():
+            for system in systems:
+                self.assertEqual(scrape.PLATFORMS[system], platform, system)
+
+    def test_systems_with_their_own_platform_are_not_folded_into_mame(self):
+        for system in ("neogeo", "naomi", "atomiswave"):
+            self.assertEqual(scrape.PLATFORMS[system], system)
+
+    def test_systems_without_a_usable_platform_are_not_scraped(self):
+        left_out = (
+            "naomi2",  # a platform, but with no ScreenScraper id
+            "daphne",  # games are folders
+            "scummvm",
+            "dos",
+            "windows",
+            "steam",
+            "satellaview",
+            "xboxone",
+        )
+        self.assertEqual(set(left_out) & scrape.PLATFORMS.keys(), set())
+
+    def test_model2_is_read_below_its_roms_folder(self):
+        self.assertEqual(scrape.FRONTEND_BASES["model2"], "roms/")
 
     def test_extra_extensions_are_only_for_the_systems_that_need_them(self):
         self.assertEqual(scrape.EXTRA_EXTENSIONS, {"3ds": ("*.zcci",), "ps4": ("*.desktop",)})
