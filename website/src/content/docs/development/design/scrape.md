@@ -204,7 +204,8 @@ The rules that decide a system:
 
 `mame` and not Skyscraper's `arcade` or `fba` platform for the family, so the library's arcade
 folders get the same kind of cover (`mame` asks for the box art, `arcade` and `fba` for the
-flyer). Folders are not mixed up in the cache either: a platform keeps its own.
+flyer). The family also shares one Skyscraper cache, the `mame` one, so a set already scraped
+under one of these folders costs no request under another.
 
 **Left out** (57 of the 195 systems of ES-DE 3.5; a system is added only when its games are one
 file or a playlist the catalog already reads, and Skyscraper 3.21.1 has a platform for it):
@@ -223,9 +224,10 @@ file or a playlist the catalog already reads, and Skyscraper 3.21.1 has a platfo
   `ports`, `quake`, `scummvm`, `solarus`, `steam`, `triforce`, `type-x`, `windows`, `windows3x`,
   `windows9x`. Each needs its own handling (like `ps4` below) before it can be added.
 
-A file named in `--includefrom` is scraped whatever its extension (Skyscraper's `formats` only
-filter a scan of the folder: the named files replace the scan), so an ES-DE extension a platform
-does not list, such as a disk image format of `c64`, needs nothing extra.
+A file named in `--includefrom` is scraped whatever its extension (the named files replace the
+scan of the folder, which is what Skyscraper's `formats` filter), so an ES-DE extension a platform
+does not list, such as a disk image format of `c64`, needs nothing extra. The `formats` do matter
+once more, when the gamelist is written: see the folder rule under [Flow](#flow), step "Stage".
 
 A test checks that every system `inbox` can place (the values of `dat.SYSTEMS` and the systems of
 the kind handlers) is in `PLATFORMS`, so a new system in `inbox` fails it until it is given a
@@ -281,7 +283,8 @@ is first replaced by the frontend's path (`scrape.frontend_games`, see
    [Media kinds](#media-kinds) or are *bare* (see [Merge](#merge)). `inbox` passes only the games it placed in this run; `scrape`
    passes all of the system's.
 2. **Stage.** In `<work_dir>/scrape/<system>/input/`, each game gets a symbolic link at its
-   `gamelist` path (subfolders kept) to the file on the share (for a PS4 or Vita game, its
+   `gamelist` path (subfolders kept; the folder rule below changes the name of a game one folder
+   down) to the file on the share (for a PS4 or Vita game, its
    launcher and not its folder). Nothing is copied: a CHD is
    hundreds of MB and Skyscraper only reads it. An `.m3u` folder is staged as a file, a link named
    after the folder that points at the playlist inside it (`Game.m3u` -> `.../Game.m3u/Game.m3u`),
@@ -292,6 +295,21 @@ is first replaced by the frontend's path (`scrape.frontend_games`, see
    platform lists only `*.3ds` and `*.cci`, so every Skyscraper call for that platform (gather
    and both generate passes) also gets `--addext '*.zcci'` (`scrape.EXTRA_EXTENSIONS`, one
    argument, extensions separated by a space). The media is `<name>.png`, as for a `.cci`.
+
+   **The folder rule.** When Skyscraper writes the gamelist for a platform whose `formats`
+   include `*.cue` (`psx`, `ps2`, `saturn`, `dreamcast`, `3do`, `segacd`, `pcenginecd`, `amiga`
+   and others), a game exactly one folder below the input folder, alone in that folder among the
+   files of the platform's formats, becomes a `<folder>` entry, and Skyscraper drops it unless the
+   user's `config.ini` sets `addFolders` (`EmulationStation::assembleList`, 3.21.1). A disc game
+   kept in its own folder (`roms/psx/Game/Game.cue`) would get no entry, and would be recorded as
+   not found or only get its media. warpzone does not own `config.ini` and has no command-line
+   option for it, so such a game is staged one folder deeper, under the folder of the real path
+   above its own (`psx/Game/Game.cue`, `scrape.staged_name`), on every platform so that no list of
+   platforms has to be kept. It is the real folder and not a made-up name because Skyscraper
+   finds a staged file again by the end of its real path. The staged name is what the batch
+   list, the media Skyscraper writes and the entry's `<path>` use; the merge keys the batch by it
+   and writes the hub's entry and media under the game's `gamelist` path, as before. A game in
+   the folder itself, or two or more folders deep, keeps its `gamelist` path as its staged name.
 3. **Gather**, in batches of 100 games (an `--includefrom` list of staged paths): `Skyscraper -p
    <platform> -s screenscraper -i <input> --includefrom <batch> --flags
    onlymissing,videos,backcovers,unattend,nohints`. This is the only step that makes requests;

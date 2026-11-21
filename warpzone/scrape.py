@@ -322,6 +322,17 @@ def frontend_games(system: str, games: Iterable[Game]) -> list[Game]:
     return found
 
 
+def staged_name(name: str, real_parts: Sequence[str]) -> str:
+    """The name a game is staged under: its `gamelist` path `name`, except that one in a folder
+    exactly one level below the system folder gets the real folder above that one in front
+    (`Dir/Game.cue` of `roms/psx/Dir/Game.cue` is staged as `psx/Dir/Game.cue`). See
+    development/design/scrape.md, "Flow", step "Stage"."""
+    rel = name.split("/")
+    if len(rel) == 2 and len(real_parts) >= 3 and list(real_parts[-2:]) == rel:
+        return f"{real_parts[-3]}/{name}"
+    return name
+
+
 def media_stem(game: Game) -> str:
     """The name the hub's media files of a game have, without kind folder and extension.
 
@@ -831,7 +842,7 @@ def plan_merge(
     """What to add to the hub for one batch of staged games. Pure: nothing is read or written.
     See development/design/scrape.md, "Merge" for the rules.
 
-    - `staged` maps a staged name (the `gamelist` path below the staged folder) to its game,
+    - `staged` maps a staged name (`staged_name`, below the staged folder) to its game,
       for the games of the batch; `staged_root` is the staged folder, to read absolute paths.
     - `hub_entries` are the hub gamelist's (`artwork.parse_gamelist`); `hub_media` holds the
       hub's media paths as for `select`, `<kind>/<stem>.<ext>`.
