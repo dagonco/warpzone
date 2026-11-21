@@ -379,9 +379,21 @@ def read_record(
 def write_record(
     root: Path, entries: Sequence[trash_record.RecordEntry], stamp: safefile.FileStamp | None
 ) -> None:
-    """Write the record, refused when the file changed since `stamp` (None: there was none).
-    `OSError` when it cannot be written. The caller holds the server's write lock."""
+    """Write the record, refused when the file changed since `stamp` (None: there was none); the
+    file goes when no entry is left. `OSError` when it cannot be written. The caller holds the
+    server's write lock."""
     path = record_path(root)
+    if not entries:
+        if stamp is None:
+            return
+        try:
+            unchanged = safefile.stamp(path) == stamp
+        except FileNotFoundError:
+            return
+        if not unchanged:
+            raise OSError(f"library/{trash_record.FILE} changed while it was being written")
+        path.unlink(missing_ok=True)
+        return
     done = safefile.guarded_edit(
         path, trash_record.encode(entries), expect=stamp, busy=lambda: False
     )

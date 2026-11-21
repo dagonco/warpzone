@@ -1143,7 +1143,7 @@ warpzone takes it for a whitelist: devices come from the config, never from a li
 folder, and prune never deletes it (it protects every `patterns-*.stignore` in the root). It is
 warpzone's own and is never edited by hand.
 
-The content is JSON in UTF-8 with sorted keys, whatever the extension says:
+The content is JSON with sorted keys (ASCII, whatever the extension says):
 
 ```json
 {"entries": [{"deleted": "2026-11-16T10:15:00Z",
@@ -1164,8 +1164,19 @@ The content is JSON in UTF-8 with sorted keys, whatever the extension says:
   The 7-day purge of the trash does not remove it from the record.
 - A reader accepts a record only as a whole: a `format` other than `1`, a path that is absolute
   or has an empty, `.` or `..` component, or any other shape makes the file unreadable and it
-  authorises nothing. The hub does not overwrite a file it cannot read (it is left as it is, the
-  write that needed it is refused or warned about, and the message says to move the file away).
+  authorises nothing. The hub does not overwrite a file it cannot read: it is left as it is, a
+  deletion warns, and Restore, Delete now and the 7-day purge are refused until the file is moved
+  away. That is shown where the user looks: `GET /api/v1/trash` lists it under `problems` and the
+  Trash view puts it at the top, and the log says it once, not on every pass.
+- A reader must apply `expires` itself (`trash_record.index` does) and must never take the record
+  alone as proof that the hub no longer has a file: an entry can list a path that is back in the
+  library until the next pass drops it, so a reader checks the hub's own index too.
+- A `sha1` is copied only when it is 40 lowercase hex digits, as the reader requires; any other
+  value in the catalog is left out, so the writer can never produce a record the reader refuses.
+  A file name that is not UTF-8 (listed by Python with lone surrogates) is written as a JSON
+  escape, so the file is ASCII and the reader gets back the same string a console's own
+  filesystem listing gives. An entry whose `deleted` is too late to add 180 days to expires on
+  the last second there is.
 
 **Who writes it and when.** Only `serve` on the hub, under the server's write lock, with
 `safefile.guarded_edit` (the temporary file starts with `.`, so a console's whitelist ignores
@@ -1183,10 +1194,16 @@ it.
   name). If the record cannot be written, nothing is removed.
 - Restore takes the entry out before its first move back and puts it back if the restore rolls
   back.
-- Every write also drops the entries past `expires` and the files whose path exists again below
-  `library/` (looked at with `lstat`), since a game filed again is not a deleted one. An entry
-  left with no file stays until it expires. A background pass that has nothing to add writes
-  nothing.
+- Every write, and every pass of the background task (60 seconds, also on a hub with an empty
+  trash while the record exists), drops the entries past `expires` and the files whose path
+  exists again below `library/` (one `lstat` per recorded path), since a game filed again is not
+  a deleted one. A restore does it again once its files are back, so no entry lists a path that
+  is in the library. An entry left with no file stays until it expires; the file itself goes when
+  no entry is left. A pass writes only when something changed, and with no record and nothing
+  to add it looks at no path.
+- An entry that cannot be recorded (a value the format cannot hold) is said once in the log and
+  does not stop the record, the purge or the deletion of anything else; it stays in the trash
+  until it can be recorded.
 
 ### Whitelist cleanup
 
@@ -1933,10 +1950,13 @@ lines recorded per device; `warnings` holds failed scans and skipped links.
               "days_left": 7, "size": 3221307227, "files": 2, "media": 1, "state": "complete"}],
  "pending": [{"device": "deck", "entry": "20261116T101500Z-5d0c1f3a9b2e7c48",
               "title": "Example Game", "lines": 2, "since": "2026-11-16T10:15:00Z",
-              "waiting": "offline"}]}
+              "waiting": "offline"}],
+ "problems": []}
 ```
 
-`state` is `complete`, `incomplete` or `damaged` (then only `entry` and `state` are certain, the
+`problems` lists what is wrong on the hub that the page cannot work around: today only a
+[record of deleted games](#the-record-of-deleted-games) that cannot be read, as a sentence that
+names the file and says to move it away (empty when all is well). `state` is `complete`, `incomplete` or `damaged` (then only `entry` and `state` are certain, the
 rest `null`). `days_left` is the whole days until `purge_after`, rounded up, never below 0, and
 `null` for an entry the purge skips. `waiting` says what a device's lines wait for: `hub` (the
 hub has not recorded the deletion), `offline`, `paused`, `not-shared`, `syncing` (connected, not

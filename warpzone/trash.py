@@ -856,15 +856,20 @@ def _entry_row(item: Listed, now: datetime) -> dict[str, Any]:
 
 
 def trash_response(
-    listed: Sequence[Listed], pending: Sequence[Mapping[str, Any]], now: datetime
+    listed: Sequence[Listed],
+    pending: Sequence[Mapping[str, Any]],
+    now: datetime,
+    problems: Sequence[str] = (),
 ) -> dict[str, Any]:
-    """The answer of `GET /api/v1/trash`: the entries, newest first, and the cleanups that
-    wait."""
+    """The answer of `GET /api/v1/trash`: the entries, newest first, the cleanups that wait and
+    the `problems` to show (see "The record of deleted games" in
+    development/design/library-ui.md)."""
     rows = [_entry_row(item, now) for item in sorted(listed, key=lambda i: i.entry, reverse=True)]
     return {
         "size": sum(item.manifest.size for item in listed if item.manifest is not None),
         "entries": rows,
         "pending": [dict(p) for p in pending],
+        "problems": list(problems),
     }
 
 

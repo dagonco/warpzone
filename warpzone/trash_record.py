@@ -95,7 +95,12 @@ def name_time(entry: str) -> datetime | None:
 
 
 def expiry(deleted: datetime) -> datetime:
-    return deleted + timedelta(days=KEEP_DAYS)
+    """`KEEP_DAYS` after `deleted`, or the last second there is for a date too late to add them
+    to."""
+    try:
+        return deleted + timedelta(days=KEEP_DAYS)
+    except OverflowError:
+        return datetime.max.replace(microsecond=0, tzinfo=UTC)
 
 
 def expired(item: RecordEntry, now: datetime) -> bool:
@@ -119,8 +124,10 @@ def _order(entries: Iterable[RecordEntry]) -> list[RecordEntry]:
 
 
 def encode(entries: Iterable[RecordEntry]) -> bytes:
-    """The bytes of the file: JSON in UTF-8 with sorted keys, entries by time and files by
-    path, so the same record always gives the same bytes."""
+    """The bytes of the file: JSON with sorted keys, entries by time and files by path, so the
+    same record always gives the same bytes. It is ASCII (a name that is not UTF-8, which Python
+    lists with lone surrogates, is written as an escape and read back as the same string, so a
+    console compares it with the name its own filesystem gives)."""
     doc = {
         "format": FORMAT,
         "entries": [
@@ -136,8 +143,13 @@ def encode(entries: Iterable[RecordEntry]) -> bytes:
             for e in _order(entries)
         ],
     }
-    text = json.dumps(doc, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    text = json.dumps(doc, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
     return (text + "\n").encode("utf-8")
+
+
+def valid_sha1(value: object) -> bool:
+    """Whether `value` is a SHA-1 as the record holds it: 40 lowercase hex digits."""
+    return isinstance(value, str) and _SHA1.fullmatch(value) is not None
 
 
 def _int(value: object) -> int | None:
@@ -151,7 +163,7 @@ def _file(raw: object) -> DeletedFile | None:
     size, mtime_ns = _int(raw.get("size")), _int(raw.get("mtime_ns"))
     if not isinstance(path, str) or not safe_path(path) or size is None or size < 0:
         return None
-    if mtime_ns is None or not (sha1 is None or (isinstance(sha1, str) and _SHA1.fullmatch(sha1))):
+    if mtime_ns is None or not (sha1 is None or valid_sha1(sha1)):
         return None
     return DeletedFile(path, size, mtime_ns, sha1)
 
@@ -210,8 +222,9 @@ def entry_from_trash(
 ) -> RecordEntry:
     """The record of a trash entry: `files` are the regular files of its `library/` (with no
     `sha1`). A file gets the `sha1` of the catalog part that is that file only when the part's
-    size and modification time (whole seconds) are the file's own."""
-    known = {p.path: p for p in parts if p.type == FILE_PART and p.sha1}
+    size and modification time (whole seconds) are the file's own, and only when it is a
+    `valid_sha1` (the reader refuses the record whole otherwise)."""
+    known = {p.path: p for p in parts if p.type == FILE_PART and valid_sha1(p.sha1)}
     out = []
     for f in sorted(files, key=lambda f: f.path):
         part = known.get(f.path)

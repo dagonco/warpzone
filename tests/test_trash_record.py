@@ -3,6 +3,7 @@ network."""
 
 import fnmatch
 import json
+import os
 import unittest
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -71,12 +72,12 @@ class EncodeParseTests(unittest.TestCase):
         )  # by time, whatever the order given
         self.assertEqual(trash_record.encode(trash_record.parse(data) or []), data)
 
-    def test_the_bytes_are_sorted_json_in_utf8(self) -> None:
+    def test_the_bytes_are_sorted_ascii_json(self) -> None:
         odd = RecordEntry(
             ENTRY, ITEM.deleted, ITEM.expires, (DeletedFile("roms/psx/Café.chd", 1, 2),)
         )
         data = trash_record.encode([odd])
-        self.assertIn("Café".encode(), data)
+        self.assertIn(b"Caf\\u00e9", data)  # an escape: the file is ASCII
         parsed = json.loads(data)
         self.assertEqual(parsed["format"], 1)
         self.assertEqual(list(parsed["entries"][0]), ["deleted", "entry", "expires", "files"])
@@ -257,6 +258,63 @@ class CatalogPartTests(unittest.TestCase):
         files = [DeletedFile("roms/psx/Game.chd", 100, 1_730_000_000_999_999_999)]
         item = trash_record.entry_from_trash(ENTRY, NOW, files, [part])
         self.assertEqual(item.files[0].sha1, SHA)
+
+
+class RobustnessTests(unittest.TestCase):
+    def test_a_name_that_is_not_utf8_survives_the_file(self) -> None:
+        name = "roms/psx/bad\udcff\udc80.bin"
+        item = RecordEntry(ENTRY, ITEM.deleted, ITEM.expires, (DeletedFile(name, 1, 2),))
+        data = trash_record.encode([item])
+        data.decode("ascii")  # nothing that could not be written as UTF-8
+        self.assertEqual(trash_record.parse(data), [item])
+        self.assertEqual(os.fsencode(name), b"roms/psx/bad\xff\x80.bin")
+
+    def test_a_sha1_the_reader_would_refuse_is_not_copied(self) -> None:
+        files = [DeletedFile("a/b", 100, 1_730_000_000_000_000_000)]
+        for sha1 in ("ABCDEF" + "0" * 34, "abc", "g" * 40, "a" * 41, " " + "a" * 39, "", "é" * 40):
+            part = Part("a/b", 100, 1_730_000_000, sha1)
+            item = trash_record.entry_from_trash(ENTRY, NOW, files, [part])
+            self.assertIsNone(item.files[0].sha1, repr(sha1))
+        good = Part("a/b", 100, 1_730_000_000, "0123456789abcdef" * 2 + "01234567")
+        self.assertEqual(
+            trash_record.entry_from_trash(ENTRY, NOW, files, [good]).files[0].sha1, good.sha1
+        )
+        self.assertTrue(trash_record.valid_sha1(SHA))
+        self.assertFalse(trash_record.valid_sha1("A" * 40))
+        self.assertFalse(trash_record.valid_sha1(None))
+
+    def test_whatever_the_writer_is_given_the_reader_reads_back(self) -> None:
+        names = [
+            "a",
+            "roms/psx/Café (Europe).chd",
+            "roms/psx/\U0001f3ae.bin",  # outside the BMP
+            "roms/psx/bad\udcff.bin",
+            'roms/psx/with "quotes" and \\ backslash.bin',
+            "roms/psx/tab\there.bin",
+            "roms/..hidden/.x",
+            "x" * 4000,
+        ]
+        sizes = [0, 1, 2**63 - 1, 2**70]
+        mtimes = [0, 1, 1_730_000_000_123_456_789, 2**64, -5]
+        shas = [None, "ABCDEF" + "0" * 34, "abc", SHA, "é" * 40]
+        parts = [
+            Part(n, s, m // 10**9, sha)
+            for n in names
+            for s in sizes
+            for m in mtimes
+            for sha in shas
+        ]
+        files = [DeletedFile(n, s, m) for n in names for s in sizes for m in mtimes]
+        item = trash_record.entry_from_trash(ENTRY, NOW, files, parts)
+        self.assertEqual(trash_record.parse(trash_record.encode([item])), [item])
+        for when in (datetime(1, 1, 1, tzinfo=UTC), datetime(9999, 12, 31, 23, 59, 59, tzinfo=UTC)):
+            other = trash_record.entry_from_trash(ENTRY, when, files[:3], [])
+            self.assertEqual(trash_record.parse(trash_record.encode([other])), [other])
+
+    def test_the_expiry_of_a_last_day_deletion_is_the_last_second_there_is(self) -> None:
+        last = datetime(9999, 12, 31, 23, 59, 59, tzinfo=UTC)
+        self.assertEqual(trash_record.when_text(trash_record.expiry(last)), "9999-12-31T23:59:59Z")
+        self.assertEqual(trash_record.expiry(NOW), NOW + timedelta(days=180))
 
 
 if __name__ == "__main__":

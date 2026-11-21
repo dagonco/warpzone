@@ -40,6 +40,9 @@ from warpzone.syncthing import Client, SyncthingError
 
 Scan = tuple[str, str]  # (Syncthing folder id, path below its root)
 RECORD_SCAN: Scan = (LIBRARY_ID, trash_record.FILE)
+# What a record step can fail with: the file cannot be read or written, or a value in an entry
+# is one the format cannot hold. None of them may stop a deletion, a purge or the background task.
+RECORD_ERRORS = (trash_store.RecordReadError, OSError, ValueError, OverflowError)
 
 
 class Hub(Protocol):
@@ -185,13 +188,16 @@ class Trasher:
     def _update_record(
         self,
         change: Callable[[list[trash_record.RecordEntry]], list[trash_record.RecordEntry]],
+        *,
+        always: bool = False,
     ) -> bool:
         """Apply `change` to the record of deleted games and write it compacted (see "The record
-        of deleted games"). False when nothing changed, so nothing was written. The caller holds
-        the write lock. `RecordReadError` or `OSError` when it cannot be read or written."""
+        of deleted games"). False when nothing changed, so nothing was written; the compaction
+        alone (an entry expired, a path back in the library) is written only with `always`. The
+        caller holds the write lock. One of `RECORD_ERRORS` when it cannot be done."""
         entries, stamp = trash_store.read_record(self.root)
         new = change(entries)
-        if new == entries:
+        if new == entries and not always:
             return False
         new = trash_record.compact(
             new,
@@ -202,6 +208,15 @@ class Trasher:
             return False
         trash_store.write_record(self.root, new, stamp)
         return True
+
+    def _compact_record(self, scans: list[Scan]) -> None:
+        """Drop from the record what no longer holds (best effort, logged once: the background
+        pass does it again)."""
+        try:
+            if self._update_record(lambda es: es, always=True):
+                scans.append(RECORD_SCAN)
+        except RECORD_ERRORS as exc:
+            self._once("record-compact", f"warning: {self._record_failure(exc)}")
 
     def _with_trash_entry(
         self,
@@ -236,7 +251,7 @@ class Trasher:
         record cannot be written: nothing is removed then."""
         try:
             return self._record_add(entry, manifest)
-        except (trash_store.RecordReadError, OSError) as exc:
+        except RECORD_ERRORS as exc:
             raise ApiError(
                 "write-failed", f"{self._record_failure(exc)}; nothing was removed", entry=entry
             ) from None
@@ -249,7 +264,7 @@ class Trasher:
         try:
             if self._record_add(entry, manifest):
                 scans.append(RECORD_SCAN)
-        except (trash_store.RecordReadError, OSError) as exc:
+        except RECORD_ERRORS as exc:
             note = f"{self._record_failure(exc)}; the next background pass will add it"
             warnings.append(note)
             self.log(f"warning: {note}")
@@ -267,7 +282,7 @@ class Trasher:
         try:
             if self._update_record(remove):
                 scans.append(RECORD_SCAN)
-        except (trash_store.RecordReadError, OSError) as exc:
+        except RECORD_ERRORS as exc:
             raise ApiError(
                 "write-failed", f"{self._record_failure(exc)}; nothing was restored", entry=entry
             ) from None
@@ -281,7 +296,7 @@ class Trasher:
         try:
             if self._update_record(lambda es: trash_record.with_entry(es, removed)):
                 scans.append(RECORD_SCAN)
-        except (trash_store.RecordReadError, OSError) as exc:
+        except RECORD_ERRORS as exc:
             self.log(f"warning: {self._record_failure(exc)}; {removed.entry} is not in it")
 
     # ------------------------------------------------------------- the dry run
@@ -483,7 +498,18 @@ class Trasher:
                     recorded=c.recorded is not None,
                     managed=trash.is_managed(views[device]),
                 )
-        return trash.trash_response(listed, trash.pending_rows(shown, why), self.now())
+        return trash.trash_response(
+            listed, trash.pending_rows(shown, why), self.now(), self._record_problems()
+        )
+
+    def _record_problems(self) -> list[str]:
+        """What the trash page says is wrong with the record of deleted games: a file the hub
+        cannot read and never overwrites, which makes Restore, Delete now and the purge wait."""
+        try:
+            trash_store.read_record(self.root)
+        except trash_store.RecordReadError as exc:
+            return [f"{exc}. Until then Restore, Delete now and the 7-day purge are refused."]
+        return []
 
     # ------------------------------------------------------------- restore
 
@@ -551,6 +577,7 @@ class Trasher:
         media_moved = [p for p in plan.moves if p.startswith(trash.MEDIA)]
         scans.extend((LIBRARY_ID, p.removeprefix(trash.LIBRARY)) for p in library_moved)
         scans.extend((MEDIA_ID, p.removeprefix(trash.MEDIA)) for p in media_moved)
+        self._compact_record(scans)  # no entry lists a path that is back
         status = "none"
         if manifest.gamelist is not None and manifest.gamelist.entries:
             edit = trash_store.restore_gamelist(
@@ -679,7 +706,10 @@ class Trasher:
         (recorded first: it stays when the record cannot be written). Incomplete and damaged
         entries wait for Delete now."""
         scans: list[Scan] = []
-        self._record_pass(scans)
+        try:
+            self._record_pass(scans)
+        except Exception as err:  # whatever the record does, the purge below still runs
+            self.log(f"error: the record pass failed ({type(err).__name__})")
         with self.write_lock:
             for name, exc in trash_store.finish_purges(self.root):
                 self.log(f"warning: the purge of {name} failed ({_reason(exc)})")
@@ -694,8 +724,11 @@ class Trasher:
                 try:
                     if self._record_add(item.entry, fresh.manifest):
                         scans.append(RECORD_SCAN)
-                except (trash_store.RecordReadError, OSError) as exc:
-                    self.log(f"warning: {self._record_failure(exc)}; {item.entry} stays")
+                except RECORD_ERRORS as exc:
+                    self._once(
+                        f"record:{item.entry}",
+                        f"warning: {self._record_failure(exc)}; {item.entry} stays in the trash",
+                    )
                     continue
                 try:
                     trash_store.purge_entry(self.root, item.entry)
@@ -706,8 +739,10 @@ class Trasher:
         self._scan(scans, [])
 
     def _record_pass(self, scans: list[Scan]) -> None:
-        """Add to the record each complete entry of the trash it does not have (the entries a
-        hub made before it kept a record, and those whose deletion could not record them)."""
+        """Keep the record as it should be: add each complete entry of the trash it does not have
+        (the entries a hub made before it kept a record, and those whose deletion could not
+        record them), and drop the entries past their time and the paths that are back. An entry
+        that cannot be recorded is said once and does not stop the others."""
         with self.write_lock:
             try:
                 complete = [
@@ -715,23 +750,24 @@ class Trasher:
                     for item in trash_store.list_entries(self.root)
                     if item.manifest is not None and item.manifest.state == trash.COMPLETE
                 ]
-                known = (
-                    {e.entry for e in trash_store.read_record(self.root)[0]} if complete else set()
-                )
-                missing = [item for item in complete if item.entry not in known]
-                if not missing:
-                    self._said.discard("record")
-                    return
-                manifests = {item.entry: item.manifest for item in missing}
 
                 def add(entries: list[trash_record.RecordEntry]) -> list[trash_record.RecordEntry]:
-                    for entry, manifest in manifests.items():
-                        entries = self._with_trash_entry(entries, entry, manifest)
+                    known = {e.entry for e in entries}
+                    for item in complete:
+                        if item.entry in known:
+                            continue
+                        try:
+                            entries = self._with_trash_entry(entries, item.entry, item.manifest)
+                        except (OSError, ValueError, OverflowError) as exc:
+                            self._once(
+                                f"record:{item.entry}",
+                                f"warning: {self._record_failure(exc)}; {item.entry} is not in it",
+                            )
                     return entries
 
-                if self._update_record(add):
+                if self._update_record(add, always=True):
                     scans.append(RECORD_SCAN)
-            except (trash_store.RecordReadError, OSError) as exc:
+            except RECORD_ERRORS as exc:
                 self._once("record", f"warning: {self._record_failure(exc)}")
                 return
             self._said.discard("record")
@@ -935,6 +971,7 @@ class Trasher:
     def has_work(self) -> bool:
         return (
             os.path.lexists(trash_store.cleanups_path(self.root))
+            or os.path.lexists(trash_store.record_path(self.root))
             or bool(trash_store.entry_names(self.root))
             or bool(trash_store.purging_names(self.root))
         )
