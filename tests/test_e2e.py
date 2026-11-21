@@ -1049,8 +1049,10 @@ rescan_seconds = 10
         for name in gone:
             self.assertTrue((emulation / name).exists(), name)  # report only
 
-        # The swapped copy is hashed right before its delete and kept, which the run reports.
-        self.wz("prune", "--apply", *args, expect=1)
+        # An apply compares the copies with the record's SHA-1s before it deletes anything: the
+        # swapped copy is kept, listed with its reason, and the run is not a failure.
+        out = self.wz("prune", "--apply", *args)
+        self.assertIn(f"{swapped} (its content differs from the deleted game)", out)
         self.assertFalse((emulation / off).exists())
         self.assertFalse((emulation / excluded).exists())
         for name in (by_hand, edited, swapped):

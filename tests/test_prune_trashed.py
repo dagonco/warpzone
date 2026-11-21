@@ -34,6 +34,7 @@ from warpzone.prune import (
     sha1_ok,
 )
 from warpzone.report import Reporter
+from warpzone.syncthing import SyncthingError
 from warpzone.trash_record import DeletedFile, RecordEntry
 
 PATH = "roms/n64/a.z64"
@@ -48,6 +49,12 @@ def deleted_file(
     path: str = PATH, size: int = 5, mtime: float = MTIME, sha1: str | None = None
 ) -> DeletedFile:
     return DeletedFile(path, size, int(mtime * 1_000_000_000), sha1)
+
+
+def rfc3339(seconds: float) -> str:
+    """A time as Syncthing writes it, with nanoseconds."""
+    when = datetime.fromtimestamp(seconds, UTC)
+    return when.strftime("%Y-%m-%dT%H:%M:%S.%f") + "000Z"
 
 
 def deleted_hub(**kw: Any) -> dict[str, Any]:
@@ -160,13 +167,22 @@ class TrashedDevice(Device):
         self.set_record_info("HUB:7", None, len(data))
         return path
 
-    def set_record_info(self, version: str, local_version: str | None, size: int) -> None:
+    def set_record_info(
+        self,
+        version: str,
+        local_version: str | None,
+        size: int,
+        modified: str | None = None,
+    ) -> None:
+        """What db/file says of the record file; `modified` is the file's own time by default."""
+        if modified is None:
+            modified = rfc3339((self.root / RECORD).stat().st_mtime)
         self.fake.file_info[("wz-library", RECORD)] = {
             "global": {"version": [version]},
-            "local": {"version": [local_version or version], "size": size},
+            "local": {"version": [local_version or version], "size": size, "modified": modified},
         }
 
-    def inspect(self) -> FolderReport:
+    def inspect(self, compare: bool = False) -> FolderReport:
         spec = next(s for s in device_specs(self.cfg, "deck", PROFILE) if s.id == "wz-library")
         spec = dataclasses.replace(spec, path=str(self.root))
         configured = {f["id"]: f for f in self.client.folders()}
@@ -180,6 +196,7 @@ class TrashedDevice(Device):
             grace=0,
             probes=REAL_PROBES,
             now=lambda: NOW,
+            compare=compare,
         )
 
     def prune(self, **kw: Any) -> int:
@@ -366,12 +383,13 @@ class Sha1Tests(TrashedTestCase):
         self.assertEqual(self.dev.prune(apply=True), 0)
         self.assertFalse(path.exists())
 
-    def test_a_different_content_with_a_sha1_is_kept(self) -> None:
+    def test_a_different_content_with_a_sha1_is_kept_and_is_not_a_failure(self) -> None:
         path = self.game(sha1=OTHER_SHA1)
-        self.assertEqual(self.dev.prune(apply=True), 1)
+        self.assertEqual(self.dev.prune(apply=True), 0)
         self.assertTrue(path.exists())
-        self.assertIn("deleted 0 file(s)", self.out())
-        self.assertTrue(any("1 file(s) were not deleted" in w for w in self.dev.warnings))
+        self.assertIn(f"{PATH} (its content differs from the deleted game)", self.out())
+        self.assertNotIn("on purpose", self.out())
+        self.assertEqual(self.dev.warnings, [])
 
     def test_no_sha1_means_no_hashing(self) -> None:
         path = self.game()
@@ -386,13 +404,16 @@ class Sha1Tests(TrashedTestCase):
         self.assertTrue(path.exists())
         self.assertIn("1 file(s) the hub deleted on purpose", self.out())
 
-    def test_a_refused_run_hashes_nothing(self) -> None:
+    def test_a_refused_run_has_hashed_once_and_the_delete_does_not_hash_again(self) -> None:
         d = self.dev
         path = self.game(sha1=SHA1)
-        with mock.patch.object(prune, "_sha1", side_effect=AssertionError("hashed")):
+        with mock.patch.object(prune, "_sha1", wraps=prune._sha1) as hashed:
             self.assertEqual(d.prune(apply=True, unattended=True), 1)  # all of what it holds
-            self.assertEqual(d.prune(apply=True, max_gib=0), 1)
-        self.assertTrue(path.exists())
+            self.assertEqual(hashed.call_count, 1)
+            self.assertTrue(path.exists())
+            self.assertEqual(d.prune(apply=True), 0)
+            self.assertEqual(hashed.call_count, 2)  # one per run, in the inspection
+        self.assertFalse(path.exists())
 
     def test_one_entry_without_a_sha1_authorises_without_hashing(self) -> None:
         d = self.dev
@@ -419,7 +440,7 @@ class Sha1Tests(TrashedTestCase):
         self.assertEqual(d.prune(apply=True), 0)
         self.assertFalse(path.exists())
         path = d.put(PATH, "zzzzz", info=trashed_info(size=5))
-        self.assertEqual(d.prune(apply=True), 1)
+        self.assertEqual(d.prune(apply=True), 0)
         self.assertTrue(path.exists())
 
 
@@ -627,3 +648,316 @@ class NameThatIsNotUtf8Tests(TrashedTestCase):
         with mock.patch.object(prune, "walk", return_value=iter([found])):
             report = d.inspect()
         self.assertEqual((report.trashed, report.leftovers, report.untracked), ([], [], 1))
+
+
+class ContentDiffersTests(TrashedTestCase):
+    """A copy that fails the SHA-1 check is a decision taken before the guards, not a failure."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.base = self.dev.home / "state"
+
+    def run_prune(self, **kw: Any) -> int:
+        return self.dev.prune(apply=True, state_base=self.base, **kw)
+
+    def test_a_copy_that_differs_is_not_a_failure_in_an_unattended_run(self) -> None:
+        path = self.game(sha1=OTHER_SHA1)
+        self.dev.put("roms/nes/mario.nes", "x" * 50, info=wanted_info(50))
+        with Receiver() as hook:
+            self.assertEqual(self.run_prune(unattended=True, notify_url=hook.url), 0)
+        self.assertTrue(path.exists())
+        self.assertEqual(hook.bodies, [])
+        self.assertEqual(self.dev.warnings, [])
+        self.assertIn("kept 1 ignored file(s)", self.out())
+
+    def test_a_copy_that_differs_does_not_trip_the_guard_or_hold_back_a_leftover(self) -> None:
+        d = self.dev
+        path = d.put(PATH, "x" * 600, info=trashed_info(size=600))
+        d.put_record([record_entry([deleted_file(size=600, sha1=OTHER_SHA1)])])
+        d.put("roms/nes/mario.nes", "y" * 400, info=wanted_info(400))
+        leftover = d.put("roms/nes/old.nes", "z" * 10)
+        self.assertEqual(self.run_prune(unattended=True), 0)
+        self.assertTrue(path.exists())
+        self.assertFalse(leftover.exists())
+        self.assertFalse(prune.guard_state_path(self.base).exists())
+
+    def test_a_copy_that_differs_does_not_count_for_the_size_cap(self) -> None:
+        path = self.game(sha1=OTHER_SHA1)
+        self.assertEqual(self.run_prune(max_gib=0), 0)
+        self.assertTrue(path.exists())
+
+    def test_a_copy_that_cannot_be_read_is_kept_with_its_reason(self) -> None:
+        path = self.game(sha1=SHA1)
+        with mock.patch.object(prune, "_sha1", side_effect=PermissionError("no")):
+            self.assertEqual(self.run_prune(), 0)
+        self.assertTrue(path.exists())
+        self.assertIn(f"{PATH} (cannot be read to compare with the deleted game)", self.out())
+        self.assertEqual(self.dev.warnings, [])
+
+    def test_a_report_hashes_nothing_and_says_so(self) -> None:
+        self.game(sha1=OTHER_SHA1)
+        with mock.patch.object(prune, "_sha1", side_effect=AssertionError("hashed")):
+            self.assertEqual(self.dev.prune(state_base=self.base), 0)
+        self.assertIn("1 file(s) the hub deleted on purpose, 5 B (not compared", self.out())
+        self.assertFalse(self.base.exists())
+
+    def test_a_file_the_record_describes_without_a_sha1_needs_no_comparison_note(self) -> None:
+        self.game()
+        self.dev.prune()
+        self.assertNotIn("not compared", self.out())
+
+    def test_an_attended_apply_compares_before_the_cap_too(self) -> None:
+        path = self.game(sha1=SHA1)
+        with mock.patch.object(prune, "_sha1", wraps=prune._sha1) as hashed:
+            self.assertEqual(self.run_prune(max_gib=0), 1)  # the cap refuses it
+        self.assertEqual(hashed.call_count, 1)
+        self.assertTrue(path.exists())
+
+
+class ComparedCopyTests(TrashedTestCase):
+    def test_a_copy_compared_in_the_inspection_is_deleted_without_hashing_again(self) -> None:
+        d = self.dev
+        path = self.game(sha1=SHA1)
+        report = d.inspect(compare=True)
+        self.assertEqual(list(report.verified), [PATH])
+        with mock.patch.object(prune, "_sha1", side_effect=AssertionError("hashed")):
+            apply_folder(d.client, report)
+        self.assertFalse(path.exists())
+
+    def test_a_copy_that_changed_after_it_was_compared_is_kept_not_hashed_again(self) -> None:
+        d = self.dev
+        path = self.game(sha1=SHA1)
+        report = d.inspect(compare=True)
+        os.utime(path, (MTIME + 1, MTIME + 1))
+        with mock.patch.object(prune, "_sha1", side_effect=AssertionError("hashed")):
+            apply_folder(d.client, report)
+        self.assertTrue(path.exists())
+        self.assertEqual(report.deleted_files, 0)
+
+
+class ContentDiffersMemoryTests(TrashedTestCase):
+    def setUp(self) -> None:
+        super().setUp()
+        self.base = self.dev.home / "state"
+        self.path = self.game(sha1=OTHER_SHA1)
+
+    def run_prune(self, **kw: Any) -> int:
+        return self.dev.prune(apply=True, unattended=True, state_base=self.base, **kw)
+
+    def memory(self) -> Path:
+        return self.base / prune.MISMATCH_STATE
+
+    def test_a_copy_that_differs_is_hashed_once_while_nothing_changes(self) -> None:
+        with mock.patch.object(prune, "_sha1", wraps=prune._sha1) as hashed:
+            for _ in range(3):
+                self.assertEqual(self.run_prune(), 0)
+        self.assertEqual(hashed.call_count, 1)
+        self.assertTrue(self.path.exists())
+        self.assertEqual(oct(self.memory().stat().st_mode & 0o777), "0o600")
+
+    def test_it_names_no_file(self) -> None:
+        self.run_prune()
+        text = self.memory().read_text()
+        self.assertNotIn("a.z64", text)
+        self.assertNotIn("roms", text)
+
+    def test_a_changed_copy_is_hashed_again(self) -> None:
+        self.run_prune()
+        os.utime(self.path, (MTIME + 1, MTIME + 1))  # within the 2 s the record tolerates
+        with mock.patch.object(prune, "_sha1", wraps=prune._sha1) as hashed:
+            self.run_prune()
+        self.assertEqual(hashed.call_count, 1)
+
+    def test_a_new_record_entry_is_hashed_again(self) -> None:
+        self.run_prune()
+        self.dev.put("roms/nes/mario.nes", "x" * 50, info=wanted_info(50))  # for the guard
+        self.dev.put_record([record_entry([deleted_file(sha1=SHA1)])])
+        with mock.patch.object(prune, "_sha1", wraps=prune._sha1) as hashed:
+            self.run_prune()
+        self.assertEqual(hashed.call_count, 1)
+        self.assertFalse(self.path.exists())  # the copy is the game now
+        self.assertFalse(self.memory().exists())
+
+    def test_a_missing_or_unreadable_memory_means_hashing_again(self) -> None:
+        for text in (None, "not json", "[]", '{"version": 1, "copies": 5}'):
+            with self.subTest(text=text):
+                if text is None:
+                    self.memory().unlink(missing_ok=True)
+                else:
+                    self.base.mkdir(exist_ok=True)
+                    self.memory().write_text(text)
+                with mock.patch.object(prune, "_sha1", wraps=prune._sha1) as hashed:
+                    self.assertEqual(self.run_prune(), 0)
+                self.assertEqual(hashed.call_count, 1)
+
+    def test_a_copy_that_is_gone_leaves_the_memory(self) -> None:
+        self.run_prune()
+        self.path.unlink()
+        self.run_prune()
+        self.assertFalse(self.memory().exists())
+
+    def test_a_report_does_not_touch_the_memory(self) -> None:
+        self.run_prune()
+        before = self.memory().read_bytes()
+        self.dev.prune(state_base=self.base)
+        self.assertEqual(self.memory().read_bytes(), before)
+
+    def test_a_memory_that_cannot_be_written_is_a_warning(self) -> None:
+        blocked = self.dev.home / "blocked"
+        blocked.write_text("a file, not a folder")
+        self.assertEqual(self.dev.prune(apply=True, unattended=True, state_base=blocked), 0)
+        self.assertTrue(any("cannot update" in w for w in self.dev.warnings))
+
+
+class RecheckBeforeEachDeleteTests(TrashedTestCase):
+    def after_hashing(self, change: Any) -> Any:
+        """`change()` runs right after the inspection compared a copy."""
+        real = prune._sha1
+
+        def hashed(path: str, before: os.stat_result) -> str | None:
+            digest = real(path, before)
+            change()
+            return digest
+
+        return mock.patch.object(prune, "_sha1", hashed)
+
+    def test_a_folder_paused_after_the_report_stops_the_delete(self) -> None:
+        d = self.dev
+        path = self.game(sha1=SHA1)
+        pause = lambda: d.fake.folders["wz-library"].update(paused=True)  # noqa: E731
+        with self.after_hashing(pause):
+            self.assertEqual(d.prune(apply=True), 1)
+        self.assertTrue(path.exists())
+        self.assertTrue(any("paused" in w for w in d.warnings))
+
+    def test_ignores_that_stopped_being_final_stop_the_delete(self) -> None:
+        d = self.dev
+        path = self.game(sha1=SHA1)
+        bootstrap = lambda: d.fake.ignores.update({"wz-library": ["!/patterns-*.stignore", "*"]})  # noqa: E731
+        with self.after_hashing(bootstrap):
+            self.assertEqual(d.prune(apply=True), 1)
+        self.assertTrue(path.exists())
+        self.assertTrue(any("not the final whitelist" in w for w in d.warnings))
+
+    def test_a_marker_that_went_away_stops_the_delete(self) -> None:
+        d = self.dev
+        path = self.game(sha1=SHA1)
+        with self.after_hashing((d.root / ".stfolder").rmdir):
+            self.assertEqual(d.prune(apply=True), 1)
+        self.assertTrue(path.exists())
+        self.assertTrue(any("not mounted" in w for w in d.warnings))
+
+    def test_a_whitelist_that_stopped_being_in_sync_stops_the_delete(self) -> None:
+        d = self.dev
+        path = self.game(sha1=SHA1)
+
+        def unsync() -> None:
+            d.fake.file_info[("wz-library", "patterns-deck.stignore")] = {
+                "global": {"version": ["X:2"]},
+                "local": {"version": ["X:1"]},
+            }
+
+        with self.after_hashing(unsync):
+            self.assertEqual(d.prune(apply=True), 1)
+        self.assertTrue(path.exists())
+        self.assertTrue(any("not in sync" in w for w in d.warnings))
+
+    def test_the_stop_ends_the_folder_and_names_what_was_not_deleted(self) -> None:
+        d = self.dev
+        first = d.put(PATH, info=trashed_info())
+        second = d.put("roms/n64/b.z64", info=trashed_info())
+        d.put_record([record_entry([deleted_file(), deleted_file("roms/n64/b.z64")])])
+        calls: list[int] = []
+
+        def problem(*args: Any) -> str | None:
+            calls.append(1)
+            return None if len(calls) == 1 else "the folder is paused"
+
+        with mock.patch.object(prune, "folder_problem", problem):
+            self.assertEqual(d.prune(apply=True), 1)
+        self.assertEqual(sorted(p.exists() for p in (first, second)), [False, True])
+        self.assertTrue(any("1 file(s) were not deleted" in w for w in d.warnings))
+        self.assertEqual(len(calls), 2)  # not asked again after it said no
+
+
+class RecordTimeTests(TrashedTestCase):
+    def kept_with(self, modified: str | None) -> bool:
+        d = self.dev
+        path = self.game()
+        record = d.root / RECORD
+        if modified is None:
+            del d.fake.file_info[("wz-library", RECORD)]["local"]["modified"]
+        else:
+            d.set_record_info("HUB:7", None, len(record.read_bytes()), modified=modified)
+        d.prune(apply=True)
+        return path.exists()
+
+    def test_a_time_within_two_seconds_of_the_file_authorises(self) -> None:
+        d = self.dev
+        self.game()
+        mtime = (d.root / RECORD).stat().st_mtime
+        self.assertFalse(self.kept_with(rfc3339(mtime + 1.5)))
+
+    def test_a_record_edited_in_place_to_the_same_size_is_ignored(self) -> None:
+        d = self.dev
+        self.game()
+        mtime = (d.root / RECORD).stat().st_mtime
+        self.assertTrue(self.kept_with(rfc3339(mtime - 3600)))
+
+    def test_a_local_record_without_a_usable_time_is_ignored(self) -> None:
+        for bad in ("", "yesterday", "2023-11-14", None):
+            with self.subTest(bad=bad):
+                self.assertTrue(self.kept_with(bad))
+
+
+class ParentDirectoryTests(TrashedTestCase):
+    def test_a_parent_turned_into_a_link_inside_the_root_is_kept(self) -> None:
+        d = self.dev
+        path = self.game()
+        report = d.inspect()
+        other = d.root / "roms/other"
+        other.mkdir(parents=True)
+        (other / "a.z64").write_text(CONTENT)
+        os.utime(other / "a.z64", (MTIME, MTIME))
+        path.unlink()
+        path.parent.rmdir()
+        path.parent.symlink_to(other, target_is_directory=True)
+        apply_folder(d.client, report)
+        self.assertEqual(report.deleted_files, 0)
+        self.assertTrue((other / "a.z64").exists())
+
+    def test_a_parent_turned_into_a_link_outside_the_root_is_kept(self) -> None:
+        d = self.dev
+        path = self.game()
+        report = d.inspect()
+        outside = d.home / "outside"
+        outside.mkdir()
+        (outside / "a.z64").write_text(CONTENT)
+        os.utime(outside / "a.z64", (MTIME, MTIME))
+        path.unlink()
+        path.parent.rmdir()
+        path.parent.symlink_to(outside, target_is_directory=True)
+        apply_folder(d.client, report)
+        self.assertEqual(report.deleted_files, 0)
+        self.assertTrue((outside / "a.z64").exists())
+
+
+class SyncthingErrorTests(TrashedTestCase):
+    def test_an_error_of_db_file_during_the_delete_keeps_the_file(self) -> None:
+        d = self.dev
+        path = self.game()
+        report = d.inspect()
+        real = d.client.db_file
+
+        def broken(folder: str, name: str) -> Any:
+            if name == PATH:
+                raise SyncthingError("boom")
+            return real(folder, name)
+
+        lines: list[str] = []
+        rep = Reporter(lines.append, warn_sink=lines.append)
+        with mock.patch.object(d.client, "db_file", broken):
+            apply_folder(d.client, report, rep=rep)
+        self.assertTrue(path.exists())
+        self.assertEqual(report.deleted_files, 0)
+        self.assertTrue(any("cannot delete" in line and "boom" in line for line in lines))

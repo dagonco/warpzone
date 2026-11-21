@@ -52,6 +52,10 @@ SHOWN_GROUPS = 30
 SHOWN_KEPT = 20
 RECORD_MAX_BYTES = 64 * 1024 * 1024  # a larger record file is not read
 HASH_CHUNK = 1024 * 1024
+MISMATCH_STATE = "prune-compared.json"
+_MISMATCH_STATE_VERSION = 1
+DIFFERS_REASON = "its content differs from the deleted game"
+UNREADABLE_REASON = "cannot be read to compare with the deleted game"
 TRASHED_REASON = "the hub deleted it on purpose"
 
 # Files EmuDeck and the emulators write into the library on every console; the shipped
@@ -102,12 +106,27 @@ class Entry:
 
 
 @dataclass(frozen=True)
+class Mismatch:
+    """A copy whose content was compared with the record and differs, as it was when compared:
+    the path (hashed, so the state file names no file), its identity and the SHA-1s it was
+    compared with."""
+
+    key: str
+    dev: int
+    ino: int
+    size: int
+    mtime_ns: int
+    sha1s: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class Record:
     """The record of deleted games as it was read: the Syncthing version and the stat of the file
     (to see it did not change before a delete) and the unexpired files by path."""
 
     version: str  # Syncthing's local version vector of the file, as JSON
     size: int
+    modified: float  # Syncthing's local modification time of the file
     mtime_ns: int
     deleted: Mapping[str, tuple[DeletedFile, ...]]
 
@@ -119,6 +138,9 @@ class FolderReport:
     leftovers: list[Entry] = field(default_factory=list)
     trashed: list[Entry] = field(default_factory=list)  # rule 4b: see `classify`
     record: Record | None = None  # what `trashed` was decided from
+    verified: dict[str, tuple[int, int, int, int]] = field(default_factory=dict)  # see `_compare`
+    mismatches: list[Mismatch] = field(default_factory=list)  # copies whose content differs
+    uncompared: int = 0  # trashed files whose SHA-1 a report does not compare
     kept: list[tuple[str, str]] = field(default_factory=list)  # (path, reason)
     generated: int = 0  # kept too, but expected: see `is_generated`
     untracked: int = 0
@@ -397,9 +419,10 @@ def _shown(path: str) -> str:
     return path.encode("utf-8", "backslashreplace").decode("utf-8")
 
 
-def _record_version(info: dict[str, Any] | None) -> tuple[str, int] | None:
-    """The local version and size of the record file when it is in sync with the hub (the notion
-    rule 2 applies to the whitelists) and has a size the record can have; None otherwise."""
+def _record_version(info: dict[str, Any] | None) -> tuple[str, int, float] | None:
+    """The local version, size and modification time of the record file when it is in sync with
+    the hub (the notion rule 2 applies to the whitelists) and has a size and a time the record
+    can have; None otherwise."""
     if not in_sync(info):
         return None
     hub = (info or {}).get("global") or {}
@@ -407,15 +430,17 @@ def _record_version(info: dict[str, Any] | None) -> tuple[str, int] | None:
         return None
     local = (info or {}).get("local") or {}
     version, size = local.get("version"), local.get("size")
+    modified = parse_time(local.get("modified"))
     if (
-        not isinstance(version, list | dict)
+        modified is None
+        or not isinstance(version, list | dict)
         or not version
         or not isinstance(size, int)
         or isinstance(size, bool)
         or not 0 <= size <= RECORD_MAX_BYTES
     ):
         return None
-    return json.dumps(version, sort_keys=True), size
+    return json.dumps(version, sort_keys=True), size, modified
 
 
 def _read_regular(path: str, size: int) -> tuple[bytes, os.stat_result] | None:
@@ -459,7 +484,7 @@ def read_record(
         first = _record_version(client.db_file(spec.id, trash_record.FILE))
         if first is None:
             return None
-        version, size = first
+        version, size, modified = first
         found = _read_regular(os.path.join(root, trash_record.FILE), size)
         again = _record_version(client.db_file(spec.id, trash_record.FILE))
     except SyncthingError:
@@ -467,11 +492,14 @@ def read_record(
     if found is None or again != first:
         return None
     data, st = found
+    # An edit in place that keeps the size must not pass: the file's time is Syncthing's record.
+    if abs(st.st_mtime - modified) > MTIME_TOLERANCE_S:
+        return None
     entries = trash_record.parse(data)
     if entries is None:
         return None
     index = trash_record.index(entries, datetime.fromtimestamp(now(), UTC))
-    return Record(version, size, st.st_mtime_ns, index)
+    return Record(version, size, modified, st.st_mtime_ns, index)
 
 
 def record_unchanged(client: Client, spec_id: str, root: str, record: Record) -> bool:
@@ -483,26 +511,15 @@ def record_unchanged(client: Client, spec_id: str, root: str, record: Record) ->
     except (OSError, SyncthingError):
         return False
     return (
-        found == (record.version, record.size)
+        found == (record.version, record.size, record.modified)
         and stat.S_ISREG(st.st_mode)
         and (st.st_size, st.st_mtime_ns) == (record.size, record.mtime_ns)
     )
 
 
-def inspect_folder(
-    client: Client,
-    spec: FolderSpec,
-    configured: dict[str, dict[str, Any]],
-    *,
-    home: Path,
-    rescan_timeout: float,
-    poll: float,
-    grace: float,
-    probes: DeviceProbes,
-    now: Callable[[], float] = time.time,
-) -> FolderReport:
-    """Check the folder is in its normal whitelisted state, rescan, classify every file."""
-    current = configured.get(spec.id)
+def _check_folder(client: Client, spec: FolderSpec, current: dict[str, Any] | None) -> str:
+    """Rules 1 and 2 for one folder (`current` is its Syncthing config): the marker name it
+    holds, or `PruneError` naming what is wrong. See development/design/prune.md, "Safety rules"."""
     if current is None:
         raise PruneError("not configured in the local Syncthing (run `warpzone provision device`)")
     if _norm(current.get("path", "")) != _norm(spec.path):
@@ -514,7 +531,7 @@ def inspect_folder(
     if current.get("paused"):
         raise PruneError("the folder is paused")
     root = _norm(spec.path)
-    marker = current.get("markerName") or ".stfolder"
+    marker = str(current.get("markerName") or ".stfolder")
     if not os.path.isdir(os.path.join(root, marker)):
         raise PruneError(f"{root} has no {marker} (not mounted?)")
 
@@ -528,7 +545,79 @@ def inspect_folder(
     waiting = [f for f in spec.required_files if not in_sync(client.db_file(spec.id, f))]
     if waiting:
         raise PruneError(f"{', '.join(waiting)} not in sync with the hub yet")
+    return marker
 
+
+def folder_problem(client: Client, spec: FolderSpec) -> str | None:
+    """Why rules 1 and 2 no longer hold for the folder right now, or None when they do."""
+    try:
+        configured = {f["id"]: f for f in client.folders()}
+        _check_folder(client, spec, configured.get(spec.id))
+    except (PruneError, SyncthingError) as exc:
+        return str(exc)
+    return None
+
+
+def path_key(path: str) -> str:
+    """What the state file keeps of a path: its SHA-256, so it names no file."""
+    return hashlib.sha256(path.encode("utf-8", "surrogatepass")).hexdigest()
+
+
+def _compare(
+    root: str,
+    entry: Entry,
+    candidates: Sequence[DeletedFile],
+    remembered: Mapping[str, Mismatch],
+) -> tuple[str, tuple[int, int, int, int] | None, Mismatch | None]:
+    """Compare a copy with the SHA-1s of the record entries it matches (rule 4b): ("ok", the
+    identity it had when hashed, None) or ("differs", None, what to remember) or ("unreadable",
+    None, None). A copy whose matching entry has no SHA-1 needs no comparison. A copy remembered
+    as different, unchanged since, is not hashed again."""
+    if any(c.sha1 is None for c in candidates):
+        return "ok", None, None
+    sha1s = tuple(sorted({c.sha1 for c in candidates if c.sha1 is not None}))
+    full = os.path.join(root, entry.path)
+    key = path_key(entry.path)
+    try:
+        st = os.lstat(full)
+        if not stat.S_ISREG(st.st_mode):
+            return "unreadable", None, None
+        old = remembered.get(key)
+        if (
+            old
+            and (old.dev, old.ino, old.size, old.mtime_ns) == _identity(st)
+            and old.sha1s == sha1s
+        ):
+            return "differs", None, old
+        digest = _sha1(full, st)
+    except OSError:
+        return "unreadable", None, None
+    if digest is None:
+        return "unreadable", None, None
+    if digest in sha1s:
+        return "ok", _identity(st), None
+    return "differs", None, Mismatch(key, st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns, sha1s)
+
+
+def inspect_folder(
+    client: Client,
+    spec: FolderSpec,
+    configured: dict[str, dict[str, Any]],
+    *,
+    home: Path,
+    rescan_timeout: float,
+    poll: float,
+    grace: float,
+    probes: DeviceProbes,
+    now: Callable[[], float] = time.time,
+    compare: bool = False,
+    remembered: Mapping[str, Mismatch] | None = None,
+) -> FolderReport:
+    """Check the folder is in its normal whitelisted state, rescan, classify every file. With
+    `compare` (a run that may delete), the files of rule 4b are compared with the record's
+    SHA-1s here, so a copy that differs is kept before the guards are computed."""
+    marker = _check_folder(client, spec, configured.get(spec.id))
+    root = _norm(spec.path)
     rescan(client, spec.id, timeout=rescan_timeout, poll=poll, grace=grace, probes=probes)
 
     skip = {
@@ -542,9 +631,21 @@ def inspect_folder(
     for entry in walk(root, skip, marker):
         if entry.kind == "file":
             report.held_bytes += entry.size
-        verdict, reason = classify(
-            entry, _db_file(client, spec.id, entry.path), known.get(entry.path, ())
-        )
+        deleted = known.get(entry.path, ())
+        verdict, reason = classify(entry, _db_file(client, spec.id, entry.path), deleted)
+        if verdict is Verdict.TRASHED:
+            candidates = record_matches(entry, deleted)
+            if not compare:
+                report.uncompared += all(c.sha1 is not None for c in candidates)
+            else:
+                outcome, identity, mismatch = _compare(root, entry, candidates, remembered or {})
+                if identity is not None:
+                    report.verified[entry.path] = identity
+                if mismatch is not None:
+                    report.mismatches.append(mismatch)
+                if outcome != "ok":
+                    verdict = Verdict.DIFFERS
+                    reason = DIFFERS_REASON if outcome == "differs" else UNREADABLE_REASON
         if verdict is Verdict.LEFTOVER:
             report.leftovers.append(entry)
         elif verdict is Verdict.TRASHED:
@@ -588,6 +689,14 @@ def _sha1(path: str, before: os.stat_result) -> str | None:
     return digest.hexdigest()
 
 
+def _plain_parent(root: str, rel: str) -> bool:
+    """Whether the folders above `rel` are real folders inside `root`, with no link on the way."""
+    parent = os.path.dirname(rel)
+    real_root = os.path.realpath(root)
+    expected = os.path.join(real_root, parent) if parent else real_root
+    return os.path.realpath(os.path.join(root, parent)) == expected
+
+
 def _identity(st: os.stat_result) -> tuple[int, int, int, int]:
     return st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns
 
@@ -618,16 +727,23 @@ def _delete_trashed(client: Client, report: FolderReport, entry: Entry) -> bool:
         return classify(fresh, info, known)[0] is Verdict.TRASHED
 
     st = os.lstat(full)
-    if not stat.S_ISREG(st.st_mode) or not _inside(report.root, os.path.dirname(full)):
+    if not stat.S_ISREG(st.st_mode) or not _plain_parent(report.root, entry.path):
         return False
     if not still_trashed(st):
         return False
     fresh = dataclasses.replace(entry, kind="file", size=st.st_size, mtime=st.st_mtime)
     candidates = record_matches(fresh, known)
     if all(c.sha1 is not None for c in candidates):
-        digest = _sha1(full, st)
-        if digest is None or not any(sha1_ok(c, digest) for c in candidates):
-            return False
+        # The inspection of a run that may delete compared it and noted its identity; one that
+        # changed since is kept. Without that note (a caller that did not compare) hash it now.
+        seen = report.verified.get(entry.path)
+        if seen is not None:
+            if seen != _identity(st):
+                return False
+        else:
+            digest = _sha1(full, st)
+            if digest is None or not any(sha1_ok(c, digest) for c in candidates):
+                return False
     if not record_unchanged(client, report.folder_id, report.root, record):
         return False
     after = os.lstat(full)
@@ -638,13 +754,28 @@ def _delete_trashed(client: Client, report: FolderReport, entry: Entry) -> bool:
 
 
 def apply_folder(
-    client: Client, report: FolderReport, marker: str = ".stfolder", rep: Reporter | None = None
+    client: Client,
+    report: FolderReport,
+    marker: str = ".stfolder",
+    rep: Reporter | None = None,
+    still_safe: Callable[[], str | None] | None = None,
 ) -> None:
-    """Delete the leftovers and the trashed files, re-checking each one right before it goes."""
+    """Delete the leftovers and the trashed files, re-checking each one right before it goes.
+    `still_safe` says why rules 1 and 2 no longer hold; before each trashed file, the first
+    answer stops the rest. See development/design/prune.md, "Safety rules"."""
     parents: set[str] = set()
     jobs = [(e, _delete_leftover) for e in report.leftovers]
     jobs += [(e, _delete_trashed) for e in report.trashed]
+    stopped = False
     for entry, delete in jobs:
+        if delete is _delete_trashed and still_safe is not None and not stopped:
+            why = still_safe()
+            if why is not None:
+                stopped = True
+                if rep:
+                    rep.warn(f"{report.folder_id}: stopped deleting: {why}")
+        if stopped and delete is _delete_trashed:
+            continue
         try:
             if not delete(client, report, entry):
                 continue
@@ -726,6 +857,11 @@ def print_report(
         rep.out(
             f"{report.folder_id}: {len(report.trashed)} file(s) the hub deleted on purpose, "
             f"{human(report.trashed_bytes)}"
+            + (
+                " (not compared with the record's SHA-1 yet: --apply does)"
+                if report.uncompared
+                else ""
+            )
         )
     if summary_only:
         # An unattended run writes to a journal: the counts, no file or folder names.
@@ -765,6 +901,75 @@ def record_guard_refusal(
 
 def clear_guard_refusal(state_base: Path) -> None:
     guard_state_path(state_base).unlink(missing_ok=True)
+
+
+def mismatch_state_path(state_base: Path) -> Path:
+    return state_base / MISMATCH_STATE
+
+
+def render_mismatch_state(items: Sequence[Mismatch]) -> str:
+    """The text of the state file of the copies whose content differs from the record."""
+    return (
+        json.dumps(
+            {
+                "version": _MISMATCH_STATE_VERSION,
+                "copies": [
+                    {
+                        "path": m.key,
+                        "dev": m.dev,
+                        "ino": m.ino,
+                        "size": m.size,
+                        "mtime_ns": m.mtime_ns,
+                        "sha1s": list(m.sha1s),
+                    }
+                    for m in sorted(items, key=lambda m: m.key)
+                ],
+            },
+            indent=2,
+        )
+        + "\n"
+    )
+
+
+def parse_mismatch_state(text: str) -> dict[str, Mismatch]:
+    """The copies a state file records, by path key; empty when the text is not one (never
+    raises), which only means they are hashed again."""
+    try:
+        raw = json.loads(text)["copies"]
+        found = [
+            Mismatch(
+                str(c["path"]),
+                int(c["dev"]),
+                int(c["ino"]),
+                int(c["size"]),
+                int(c["mtime_ns"]),
+                tuple(str(h) for h in c["sha1s"]),
+            )
+            for c in raw
+        ]
+    except (ValueError, KeyError, TypeError, AttributeError):
+        return {}
+    return {m.key: m for m in found}
+
+
+def read_mismatches(state_base: Path) -> dict[str, Mismatch]:
+    try:
+        return parse_mismatch_state(mismatch_state_path(state_base).read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def _track_mismatches(state_base: Path, rep: Reporter, items: Sequence[Mismatch]) -> None:
+    """Remember the copies that differ (atomic, mode 0600), or forget them all when there are
+    none. A write that fails is a warning: the next run only hashes them again."""
+    path = mismatch_state_path(state_base)
+    try:
+        if items:
+            write_file(path, render_mismatch_state(items).encode())
+        else:
+            path.unlink(missing_ok=True)
+    except OSError as exc:
+        rep.warn(f"cannot update {path}: {exc.strerror or exc}")
 
 
 def _track_refusal(
@@ -833,6 +1038,7 @@ def prune_device(
         return 0
 
     configured = {f["id"]: f for f in local.folders()}
+    remembered = read_mismatches(state_base) if apply and state_base is not None else {}
     problems = 0
     busy: list[str] = []
     skipped = 0
@@ -850,6 +1056,8 @@ def prune_device(
                 grace=grace,
                 probes=probes,
                 now=now,
+                compare=apply,
+                remembered=remembered,
             )
         except PruneBusy as exc:
             if not unattended:
@@ -867,6 +1075,9 @@ def prune_device(
             continue
         print_report(report, rep, list_all=list_all and not unattended, summary_only=unattended)
         reports.append(report)
+
+    if apply and state_base is not None and not busy and not skipped:
+        _track_mismatches(state_base, rep, [m for r in reports for m in r.mismatches])
 
     total_files = sum(r.files for r in reports)
     total_bytes = sum(r.bytes for r in reports)
@@ -907,7 +1118,12 @@ def prune_device(
     if deleting:
         for report in reports:
             marker = (configured[report.folder_id].get("markerName")) or ".stfolder"
-            apply_folder(local, report, marker, rep)
+            spec = next(sp for sp in specs if sp.id == report.folder_id)
+
+            def still_safe(spec: FolderSpec = spec) -> str | None:
+                return folder_problem(local, spec)
+
+            apply_folder(local, report, marker, rep, still_safe=still_safe)
             rep.out(
                 f"{report.folder_id}: deleted {report.deleted_files} file(s), "
                 f"{human(report.deleted_bytes)}, removed {report.removed_dirs} empty folder(s)"

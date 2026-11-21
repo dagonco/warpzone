@@ -47,8 +47,11 @@ Syncthing v2.1.7 with two real instances (hub send-only, device receive-only):
 
 ## Safety rules
 
-A file is deleted only if rules 1, 2, 3 and 6 hold and either rules 4a and 5 or rule 4b holds,
-all re-checked right before each delete:
+A file is deleted only if rules 1, 2, 3 and 6 hold and either rules 4a and 5 or rule 4b holds.
+Rules 3 to 6 are checked again for each file, right before it is deleted. Rules 1 and 2 are
+checked once per run, before the rescan, and for rule 4b also before each delete, because
+comparing a large file can take minutes: the first failure stops the deletes of rule 4b in that
+folder and the run reports it. Rule 4a keeps its single check per run.
 
 1. The folder is a warpzone whitelisted folder, receive-only, not paused, at the
    path the config says, and its marker directory (`.stfolder`) exists (an
@@ -69,25 +72,30 @@ all re-checked right before each delete:
      - the console's `patterns-_deleted.stignore` is in sync with the hub, read after the full
        scan: Syncthing reports that file's local and global versions equal (the same notion as
        the whitelist files in rule 2, and `global` is not deleted, ignored or invalid either),
-       and its size on disk equals its local record;
+       and its size on disk equals its local record and its modification time is within 2 s of
+       the local record's `modified`;
      - the record parses, and an entry that has not expired lists the same path with the same
        size and a modification time within 2 s of the file's (FAT stores 2 s steps);
      - when that entry has a `sha1`, the file's SHA-1 equals it. A path can be in several
        entries; it is authorised when any one of them matches the file, so one with no `sha1`
        that matches the size and time is enough.
 
-     Right before each delete all of this is checked again: the record file is still the
-     version that was read (the same Syncthing local version, the same size and modification
-     time on disk), `global` is still deleted, and the file's size and modification time are
-     unchanged after it was hashed.
+     A run that may delete (`--apply`) compares the files that need a SHA-1 while it inspects the
+     folder, before the guards and the size cap are computed; a copy whose content differs, or
+     that cannot be read, is kept and listed with its reason, and is not a failure. Right before
+     each delete the rest is checked again: the record file is still the version that was read
+     (the same Syncthing local version, the same size and modification time on disk), `global`
+     is still deleted, the file is still a regular file with no link on the way to it, and its
+     device, inode, size and modification time are those it had when it was compared (a file
+     that changed since is kept, not compared again).
 5. Under 4a, for regular files, the size equals the hub's and the modification time is
    within 2 s of the hub's (FAT stores 2 s steps). A file edited on the device
    after it was synced is reported, not deleted. Under 4b the hub has no copy to compare
    with, so the record's size and modification time (rule 4b) take its place.
 6. It is not `.stfolder`, `.stignore`, `.stversions` or `patterns-*.stignore` at
    the folder root, nor a Syncthing temp file, and it lives in a directory
-   whose real path is inside the folder root. Symlinks are unlinked, never
-   followed. The subtree of any other Syncthing folder nested in the root (the
+   whose real path is inside the folder root (for rule 4b, with no link in the path at all).
+   Symlinks are unlinked, never followed. The subtree of any other Syncthing folder nested in the root (the
    save folders under `~/Emulation`) is skipped.
 
 Files that are ignored but fail 4a and 4b, or 5, are listed as kept, with the reason; the
@@ -174,11 +182,21 @@ and after the full scan):
   the file on disk and the record's files for that path (`prune.record_matches`: same size,
   modification time within 2 s). `prune.sha1_ok` (pure) compares a record file's `sha1`, when it
   has one, with a digest.
-- Hashing happens only in `apply_folder`, right before each delete and only when no matching entry
-  lacks a `sha1`, in chunks of 1 MiB. A report never hashes, and neither does a run an unattended
-  guard or the size cap refused. A file whose size or modification time changes while it is
-  hashed is kept. After hashing, `record_unchanged`, `global` and the file's identity are checked
-  once more before the unlink.
+- Hashing is in chunks of 1 MiB and only for a copy whose matching entries all have a `sha1` (a
+  matching entry with none authorises it without hashing). A report-only run never hashes, so it
+  lists such a copy as deletable and says on the line that the content is not compared yet; the
+  run with `--apply` compares it during the inspection (`prune.inspect_folder`), so a copy that
+  differs, or cannot be read, is already kept when the guard and `--max-gib` are computed. A run
+  that a guard or the cap then refuses has therefore hashed these files. A file whose size or
+  modification time changes while it is hashed is kept. At the delete, `apply_folder` does not
+  hash again: it compares the file's identity with the one it had when it was compared, and then
+  checks `record_unchanged`, `global` and the folder (rules 1 and 2) once more before the unlink.
+- A copy that differs would be hashed again by every run of the timer. The run therefore leaves
+  `~/.local/state/warpzone/prune-compared.json` (next to `prune-guard.json`, mode 0600, replaced
+  atomically): for each such copy the SHA-256 of its path (no file name), its device, inode,
+  size and modification time, and the SHA-1s it was compared with. While those are unchanged the
+  run skips the hash. A missing or unreadable file only means hashing again, a failed write is a
+  warning, and an `--apply` run that settles without such a copy removes the file.
 
 What is deleted and what is not:
 
@@ -187,7 +205,9 @@ What is deleted and what is not:
   failed mount or a mistake looks the same as. Only the library UI writes the record, so a copy
   with no entry in it stays and is reported as before.
 - A copy whose size or modification time differs from the entry's, or whose content differs from
-  its `sha1`, was edited on the console or is another file at the same path. It stays.
+  its `sha1`, was edited on the console or is another file at the same path. It stays, listed as
+  kept (`its content differs from the deleted game`, or `cannot be read to compare with the
+  deleted game` when it cannot be opened).
 - A symlink or a directory at a recorded path stays.
 - A copy whose entry expired, or whose trash entry was purged before the hub ran a version that
   writes the record, is not in the record and needs a manual delete.
@@ -203,7 +223,7 @@ the console without anyone running a command there, so each console that lists `
 `prune <device> --apply --unattended` from a timer. This is the one exception to the rule that a
 destructive command acts only when a person runs it with `--apply` (see
 [Writing commands](/warpzone/development/design/configuration/#writing-commands)). Every safety
-rule above still holds, file by file, with the re-check right before each delete. What changes:
+rule above still holds, with the re-checks described there. What changes:
 
 - **No size cap.** `--max-gib` does not apply: one PS4 game is larger than the 50 GiB default.
   `--unattended` requires `--apply` and refuses `--max-gib` and `--force` (usage error).
