@@ -50,8 +50,10 @@ def escape(text: str) -> str:
 
 
 def unescape(text: str) -> str:
-    """The inverse of `escape` (`&amp;` last, so `&amp;lt;` becomes `&lt;`)."""
-    return text.replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
+    """The inverse of `escape`, which also reads `&quot;` and `&apos;` as an XML parser does
+    (`&amp;` last, so `&amp;lt;` becomes `&lt;`)."""
+    text = text.replace("&lt;", "<").replace("&gt;", ">")
+    return text.replace("&quot;", '"').replace("&apos;", "'").replace("&amp;", "&")
 
 
 def eol_of(text: str) -> str:

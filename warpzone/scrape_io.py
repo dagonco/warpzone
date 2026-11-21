@@ -399,7 +399,8 @@ def settle(plan: scrape.MergePlan, done: Written) -> tuple[scrape.GameMerge, ...
     """The plan's games as they came out: copies that did not land are gone, and an entry or a
     fill that was not written (a console wrote one first, or the gamelist could not be written)
     turns an `added` into `filled` or `unchanged`, and a `filled` with nothing left into
-    `unchanged`."""
+    `unchanged`. A fill the writer left out without an error keeps a bare entry bare, so that it
+    is remembered (see development/design/scrape.md, "The cache")."""
     merges: list[scrape.GameMerge] = []
     for merge in plan.games:
         copies = tuple(c for c in merge.copies if c in done.copies)
@@ -413,6 +414,10 @@ def settle(plan: scrape.MergePlan, done: Written) -> tuple[scrape.GameMerge, ...
             still_bare = False
         if fill is not None and artwork.relative(fill.path) not in done.entries:
             fill = None
+            if (
+                done.gamelist_error is None
+            ):  # the writer found nothing to edit: the entry is as it was
+                still_bare = merge.was_bare
         if result is scrape.Result.ADDED and entry is None:
             result = scrape.Result.FILLED if copies else scrape.Result.UNCHANGED
         elif result is scrape.Result.FILLED and not copies and fill is None:

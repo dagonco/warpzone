@@ -582,7 +582,7 @@ class GameMerge:
     """The plan for one game: the entry to add (None when the hub has one or Skyscraper gave
     none), the fields to add to the entry the hub has (`fill`, its `fields` are the ones that
     entry lacks), the files to copy and the verdict. `still_bare` is whether the hub's entry has
-    no text after the merge."""
+    no text after the merge, `was_bare` whether it had none before."""
 
     game: Game
     result: Result
@@ -591,6 +591,7 @@ class GameMerge:
     copies: tuple[MediaCopy, ...] = ()
     fill: artwork.Entry | None = None
     still_bare: bool = False
+    was_bare: bool = False
 
     @property
     def kinds(self) -> tuple[str, ...]:
@@ -754,12 +755,15 @@ def plan_merge(
         else:
             result = Result.UNCHANGED
         bare = False
+        was_bare = existing is not None and is_bare(existing)
         if existing is not None:
-            bare = is_bare(existing) and not (fill and any(k in fill.fields for k in TEXT_FIELDS))
+            bare = was_bare and not (fill and any(k in fill.fields for k in TEXT_FIELDS))
         elif entry is not None:
             bare = is_bare(entry)
         games.append(
-            GameMerge(game, result, existing is not None, entry, tuple(copies), fill, bare)
+            GameMerge(
+                game, result, existing is not None, entry, tuple(copies), fill, bare, was_bare
+            )
         )
     return MergePlan(tuple(games), tuple(dropped))
 

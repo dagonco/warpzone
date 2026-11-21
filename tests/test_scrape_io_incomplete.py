@@ -5,9 +5,10 @@ import time
 from datetime import timedelta
 from unittest import mock
 
+from library_support import game
 from scrape_support import CHRONO, HOMEBREW, KIRBY, TODAY, HubCase
 from test_scrape_io import library
-from warpzone import safefile, scrape, scrape_io, scrape_unattended
+from warpzone import artwork, safefile, scrape, scrape_io, scrape_unattended
 from warpzone.report import Reporter
 
 NO_VIDEOS = ["covers", "screenshots", "miximages", "marquees", "backcovers"]
@@ -187,3 +188,97 @@ class BareTest(BareMemoryCase):
         self.hub.run()
         self.assertEqual(self.incomplete(), {})
         self.assertIn("<desc>", self.hub.gamelist().read_text())
+
+
+QUEST = "Tom's Quest (USA).zip"
+QUEST_STEM = "Tom's Quest (USA)"
+
+
+class UnwrittenFillCase(HubCase):
+    """A bare entry for a game with every medium, in a gamelist the stand-in has text for."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        library(self.hub, QUEST)
+        for kind in scrape.MEDIA_KINDS:
+            ext = "mp4" if kind == "videos" else "png"
+            self.hub.put_media(kind, QUEST_STEM, b"mine", ext)
+        self.hub.canned({"known": [QUEST_STEM]})
+
+    def gamelist(self, path: str, extra: str = "") -> str:
+        text = (
+            '<?xml version="1.0"?>\n<gameList>\n\t<game>\n'
+            f"\t\t<path>./{path}</path>\n\t\t<name>{QUEST_STEM}</name>\n{extra}"
+            "\t\t<playcount>2</playcount>\n\t</game>\n</gameList>\n"
+        )
+        self.hub.write_gamelist(text)
+        return text
+
+    def incomplete(self):
+        return scrape.parse_incomplete(
+            safefile.read_json_cache(self.hub.cache / scrape_io.NOT_FOUND_FILE)
+        )
+
+
+class UnwrittenFillTest(UnwrittenFillCase):
+    def test_an_entity_in_the_path_does_not_hide_the_entry_from_the_writer(self):
+        self.gamelist("Tom&apos;s Quest (USA).zip")
+        code, out, _ = self.hub.run()
+        self.assertEqual(code, 0, out)
+        found = self.hub.gamelist().read_text()
+        self.assertIn("<desc>About Tom's Quest (USA) &amp; more</desc>", found)
+        self.assertIn("<path>./Tom&apos;s Quest (USA).zip</path>", found)
+        self.assertEqual(self.incomplete(), {})
+
+    def test_a_quote_entity_in_the_path_is_found_too(self):
+        text = "<gameList>\n<game><path>./A &quot;B&quot;.zip</path></game>\n</gameList>\n"
+        fill = artwork.Entry("game", './A "B".zip', {"desc": "x"})
+        _, done = scrape.fill_entries(text, artwork.parse_gamelist(text), [fill])
+        self.assertEqual(done, frozenset({'A "B".zip'}))
+
+    def test_a_fill_that_cannot_be_written_is_remembered_as_bare_and_not_reported_filled(self):
+        text = self.gamelist(QUEST, "\t\t<!-- a comment -->\n")
+        code, out, _ = self.hub.run()
+        self.assertEqual(code, 0, out)
+        self.assertEqual(self.hub.gamelist().read_text(), text)
+        self.assertFalse(any("filled" in line for line in out), out)
+        self.assertEqual(out[-1], "scrape: snes: 1 unchanged")
+        self.assertEqual(
+            self.incomplete(),
+            {"snes": {f"./{QUEST}": scrape.Incomplete(len(b"rom"), (), TODAY, bare=True)}},
+        )
+
+    def test_the_nightly_filter_then_leaves_it_alone(self):
+        self.gamelist(QUEST, "\t\t<!-- a comment -->\n")
+        self.hub.run()
+        before = len(self.hub.gathers())
+        skip = scrape_unattended.incomplete_skipper(self.incomplete())
+        opts = self.hub.options(now=lambda: time.time() + 86400)
+        found = scrape_io.run_held(opts, Reporter(lambda text: None), skip_incomplete=skip)
+        self.assertEqual(found.systems[0].skipped_incomplete, 1)
+        self.assertEqual(len(self.hub.gathers()), before)
+
+
+class SettleTest(UnwrittenFillCase):
+    def merge(self):
+        g = game("snes", f"roms/snes/{QUEST}", "T", gamelist=f"./{QUEST}")
+        fill = artwork.Entry("game", f"./{QUEST}", {"desc": "x"})
+        return scrape.GameMerge(g, scrape.Result.FILLED, True, None, (), fill, False, True)
+
+    def test_a_fill_that_was_not_written_keeps_the_game_bare_and_unchanged(self):
+        done = scrape_io.Written(frozenset(), frozenset(), ())
+        (settled,) = scrape_io.settle(scrape.MergePlan((self.merge(),)), done)
+        self.assertEqual(
+            (settled.result, settled.fill, settled.still_bare),
+            (scrape.Result.UNCHANGED, None, True),
+        )
+
+    def test_a_fill_that_was_written_leaves_the_game_not_bare(self):
+        done = scrape_io.Written(frozenset(), frozenset({QUEST}), ())
+        (settled,) = scrape_io.settle(scrape.MergePlan((self.merge(),)), done)
+        self.assertEqual((settled.result, settled.still_bare), (scrape.Result.FILLED, False))
+
+    def test_with_a_gamelist_error_nothing_is_decided(self):
+        done = scrape_io.Written(frozenset(), frozenset(), (), "boom")
+        (settled,) = scrape_io.settle(scrape.MergePlan((self.merge(),)), done)
+        self.assertFalse(settled.still_bare)

@@ -486,9 +486,12 @@ empty and no `bare` says nothing and is dropped), and a record that cannot be re
 **Games ScreenScraper has no text for.** A bare entry is picked because its text is missing, so a
 game for which ScreenScraper has no `desc`, genre or the like would be picked on every run. The
 merge ends `unchanged` with the entry still bare, and the record above (`bare: true`, with the
-size) is what stops the nightly run from picking it again; the record is dropped when the entry
-gets text (a later scrape fills it, or a person writes it), and the game comes back when its file's
-size changes. A game ScreenScraper does not know at all is `not found` and is in the not-found
+size) is what stops the nightly run from picking it again; the record is dropped when the game is
+next processed and its entry has text, and the game comes back when its file's size changes. The
+same holds for a fill the writer could not apply although the gamelist was written (it finds no
+block to edit, as for an entry with an XML comment inside it): the game is `unchanged`, not
+`filled`, and is remembered as bare, so it is tried once and not every night. A fill that was
+dropped because the gamelist could not be written records nothing. A game ScreenScraper does not know at all is `not found` and is in the not-found
 memory above. An attended scrape ignores both and tries the bare entry again, as it does a game
 missing a video.
 

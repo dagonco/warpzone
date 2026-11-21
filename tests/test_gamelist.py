@@ -1319,6 +1319,8 @@ class PrimitivesTests(unittest.TestCase):
         self.assertEqual(gamelist.escape('a & b <c> "d"'), 'a &amp; b &lt;c&gt; "d"')
         self.assertEqual(gamelist.unescape("a &amp; b &lt;c&gt;"), "a & b <c>")
         self.assertEqual(gamelist.unescape("&amp;lt;"), "&lt;")
+        self.assertEqual(gamelist.unescape("Tom&apos;s &quot;X&quot;"), 'Tom\'s "X"')
+        self.assertEqual(gamelist.unescape("&amp;apos;"), "&apos;")
         text = "<&>&amp;"
         self.assertEqual(gamelist.unescape(gamelist.escape(text)), text)
 
