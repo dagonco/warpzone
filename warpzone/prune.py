@@ -4,7 +4,9 @@ When a pattern leaves a device's whitelist, Syncthing stops syncing the files bu
 leaves the copies on disk. A file is a leftover only when Syncthing itself has
 flagged it as ignored in the folder database after a full rescan (`local.ignored`
 in `GET /rest/db/file`) AND the hub still has the same file (`global`). Nothing
-here re-implements Syncthing's ignore matcher; see development/design/prune.md.
+here re-implements Syncthing's ignore matcher; see development/design/prune.md. One more
+case is deleted: a file the hub deleted on purpose, which `trash_record` says (rule 4b, "Files the
+hub deleted on purpose" in the same page).
 """
 
 from __future__ import annotations
@@ -12,19 +14,22 @@ from __future__ import annotations
 import dataclasses
 import enum
 import fnmatch
+import hashlib
 import json
 import os
 import re
+import stat
 import time
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from warpzone import trash_record
 from warpzone.config import DEFAULT_MAX_GIB, DEFAULT_RESCAN_TIMEOUT, Config
 from warpzone.errors import UsageError, WarpzoneError
-from warpzone.model import FolderSpec, device_specs
+from warpzone.model import LIBRARY_ID, FolderSpec, device_specs
 from warpzone.notify import NotifyError, notify
 from warpzone.paths import expand_home
 from warpzone.probes import REAL_PROBES, DeviceProbes
@@ -33,6 +38,7 @@ from warpzone.provision_folders import in_sync
 from warpzone.report import Reporter
 from warpzone.safefile import write_file
 from warpzone.syncthing import Client, SyncthingError
+from warpzone.trash_record import DeletedFile
 
 GIB = 1024**3
 # The hub's modification time is restored on the device when a file is pulled; FAT
@@ -44,6 +50,9 @@ PROTECTED_ROOT_GLOBS = ("patterns-*.stignore",)
 SCANNING = ("scanning", "scan-waiting")
 SHOWN_GROUPS = 30
 SHOWN_KEPT = 20
+RECORD_MAX_BYTES = 64 * 1024 * 1024  # a larger record file is not read
+HASH_CHUNK = 1024 * 1024
+TRASHED_REASON = "the hub deleted it on purpose"
 
 # Files EmuDeck and the emulators write into the library on every console; the shipped
 # profile's `[library] ignore` list ignores them (data/profiles/steamos-emudeck.toml), so
@@ -81,6 +90,7 @@ class Verdict(enum.Enum):
     LEFTOVER = "leftover"
     LOCAL_ONLY = "local-only"  # ignored, but the hub does not have it
     DIFFERS = "differs"  # ignored, but not the hub's copy
+    TRASHED = "trashed"  # ignored, and the hub deleted it on purpose (the record says so)
 
 
 @dataclass(frozen=True)
@@ -91,11 +101,24 @@ class Entry:
     mtime: float
 
 
+@dataclass(frozen=True)
+class Record:
+    """The record of deleted games as it was read: the Syncthing version and the stat of the file
+    (to see it did not change before a delete) and the unexpired files by path."""
+
+    version: str  # Syncthing's local version vector of the file, as JSON
+    size: int
+    mtime_ns: int
+    deleted: Mapping[str, tuple[DeletedFile, ...]]
+
+
 @dataclass
 class FolderReport:
     folder_id: str
     root: str
     leftovers: list[Entry] = field(default_factory=list)
+    trashed: list[Entry] = field(default_factory=list)  # rule 4b: see `classify`
+    record: Record | None = None  # what `trashed` was decided from
     kept: list[tuple[str, str]] = field(default_factory=list)  # (path, reason)
     generated: int = 0  # kept too, but expected: see `is_generated`
     untracked: int = 0
@@ -105,8 +128,22 @@ class FolderReport:
     removed_dirs: int = 0
 
     @property
-    def bytes(self) -> int:
+    def leftover_bytes(self) -> int:
         return sum(e.size for e in self.leftovers)
+
+    @property
+    def trashed_bytes(self) -> int:
+        return sum(e.size for e in self.trashed)
+
+    @property
+    def files(self) -> int:
+        """What an apply would delete here: the leftovers and the trashed files."""
+        return len(self.leftovers) + len(self.trashed)
+
+    @property
+    def bytes(self) -> int:
+        """What an apply would delete here, in bytes: what the guards and the cap count."""
+        return self.leftover_bytes + self.trashed_bytes
 
 
 def parse_time(text: Any) -> float | None:
@@ -124,8 +161,29 @@ def parse_time(text: Any) -> float | None:
         return None
 
 
-def classify(entry: Entry, info: dict[str, Any] | None) -> tuple[Verdict, str]:
-    """Pure decision from one `db/file` answer and what is on disk."""
+def record_matches(entry: Entry, deleted: Sequence[DeletedFile]) -> list[DeletedFile]:
+    """The files of `deleted` that are this regular file: same size, modification time within
+    `MTIME_TOLERANCE_S`. Pure; the SHA-1 is not looked at (see `sha1_ok`)."""
+    if entry.kind != "file":
+        return []
+    return [
+        d
+        for d in deleted
+        if d.size == entry.size and abs(d.mtime_ns / 1e9 - entry.mtime) <= MTIME_TOLERANCE_S
+    ]
+
+
+def sha1_ok(record_file: DeletedFile, digest: str) -> bool:
+    """Whether a file with SHA-1 `digest` is `record_file`: it has no SHA-1 to compare, or the
+    same one."""
+    return record_file.sha1 is None or record_file.sha1 == digest
+
+
+def classify(
+    entry: Entry, info: dict[str, Any] | None, deleted: Sequence[DeletedFile] = ()
+) -> tuple[Verdict, str]:
+    """Pure decision from one `db/file` answer, what is on disk and the record's files for the
+    path (`deleted`); it never hashes. See development/design/prune.md, "Safety rules"."""
     if not info:
         return Verdict.UNTRACKED, ""
     if not (info.get("local") or {}).get("ignored"):
@@ -133,7 +191,11 @@ def classify(entry: Entry, info: dict[str, Any] | None) -> tuple[Verdict, str]:
     hub = info.get("global") or {}
     # A local-only file that was scanned before it got ignored shows up in `global`
     # too, flagged invalid or ignored. That is not the hub's copy.
-    if not hub or hub.get("deleted") or hub.get("ignored") or hub.get("invalid"):
+    if not hub or hub.get("ignored") or hub.get("invalid"):
+        return Verdict.LOCAL_ONLY, "the hub does not have it"
+    if hub.get("deleted"):
+        if record_matches(entry, deleted):
+            return Verdict.TRASHED, TRASHED_REASON
         return Verdict.LOCAL_ONLY, "the hub does not have it"
     if hub.get("type") != (_TYPE_SYMLINK if entry.kind == "symlink" else _TYPE_FILE):
         return Verdict.DIFFERS, "the hub has a different kind of object"
@@ -320,6 +382,113 @@ def _norm(path: str) -> str:
     return os.path.normpath(path)
 
 
+def _db_file(client: Client, folder_id: str, path: str) -> dict[str, Any] | None:
+    """`db/file`, with None for a name that is not UTF-8 (a lone surrogate): Syncthing holds no
+    record for it, so it counts as not known."""
+    try:
+        path.encode("utf-8")
+    except UnicodeEncodeError:
+        return None
+    return client.db_file(folder_id, path)
+
+
+def _shown(path: str) -> str:
+    """`path` as text a report can always print, a name that is not UTF-8 included."""
+    return path.encode("utf-8", "backslashreplace").decode("utf-8")
+
+
+def _record_version(info: dict[str, Any] | None) -> tuple[str, int] | None:
+    """The local version and size of the record file when it is in sync with the hub (the notion
+    rule 2 applies to the whitelists) and has a size the record can have; None otherwise."""
+    if not in_sync(info):
+        return None
+    hub = (info or {}).get("global") or {}
+    if hub.get("deleted") or hub.get("invalid") or hub.get("ignored"):
+        return None
+    local = (info or {}).get("local") or {}
+    version, size = local.get("version"), local.get("size")
+    if (
+        not isinstance(version, list | dict)
+        or not version
+        or not isinstance(size, int)
+        or isinstance(size, bool)
+        or not 0 <= size <= RECORD_MAX_BYTES
+    ):
+        return None
+    return json.dumps(version, sort_keys=True), size
+
+
+def _read_regular(path: str, size: int) -> tuple[bytes, os.stat_result] | None:
+    """The bytes of the regular file at `path` (never through a link) when it is `size` bytes
+    and does not change while it is read; None otherwise."""
+    try:
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0))
+    except OSError:
+        return None
+    try:
+        before = os.fstat(fd)
+        if not stat.S_ISREG(before.st_mode) or before.st_size != size:
+            return None
+        data = b""
+        while len(data) <= size:
+            chunk = os.read(fd, HASH_CHUNK)
+            if not chunk:
+                break
+            data += chunk
+        after = os.fstat(fd)
+    except OSError:
+        return None
+    finally:
+        os.close(fd)
+    same = (before.st_size, before.st_mtime_ns) == (after.st_size, after.st_mtime_ns)
+    return (data, before) if same and len(data) == size else None
+
+
+def read_record(
+    client: Client,
+    spec: FolderSpec,
+    root: str,
+    now: Callable[[], float] = time.time,
+) -> Record | None:
+    """The usable record of deleted games (`wz-library` only), read after the full scan, or None
+    when it authorises nothing. See development/design/prune.md, "Files the hub deleted on
+    purpose"."""
+    if spec.id != LIBRARY_ID:
+        return None
+    try:
+        first = _record_version(client.db_file(spec.id, trash_record.FILE))
+        if first is None:
+            return None
+        version, size = first
+        found = _read_regular(os.path.join(root, trash_record.FILE), size)
+        again = _record_version(client.db_file(spec.id, trash_record.FILE))
+    except SyncthingError:
+        return None
+    if found is None or again != first:
+        return None
+    data, st = found
+    entries = trash_record.parse(data)
+    if entries is None:
+        return None
+    index = trash_record.index(entries, datetime.fromtimestamp(now(), UTC))
+    return Record(version, size, st.st_mtime_ns, index)
+
+
+def record_unchanged(client: Client, spec_id: str, root: str, record: Record) -> bool:
+    """Whether the record file is still the version `record` was read from: in sync with the
+    hub, the same Syncthing version, and the same size and modification time on disk."""
+    try:
+        found = _record_version(client.db_file(spec_id, trash_record.FILE))
+        st = os.lstat(os.path.join(root, trash_record.FILE))
+    except (OSError, SyncthingError):
+        return False
+    return (
+        found == (record.version, record.size)
+        and stat.S_ISREG(st.st_mode)
+        and (st.st_size, st.st_mtime_ns) == (record.size, record.mtime_ns)
+    )
+
+
 def inspect_folder(
     client: Client,
     spec: FolderSpec,
@@ -330,6 +499,7 @@ def inspect_folder(
     poll: float,
     grace: float,
     probes: DeviceProbes,
+    now: Callable[[], float] = time.time,
 ) -> FolderReport:
     """Check the folder is in its normal whitelisted state, rescan, classify every file."""
     current = configured.get(spec.id)
@@ -367,12 +537,18 @@ def inspect_folder(
         if fid != spec.id
     }
     report = FolderReport(spec.id, root)
+    report.record = read_record(client, spec, root, now)
+    known = report.record.deleted if report.record else {}
     for entry in walk(root, skip, marker):
         if entry.kind == "file":
             report.held_bytes += entry.size
-        verdict, reason = classify(entry, client.db_file(spec.id, entry.path))
+        verdict, reason = classify(
+            entry, _db_file(client, spec.id, entry.path), known.get(entry.path, ())
+        )
         if verdict is Verdict.LEFTOVER:
             report.leftovers.append(entry)
+        elif verdict is Verdict.TRASHED:
+            report.trashed.append(entry)
         elif verdict is Verdict.UNTRACKED:
             report.untracked += 1
         elif verdict is Verdict.LOCAL_ONLY and is_generated(entry.path):
@@ -387,25 +563,96 @@ def _inside(root: str, path: str) -> bool:
     return os.path.commonpath([real_root, os.path.realpath(path)]) == real_root
 
 
+def _sha1(path: str, before: os.stat_result) -> str | None:
+    """The SHA-1 of the regular file at `path`, read in chunks; None when it is not the file
+    `before` described or its size or modification time changes while it is read."""
+    fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0))
+    try:
+        opened = os.fstat(fd)
+        same = (opened.st_dev, opened.st_ino, opened.st_size, opened.st_mtime_ns) == (
+            before.st_dev,
+            before.st_ino,
+            before.st_size,
+            before.st_mtime_ns,
+        )
+        if not stat.S_ISREG(opened.st_mode) or not same:
+            return None
+        digest = hashlib.sha1(usedforsecurity=False)
+        while chunk := os.read(fd, HASH_CHUNK):
+            digest.update(chunk)
+        after = os.fstat(fd)
+    finally:
+        os.close(fd)
+    if (after.st_size, after.st_mtime_ns) != (opened.st_size, opened.st_mtime_ns):
+        return None
+    return digest.hexdigest()
+
+
+def _identity(st: os.stat_result) -> tuple[int, int, int, int]:
+    return st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns
+
+
+def _delete_leftover(client: Client, report: FolderReport, entry: Entry) -> bool:
+    full = os.path.join(report.root, entry.path)
+    st = os.lstat(full)
+    fresh = dataclasses.replace(entry, size=st.st_size, mtime=st.st_mtime)
+    verdict, _ = classify(fresh, _db_file(client, report.folder_id, entry.path))
+    if verdict is not Verdict.LEFTOVER or not _inside(report.root, os.path.dirname(full)):
+        return False
+    os.unlink(full)
+    return True
+
+
+def _delete_trashed(client: Client, report: FolderReport, entry: Entry) -> bool:
+    """Rule 4b for one file, all of it checked again right before the unlink and the hashing done
+    here; see development/design/prune.md, "Safety rules" and "Files the hub deleted on purpose"."""
+    record = report.record
+    if record is None:
+        return False
+    full = os.path.join(report.root, entry.path)
+    known = record.deleted.get(entry.path, ())
+
+    def still_trashed(st: os.stat_result) -> bool:
+        fresh = dataclasses.replace(entry, kind="file", size=st.st_size, mtime=st.st_mtime)
+        info = _db_file(client, report.folder_id, entry.path)
+        return classify(fresh, info, known)[0] is Verdict.TRASHED
+
+    st = os.lstat(full)
+    if not stat.S_ISREG(st.st_mode) or not _inside(report.root, os.path.dirname(full)):
+        return False
+    if not still_trashed(st):
+        return False
+    fresh = dataclasses.replace(entry, kind="file", size=st.st_size, mtime=st.st_mtime)
+    candidates = record_matches(fresh, known)
+    if all(c.sha1 is not None for c in candidates):
+        digest = _sha1(full, st)
+        if digest is None or not any(sha1_ok(c, digest) for c in candidates):
+            return False
+    if not record_unchanged(client, report.folder_id, report.root, record):
+        return False
+    after = os.lstat(full)
+    if _identity(after) != _identity(st) or not still_trashed(after):
+        return False
+    os.unlink(full)
+    return True
+
+
 def apply_folder(
     client: Client, report: FolderReport, marker: str = ".stfolder", rep: Reporter | None = None
 ) -> None:
-    """Delete the leftovers, re-checking each one right before it goes."""
+    """Delete the leftovers and the trashed files, re-checking each one right before it goes."""
     parents: set[str] = set()
-    for entry in report.leftovers:
-        full = os.path.join(report.root, entry.path)
+    jobs = [(e, _delete_leftover) for e in report.leftovers]
+    jobs += [(e, _delete_trashed) for e in report.trashed]
+    for entry, delete in jobs:
         try:
-            st = os.lstat(full)
-            fresh = dataclasses.replace(entry, size=st.st_size, mtime=st.st_mtime)
-            verdict, _ = classify(fresh, client.db_file(report.folder_id, entry.path))
-            if verdict is not Verdict.LEFTOVER or not _inside(report.root, os.path.dirname(full)):
+            if not delete(client, report, entry):
                 continue
-            os.unlink(full)
         except FileNotFoundError:
             continue
         except (OSError, SyncthingError) as exc:
             if rep:
-                rep.warn(f"{report.folder_id}: cannot delete {entry.path}: {exc}")
+                rep.warn(f"{report.folder_id}: cannot delete {_shown(entry.path)}: {exc}")
             continue
         report.deleted_files += 1
         report.deleted_bytes += entry.size
@@ -423,7 +670,7 @@ def apply_folder(
             continue
         try:
             client.scan(report.folder_id, sub=rel)
-            info = client.db_file(report.folder_id, rel)
+            info = _db_file(client, report.folder_id, rel)
             if (info or {}).get("local", {}).get("ignored"):
                 os.rmdir(os.path.join(report.root, rel))
                 report.removed_dirs += 1
@@ -453,11 +700,33 @@ def _print_generated(report: FolderReport, rep: Reporter) -> None:
         )
 
 
+def _print_entries(entries: Sequence[Entry], rep: Reporter, *, list_all: bool) -> None:
+    """The files a report lists: every one with `--list`, else grouped by their first two levels."""
+    if list_all:
+        for entry in entries:
+            rep.out(f"  {_shown(entry.path)}")
+        return
+    groups: dict[str, list[int]] = {}
+    for entry in entries:
+        count, size = groups.setdefault(_group(entry.path), [0, 0])
+        groups[_group(entry.path)] = [count + 1, size + entry.size]
+    ranked = sorted(groups.items(), key=lambda kv: (-kv[1][1], kv[0]))
+    for name, (count, size) in ranked[:SHOWN_GROUPS]:
+        rep.out(f"  {_shown(name)}: {count} file(s), {human(size)}")
+    if len(ranked) > SHOWN_GROUPS:
+        rep.out(f"  ... and {len(ranked) - SHOWN_GROUPS} more folder(s), use --list")
+
+
 def print_report(
     report: FolderReport, rep: Reporter, *, list_all: bool, summary_only: bool = False
 ) -> None:
     n = len(report.leftovers)
-    rep.out(f"{report.folder_id}: {n} leftover file(s), {human(report.bytes)}")
+    rep.out(f"{report.folder_id}: {n} leftover file(s), {human(report.leftover_bytes)}")
+    if report.trashed:
+        rep.out(
+            f"{report.folder_id}: {len(report.trashed)} file(s) the hub deleted on purpose, "
+            f"{human(report.trashed_bytes)}"
+        )
     if summary_only:
         # An unattended run writes to a journal: the counts, no file or folder names.
         if report.kept:
@@ -471,25 +740,13 @@ def print_report(
                 f"{report.folder_id}: {report.untracked} file(s) not known to Syncthing, left alone"
             )
         return
-    if list_all:
-        for entry in report.leftovers:
-            rep.out(f"  {entry.path}")
-    else:
-        groups: dict[str, list[int]] = {}
-        for entry in report.leftovers:
-            count, size = groups.setdefault(_group(entry.path), [0, 0])
-            groups[_group(entry.path)] = [count + 1, size + entry.size]
-        ranked = sorted(groups.items(), key=lambda kv: (-kv[1][1], kv[0]))
-        for name, (count, size) in ranked[:SHOWN_GROUPS]:
-            rep.out(f"  {name}: {count} file(s), {human(size)}")
-        if len(ranked) > SHOWN_GROUPS:
-            rep.out(f"  ... and {len(ranked) - SHOWN_GROUPS} more folder(s), use --list")
+    _print_entries([*report.leftovers, *report.trashed], rep, list_all=list_all)
     if report.kept:
         rep.out(
             f"{report.folder_id}: kept {len(report.kept)} ignored file(s) the hub cannot restore"
         )
         for path, reason in report.kept[: len(report.kept) if list_all else SHOWN_KEPT]:
-            rep.out(f"  {path} ({reason})")
+            rep.out(f"  {_shown(path)} ({reason})")
         if not list_all and len(report.kept) > SHOWN_KEPT:
             rep.out(f"  ... and {len(report.kept) - SHOWN_KEPT} more, use --list")
     _print_generated(report, rep)
@@ -592,6 +849,7 @@ def prune_device(
                 poll=poll,
                 grace=grace,
                 probes=probes,
+                now=now,
             )
         except PruneBusy as exc:
             if not unattended:
@@ -610,7 +868,7 @@ def prune_device(
         print_report(report, rep, list_all=list_all and not unattended, summary_only=unattended)
         reports.append(report)
 
-    total_files = sum(len(r.leftovers) for r in reports)
+    total_files = sum(r.files for r in reports)
     total_bytes = sum(r.bytes for r in reports)
     rep.out(f"total: {total_files} leftover file(s), {human(total_bytes)}")
 
@@ -654,10 +912,10 @@ def prune_device(
                 f"{report.folder_id}: deleted {report.deleted_files} file(s), "
                 f"{human(report.deleted_bytes)}, removed {report.removed_dirs} empty folder(s)"
             )
-            if report.deleted_files < len(report.leftovers):
+            if report.deleted_files < report.files:
                 problems += 1
                 rep.warn(
-                    f"{report.folder_id}: {len(report.leftovers) - report.deleted_files} "
+                    f"{report.folder_id}: {report.files - report.deleted_files} "
                     "file(s) were not deleted (changed meanwhile or a delete failed)"
                 )
     elif total_files and not apply:
@@ -674,13 +932,13 @@ def prune_device(
 
     if notify_url:
         for report in reports:
-            if not report.leftovers:
+            if not report.files:
                 continue
             done = deleting
             payload = {
                 "device": name,
                 "folder": report.folder_id,
-                "files": report.deleted_files if done else len(report.leftovers),
+                "files": report.deleted_files if done else report.files,
                 "bytes": report.deleted_bytes if done else report.bytes,
                 "applied": done,
             }

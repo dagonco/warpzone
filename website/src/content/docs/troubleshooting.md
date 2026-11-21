@@ -11,7 +11,7 @@ Symptoms, causes and fixes, grouped by where the problem shows up. When you are 
 
 **Cause.** Removing a line from a whitelist only makes Syncthing stop syncing that path. The copy on the console is kept, on purpose: a whitelist edit can never delete anything by itself.
 
-**Fix.** To reclaim the space, run `warpzone prune` on the console and, when the report looks right, `warpzone prune --apply` ([Whitelists and pruning](/warpzone/setup/whitelists/#pruning-what-a-device-no-longer-whitelists)). It deletes only files Syncthing ignores and the hub still has, unchanged.
+**Fix.** To reclaim the space, run `warpzone prune` on the console and, when the report looks right, `warpzone prune --apply` ([Whitelists and pruning](/warpzone/setup/whitelists/#pruning-what-a-device-no-longer-whitelists)). It deletes only files Syncthing ignores and the hub still has, unchanged, or that the library UI deleted from the hub on purpose.
 
 To delete a game everywhere, do it in this order:
 
@@ -19,7 +19,7 @@ To delete a game everywhere, do it in this order:
 2. Wait until every console shows `need 0` for that folder in `warpzone status` (run it on each console). The deletion reaches a console only while the game is still whitelisted there.
 3. Remove the whitelist line.
 
-If you remove the line first, the console keeps its copy, and `prune` will report it as a file the hub cannot restore and leave it alone. Delete it by hand in that case.
+If you remove the line first and then delete the game with the library UI, the next `prune` (the timer's too) removes the console's copy, because the hub's record of deleted games lists it. If the game was deleted from the hub by hand, or before the hub ran a version that keeps the record, `prune` reports the copy as a file the hub cannot restore and leaves it alone: delete it by hand in that case.
 
 ### A new whitelist line has no effect
 
@@ -81,7 +81,7 @@ If you remove the line first, the console keeps its copy, and `prune` will repor
 
 **Cause and fix.** `prune` is conservative by design:
 
-- A file that exists only on the device, or that you edited, is reported as `kept ... the hub cannot restore` and never deleted.
+- A file that exists only on the device, or that you edited, is reported as `kept ... the hub cannot restore` and never deleted. So is a file you deleted from the hub by hand: only the library UI's delete is recorded for the consoles, and a console deletes its copy only when that record lists it.
 - It refuses to delete more than `--max-gib` (default 50) in one run; pass `--force` if the number is right.
 - It refuses to run while a device is still bootstrapping. Let `provision device` finish first.
 - Without `--apply` it only reports.
