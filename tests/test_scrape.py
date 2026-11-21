@@ -313,7 +313,7 @@ class SelectTest(unittest.TestCase):
         (g,) = scrape.frontend_games("ps4", [ps4_game("Bloodborne")])
         sel = self.pick([g])
         self.assertFalse(sel.picks[0].has_entry)
-        entry_there = entry("./Bloodborne.desktop", name="Bloodborne")
+        entry_there = entry("./Bloodborne.desktop", name="Bloodborne", desc="x")
         sel = self.pick([g], [entry_there], media("Bloodborne", "covers"))
         self.assertTrue(sel.picks[0].has_entry)
         self.assertNotIn("covers", sel.picks[0].missing)
@@ -331,7 +331,9 @@ class SelectTest(unittest.TestCase):
             gamelist="./roms/Halo 3 (World).iso",
         )
         (g,) = scrape.frontend_games("xbox360", [raw])
-        done = self.pick([g], [entry("./Halo 3 (World).iso")], media("Halo 3 (World)", *ALL_KINDS))
+        done = self.pick(
+            [g], [entry("./Halo 3 (World).iso", desc="x")], media("Halo 3 (World)", *ALL_KINDS)
+        )
         self.assertEqual(done.picks, ())
 
     def test_not_found_is_keyed_by_the_frontend_path(self):
@@ -366,12 +368,12 @@ class SelectTest(unittest.TestCase):
 
     def test_entry_without_dot_slash_still_matches(self):
         g = game("snes", "roms/snes/Game.zip", "Game")
-        sel = self.pick([g], [entry("Game.zip")], media("Game", *ALL_KINDS))
+        sel = self.pick([g], [entry("Game.zip", desc="x")], media("Game", *ALL_KINDS))
         self.assertEqual(sel.picks, ())
 
     def test_complete_entry_is_left_alone(self):
         g = game("snes", "roms/snes/Game.zip", "Game")
-        sel = self.pick([g], [entry("./Game.zip")], media("Game", *ALL_KINDS))
+        sel = self.pick([g], [entry("./Game.zip", desc="x")], media("Game", *ALL_KINDS))
         self.assertEqual(sel.picks, ())
 
     def test_nomultiscrape_gets_nothing(self):
@@ -388,9 +390,9 @@ class SelectTest(unittest.TestCase):
     def test_media_in_another_extension_counts_as_present(self):
         g = game("snes", "roms/snes/Game.zip", "Game")
         present = {f"{k}/Game.jpg" for k in ALL_KINDS if k != "videos"} | {"videos/Game.webm"}
-        self.assertEqual(self.pick([g], [entry("./Game.zip")], present).picks, ())
+        self.assertEqual(self.pick([g], [entry("./Game.zip", desc="x")], present).picks, ())
         jpeg = {f"{k}/Game.jpeg" for k in ALL_KINDS if k != "videos"} | {"videos/Game.mp4"}
-        self.assertEqual(self.pick([g], [entry("./Game.zip")], jpeg).picks, ())
+        self.assertEqual(self.pick([g], [entry("./Game.zip", desc="x")], jpeg).picks, ())
 
     def test_a_video_extension_does_not_count_for_an_image_kind(self):
         g = game("snes", "roms/snes/Game.zip", "Game")
@@ -405,13 +407,13 @@ class SelectTest(unittest.TestCase):
     def test_subfolder_stem(self):
         g = game("gba", "roms/gba/Hacks/X.gba", "X", gamelist="./Hacks/X.gba")
         self.assertEqual(scrape.media_stem(g), "Hacks/X")
-        sel = self.pick([g], [entry("./Hacks/X.gba")], media("Hacks/X", *ALL_KINDS))
+        sel = self.pick([g], [entry("./Hacks/X.gba", desc="x")], media("Hacks/X", *ALL_KINDS))
         self.assertEqual(sel.picks, ())
 
     def test_m3u_folder_keeps_its_whole_name(self):
         g = game("psx", "roms/psx/Game.m3u", "Game", kind="dir", gamelist="./Game.m3u")
         self.assertEqual(scrape.media_stem(g), "Game.m3u")
-        entries = [entry("./Game.m3u", tag="folder")]
+        entries = [entry("./Game.m3u", tag="folder", desc="x")]
         # covers/Game.png is the stem of a file, not of the folder
         self.assertEqual(len(self.pick([g], entries, media("Game", *ALL_KINDS)).picks), 1)
         self.assertEqual(self.pick([g], entries, media("Game.m3u", *ALL_KINDS)).picks, ())
@@ -466,7 +468,7 @@ class SelectTest(unittest.TestCase):
         record = scrape.NotFound(500, TODAY)
         sel = self.pick(
             [done],
-            [entry("./Done.zip")],
+            [entry("./Done.zip", desc="x")],
             media("Done", *ALL_KINDS),
             not_found={"./Done.zip": record},
         )
@@ -612,7 +614,7 @@ class MergeEntriesTest(unittest.TestCase):
             with self.subTest(hub_path=hub_path):
                 p = plan(
                     [self.g],
-                    hub=[entry(hub_path, name="My name", playcount="3")],
+                    hub=[entry(hub_path, **{**SKY_FIELDS, "name": "My name"}, playcount="3")],
                     hub_media=media("Game (USA)", *ALL_KINDS),
                     sky=[entry("./Game (USA).zip", **SKY_FIELDS)],
                 )
@@ -789,7 +791,7 @@ class MergeFrontendPathTest(unittest.TestCase):
         (g,) = scrape.frontend_games("ps4", [ps4_game("Bloodborne")])
         p = plan(
             [g],
-            hub=[entry("./Bloodborne.desktop", name="Mine")],
+            hub=[entry("./Bloodborne.desktop", **{**SKY_FIELDS, "name": "Mine"})],
             hub_media=media("Bloodborne", *ALL_KINDS),
             sky=[entry("./Bloodborne.desktop", **SKY_FIELDS)],
         )

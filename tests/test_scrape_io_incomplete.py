@@ -131,3 +131,59 @@ class ReadTest(IncompleteMemoryCase):
         not_found, incomplete = scrape_io.read_memory(opts)
         self.assertEqual(set(not_found["snes"]), {f"./{HOMEBREW}"})
         self.assertEqual(set(incomplete["snes"]), {f"./{CHRONO}", f"./{KIRBY}"})
+
+
+class BareMemoryCase(HubCase):
+    """A game with a bare entry and every medium, for which ScreenScraper has no text."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        library(self.hub, KIRBY)
+        self.hub.write_gamelist(
+            '<?xml version="1.0"?>\n<gameList>\n\t<game>\n'
+            f"\t\t<path>./{KIRBY}</path>\n\t\t<name>Kirby Super Star (USA)</name>\n"
+            "\t</game>\n</gameList>\n"
+        )
+        for kind in scrape.MEDIA_KINDS:
+            self.hub.put_media(
+                kind, "Kirby Super Star (USA)", b"mine", "mp4" if kind == "videos" else "png"
+            )
+        self.hub.canned({"known": ["Kirby Super Star (USA)"], "no_text": True})
+
+    def incomplete(self):
+        return scrape.parse_incomplete(
+            safefile.read_json_cache(self.hub.cache / scrape_io.NOT_FOUND_FILE)
+        )
+
+
+class BareTest(BareMemoryCase):
+    def test_a_game_that_stays_bare_is_recorded(self):
+        self.hub.run()
+        self.assertEqual(
+            self.incomplete(),
+            {"snes": {f"./{KIRBY}": scrape.Incomplete(len(b"rom"), (), TODAY, bare=True)}},
+        )
+
+    def test_the_nightly_filter_skips_it_the_next_time(self):
+        self.hub.run()
+        before = len(self.hub.gathers())
+        skip = scrape_unattended.incomplete_skipper(self.incomplete())
+        opts = self.hub.options(now=lambda: time.time() + 86400)
+        found = scrape_io.run_held(opts, Reporter(lambda text: None), skip_incomplete=skip)
+        self.assertEqual(found.systems[0].skipped_incomplete, 1)
+        self.assertEqual(len(self.hub.gathers()), before)
+
+    def test_the_first_nightly_pass_is_not_stopped_by_an_old_record(self):
+        old = {"snes": {f"./{KIRBY}": scrape.Incomplete(len(b"rom"), ("videos",), TODAY)}}
+        skip = scrape_unattended.incomplete_skipper(old)
+        opts = self.hub.options(now=lambda: time.time() + 86400)
+        found = scrape_io.run_held(opts, Reporter(lambda text: None), skip_incomplete=skip)
+        self.assertEqual(found.systems[0].skipped_incomplete, 0)
+        self.assertEqual(len(self.hub.gathers()), 1)
+
+    def test_a_game_that_later_gets_text_loses_the_record(self):
+        self.hub.run()
+        self.hub.canned({"known": ["Kirby Super Star (USA)"]})
+        self.hub.run()
+        self.assertEqual(self.incomplete(), {})
+        self.assertIn("<desc>", self.hub.gamelist().read_text())

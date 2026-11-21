@@ -63,7 +63,7 @@ class NightCase(HubCase):
     def complete(self, stem: str, name: str) -> None:
         self.hub.write_gamelist(
             f'<?xml version="1.0"?>\n<gameList>\n\t<game>\n\t\t<path>./{name}</path>\n'
-            f"\t\t<name>x</name>\n\t</game>\n</gameList>\n"
+            f"\t\t<name>x</name>\n\t\t<desc>x</desc>\n\t</game>\n</gameList>\n"
         )
         for kind in scrape.MEDIA_KINDS:
             self.hub.put_media(kind, stem, ext="mp4" if kind == "videos" else "png")

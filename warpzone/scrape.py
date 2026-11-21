@@ -139,11 +139,13 @@ class NotFound:
 @dataclass(frozen=True)
 class Pick:
     """A game to scrape. `has_entry` is False when the hub gamelist has no entry for it;
-    `missing` lists the media kinds (in `MEDIA_KINDS` order) the hub has no file of."""
+    `missing` lists the media kinds (in `MEDIA_KINDS` order) the hub has no file of; `bare` is
+    whether its entry has none of the `TEXT_FIELDS`."""
 
     game: Game
     has_entry: bool
     missing: tuple[str, ...]
+    bare: bool = False
 
 
 @dataclass(frozen=True)
@@ -256,9 +258,10 @@ def select(
     paths of the hub's media files below the system's media folder in lower-case-extension
     form, `<kind>/<stem>.<ext>` with `/` (a file in another extension of the kind counts as
     present). A game is picked when it has no entry, or has one that is not marked
-    `<nomultiscrape>` and lacks a file of a kind in `MEDIA_KINDS`. A game in `not_found` (keyed
-    by gamelist path) that is still within `NOT_FOUND_DAYS` is left out and counted, unless
-    `retry_not_found`. See development/design/scrape.md, "Flow" and "The cache".
+    `<nomultiscrape>` and lacks a file of a kind in `MEDIA_KINDS` or is bare (`is_bare`). A
+    game in `not_found` (keyed by gamelist path) that is still within `NOT_FOUND_DAYS` is left
+    out and counted, unless `retry_not_found`. See development/design/scrape.md, "Flow" and
+    "The cache".
     """
     by_path = _entries_by_path(entries)
     records = not_found or {}
@@ -270,27 +273,31 @@ def select(
             continue
         stem = media_stem(game)
         missing = tuple(k for k in MEDIA_KINDS if not _has_media(media, k, stem))
-        if entry is not None and not missing:
+        bare = entry is not None and is_bare(entry)
+        if entry is not None and not missing and not bare:
             continue
         if _known_recently(game, records, today, retry_not_found):
             skipped += 1
             continue
-        picks.append(Pick(game, entry is not None, missing))
+        picks.append(Pick(game, entry is not None, missing, bare))
     return Selection(tuple(picks), skipped)
 
 
 def render_dry_run(system: str, selection: Selection) -> str:
     """What `scrape --dry-run` prints for a system (no trailing newline): the games a run would
-    scrape, split into "no entry" and "missing media" with the kinds."""
+    scrape, split into "no entry", "missing media" with the kinds and "bare entry"."""
     picks = selection.picks
     noun = "game" if len(picks) == 1 else "games"
     lines = [f"scrape: {system}: would scrape {len(picks)} {noun}"]
     for pick in picks:
         name = artwork.relative(pick.game.gamelist) or pick.game.gamelist
-        if pick.has_entry:
-            lines.append(f"  {'missing media':<13}  {name}: {', '.join(pick.missing)}")
-        else:
+        if not pick.has_entry:
             lines.append(f"  {'no entry':<13}  {name}")
+            continue
+        if pick.missing:
+            lines.append(f"  {'missing media':<13}  {name}: {', '.join(pick.missing)}")
+        if pick.bare:
+            lines.append(f"  {'bare entry':<13}  {name}")
     if selection.skipped_not_found:
         lines.append(
             f"  skipped {selection.skipped_not_found} not found in the last {NOT_FOUND_DAYS} days"
@@ -302,12 +309,15 @@ def render_dry_totals(selections: Mapping[str, Selection]) -> str:
     """The last line of `scrape --dry-run`: the totals over every system."""
     picks = [p for sel in selections.values() for p in sel.picks]
     entryless = sum(1 for p in picks if not p.has_entry)
+    bare_only = sum(1 for p in picks if p.has_entry and not p.missing)
     systems = sum(1 for sel in selections.values() if sel.picks)
     noun = "game" if len(picks) == 1 else "games"
+    parts = f"{entryless} with no entry, {len(picks) - entryless - bare_only} missing media"
+    if bare_only:
+        parts += f", {bare_only} with a bare entry"
     return (
         f"scrape: would scrape {len(picks)} {noun} in {systems} "
-        f"{'system' if systems == 1 else 'systems'} "
-        f"({entryless} with no entry, {len(picks) - entryless} missing media)"
+        f"{'system' if systems == 1 else 'systems'} ({parts})"
     )
 
 
@@ -471,7 +481,7 @@ def classify_output(text: str) -> Outcome:
 
 # ------------------------------------------------------------------ merge
 
-# The text fields a new entry takes from Skyscraper's (the ones the library UI reads), in the
+# The text fields an entry takes from Skyscraper's (the ones the library UI reads), in the
 # order they are written.
 ENTRY_FIELDS: tuple[str, ...] = (
     "name",
@@ -483,6 +493,40 @@ ENTRY_FIELDS: tuple[str, ...] = (
     "genre",
     "players",
 )
+# What a scrape adds to a bare entry: the fields of `ENTRY_FIELDS` that say something about the
+# game (the name is the file name until a scrape or a person gives it a title).
+TEXT_FIELDS: tuple[str, ...] = tuple(key for key in ENTRY_FIELDS if key != "name")
+
+
+def is_bare(entry: artwork.Entry) -> bool:
+    """Whether an entry has none of the `TEXT_FIELDS`, whatever else it holds (play data, an
+    emulator): the entry ES-DE or the play state created before a scrape. See
+    development/design/scrape.md, "Merge"."""
+    return not any(entry.fields.get(key) for key in TEXT_FIELDS)
+
+
+def _placeholder_name(entry: artwork.Entry, name: str) -> bool:
+    """Whether `name` is the file name of the entry's game or its stem: never a real title."""
+    base = posixpath.basename(artwork.relative(entry.path) or entry.path)
+    return name in (base, posixpath.splitext(base)[0])
+
+
+def fill_fields(entry: artwork.Entry, wanted: Mapping[str, str]) -> dict[str, str]:
+    """The fields of `wanted` (by `ENTRY_FIELDS` order) to add to an existing entry: those it
+    has no value for, and the name when it is only the file name. An entry marked
+    `<nomultiscrape>` gets none. See development/design/scrape.md, "Merge"."""
+    if entry.fields.get(NO_MULTISCRAPE, "").lower() == "true":
+        return {}
+    found: dict[str, str] = {}
+    for key in ENTRY_FIELDS:
+        value = _clean(wanted.get(key, "")).strip()
+        have = entry.fields.get(key, "")
+        if not value or value == have:
+            continue
+        if not have or (key == "name" and _placeholder_name(entry, have)):
+            found[key] = value
+    return found
+
 
 # Where Skyscraper leaves each hub kind: the pass (`MAIN` or `BOX`) and the folder of that
 # pass's media folder (`3dboxes` are the `covers` of the 3D box pass).
@@ -536,17 +580,25 @@ class Dropped:
 @dataclass(frozen=True)
 class GameMerge:
     """The plan for one game: the entry to add (None when the hub has one or Skyscraper gave
-    none), the files to copy and the verdict."""
+    none), the fields to add to the entry the hub has (`fill`, its `fields` are the ones that
+    entry lacks), the files to copy and the verdict. `still_bare` is whether the hub's entry has
+    no text after the merge."""
 
     game: Game
     result: Result
     had_entry: bool
     entry: artwork.Entry | None = None
     copies: tuple[MediaCopy, ...] = ()
+    fill: artwork.Entry | None = None
+    still_bare: bool = False
 
     @property
     def kinds(self) -> tuple[str, ...]:
         return tuple(c.kind for c in self.copies)
+
+    @property
+    def filled_fields(self) -> tuple[str, ...]:
+        return () if self.fill is None else tuple(k for k in ENTRY_FIELDS if k in self.fill.fields)
 
 
 @dataclass(frozen=True)
@@ -563,6 +615,10 @@ class MergePlan:
     @property
     def copies(self) -> tuple[MediaCopy, ...]:
         return tuple(c for g in self.games for c in g.copies)
+
+    @property
+    def fills(self) -> tuple[artwork.Entry, ...]:
+        return tuple(g.fill for g in self.games if g.fill is not None)
 
 
 def _clean(text: str) -> str:
@@ -591,6 +647,15 @@ def _new_entry(game: Game, source: artwork.Entry | None) -> artwork.Entry | None
         if value:
             fields[key] = value
     return artwork.Entry("game", game.gamelist, fields)
+
+
+def _fill_entry(
+    game: Game, existing: artwork.Entry, source: artwork.Entry | None
+) -> artwork.Entry | None:
+    if source is None:
+        return None
+    fields = fill_fields(existing, source.fields)
+    return artwork.Entry(existing.tag, game.gamelist, fields) if fields else None
 
 
 def _plan_copies(
@@ -679,15 +744,23 @@ def plan_merge(
             continue
         copies, seen = _plan_copies(game, name, hub_media, main_files, box_files, claimed, dropped)
         entry = None if existing is not None else _new_entry(game, source.get(name))
+        fill = None if existing is None else _fill_entry(game, existing, source.get(name))
         if entry is not None:
             result = Result.ADDED
-        elif copies:
+        elif copies or fill is not None:
             result = Result.FILLED
         elif not seen and name not in source:
             result = Result.NOT_FOUND
         else:
             result = Result.UNCHANGED
-        games.append(GameMerge(game, result, existing is not None, entry, tuple(copies)))
+        bare = False
+        if existing is not None:
+            bare = is_bare(existing) and not (fill and any(k in fill.fields for k in TEXT_FIELDS))
+        elif entry is not None:
+            bare = is_bare(entry)
+        games.append(
+            GameMerge(game, result, existing is not None, entry, tuple(copies), fill, bare)
+        )
     return MergePlan(tuple(games), tuple(dropped))
 
 
@@ -713,6 +786,44 @@ def render_entries(
                 lines.append(f"{inner}<{key}>{text}</{key}>")
         lines.append(f"{indent}</{item.tag}>")
     return "".join(line + eol for line in lines)
+
+
+def fill_entries(
+    text: str, current: Sequence[artwork.Entry], fills: Sequence[artwork.Entry]
+) -> tuple[str, frozenset[str]]:
+    """`text` (a gamelist, whose entries are `current`) with the fields of each of `fills` set
+    in the entry that has its path, and the relative paths filled. What the entry has now is
+    checked again with `fill_fields`, so a field with a value is never replaced; the indentation,
+    the line endings and every other byte stay. `GamelistError` when the result would not be
+    well-formed XML."""
+    existing = _entries_by_path(current)
+    blocks: dict[str, re.Match[str]] = {}
+    for match in gamelist.entry_blocks(text):
+        blocks.setdefault(gamelist.entry_path(match.group(0)), match)
+    eol = gamelist.eol_of(text)
+    edits: list[tuple[int, int, str]] = []
+    done: set[str] = set()
+    for fill in fills:
+        rel = artwork.relative(fill.path)
+        have = existing.get(rel or "")
+        found = blocks.get(rel or "")
+        if rel is None or have is None or found is None or rel in done:
+            continue
+        fields = fill_fields(have, fill.fields)
+        if not fields:
+            continue
+        block = found.group(0)
+        for key in ENTRY_FIELDS:
+            if key in fields:
+                block = gamelist.set_child(block, key, fields[key], eol)
+        edits.append((found.start(), found.end(), block))
+        done.add(rel)
+    new = text
+    for start, end, block in sorted(edits, reverse=True):
+        new = new[:start] + block + new[end:]
+    if edits and gamelist.well_formed(text) and not gamelist.well_formed(new):
+        raise gamelist.GamelistError("the edited gamelist would not be well-formed XML")
+    return new, frozenset(done)
 
 
 def add_entries(text: str, entries: Sequence[artwork.Entry]) -> str:
@@ -764,8 +875,13 @@ def render_report(report: Report) -> str:
         if merge.result is Result.ADDED:
             lines.append(f"  {'added':<9}  {_label(merge)}: {', '.join(merge.kinds) or 'no media'}")
         elif merge.result is Result.FILLED:
-            kept = " (entry kept)" if merge.had_entry else ""
-            lines.append(f"  {'filled':<9}  {_label(merge)}: {', '.join(merge.kinds)}{kept}")
+            parts = []
+            if merge.kinds or not merge.fill:
+                parts.append(", ".join(merge.kinds))
+            if merge.fill:
+                parts.append(f"fields {', '.join(merge.filled_fields)}")
+            kept = " (entry kept)" if merge.had_entry and not merge.fill else ""
+            lines.append(f"  {'filled':<9}  {_label(merge)}: {'; '.join(parts)}{kept}")
         elif merge.result is Result.NOT_FOUND:
             lines.append(f"  {'not found':<9}  {_label(merge)}")
     lines += [f"  {'warning':<9}  {d.what}: {d.reason}" for d in report.dropped]
@@ -1010,12 +1126,13 @@ def remember_not_found(
 @dataclass(frozen=True)
 class Incomplete:
     """A record of the `"incomplete"` section of `scrape-not-found.json`: a game ScreenScraper
-    knows but that still lacks `missing` kinds after a scrape, the size its file had and the day
-    the scrape was."""
+    knows but that still lacks `missing` kinds after a scrape, or whose entry is still `bare`
+    (no `TEXT_FIELDS`), the size its file had and the day the scrape was."""
 
     size: int
     missing: tuple[str, ...]
     tried: date
+    bare: bool = False
 
 
 IncompleteRecords = dict[str, Incomplete]  # gamelist path -> the record, for one system
@@ -1037,19 +1154,28 @@ def parse_incomplete(data: object) -> dict[str, IncompleteRecords]:
             if not isinstance(path, str) or not isinstance(row, dict):
                 continue
             size, missing, tried = row.get("size"), row.get("missing"), row.get("tried")
+            bare = row.get("bare", False)
             if not isinstance(size, int) or isinstance(size, bool) or not isinstance(tried, str):
                 continue
-            if not isinstance(missing, list) or not missing:
+            if not isinstance(missing, list) or not isinstance(bare, bool):
                 continue
-            if any(kind not in MEDIA_KINDS for kind in missing):
+            if not (missing or bare) or any(kind not in MEDIA_KINDS for kind in missing):
                 continue
             try:
                 day = date.fromisoformat(tried)
             except ValueError:
                 continue
-            records[path] = Incomplete(size, tuple(missing), day)
+            records[path] = Incomplete(size, tuple(missing), day, bare)
         memory[system] = records
     return memory
+
+
+def _render_incomplete(rec: Incomplete) -> dict[str, Any]:
+    row: dict[str, Any] = {"size": rec.size, "missing": list(rec.missing)}
+    if rec.bare:
+        row["bare"] = True
+    row["tried"] = rec.tried.isoformat()
+    return row
 
 
 def render_memory(
@@ -1060,10 +1186,7 @@ def render_memory(
     renders them, plus the `"incomplete"` key when there is a record in it."""
     data = render_not_found(not_found)
     rows = {
-        system: {
-            path: {"size": rec.size, "missing": list(rec.missing), "tried": rec.tried.isoformat()}
-            for path, rec in sorted(records.items())
-        }
+        system: {path: _render_incomplete(rec) for path, rec in sorted(records.items())}
         for system, records in sorted(incomplete.items())
         if records
     }
@@ -1080,6 +1203,7 @@ def skip_incomplete(pick: Pick, record: Incomplete | None) -> bool:
         and pick.has_entry
         and record.size == pick.game.size
         and set(pick.missing) <= set(record.missing)
+        and (record.bare or not pick.bare)
     )
 
 
@@ -1094,8 +1218,9 @@ def remember_incomplete(
     """The records of a system after a batch was merged. `picks` are the batch's picks by
     gamelist path, `written` whether the gamelist write succeeded (when not, the records stay as
     they were) and `lost` the gamelist paths of games with a copy that did not land. `missing` is
-    the kinds of the pick that the merge did not add. See development/design/scrape.md, "The
-    cache" (games that stay incomplete) for when a game is recorded."""
+    the kinds of the pick that the merge did not add and `bare` whether the entry still has no
+    text. See development/design/scrape.md, "The cache" (games that stay incomplete) for when a
+    game is recorded."""
     if not written:
         return dict(records)
     result = dict(records)
@@ -1108,8 +1233,8 @@ def remember_incomplete(
             continue
         added = set(merge.kinds)
         missing = tuple(k for k in pick.missing if k not in added)
-        if missing:
-            result[key] = Incomplete(merge.game.size, missing, today)
+        if missing or merge.still_bare:
+            result[key] = Incomplete(merge.game.size, missing, today, merge.still_bare)
         else:
             result.pop(key, None)
     return result

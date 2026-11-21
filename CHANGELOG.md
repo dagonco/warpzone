@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ## [Unreleased]
 
+### Fixed
+
+- `warpzone scrape` (and the scrape of `warpzone inbox --apply` and of `warpzone scrape --unattended`) now fills in the description, genre, developer, publisher, release date, players and rating of a game whose gamelist entry has none of them. Before, a game whose entry already existed (ES-DE or the play state had written only its path, its name and play statistics) got its media but never its text, and the nightly run skipped it for ever. The rule is now "never change a field an entry has": the fields the entry lacks or holds empty are added, its name is replaced by the game's title only when it was the file name, and play statistics, the emulator choice, `hidden`, `favorite` and entries marked `<nomultiscrape>` are never touched. Such a game is picked even when it has every medium, shows as `filled ... fields desc, genre` in the report and as `bare entry` in `--dry-run`, and the nightly run remembers one that ScreenScraper has no text for so it is not tried every night. See [Scraping](https://dagonco.github.io/warpzone/setup/scrape/).
+
 ## [0.4.0rc6] - 2026-11-20
 
 ### Added

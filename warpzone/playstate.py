@@ -395,18 +395,6 @@ def element(included: Mapping[str, int], eol: str = "\n") -> str:
     return eol.join(lines) + eol
 
 
-def _set_tag(block: str, tag: str, value: str | None, eol: str) -> str:
-    whole = re.compile(rf"<{tag}>[^<]*</{tag}\s*>|<{tag}\s*/>")
-    if value is None:
-        line = re.compile(rf"[ \t]*(?:{whole.pattern})[ \t]*(?:\r?\n)?")
-        return line.sub("", block, count=1)
-    text = f"<{tag}>{gamelist.escape(value)}</{tag}>"
-    if whole.search(block):
-        return whole.sub(lambda _: text, block, count=1)
-    indent = gamelist.child_indent(block, "", line_start_only=True)
-    return gamelist.add_child(block, text, eol, indent)
-
-
 def _values(change: Wanted, zone: tzinfo | None) -> list[tuple[str, str | None]]:
     values: list[tuple[str, str | None]] = []
     if change.favorite is not None:
@@ -470,7 +458,7 @@ def edit_gamelist(
             return block
         done.add(rel)
         for tag, value in _values(changes[rel], zone):
-            block = _set_tag(block, tag, value, eol)
+            block = gamelist.set_child(block, tag, value, eol)
         return block
 
     new = _BLOCK.sub("", text)

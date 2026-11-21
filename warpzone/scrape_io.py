@@ -342,12 +342,15 @@ def _rel_paths(entries: Sequence[artwork.Entry]) -> set[str]:
 
 
 def write_entries(
-    run: Run, system: str, entries: Sequence[artwork.Entry]
+    run: Run,
+    system: str,
+    entries: Sequence[artwork.Entry],
+    fills: Sequence[artwork.Entry] = (),
 ) -> tuple[frozenset[str], str | None]:
-    """Add `entries` to the hub gamelist, re-reading it when it changed under the write (see
-    development/design/scrape.md, "Merge"). Returns the relative paths written and the reason
-    when they were not."""
-    if not entries:
+    """Add `entries` to the hub gamelist and the fields of `fills` to the entries it has,
+    re-reading it when it changed under the write (see development/design/scrape.md, "Merge").
+    Returns the relative paths written and the reason when they were not."""
+    if not entries and not fills:
         return frozenset(), None
     path = gamelist_path(run.opts.root, system)
     for _ in range(WRITE_TRIES):
@@ -355,9 +358,10 @@ def write_entries(
             hub = read_hub_gamelist(path)
             existing = _rel_paths(hub.entries)
             todo = [e for e in entries if artwork.relative(e.path) not in existing]
-            if not todo:
+            text, filled = scrape.fill_entries(hub.text, hub.entries, fills)
+            if not todo and not filled:
                 return frozenset(), None
-            data = scrape.add_entries(hub.text, todo).encode("utf-8")
+            data = scrape.add_entries(text, todo).encode("utf-8")
             _backup(run, system, hub, path)
             written = safefile.atomic_write(path, data, expect=hub.stamp)
         except (HubError, gamelist.GamelistError) as exc:
@@ -365,7 +369,7 @@ def write_entries(
         except OSError as exc:
             return frozenset(), f"cannot write {path.name}: {exc.strerror or exc}"
         if written:
-            return frozenset(_rel_paths(todo)), None
+            return frozenset(_rel_paths(todo)) | filled, None
     return frozenset(), f"{path.name} changed {WRITE_TRIES} times while it was written"
 
 
@@ -387,29 +391,42 @@ def write_plan(
         except OSError as exc:
             reason = f"could not be copied ({exc.strerror or exc}); left for the next run"
             dropped.append(scrape.Dropped(copy.dest, reason))
-    written, error = write_entries(run, system, plan.entries)
+    written, error = write_entries(run, system, plan.entries, plan.fills)
     return Written(frozenset(copied), written, tuple(dropped), error)
 
 
 def settle(plan: scrape.MergePlan, done: Written) -> tuple[scrape.GameMerge, ...]:
-    """The plan's games as they came out: copies that did not land are gone, and an entry that
-    was not written (a console wrote one first, or the gamelist could not be written) turns an
-    `added` into `filled` or `unchanged`."""
+    """The plan's games as they came out: copies that did not land are gone, and an entry or a
+    fill that was not written (a console wrote one first, or the gamelist could not be written)
+    turns an `added` into `filled` or `unchanged`, and a `filled` with nothing left into
+    `unchanged`."""
     merges: list[scrape.GameMerge] = []
     for merge in plan.games:
         copies = tuple(c for c in merge.copies if c in done.copies)
-        entry = merge.entry
+        entry, fill = merge.entry, merge.fill
         had_entry = merge.had_entry
+        still_bare = merge.still_bare
         result = merge.result
         if entry is not None and artwork.relative(entry.path) not in done.entries:
             entry = None
             had_entry = had_entry or done.gamelist_error is None
+            still_bare = False
+        if fill is not None and artwork.relative(fill.path) not in done.entries:
+            fill = None
         if result is scrape.Result.ADDED and entry is None:
             result = scrape.Result.FILLED if copies else scrape.Result.UNCHANGED
-        elif result is scrape.Result.FILLED and not copies:
+        elif result is scrape.Result.FILLED and not copies and fill is None:
             result = scrape.Result.UNCHANGED
         merges.append(
-            replace(merge, result=result, had_entry=had_entry, entry=entry, copies=copies)
+            replace(
+                merge,
+                result=result,
+                had_entry=had_entry,
+                entry=entry,
+                copies=copies,
+                fill=fill,
+                still_bare=still_bare,
+            )
         )
     return tuple(merges)
 

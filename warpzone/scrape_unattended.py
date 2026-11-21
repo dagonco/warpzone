@@ -102,7 +102,7 @@ def tier_of(pick: scrape.Pick, record: scrape.NotFound | None, today: date) -> i
         return NOT_FOUND_AGAIN
     if not pick.has_entry:
         return NEW_GAME
-    if any(kind in CORE_KINDS for kind in pick.missing):
+    if pick.bare or any(kind in CORE_KINDS for kind in pick.missing):
         return MISSING_CORE
     return MISSING_EXTRA
 

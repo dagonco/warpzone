@@ -60,12 +60,13 @@ entry and its art on the NAS by the next morning, with nothing run by hand.
   `--unattended`.
 - `scrape` is a convergent command (see
   [Writing commands](/warpzone/development/design/configuration/#writing-commands)): it writes by
-  default, only adds and keeps a backup of any gamelist it edits. So no exception to that rule is
+  default, only adds (it never changes a field an entry has) and keeps a backup of any gamelist it
+  edits. So no exception to that rule is
   needed. `configuration.md` names `scrape --unattended` as a convergent command that runs on a
   schedule, which is a note, not a third rule.
 - Everything else is the attended command: the platform table, the flow of
-  [Scraping](/warpzone/development/design/scrape/#flow), the merge rules (an existing entry is
-  never changed, no media file is overwritten) and the not-found memory.
+  [Scraping](/warpzone/development/design/scrape/#flow), the merge rules (a field an existing
+  entry has is never changed, no media file is overwritten) and the not-found memory.
 
 ## What gets picked each night
 
@@ -80,7 +81,9 @@ total, what is left after the cap). Picks are grouped into four tiers and, insid
 by system and path:
 
 1. games with no gamelist entry;
-2. games with an entry but missing a core kind (`covers`, `screenshots` or `miximages`);
+2. games with an entry but missing a core kind (`covers`, `screenshots` or `miximages`), or whose
+   entry is bare (it has none of the text fields, see
+   [Merge](/warpzone/development/design/scrape/#merge)), whatever media it has;
 3. not-found games whose 30 days have passed (`select` already lets them through; the tier comes
    from the age of the record);
 4. games missing only extra kinds (`videos`, `backcovers`, `3dboxes` or `marquees`).
@@ -111,17 +114,25 @@ So `scrape` keeps a second memory in the same per-machine file as the
 [not-found memory](/warpzone/development/design/scrape/#the-cache)
 (`$XDG_CACHE_HOME/warpzone/scrape-not-found.json`, `/work/cache/warpzone/` in the container),
 under a new key `"incomplete"`: for each system and gamelist path, `{size, missing: [kinds],
-tried}`. Old files without the key still parse.
+bare, tried}` (`bare` is written only when true). Old files without the key, and records without
+`bare`, still parse.
 
 - **Written by every scrape on the machine,** attended or not, through
   `remember_incomplete(records, merges, picks, written, today, lost)`. A record is written only for
   a game whose verdict is `added`, `filled` or `unchanged`, that has an entry in the hub after the
   merge, with no dropped copy (`lost`), and only when the gamelist write succeeded (`written`).
-  `missing` is what the pick lacked minus the kinds the merge added; a game that lacks nothing
-  loses its record.
+  `missing` is what the pick lacked minus the kinds the merge added, and `bare` is whether the
+  entry still has no text after the merge; a game that lacks nothing and is not bare loses its
+  record.
 - **Read only by the nightly run.** `skip_incomplete(pick, record)` is true when the game has an
-  entry, the size matches and the kinds the game lacks now are a subset of the recorded ones.
-  There is no time limit.
+  entry, the size matches, the kinds the game lacks now are a subset of the recorded ones and, if
+  its entry is bare now, the record has `bare` (see below). There is no time limit.
+- **Bare entries.** A game whose entry has no text is picked for its text (see
+  [Games ScreenScraper has no text for](/warpzone/development/design/scrape/#the-cache)), however
+  complete its media are. A record without `bare` does not cover it, so an old memory file never
+  hides one. When the merge fills the text the record loses `bare`; when ScreenScraper has none,
+  the record gets `bare: true` and the nightly run leaves the game alone from then on, so such a
+  game is paid for once and not every night.
 - **A game comes back** when its file's size changes, or when a file it had goes missing (a kind
   that is missing now and was not recorded). Deleting the entry and its media and scraping again
   also works, since the record is rewritten by that scrape.

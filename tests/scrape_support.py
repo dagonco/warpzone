@@ -103,7 +103,7 @@ if art == "artwork-esde.xml":
             "<game>",
             "<path>%s</path>" % path,
             "<name>%s</name>" % canned.get("names", {{}}).get(name, name),
-            "<desc>About %s &amp; more</desc>" % name,
+            "" if canned.get("no_text") else "<desc>About %s &amp; more</desc>" % name,
             "<image>./covers/%s.png</image>" % name,
             "<playcount>99</playcount>",
             "</game>",
