@@ -1,10 +1,11 @@
 """Edits of ES-DE gamelists, as text. Pure: no I/O.
 
 An edit keeps every byte it has no reason to touch: comments, unknown elements, the line endings
-and the file's own indentation. Two editors share these primitives: the arcade emulator of a game
-(`update_entry`, used by `inbox_mame` and `inbox_console_iso`) and the play state of a device
-(`playstate`, via `add_child`). They differ in how much of the file they trust, so the primitives
-take that as an argument (`game_blocks(skip_comments=...)`, `child_indent(line_start_only=...)`).
+and the file's own indentation. Three editors share these primitives: the arcade emulator of a
+game (`update_entry`, used by `inbox_mame` and `inbox_console_iso`), the play state of a device
+(`playstate`, via `set_child`) and the text a scrape fills in (`scrape.fill_entries`). They differ
+in how much of the file they trust, so the primitives take that as an argument
+(`game_blocks(skip_comments=...)`, `child_indent(line_start_only=...)`).
 
 Nothing here imports the network: `playstate` runs on ES-DE's startup path (see "Speed" in
 development/design/emulator-settings.md), so `escape` and `unescape` are local instead of
@@ -49,8 +50,10 @@ def escape(text: str) -> str:
 
 
 def unescape(text: str) -> str:
-    """The inverse of `escape` (`&amp;` last, so `&amp;lt;` becomes `&lt;`)."""
-    return text.replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
+    """The inverse of `escape`, which also reads `&quot;` and `&apos;` as an XML parser does
+    (`&amp;` last, so `&amp;lt;` becomes `&lt;`)."""
+    text = text.replace("&lt;", "<").replace("&gt;", ">")
+    return text.replace("&quot;", '"').replace("&apos;", "'").replace("&amp;", "&")
 
 
 def eol_of(text: str) -> str:
@@ -125,10 +128,10 @@ def child_indent(block: str, default: str, *, line_start_only: bool = False) -> 
 
 
 def add_child(block: str, element: str, eol: str, indent: str) -> str:
-    """`block` (one `<game>`) with `element` as its last child, on a line of its own after
-    the last one, indented by `indent`. When `</game>` shares its line with other content
-    the element goes right before it."""
-    close = block.rindex("</game")
+    """`block` (one `<game>` or `<folder>`) with `element` as its last child, on a line of its
+    own after the last one, indented by `indent`. When the closing tag shares its line with
+    other content the element goes right before it."""
+    close = block.rindex("</")
     head = block[:close].rstrip(" \t")
     if not head.endswith(("\n", "\r")):
         head += eol
@@ -137,6 +140,20 @@ def add_child(block: str, element: str, eol: str, indent: str) -> str:
     if closing_indent is None:
         return f"{block[:close]}{element}{tail}"
     return f"{head}{indent}{element}{eol}{closing_indent}{tail}"
+
+
+def set_child(block: str, tag: str, value: str | None, eol: str) -> str:
+    """`block` (one `<game>` or `<folder>`) with its first `<tag>` set to `value` (escaped),
+    or the element added as its last child when it has none, in the indentation of its
+    `<path>`. A `value` of None removes the element and its line. Everything else stays."""
+    whole = re.compile(rf"<{tag}>[^<]*</{tag}\s*>|<{tag}\s*/>")
+    if value is None:
+        line = re.compile(rf"[ \t]*(?:{whole.pattern})[ \t]*(?:\r?\n)?")
+        return line.sub("", block, count=1)
+    text = f"<{tag}>{escape(value)}</{tag}>"
+    if whole.search(block):
+        return whole.sub(lambda _: text, block, count=1)
+    return add_child(block, text, eol, child_indent(block, "", line_start_only=True))
 
 
 # ------------------------------------------------------------------ the emulator of a game

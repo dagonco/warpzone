@@ -14,9 +14,9 @@ A game that `warpzone inbox` files arrives on every console without a descriptio
 Two things trigger it:
 
 - `warpzone inbox --apply` scrapes the games it has just placed, when Skyscraper is set up (it never scrapes anything else, and a scrape that fails never undoes a placement).
-- `warpzone scrape` scrapes the games already in the library that have no entry or lack media.
+- `warpzone scrape` scrapes the games already in the library that have no entry, lack media or have an entry with no description or other text.
 
-It only adds. An existing gamelist entry is never changed (consoles write play data into it, and you may have edited it), a game with an entry only gets the media files it lacks, and no media file is ever overwritten. A game marked `<nomultiscrape>true</nomultiscrape>` is left alone. The design is in [Scraping](/warpzone/development/design/scrape/).
+It only adds. A field an existing gamelist entry has is never changed (consoles write play data into it, and you may have edited it), a game with an entry only gets what it lacks (the media files, and the description, genre, developer, publisher, release date, players and rating the entry has no value for), and no media file is ever overwritten. An entry that holds only a name and play data, as ES-DE or the play state leave one, is filled in like this, and its name is replaced by the game's title only when it was just the file name. Play statistics, the emulator choice and favourites are never touched. A game marked `<nomultiscrape>true</nomultiscrape>` is left alone. The design is in [Scraping](/warpzone/development/design/scrape/).
 
 ## Install Skyscraper
 
@@ -74,7 +74,7 @@ That is Spanish first, then European and English, which is what most of a Europe
 
 Things to know:
 
-- **Games already scraped keep what they have.** The setting reaches the games scraped from now on. warpzone never overwrites a medium or the text of an entry it already wrote, and Skyscraper keeps what it fetched in its cache. To redo a game, delete its media files and its `<game>` entry from the hub's gamelist, purge the cache of that system (`Skyscraper -p <platform> --cache purge:m=screenscraper`, which cannot be undone; the hub image's `config.ini` and cache are on its `/skyscraper` volume), and run `warpzone scrape --system <system>`.
+- **Games already scraped keep what they have.** The setting reaches the games scraped from now on. warpzone never overwrites a medium or a field of an entry it already wrote (it only fills in what is empty), and Skyscraper keeps what it fetched in its cache. To redo a game, delete its media files and its `<game>` entry from the hub's gamelist, purge the cache of that system (`Skyscraper -p <platform> --cache purge:m=screenscraper`, which cannot be undone; the hub image's `config.ini` and cache are on its `/skyscraper` volume), and run `warpzone scrape --system <system>`.
 - **Only one code each.** Skyscraper's command line takes one region and one language, and puts it first in its order. For a longer order of your own, such as `regionPrios="sp,eu,wor,uk,us"`, use Skyscraper's `config.ini` in its `[main]` section (or one named after a platform, such as `[snes]`), as below; the two combine, and `scrape_region` goes first in whatever list `config.ini` holds.
 - **The file name's region.** With `scrape_region` set, a region in the file name such as `(USA)` no longer goes first; `--region` replaces it. If you want each game's own region to win, leave `scrape_region` unset and put `regionFromFilename="first"` in `config.ini`. In a test, "Kirby Super Star (USA)" got the European title "Kirby's Fun Pak" with the defaults.
 
@@ -133,7 +133,7 @@ warpzone scrape --system snes gba        # only these
 warpzone scrape --retry-not-found        # also the games ScreenScraper did not know recently
 ```
 
-Use `--dry-run` first on a big library: it lists the games with no entry and the ones missing media, with their totals, which is how to size a first run. It needs the [catalog index](/warpzone/reference/commands/#warpzone-catalog); a system without one is skipped with the hint to run `warpzone catalog`. It takes the inbox lock while it writes (so it never runs while `inbox --apply` does), and `--force-lock` takes over a stale one.
+Use `--dry-run` first on a big library: it lists the games with no entry, the ones missing media and the ones with a bare entry, with their totals, which is how to size a first run. It needs the [catalog index](/warpzone/reference/commands/#warpzone-catalog); a system without one is skipped with the hint to run `warpzone catalog`. It takes the inbox lock while it writes (so it never runs while `inbox --apply` does), and `--force-lock` takes over a stale one.
 
 The run is resumable. Skyscraper keeps what it gathers in its own cache, so a run stopped by the daily limit, the time limit or Ctrl-C goes on where it stopped when you run it again (tomorrow, for the limit), asking for nothing twice. Games ScreenScraper does not know are remembered for 30 days in `$XDG_CACHE_HOME/warpzone/scrape-not-found.json` on the computer that scrapes (never on the hub); `--retry-not-found` tries them now, and a game whose file changes size is tried again by itself.
 
@@ -149,9 +149,9 @@ A game that reaches the library without going through `inbox` (copied by hand, p
 
 What a night does:
 
-- **It picks what is worth it.** New games with no entry go first, then games with an entry but no cover, screenshot or miximage, then games ScreenScraper did not know whose 30 days have passed, and last games that only lack a video, back cover, 3D box or logo. It takes at most `--max-games` of them (default 500) and stops before a batch that would end after `--max-minutes` (default 180). What is left is picked up the next night, so a big library fills over several nights. On a NAS with a ScreenScraper account a night of 500 games took about two and a half hours and did not reach the quota.
+- **It picks what is worth it.** New games with no entry go first, then games with an entry but no cover, screenshot or miximage, or an entry with no description or other text, then games ScreenScraper did not know whose 30 days have passed, and last games that only lack a video, back cover, 3D box or logo. It takes at most `--max-games` of them (default 500) and stops before a batch that would end after `--max-minutes` (default 180). What is left is picked up the next night, so a big library fills over several nights. On a NAS with a ScreenScraper account a night of 500 games took about two and a half hours and did not reach the quota.
 - **It does nothing when there is nothing to do.** It exits at once, with no lock and no Skyscraper, so an up-to-date library costs nothing.
-- **It skips games that cannot improve.** When ScreenScraper has no video or back cover for a game, the game would be "missing media" for ever. Every scrape remembers such games (per machine, next to the list of games ScreenScraper did not know) and the nightly run does not ask for them again; they come back when their file changes size or a media file they had goes missing.
+- **It skips games that cannot improve.** When ScreenScraper has no video or back cover for a game, the game would be "missing media" for ever. Every scrape remembers such games (per machine, next to the list of games ScreenScraper did not know) and the nightly run does not ask for them again; they come back when their file changes size or a media file they had goes missing. The same goes for a game whose entry has no text and for which ScreenScraper has none: it is tried once, remembered, and left alone by the nightly run from then on.
 - **It takes the inbox lock.** If an `inbox` tick or a scrape by hand holds it, the run waits up to 30 minutes (a lock silent for 10 minutes is taken over). The inbox's own ticks during the run exit as busy and try again at the next one, so a game dropped at 03:30 is filed when the run ends, at most `--max-minutes` later.
 - **It runs at low priority** and uses the same Skyscraper, cache and account as the rest.
 

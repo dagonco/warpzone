@@ -51,10 +51,13 @@ class FlowTest(HubCase):
         code, out, _ = self.hub.run()
         self.assertEqual(code, 0, out)
         text = self.hub.gamelist().read_text()
-        # Chrono's entry is untouched (the stand-in's playcount 99 never arrives).
-        self.assertIn(CHRONO_ENTRY, text)
+        # Chrono's entry keeps what it has and gains the text it lacked (the stand-in's
+        # playcount 99 never arrives).
         self.assertNotIn("99", text)
         entries = {e.path: e.fields for e in artwork.parse_gamelist(text)}
+        chrono_fields = entries["./Chrono Trigger (USA).zip"]
+        self.assertEqual((chrono_fields["name"], chrono_fields["playcount"]), ("Chrono", "7"))
+        self.assertEqual(chrono_fields["desc"], "About Chrono Trigger (USA) & more")
         self.assertEqual(
             entries["./Kirby Super Star (USA).zip"]["desc"], "About Kirby Super Star (USA) & more"
         )
@@ -83,7 +86,7 @@ class FlowTest(HubCase):
             "3dboxes, backcovers, videos",
             out,
         )
-        self.assertIn("  filled     Chrono Trigger (USA).zip: 3dboxes, videos (entry kept)", out)
+        self.assertIn("  filled     Chrono Trigger (USA).zip: 3dboxes, videos; fields desc", out)
         self.assertIn("  not found  Example Homebrew (World).zip", out)
         self.assertEqual(out[-1], "scrape: snes: 1 added, 1 filled, 1 not found")
         self.assertNotIn("\x1b", "\n".join(out))
@@ -221,6 +224,69 @@ class FlowTest(HubCase):
         code, out, _ = self.hub.run()
         self.assertEqual(code, 0)
         self.assertTrue(any(KIRBY in line and "not on the share" in line for line in out))
+
+
+class BareEntryTest(HubCase):
+    """An entry with only a path, a name and play data, and every medium, is filled."""
+
+    BARE = (
+        "\t<game>\n\t\t<path>./Kirby Super Star (USA).zip</path>\n"
+        "\t\t<name>Kirby Super Star (USA)</name>\n\t\t<playcount>4</playcount>\n"
+        "\t\t<altemulator>Core</altemulator>\n\t</game>\n"
+    )
+
+    def setUp(self) -> None:
+        super().setUp()
+        library(self.hub, KIRBY)
+        self.hub.write_gamelist(f'<?xml version="1.0"?>\n<gameList>\n{self.BARE}</gameList>\n')
+        for kind in scrape.MEDIA_KINDS:
+            ext = "mp4" if kind == "videos" else "png"
+            self.hub.put_media(kind, "Kirby Super Star (USA)", b"mine", ext)
+        self.hub.canned(
+            {
+                "known": ["Kirby Super Star (USA)"],
+                "names": {"Kirby Super Star (USA)": "Kirby Super Star"},
+            }
+        )
+
+    def test_the_text_is_written_and_nothing_else_changes(self):
+        code, out, _ = self.hub.run()
+        self.assertEqual(code, 0, out)
+        text = self.hub.gamelist().read_text()
+        self.assertIn(
+            self.BARE.replace(
+                "<name>Kirby Super Star (USA)</name>", "<name>Kirby Super Star</name>"
+            ).replace(
+                "\t</game>", "\t\t<desc>About Kirby Super Star (USA) &amp; more</desc>\n\t</game>"
+            ),
+            text,
+        )
+        self.assertEqual(self.hub.media("covers", "Kirby Super Star (USA)").read_bytes(), b"mine")
+        self.assertIn("  filled     Kirby Super Star (USA).zip: fields name, desc", out)
+        self.assertEqual(out[-1], "scrape: snes: 1 filled")
+        backups = list((self.hub.root / "tools" / "logs" / "gamelist-backups").iterdir())
+        self.assertEqual(len(backups), 1)
+
+    def test_a_second_run_picks_nothing(self):
+        self.hub.run()
+        before = len(self.hub.gathers())
+        _, out, _ = self.hub.run()
+        self.assertEqual(len(self.hub.gathers()), before)
+        self.assertEqual(out[-1], "scrape: snes: nothing to do")
+
+    def test_nomultiscrape_keeps_the_bare_entry_as_it_is(self):
+        marked = self.BARE.replace(
+            "\t</game>", "\t\t<nomultiscrape>true</nomultiscrape>\n\t</game>"
+        )
+        self.hub.write_gamelist(f'<?xml version="1.0"?>\n<gameList>\n{marked}</gameList>\n')
+        before = self.hub.gamelist().read_text()
+        self.hub.run()
+        self.assertEqual(self.hub.gamelist().read_text(), before)
+        self.assertEqual(self.hub.gathers(), [])
+
+    def test_the_dry_run_lists_it(self):
+        _, out, _ = self.hub.run(dry_run=True)
+        self.assertIn("  bare entry     Kirby Super Star (USA).zip", out)
 
 
 class DryRunTest(HubCase):
@@ -448,6 +514,65 @@ class WriterTest(HubCase):
     def test_no_entries_touch_nothing(self):
         before = self.hub.snapshot()
         self.assertEqual(scrape_io.write_entries(self.run_state, "snes", []), (frozenset(), None))
+        self.assertEqual(self.hub.snapshot(), before)
+
+    def fill(self, **fields):
+        return artwork.Entry("game", "./Chrono Trigger (USA).zip", fields)
+
+    def test_a_fill_adds_the_missing_fields_and_keeps_the_rest(self):
+        written, error = scrape_io.write_entries(
+            self.run_state, "snes", [], [self.fill(desc="Text & more", genre="RPG")]
+        )
+        self.assertEqual((written, error), (frozenset({"Chrono Trigger (USA).zip"}), None))
+        self.assertEqual(
+            self.path.read_text(),
+            HUB_GAMELIST.replace(
+                "\t\t<playcount>7</playcount>\n",
+                "\t\t<playcount>7</playcount>\n\t\t<desc>Text &amp; more</desc>\n"
+                "\t\t<genre>RPG</genre>\n",
+            ),
+        )
+
+    def test_a_fill_and_a_new_entry_go_in_one_write(self):
+        written, _ = scrape_io.write_entries(
+            self.run_state, "snes", [self.entry], [self.fill(desc="Text")]
+        )
+        self.assertEqual(written, frozenset({"New.zip", "Chrono Trigger (USA).zip"}))
+        fields = {e.path: e.fields for e in artwork.parse_gamelist(self.path.read_bytes())}
+        self.assertEqual(fields["./Chrono Trigger (USA).zip"]["desc"], "Text")
+        self.assertIn("./New.zip", fields)
+        backups = list((self.hub.root / "tools" / "logs" / "gamelist-backups").iterdir())
+        self.assertEqual([b.read_text() for b in backups], [HUB_GAMELIST])
+
+    def test_a_field_a_console_wrote_meanwhile_is_not_overwritten(self):
+        real = safefile.atomic_write
+        calls = []
+
+        def console_writes_it(path, data, *, expect, **kw):
+            calls.append(1)
+            if len(calls) == 1:
+                path.write_text(
+                    path.read_text().replace(
+                        "\t\t<playcount>", "\t\t<desc>Mine</desc>\n\t\t<playcount>"
+                    )
+                )
+            return real(path, data, expect=expect, **kw)
+
+        with mock.patch.object(scrape_io.safefile, "atomic_write", console_writes_it):
+            written, error = scrape_io.write_entries(
+                self.run_state, "snes", [], [self.fill(desc="Theirs", genre="RPG")]
+            )
+        self.assertEqual((written, error), (frozenset({"Chrono Trigger (USA).zip"}), None))
+        text = self.path.read_text()
+        self.assertIn("<desc>Mine</desc>", text)
+        self.assertNotIn("Theirs", text)
+        self.assertIn("<genre>RPG</genre>", text)
+
+    def test_a_fill_for_an_entry_that_became_complete_writes_nothing(self):
+        self.path.write_text(HUB_GAMELIST.replace("</game>", "<desc>Mine</desc></game>"))
+        before = self.hub.snapshot()
+        result = scrape_io.write_entries(self.run_state, "snes", [], [self.fill(desc="Theirs")])
+        self.assertEqual(result, (frozenset(), None))
         self.assertEqual(self.hub.snapshot(), before)
 
 

@@ -1319,6 +1319,8 @@ class PrimitivesTests(unittest.TestCase):
         self.assertEqual(gamelist.escape('a & b <c> "d"'), 'a &amp; b &lt;c&gt; "d"')
         self.assertEqual(gamelist.unescape("a &amp; b &lt;c&gt;"), "a & b <c>")
         self.assertEqual(gamelist.unescape("&amp;lt;"), "&lt;")
+        self.assertEqual(gamelist.unescape("Tom&apos;s &quot;X&quot;"), 'Tom\'s "X"')
+        self.assertEqual(gamelist.unescape("&amp;apos;"), "&apos;")
         text = "<&>&amp;"
         self.assertEqual(gamelist.unescape(gamelist.escape(text)), text)
 
@@ -1364,6 +1366,24 @@ class PrimitivesTests(unittest.TestCase):
         self.assertEqual(
             gamelist.add_child("<game><path>./a.zip</path></game>", "<x/>", "\n", "\t\t"),
             "<game><path>./a.zip</path><x/></game>",
+        )
+
+    def test_add_child_works_on_a_folder_too(self) -> None:
+        block = "<folder>\n\t\t<path>./a</path>\n\t</folder>"
+        self.assertEqual(
+            gamelist.add_child(block, "<x/>", "\n", "\t\t"),
+            "<folder>\n\t\t<path>./a</path>\n\t\t<x/>\n\t</folder>",
+        )
+
+    def test_set_child_replaces_the_first_element_or_adds_one_or_removes_it(self) -> None:
+        block = "<game>\n\t\t<path>./a.zip</path>\n\t\t<desc></desc>\n\t</game>"
+        once = gamelist.set_child(block, "desc", "a & b", "\n")
+        self.assertEqual(once, block.replace("<desc></desc>", "<desc>a &amp; b</desc>"))
+        added = gamelist.set_child(block, "genre", "RPG", "\n")
+        self.assertEqual(added, block.replace("\t</game>", "\t\t<genre>RPG</genre>\n\t</game>"))
+        self.assertEqual(
+            gamelist.set_child(once, "desc", None, "\n"),
+            "<game>\n\t\t<path>./a.zip</path>\n\t</game>",
         )
 
 

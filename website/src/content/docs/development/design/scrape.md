@@ -32,7 +32,7 @@ closes that gap on the machine that files the game, in the layout ES-DE and the 
 - **The tool boundary.** Skyscraper reads the games from a staged folder outside the share and
   writes its gamelist and media into a temporary folder outside the share. It never writes to the
   hub. warpzone alone decides what reaches the hub and writes it, so the rules below (never
-  change an existing entry, never overwrite a file) do not depend on how Skyscraper merges
+  change a field an entry has, never overwrite a file) do not depend on how Skyscraper merges
   gamelists.
 - **Credentials stay in Skyscraper's config.** They are optional and live only in
   `~/.skyscraper/config.ini`. warpzone never reads their value, never prints them and never puts
@@ -49,10 +49,12 @@ closes that gap on the machine that files the game, in the layout ES-DE and the 
   button in the library UI can come later on top of the same code.
   A nightly run from a scheduled task, `warpzone scrape --unattended`, is planned: see
   [Unattended scrape](/warpzone/development/design/scrape-unattended/).
-- **Only adds.** An existing `<game>` entry's text is never changed: consoles write play data
+- **Only adds.** A field an existing `<game>` entry has is never changed: consoles write play data
   into it and the user may have edited it. A game without an entry gets one; a game with an
-  entry only gets the media files it lacks. ES-DE's `<nomultiscrape>` is respected. No media file
-  is ever overwritten.
+  entry only gets what it lacks: the media files, and the text fields (`desc`, `genre` and the
+  others of [Merge](#merge)) that it has no value for, which is what completes an entry ES-DE or
+  the play state created bare. ES-DE's `<nomultiscrape>` is respected. No media file is ever
+  overwritten.
 
 ## Scope and non-goals
 
@@ -249,7 +251,7 @@ is first replaced by the frontend's path (`scrape.frontend_games`, see
 1. **Select** (pure, `scrape.select`). From the catalog's games of the system, the hub gamelist
    and the media files present, it returns the games to scrape: those without an entry, and those
    with an entry (not marked `<nomultiscrape>`) that lack a file of a kind in
-   [Media kinds](#media-kinds). `inbox` passes only the games it placed in this run; `scrape`
+   [Media kinds](#media-kinds) or are *bare* (see [Merge](#merge)). `inbox` passes only the games it placed in this run; `scrape`
    passes all of the system's.
 2. **Stage.** In `<work_dir>/scrape/<system>/input/`, each game gets a symbolic link at its
    `gamelist` path (subfolders kept) to the file on the share (for a PS4 or Vita game, its
@@ -290,9 +292,10 @@ the encoding rules of [Frontend artwork](/warpzone/development/design/frontend-a
 Skyscraper's gamelist entries, the paths of the hub's media files (as `select` takes them), and
 the files of the two passes' media folders, each with its type (regular file, symbolic link or
 other). It returns a `MergePlan`: for each game a verdict (`added`, `filled`, `not found` or
-`unchanged`), the entry to add and the files to copy (pass, source, destination), plus what it
-dropped and why. The writer only executes it; `scrape.render_entries` gives the text of the new
-entries, escaped, for the indentation and newline style the writer copies from the file. Its rules:
+`unchanged`), the entry to add or the fields to add to the entry the hub has (`fill`) and the
+files to copy (pass, source, destination), plus what it dropped and why. The writer only
+executes it; `scrape.render_entries` gives the text of the new entries, escaped, for the
+indentation and newline style the writer copies from the file. Its rules:
 
 - **Matching Skyscraper's entries.** An entry's `<path>` is taken as relative to the staged
   folder: `./Game.zip`, `Game.zip` and an absolute path inside the staged folder all mean
@@ -300,11 +303,25 @@ entries, escaped, for the indentation and newline style the writer copies from t
   warning. The entry written to the hub has the game's `gamelist` path (the frontend's, for the systems of
   [Systems and platforms](#systems-and-platforms)), never Skyscraper's.
 - **Existing entries.** A `<game>` or `<folder>` of the hub gamelist whose `<path>` is the game's
-  (`./` or not) is existing: nothing of it is changed, and only media are considered. One marked
-  `<nomultiscrape>true</nomultiscrape>` gets nothing at all.
+  (`./` or not) is existing, and a field it has a value for is never changed. It gets the media
+  it lacks and, from Skyscraper's entry for the game, the fields of the "New entries" rule that
+  it lacks or holds empty (`scrape.fill_fields`). It never gets a play statistic (`playcount`,
+  `playtime`, `lastplayed`), `altemulator`, `hidden`, `favorite` or any other tag outside that
+  list. One marked `<nomultiscrape>true</nomultiscrape>` gets nothing at all.
+- **The name of an existing entry** is replaced only when it is the game's file name or the stem
+  of it (what ES-DE shows, and the play state leaves out entirely, until someone gives the game a
+  title): `Game.zip` or `Game`, compared with the base name of the entry's `<path>`, case
+  sensitive. Any other name is a title and is kept. An entry with no `<name>` gets one.
+- **Bare entries.** An entry with none of `desc`, `rating`, `releasedate`, `developer`,
+  `publisher`, `genre` and `players` (whatever else it holds: play statistics,
+  `altemulator`, a name) is bare (`scrape.is_bare`). `select` picks a bare entry even when it has
+  every medium, so that its text is filled in. An entry that has some text and lacks other
+  fields is filled whenever the game is scraped for another reason, but is not picked for that
+  alone, since ScreenScraper has no rating or player count for many games.
 - **New entries.** For a game without one: a `<game>` with the game's path and, from
   Skyscraper's entry, `name`, `desc`, `rating`, `releasedate`, `developer`, `publisher`, `genre`
-  and `players` (the fields the library UI reads), when present and not empty. Nothing else is
+  and `players` (the fields the library UI reads, `scrape.ENTRY_FIELDS`), when present and not
+  empty. Nothing else is
   copied: no user field, no media path (ES-DE does not keep them in the gamelist). Text comes from
   the web, so it is XML-escaped and characters XML 1.0 cannot hold are dropped. An `.m3u` folder
   gets a `<game>` too, as ES-DE writes for a folder it reads as a file.
@@ -327,9 +344,12 @@ The I/O layer (`scrape_io.py`) applies the plan:
   is taken with a hard link where the file system has them (which cannot replace a file), else with
   a rename right after the check. `wz-media` and `wz-esde` carry the fixed `*.wz-tmp` ignore line
   on both sides, as `wz-settings` has, so a scan never sends a half-written file.
-- **The gamelist is edited as text** with the helpers the arcade and PS3 edits use
-  (`inbox_mame`): the new entries go before `</gameList>`, indentation and newline style are
-  copied, comments and ES-DE's `<alternativeEmulator>` block are left as they are, and the result
+- **The gamelist is edited as text** with the helpers the arcade and PS3 edits and the play state
+  use (`gamelist`): the new entries go before `</gameList>`, the fields of a fill are set in the
+  entry in place (an empty `<desc/>`, or the name that was the file name, is replaced; a missing
+  tag is added as the entry's last child in the indentation of its `<path>`; `fill_entries`),
+  indentation and newline style are copied, comments, every other tag of the entry and ES-DE's
+  `<alternativeEmulator>` block are left as they are, and the result
   is checked to be well-formed before it is written to `.gamelist.xml.wz-tmp` beside the gamelist
   (`safefile.atomic_write`) and renamed. A missing gamelist is created, with the system folder,
   when there is an entry to add.
@@ -338,18 +358,20 @@ The I/O layer (`scrape_io.py`) applies the plan:
   rename it is read again, and if it changed the plan is made again from the new content and the
   write retried, three times, then the system's entries are left for the next run with a warning.
   The plan only adds, so making it again is always safe: an entry a console wrote for the same
-  game in the meantime is kept as it is and the new one is not added.
+  game in the meantime is kept as it is and the new one is not added, and a field it gained
+  meanwhile is not replaced (`fill_entries` checks each field against the entry just read).
 - **Backup.** Before the run's first change to a gamelist, a copy goes to
   `<root>/tools/logs/gamelist-backups/<system>-gamelist-<YYYYMMDD-HHMMSS>.xml`, as for the inbox's
   gamelist edits (outside every synced folder, so it reaches no console). `scrape` is a
   convergent command (see [Writing commands](/warpzone/development/design/configuration/#writing-commands)):
-  it writes by default, takes `--dry-run`, only adds, and a second run with nothing new changes
-  nothing.
+  it writes by default, takes `--dry-run`, only adds (a field with a value is never changed), and
+  a second run with nothing new changes nothing.
 - **ES-DE keeps its gamelist in memory.** A console with ES-DE open writes back the gamelist it
   read at start, without the new entries. As in `inbox`, a gamelist written in the last 10 minutes
   (`recently_written`) gets one warning per run saying to quit ES-DE on every console and run
   `warpzone scrape` again if the entries do not stick. A later run adds them again from the cache,
-  with no request; the media are already there.
+  with no request; the media are already there (and a filled field a console dropped is filled
+  again, since the entry lacks it again).
 
 ## Media kinds
 
@@ -449,14 +471,29 @@ name), drops its record. A file that cannot be read or parsed counts as empty an
 in Skyscraper's cache, so it is never asked for again, yet `select` keeps finding it "missing
 media". So every scrape (attended, or the one at the end of `inbox`) also records, in the same file
 under the key `"incomplete"`, the games it left incomplete: per system and gamelist path, `{size,
-missing: [kinds], tried}`. A game is recorded only when its merge ended `added`, `filled` or
+missing: [kinds], bare, tried}`. A game is recorded only when its merge ended `added`, `filled` or
 `unchanged`, the hub has an entry for it, none of its copies was dropped and the gamelist write
-succeeded; `missing` is the kinds the hub still lacks after the merge, and a game that lacks nothing
-loses its record. `scrape.skip_incomplete` is true when the size matches and the kinds a game lacks
-now are among the recorded ones. Nothing in `select` reads the records: an attended `warpzone
+succeeded; `missing` is the kinds the hub still lacks after the merge, `bare` (written only when
+true) says the entry has no text after the merge, and a game that lacks nothing and is not bare
+loses its record. `scrape.skip_incomplete` is true when the size matches, the kinds a game lacks
+now are among the recorded ones and, if its entry is bare now, the record says it stayed bare
+(`bare`). Nothing in `select` reads the records: an attended `warpzone
 scrape` ignores them and does the full pass, and only the
 [nightly run](/warpzone/development/design/scrape-unattended/#the-incomplete-memory) skips on them.
-An old file without the key still reads, and a record that cannot be read is dropped.
+An old file without the key, or a record without `bare`, still reads (a record with `missing`
+empty and no `bare` says nothing and is dropped), and a record that cannot be read is dropped.
+
+**Games ScreenScraper has no text for.** A bare entry is picked because its text is missing, so a
+game for which ScreenScraper has no `desc`, genre or the like would be picked on every run. The
+merge ends `unchanged` with the entry still bare, and the record above (`bare: true`, with the
+size) is what stops the nightly run from picking it again; the record is dropped when the game is
+next processed and its entry has text, and the game comes back when its file's size changes. The
+same holds for a fill the writer could not apply although the gamelist was written (it finds no
+block to edit, as for an entry with an XML comment inside it): the game is `unchanged`, not
+`filled`, and is remembered as bare, so it is tried once and not every night. A fill that was
+dropped because the gamelist could not be written records nothing. A game ScreenScraper does not know at all is `not found` and is in the not-found
+memory above. An attended scrape ignores both and tries the bare entry again, as it does a game
+missing a video.
 
 A game is recorded only when Skyscraper itself said "not found" for it (a game it never got to,
 after the quota, says nothing) and that answer did not come after a retry line. If ScreenScraper
@@ -563,7 +600,7 @@ How it is done (`inbox_scrape.py`, called from `inbox._run` right after `_update
 ## `warpzone scrape`
 
 `warpzone scrape [--root PATH] [--system NAME ...] [--retry-not-found] [--dry-run] [--force-lock]` scrapes the games of the library
-that have no gamelist entry or lack media, for every system in the platform table, or only the
+that have no gamelist entry, lack media or have a bare entry, for every system in the platform table, or only the
 ones named with `--system` (a name not in the table is a usage error, exit 2). It reads `[inbox]` only, like `inbox`, and needs
 the catalog: a system without a catalog file is skipped with the hint to run `warpzone catalog`.
 It takes the inbox lock (`inbox/.warpzone.lock`, with its heartbeat, its stale rules and
@@ -576,8 +613,9 @@ games and minutes, a lock wait and exit codes that report only news; it is speci
 
 `--dry-run` runs no Skyscraper (no request, no change to the cache), writes nothing and takes no
 lock. It prints,
-per system, the games it would scrape, split into "no entry" and "missing media" with the kinds,
-and the totals, which is how a user sizes a first run over a whole library before starting it.
+per system, the games it would scrape, split into "no entry", "missing media" with the kinds and
+"bare entry" (a game can be on two lines), and the totals, which is how a user sizes a first run
+over a whole library before starting it.
 
 ## Report
 
@@ -590,14 +628,19 @@ hub) for the user to read when a batch fails.
 scrape: snes: 3 games (Skyscraper 3.21.1, ScreenScraper account: set)
   added      Kirby Super Star (USA).zip: covers, screenshots, miximages, marquees, 3dboxes, backcovers, videos
   filled     Chrono Trigger (USA).zip: videos, 3dboxes (entry kept)
+  filled     Secret of Mana (USA).zip: fields desc, genre, developer
   not found  Example Homebrew (World).zip
-scrape: snes: 1 added, 1 filled, 1 not found
+scrape: snes: 1 added, 2 filled, 1 not found
 ```
+
+`filled` means no new entry but something the hub lacked: media (`videos, 3dboxes`, and then the
+entry is kept as it is), fields of the entry (`fields desc, genre`), or both (`videos; fields
+desc`).
 
 "not found" means the gather left no data for the game in the cache (ScreenScraper does not know
 it, or the match was below Skyscraper's threshold): in the merge, Skyscraper's output has no entry
 and no media for it, whether or not the hub has an entry. A game with an entry and nothing new to
-fill is counted as unchanged, not listed. The kinds are listed in the order of the
+fill (no medium and no field) is counted as unchanged, not listed. The kinds are listed in the order of the
 [Media kinds](#media-kinds) table, a symbolic link or an entry that was dropped is a `warning`
 line, and the games skipped because they were not found recently are counted in the last line.
 `scrape.render_report` (pure, over a `Report` that holds the merged games) prints these lines, and
@@ -668,7 +711,10 @@ Unit tests, with no network and no Skyscraper:
 - `select`: no entry, entry with missing kinds, entry complete, `<nomultiscrape>`, a media file in
   another extension counts as present, an `.m3u` folder's stem; a game not found 29 and 31 days
   ago, with the same and with another size, and with `--retry-not-found`.
-- `plan_merge`: existing entries left as they are byte for byte, new entries with only the listed
+- `plan_merge`: a field an existing entry has is never taken from Skyscraper, a bare entry gets
+  its text, and its title only when the name was the file name; `fill_entries` keeps the file's
+  indentation, line endings and every other tag; play statistics and `<nomultiscrape>` are never
+  touched; new entries with only the listed
   fields and escaped text, absolute and `./` paths rewritten, paths outside the staged folder or
   unknown dropped, `.m3u` media renamed, symbolic links skipped, nothing planned over an existing
   file.
