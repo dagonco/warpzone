@@ -922,6 +922,13 @@
         removed.length ? `On ${removed.join(', ')} it is off, like a new game: turn it on from its page.` : '');
     }
 
+    // What is wrong on the hub that the trash cannot work around (an unreadable record of deleted games).
+    function problemsNote(d) {
+      const problems = Array.isArray(d.problems) ? d.problems : [];
+      if (!problems.length) return null;
+      return h('div', { class: 'note warn', role: 'alert' }, problems.map((p) => h('p', null, p)));
+    }
+
     function paint() {
       const fk = captureFocus();
       const d = S.trash;
@@ -932,7 +939,7 @@
           : h('p', { class: 'loading-note' }, 'Loading...'));
         return;
       }
-      host.replaceChildren(...[restoredNote(), entriesPanel(d), pendingPanel(d)].filter(Boolean));
+      host.replaceChildren(...[problemsNote(d), restoredNote(), entriesPanel(d), pendingPanel(d)].filter(Boolean));
       restoreFocus(fk);
     }
 

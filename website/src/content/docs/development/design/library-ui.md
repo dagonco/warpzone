@@ -844,8 +844,11 @@ receives the game deletes it as part of the normal sync, and the server removes 
 whitelist lines from each console afterwards. The order matters and is the one the manual
 procedure follows (`.claude/skills/edit-whitelist/SKILL.md`, "Remove a game"): **the hub first,
 the whitelist lines last, per console.** A line removed before the console has received the
-deletion makes Syncthing ignore the path there, so the deletion never reaches it, and prune does
-not help: it deletes only files the hub still has. The console would keep its copy forever.
+deletion makes Syncthing ignore the path there, so the deletion never reaches it, and prune by
+itself does not help: it deletes only files the hub still has. That is why the hub keeps
+[a record of the games it deleted](#the-record-of-deleted-games), which every console receives, so
+that prune can remove such a copy; the rule prune applies to the record is in
+[Pruning](/warpzone/development/design/prune/).
 
 ### What a deletion removes
 
@@ -980,13 +983,17 @@ Under the hub lock and the server's write lock (see [Concurrency](#concurrency))
    `lstat`: not a link, the type of the plan, and for a file the size and mtime of the plan. A
    path that no longer matches stops the deletion with `unsafe-path` and rolls it back (below).
 5. Remove the gamelist entries, with the backup; the removed blocks go into the manifest.
-6. Rewrite the manifest with `"state": "complete"`, then update the catalog.
+6. Rewrite the manifest with `"state": "complete"`, then add the entry to
+   [the record of deleted games](#the-record-of-deleted-games) (a failure is a warning: the
+   background task adds the entry), then update the catalog. A deletion that was rolled back
+   records nothing.
 
 Then, with the locks released, the server asks the hub's Syncthing to scan what changed, so the
 deletion is announced at once: `POST /rest/db/scan?folder=wz-library&sub=<part>` for each part,
-`wz-media` with `sub=<system>/<kind>/<file>` for each media file, and `wz-esde` with
-`sub=gamelists/<system>/gamelist.xml`. A failed scan is a warning; the hub's watcher picks the
-change up anyway, and the cleanup waits for the hub's index in any case.
+`sub=patterns-_deleted.stignore` for the record, `wz-media` with `sub=<system>/<kind>/<file>` for
+each media file, and `wz-esde` with `sub=gamelists/<system>/gamelist.xml`. A failed scan is a
+warning; the hub's watcher picks the change up anyway, and the cleanup waits for the hub's index
+in any case.
 
 **A move that fails halfway** is rolled back, the safer of the two choices: the server moves the
 paths already moved back to their places in reverse order, removes the lines it recorded in step
@@ -1073,9 +1080,12 @@ UTF-8 JSON with sorted keys, written with `safefile.atomic_write`:
    original place (a copy filed again by `inbox`, new art from a scrape, a file put back by hand)
    is a conflict: the restore is refused with `409 restore-conflict`, naming the paths, and nothing
    moves. A path in neither place (an incomplete entry) is skipped with a warning.
-2. Write the manifest with `"state": "restoring"`, then move each path back (parts first, then
-   media), creating missing parent folders, with the same check right before each move. A failure
-   moves the restored paths back into the trash and answers `500 move-failed`, as for a deletion.
+2. Take the entry out of [the record of deleted games](#the-record-of-deleted-games), before
+   anything moves: a record that cannot be written refuses the restore with `500 write-failed`,
+   and nothing has changed. Write the manifest with `"state": "restoring"`, then move each path
+   back (parts first, then media), creating missing parent folders, with the same check right
+   before each move. A failure moves the restored paths back into the trash, puts the entry back
+   in the record and answers `500 move-failed`, as for a deletion.
    A path that appears at its place between the check of step 1 and its move is never replaced:
    it is a conflict like the others (`409 restore-conflict`, naming it, after the paths already
    restored went back into the trash).
@@ -1095,14 +1105,18 @@ UTF-8 JSON with sorted keys, written with `safefile.atomic_write`:
 6. Remove the entry folder (by then only the manifest and empty folders), then scan as after a
    deletion.
 
-**Delete now** (`POST /api/v1/trash/{entry}/purge`) and the **automatic purge** remove the whole
-entry folder, under the write lock only, since nothing outside `trash/` changes. The entry's path
-must be a real directory directly below `trash/` (not a link); it is removed with
-`shutil.rmtree`, which does not follow links inside it. This is the one place where warpzone
-deletes library files on the hub, and only files a deletion moved there. The background task of
-`serve` purges each `complete` entry whose `purge_after` has passed (7 days, `TRASH_DAYS`);
-incomplete and damaged entries wait for Delete now. A purge that fails partway answers
-`500 purge-failed`. Purging an entry does not touch its pending cleanups.
+**Delete now** (`POST /api/v1/trash/{entry}/purge`) and the **automatic purge** first add the
+entry to [the record of deleted games](#the-record-of-deleted-games), whatever its state (an
+incomplete or damaged entry is recorded with whatever is under its `library/`), and then remove
+the whole entry folder, under the write lock only. If the record cannot be written nothing is
+removed: Delete now answers `500 write-failed`, and the automatic purge logs a warning and tries
+again on its next pass. The entry's path must be a real directory directly below `trash/` (not a
+link); it is removed with `shutil.rmtree`, which does not follow links inside it. This is the one
+place where warpzone deletes library files on the hub, and only files a deletion moved there. The
+background task of `serve` purges each `complete` entry whose `purge_after` has passed (7 days,
+`TRASH_DAYS`); incomplete and damaged entries wait for Delete now. A purge that fails partway
+answers `500 purge-failed`. Purging an entry does not touch its pending cleanups, and does not
+remove it from the record, which keeps it for 180 days.
 
 The folder is first renamed, in one step, to `trash/.purging-<entry>`, and that is what is
 removed. A removal that fails partway therefore leaves a folder that is not an entry: the
@@ -1110,6 +1124,86 @@ listing, Restore and the manifest reader never see it, so a half-purged game can
 with its old catalog record. The next pass of the background task, or Delete now again on the
 same entry name, removes what is left; it looks only at real folders directly below `trash/`
 and never follows a link.
+
+### The record of deleted games
+
+A console that had a game turned off (its whitelist line already removed, the files ignored and
+waiting for prune) never receives the deletion, and the hub no longer has the game, so prune
+alone would keep the copy for ever. The hub therefore keeps a record of what it deliberately
+deleted and delivers it to the consoles, so that prune can tell such a copy from any other file.
+How prune uses it is in [Pruning](/warpzone/development/design/prune/); the hub only keeps the
+file.
+
+The record is `library/patterns-_deleted.stignore`, in the root of the library folder next to the
+whitelists. The name is chosen so that nothing has to change anywhere else: `patterns-common.stignore`
+and the bootstrap ignores already let `!/patterns-*.stignore` through, so every console that has
+`wz-library` receives it; a device name starts with `[a-z0-9]`, so `_deleted` can never be a
+device; and nothing `#include`s it, so Syncthing never parses it as ignore patterns. Nothing in
+warpzone takes it for a whitelist: devices come from the config, never from a listing of the
+folder, and prune never deletes it (it protects every `patterns-*.stignore` in the root). It is
+warpzone's own and is never edited by hand.
+
+The content is JSON with sorted keys (ASCII, whatever the extension says):
+
+```json
+{"entries": [{"deleted": "2026-11-16T10:15:00Z",
+              "entry": "20261116T101500Z-5d0c1f3a9b2e7c48",
+              "expires": "2027-05-15T10:15:00Z",
+              "files": [{"mtime_ns": 1730000000123456789, "path": "roms/psx/Game.chd",
+                         "sha1": null, "size": 943718400}]}],
+ "format": 1}
+```
+
+- An entry is one deletion, named like its trash entry. `files` lists every regular file of the
+  trash copy below `library/` (`trash/<entry>/library/`, walked without following links; a
+  symbolic link is not listed), each with its `path` relative to `library/` with `/`, exactly as
+  Syncthing names it, its `size` and its modification time `mtime_ns`. `sha1` is the one the
+  catalog had for that file, copied from the manifest's `game.parts` only for a file part whose
+  size and modification time (whole seconds) equal the file's, and `null` otherwise.
+- An entry lives 180 days (`KEEP_DAYS`) from `deleted`, so `expires` is `deleted` plus 180 days.
+  The 7-day purge of the trash does not remove it from the record.
+- A reader accepts a record only as a whole: a `format` other than `1`, a path that is absolute
+  or has an empty, `.` or `..` component, or any other shape makes the file unreadable and it
+  authorises nothing. The hub does not overwrite a file it cannot read: it is left as it is, a
+  deletion warns, and Restore, Delete now and the 7-day purge are refused until the file is moved
+  away. That is shown where the user looks: `GET /api/v1/trash` lists it under `problems` and the
+  Trash view puts it at the top, and the log says it once, not on every pass.
+- A reader must apply `expires` itself (`trash_record.index` does) and must never take the record
+  alone as proof that the hub no longer has a file: an entry can list a path that is back in the
+  library until the next pass drops it, so a reader checks the hub's own index too.
+- A `sha1` is copied only when it is 40 lowercase hex digits, as the reader requires; any other
+  value in the catalog is left out, so the writer can never produce a record the reader refuses.
+  A file name that is not UTF-8 (listed by Python with lone surrogates) is written as a JSON
+  escape, so the file is ASCII and the reader gets back the same string a console's own
+  filesystem listing gives. An entry whose `deleted` is too late to add 180 days to expires on
+  the last second there is.
+
+**Who writes it and when.** Only `serve` on the hub, under the server's write lock, with
+`safefile.guarded_edit` (the temporary file starts with `.`, so a console's whitelist ignores
+it), and then asks the hub's Syncthing to scan just that file in `wz-library`. A console running
+a version that does not know the record never reads the file, and a hub running one never writes
+it.
+
+- A deletion adds its entry right after the manifest becomes `complete`. A deletion that was
+  rolled back records nothing. A failed write is a warning of the answer; the background task adds
+  the entry.
+- Each pass of the background task adds every `complete` entry of the trash that the record lacks.
+  This also records the entries already in the trash when the hub is upgraded.
+- Delete now and the automatic purge add the entry before they remove it, also an incomplete or
+  damaged one (whatever is under its `library/`; the time of a damaged one is the one in its
+  name). If the record cannot be written, nothing is removed.
+- Restore takes the entry out before its first move back and puts it back if the restore rolls
+  back.
+- Every write, and every pass of the background task (60 seconds, also on a hub with an empty
+  trash while the record exists), drops the entries past `expires` and the files whose path
+  exists again below `library/` (one `lstat` per recorded path), since a game filed again is not
+  a deleted one. A restore does it again once its files are back, so no entry lists a path that
+  is in the library. An entry left with no file stays until it expires; the file itself goes when
+  no entry is left. A pass writes only when something changed, and with no record and nothing
+  to add it looks at no path.
+- An entry that cannot be recorded (a value the format cannot hold) is said once in the log and
+  does not stop the record, the purge or the deletion of anything else; it stays in the trash
+  until it can be recorded.
 
 ### Whitelist cleanup
 
@@ -1189,6 +1283,10 @@ A cleanup write is a whitelist write like a change from the page: the device sho
 - **The library.** The hub's `wz-library` announces the deleted paths, and every console that
   receives them (by a game line or by its whole system) deletes its copy as a normal sync, with no
   prune involved. A restore downloads the game again where its lines are still there.
+- **The record.** `library/patterns-_deleted.stignore` travels like the whitelists, in the same
+  folder and through the same ignore lines, to every console that has `wz-library`. It is how a
+  console that had the game turned off learns that the hub deleted it, so that prune can remove
+  its copy (see [The record of deleted games](#the-record-of-deleted-games)).
 - **Media and gamelists.** `wz-media` and `wz-esde` are two-way, so the media deletion and the
   gamelist edit reach every console that has them, and a restore reaches them back. ES-DE keeps
   its gamelist in memory and writes it when it exits, so a console running ES-DE may write the
@@ -1209,8 +1307,9 @@ Two locks, always taken in this order:
   the Inbox view says "The library UI". An unattended inbox or scrape that finds it busy behaves as
   for any live holder.
 - **The server's write lock**, the one of every whitelist and queue write, held for the moves, the
-  gamelist and catalog writes and the cleanups file, so a change request, a queue write or the
-  cleanup never sees a game half deleted. The purge and the cleanup take only this one.
+  gamelist and catalog writes, the cleanups file and the record of deleted games, so a change
+  request, a queue write or the cleanup never sees a game half deleted. The purge and the cleanup
+  take only this one.
 
 ## HTTP API
 
@@ -1851,10 +1950,13 @@ lines recorded per device; `warnings` holds failed scans and skipped links.
               "days_left": 7, "size": 3221307227, "files": 2, "media": 1, "state": "complete"}],
  "pending": [{"device": "deck", "entry": "20261116T101500Z-5d0c1f3a9b2e7c48",
               "title": "Example Game", "lines": 2, "since": "2026-11-16T10:15:00Z",
-              "waiting": "offline"}]}
+              "waiting": "offline"}],
+ "problems": []}
 ```
 
-`state` is `complete`, `incomplete` or `damaged` (then only `entry` and `state` are certain, the
+`problems` lists what is wrong on the hub that the page cannot work around: today only a
+[record of deleted games](#the-record-of-deleted-games) that cannot be read, as a sentence that
+names the file and says to move it away (empty when all is well). `state` is `complete`, `incomplete` or `damaged` (then only `entry` and `state` are certain, the
 rest `null`). `days_left` is the whole days until `purge_after`, rounded up, never below 0, and
 `null` for an entry the purge skips. `waiting` says what a device's lines wait for: `hub` (the
 hub has not recorded the deletion), `offline`, `paused`, `not-shared`, `syncing` (connected, not
@@ -1875,7 +1977,9 @@ answer).
 those whose lines were already removed (the game is off there). `POST
 /api/v1/trash/{entry}/purge` takes `{}` and answers `{"entry": "…", "purged": true, "bytes":
 3221307227}`. An entry name that does not match the pattern, or is not in `trash/`, is
-`404 not-found` without touching the disk.
+`404 not-found` without touching the disk. A restore or a Delete now whose entry cannot be put in
+or taken out of [the record of deleted games](#the-record-of-deleted-games) is `500 write-failed`
+and changes nothing.
 
 ### Validation and errors
 
@@ -1918,7 +2022,7 @@ an error about the trash carries `entry`, `has-dependants` carries `dependants`,
 | 422 | `unsupported` | turning on a system in the device's `exclude_systems` |
 | 428 | `expect-missing` | a touched device has no `expect`, or a deletion is applied without one |
 | 429 | `too-many-attempts` | an attempt to sign in (the session route or a bearer token) while 8 failed ones already wait; has a `Retry-After` header |
-| 500 | `write-failed` | a whitelist could not be written (a disk error); the answer also lists the devices already written |
+| 500 | `write-failed` | a whitelist could not be written (a disk error); the answer also lists the devices already written. Also a trash entry, or the record of deleted games, that could not be written |
 | 500 | `read-failed` | a whitelist, or the pending cleanups file, exists but could not be read (permissions on the share); the message names the file and the cause, the log has the full path |
 | 500 | `move-failed` | a move into or out of the trash failed; the moves were rolled back, unless `incomplete` is true |
 | 500 | `purge-failed` | a trash entry could not be removed whole |
@@ -2095,18 +2199,21 @@ network:
   `diskstatus` (`measure`, `should_write`, `render`, `parse`, `stale`, `api_disk`); `trash`
   (`plan_delete` with the media stems, the arcade dependants and the plan's `expect`, the entry
   names, the manifest's and the cleanups file's encoding and validation, which cleanup is ready,
-  what is expired, `days_left`), `whitelist.drop_lines` and `gamelist.drop_entries`.
+  what is expired, `days_left`), `trash_record` (the record's encoding and validation, which
+  `sha1` an entry copies, what a write compacts and the index of what is still recorded),
+  `whitelist.drop_lines` and `gamelist.drop_entries`.
 - **Orchestration:** `trash_run` (`Trasher`: the hub lock with `task: "delete"` and then the
   write lock, the plan again, the order of a deletion with its rollback, the restore, the
-  purge, and the background task every 60 seconds that purges after 7 days and cleans the
-  whitelists), over the I/O of `trash_store` and the pure `trash`.
+  purge, the record of deleted games, and the background task every 60 seconds that records,
+  purges after 7 days and cleans the whitelists), over the I/O of `trash_store` and the pure
+  `trash` and `trash_record`.
 - **I/O:** `catalog_store` (the walk, hashing, RAHasher and the RA download through `ra.py`, the
   guarded writes), `diskstatus_io` (the disk report's write on a console and read on the hub),
   `queue_store` (the queue file: reading with a stamp, backups, the guarded write),
   `whitelist_store` (reading with a stamp, backups, the guarded write, the hub
   scan, the migration's walk, the restore), `saves_index.scan` and `SavesCache` (the listing of `saves/` and its
   60-second cache), `trash_store` (the listing for a plan, the moves and their rollback, the
-  manifest and cleanups writes, the restore, the purge, the questions to the hub for the
+  manifest, cleanups and record files, the restore, the purge, the questions to the hub for the
   cleanup), `serve` (sockets, sessions, the locks, the background runs, the caches).
 
 Tests: the derivation on listings of each layout (PS4 with and without its shortcut, Vita with

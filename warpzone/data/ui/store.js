@@ -37,7 +37,7 @@
     detail: null,           // {id, data}: the game page being shown
     inbox: null,            // the unattended inbox (/inbox), or null until it loaded
     inboxError: false,      // the last load of the inbox failed
-    trash: null,            // the trash (/trash): {size, entries, pending}, or null until it loaded
+    trash: null,            // the trash (/trash): {size, entries, pending, problems}, or null until it loaded
     trashError: false,      // the last load of the trash failed
     trashNotes: new Map(),  // trash entry -> the error its last restore or delete now ended in
     busy: false,

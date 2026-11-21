@@ -19,7 +19,7 @@ import test_serve
 from library_support import games, managed, write_catalog
 from support import DECK_ID, MACHINE_ID
 from test_serve import EXAMPLE, OTHER, PS4, ServeCase, by_title
-from warpzone import catalog, inbox_lock, trash, trash_run, trash_store
+from warpzone import catalog, inbox_lock, prune, trash, trash_record, trash_run, trash_store
 from warpzone import whitelist as wl
 from warpzone.syncthing import Client
 
@@ -978,7 +978,9 @@ class RestoreTests(TrashCase):
 
 class TrashListTests(TrashCase):
     def test_the_listing(self) -> None:
-        self.assertEqual(self.trash_list(), {"size": 0, "entries": [], "pending": []})
+        self.assertEqual(
+            self.trash_list(), {"size": 0, "entries": [], "pending": [], "problems": []}
+        )
         self.write_whitelist("deck", managed(["gba"], includes=[EXAMPLE.primary]))
         plan = self.dry(EXAMPLE)
         entry = self.deleted(EXAMPLE)
@@ -1141,6 +1143,369 @@ class PurgeTests(TrashCase):
         listing = {e["entry"]: e for e in self.trash_list()["entries"]}
         self.assertEqual(listing[moving]["state"], "incomplete")
         self.assertEqual(listing[broken]["state"], "damaged")
+
+
+RECORD = "patterns-_deleted.stignore"
+
+
+class RecordTests(TrashCase):
+    """The record of the games the hub deleted, `library/patterns-_deleted.stignore`: written
+    under the write lock after a deletion, a Delete now or a purge, taken out by a restore."""
+
+    def record(self) -> dict[str, Any] | None:
+        path = self.library / RECORD
+        found: dict[str, Any] | None = (
+            json.loads(path.read_text("utf-8")) if path.exists() else None
+        )
+        return found
+
+    def recorded(self) -> list[str]:
+        doc = self.record()
+        return [] if doc is None else [e["entry"] for e in doc["entries"]]
+
+    def item(self, entry: str) -> dict[str, Any]:
+        doc = self.record()
+        assert doc is not None
+        (found,) = [e for e in doc["entries"] if e["entry"] == entry]
+        return found
+
+    def fail_on(self, nth: int, *, also_undo: bool = False) -> Any:
+        real = trash_store._rename
+        calls: list[tuple[Path, Path]] = []
+
+        def rename(src: Path, dst: Path) -> None:
+            calls.append((src, dst))
+            if len(calls) == nth or (also_undo and len(calls) > nth):
+                raise OSError(28, "No space left on device")
+            real(src, dst)
+
+        return mock.patch.object(trash_store, "_rename", rename)
+
+    def trash_tree(self, entry: str) -> list[str]:
+        base = self.root / "trash" / entry / "library"
+        return sorted(p.relative_to(base).as_posix() for p in base.rglob("*") if p.is_file())
+
+    def clock(self, start: datetime) -> list[datetime]:
+        now = [start]
+        self.start(now=lambda: now[0], progress_seconds=0)
+        return now
+
+    def test_a_deletion_records_every_file_of_the_trash_copy(self) -> None:
+        entry = self.deleted(PS4)
+        doc = self.record()
+        assert doc is not None
+        self.assertEqual(doc["format"], 1)
+        item = self.item(entry)
+        manifest = json.loads((self.root / "trash" / entry / "manifest.json").read_text())
+        self.assertEqual(item["deleted"], manifest["deleted"])
+        deleted = datetime.strptime(item["deleted"], "%Y-%m-%dT%H:%M:%SZ")
+        self.assertEqual(
+            item["expires"], (deleted + timedelta(days=180)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        )
+        self.assertEqual([f["path"] for f in item["files"]], self.trash_tree(entry))
+        self.assertEqual(len(item["files"]), 3)
+        base = self.root / "trash" / entry / "library"
+        for f in item["files"]:
+            info = (base / f["path"]).stat()
+            self.assertEqual(
+                (f["size"], f["mtime_ns"], f["sha1"]), (info.st_size, info.st_mtime_ns, None)
+            )
+        self.assertIn(("wz-library", RECORD), self.scans())
+        self.assertEqual([n for n in os.listdir(self.library) if n.endswith(".wz-tmp")], [])
+        self.assertEqual((self.library / RECORD).stat().st_mode & 0o777, 0o644)
+
+    def test_a_second_deletion_adds_to_the_record(self) -> None:
+        first = self.deleted(OTHER)
+        second = self.deleted(EXAMPLE)
+        self.assertEqual(self.recorded(), sorted([first, second]))
+
+    def test_a_rolled_back_deletion_records_nothing(self) -> None:
+        with self.fail_on(3):
+            reply = self.apply(PS4)
+        self.assertEqual(self.error(reply)["code"], "move-failed")
+        self.assertIsNone(self.record())
+        self.assertNotIn(("wz-library", RECORD), self.scans())
+
+    def test_an_incomplete_deletion_records_nothing_until_it_is_deleted_now(self) -> None:
+        with self.fail_on(3, also_undo=True):
+            entry = self.error(self.apply(PS4))["entry"]
+        self.app.trash.purge_pass()
+        self.assertIsNone(self.record())
+        left = self.trash_tree(entry)
+        self.assertTrue(left)
+        self.assertEqual(self.purge(entry).status, 200)
+        self.assertEqual([f["path"] for f in self.item(entry)["files"]], left)
+
+    def test_a_restore_takes_the_entry_out(self) -> None:
+        first = self.deleted(OTHER)
+        entry = self.deleted(PS4)
+        self.assertEqual(self.restore(entry).status, 200)
+        self.assertEqual(self.recorded(), [first])
+        self.assertGreaterEqual(self.scans().count(("wz-library", RECORD)), 3)
+
+    def test_a_restore_that_rolls_back_puts_the_entry_back(self) -> None:
+        entry = self.deleted(PS4)
+        before = (self.library / RECORD).read_bytes()
+        with self.fail_on(3):
+            reply = self.restore(entry)
+        self.assertEqual(self.error(reply)["code"], "move-failed")
+        self.assertEqual((self.library / RECORD).read_bytes(), before)
+        self.assertEqual(self.restore(entry).status, 200)
+        self.assertEqual(self.recorded(), [])
+
+    def test_a_restore_that_conflicts_leaves_the_record_alone(self) -> None:
+        entry = self.deleted(PS4)
+        before = (self.library / RECORD).read_bytes()
+        self.put(PS4.parts[1].path)  # the shortcut is there again
+        reply = self.restore(entry)
+        self.assertEqual(self.error(reply)["code"], "restore-conflict")
+        self.assertEqual((self.library / RECORD).read_bytes(), before)
+
+    def test_a_restore_is_refused_when_the_record_cannot_be_written(self) -> None:
+        entry = self.deleted(PS4)
+        before = self.snapshot()
+        with mock.patch.object(trash_store, "write_record", side_effect=OSError(13, "denied")):
+            reply = self.restore(entry)
+        self.assertEqual((reply.status, self.error(reply)["code"]), (500, "write-failed"))
+        self.assertEqual(self.snapshot(), before)
+        self.assertEqual(self.entries(), [entry])
+
+    def test_delete_now_records_what_is_in_the_trash_before_it_goes(self) -> None:
+        entry = self.deleted(PS4)
+        (self.library / RECORD).unlink()  # a hub that deleted it before it kept a record
+        seen = self.trash_tree(entry)
+        self.assertEqual(self.purge(entry).status, 200)
+        self.assertEqual([f["path"] for f in self.item(entry)["files"]], seen)
+        self.assertEqual(self.entries(), [])
+
+    def test_delete_now_of_a_damaged_entry_records_it_by_the_time_in_its_name(self) -> None:
+        now = self.clock(datetime(2026, 11, 16, 10, 15, 0, tzinfo=UTC))
+        entry = self.deleted(OTHER)
+        (self.root / "trash" / entry / "manifest.json").write_text("nope")
+        (self.library / RECORD).unlink()
+        now[0] += timedelta(days=2)
+        self.assertEqual(self.purge(entry).status, 200)
+        item = self.item(entry)
+        self.assertEqual(item["deleted"], "2026-11-16T10:15:00Z")
+        self.assertEqual(item["expires"], "2027-05-15T10:15:00Z")
+        self.assertEqual([f["path"] for f in item["files"]], [OTHER.primary])
+
+    def test_delete_now_does_not_purge_when_the_record_cannot_be_written(self) -> None:
+        entry = self.deleted(OTHER)
+        (self.library / RECORD).unlink()
+        with mock.patch.object(trash_store, "write_record", side_effect=OSError(13, "denied")):
+            reply = self.purge(entry)
+        self.assertEqual((reply.status, self.error(reply)["code"]), (500, "write-failed"))
+        self.assertEqual(self.entries(), [entry])
+        self.assertTrue((self.root / "trash" / entry / "library" / OTHER.primary).exists())
+        self.assertEqual(self.purge(entry).status, 200)
+        self.assertEqual(self.recorded(), [entry])
+
+    def test_delete_now_of_an_unknown_entry_is_still_not_found(self) -> None:
+        self.assertEqual(self.purge("20260101T000000Z-" + "2" * 16).status, 404)
+        self.assertIsNone(self.record())
+
+    def test_the_purge_after_seven_days_records_first_and_stops_when_it_cannot(self) -> None:
+        now = self.clock(datetime(2026, 11, 16, 10, 0, tzinfo=UTC))
+        entry = self.deleted(OTHER)
+        (self.library / RECORD).unlink()
+        now[0] += timedelta(days=8)
+        with mock.patch.object(trash_store, "write_record", side_effect=OSError(13, "denied")):
+            self.app.trash.purge_pass()
+        self.assertEqual(self.entries(), [entry])
+        self.assertTrue(any("record" in line for line in self.logs))
+        self.app.trash.purge_pass()
+        self.assertEqual(self.entries(), [])
+        self.assertEqual([f["path"] for f in self.item(entry)["files"]], [OTHER.primary])
+
+    def test_the_background_pass_records_an_entry_made_before_the_upgrade(self) -> None:
+        entry = self.deleted(OTHER)
+        (self.library / RECORD).unlink()
+        self.app.trash.purge_pass()
+        self.assertEqual(self.recorded(), [entry])
+        self.assertEqual(self.scans().count(("wz-library", RECORD)), 2)
+        stamp = (self.library / RECORD).stat().st_mtime_ns
+        self.app.trash.purge_pass()  # nothing new: nothing written, nothing scanned
+        self.assertEqual((self.library / RECORD).stat().st_mtime_ns, stamp)
+        self.assertEqual(self.scans().count(("wz-library", RECORD)), 2)
+
+    def test_the_background_pass_does_not_record_what_a_restore_is_moving(self) -> None:
+        entry = self.deleted(PS4)
+        manifest = self.root / "trash" / entry / "manifest.json"
+        doc = json.loads(manifest.read_text())
+        doc["state"] = "restoring"
+        manifest.write_text(json.dumps(doc))
+        (self.library / RECORD).unlink()
+        self.app.trash.purge_pass()
+        self.assertIsNone(self.record())
+
+    def test_an_entry_lives_180_days_and_is_dropped_by_the_next_write(self) -> None:
+        now = self.clock(datetime(2026, 11, 16, 10, 0, tzinfo=UTC))
+        old = self.deleted(OTHER)
+        now[0] += timedelta(days=179)
+        self.app.trash.purge_pass()
+        self.assertEqual(self.recorded(), [old])
+        now[0] += timedelta(days=2)
+        young = self.deleted(EXAMPLE)
+        self.assertEqual(self.recorded(), [young])
+
+    def test_a_path_that_exists_again_leaves_the_record_at_the_next_write(self) -> None:
+        first = self.deleted(OTHER)
+        self.put(OTHER.primary)  # filed again
+        second = self.deleted(EXAMPLE)
+        self.assertEqual(self.item(first)["files"], [])
+        self.assertEqual([f["path"] for f in self.item(second)["files"]], [EXAMPLE.primary])
+
+    def test_a_record_that_cannot_be_read_is_never_overwritten(self) -> None:
+        text = '{"format": 2, "entries": []}'
+        (self.library / RECORD).write_text(text)
+        entry = self.deleted(OTHER)  # the deletion itself goes on; the record is a warning
+        self.assertEqual((self.library / RECORD).read_text(), text)
+        self.assertTrue(any("record" in line for line in self.logs))
+        reply = self.purge(entry)
+        self.assertEqual((reply.status, self.error(reply)["code"]), (500, "write-failed"))
+        self.assertEqual(self.entries(), [entry])
+
+    def test_a_failed_record_is_a_warning_of_the_deletion(self) -> None:
+        with mock.patch.object(trash_store, "write_record", side_effect=OSError(13, "denied")):
+            reply = self.apply(OTHER)
+        self.assertEqual(reply.status, 200, reply.body)
+        self.assertTrue(any("record" in w for w in reply.json["warnings"]))
+        self.assertIsNone(self.record())
+        self.app.trash.purge_pass()  # the pass adds it
+        self.assertEqual(self.recorded(), [reply.json["entry"]])
+
+    # ------------------------------------------------------------- a name that is not UTF-8
+
+    def with_bad_name(self, name: str = "roms/ps4/bad\udcff.bin") -> Any:
+        """`trash_files` as if the trash copy held a file whose name is not UTF-8 (Linux lists
+        it with a lone surrogate; macOS cannot make one)."""
+        real = trash_store.trash_files
+
+        def files(root: Path, entry: str) -> Any:
+            found = real(root, entry)
+            return None if found is None else [*found, trash_record.DeletedFile(name, 3, 4)]
+
+        return mock.patch.object(trash_store, "trash_files", files)
+
+    def test_a_file_name_that_is_not_utf8_is_recorded_and_read_back(self) -> None:
+        bad = "roms/ps4/bad\udcff.bin"
+        with self.with_bad_name(bad):
+            reply = self.apply(OTHER)
+        self.assertEqual(reply.status, 200, reply.body)
+        self.assertFalse([w for w in reply.json["warnings"] if "record" in w])
+        self.assertNotIn(OTHER.id, self.catalog_ids("psx"))  # the deletion finished
+        data = (self.library / RECORD).read_bytes()
+        (item,) = trash_record.parse(data) or []
+        self.assertIn(bad, [f.path for f in item.files])
+        self.assertEqual(os.fsencode(bad), b"roms/ps4/bad\xff.bin")  # what a console compares
+
+    def test_an_entry_that_cannot_be_recorded_does_not_stop_the_purge_of_the_others(self) -> None:
+        now = self.clock(datetime(2026, 11, 16, 10, 0, tzinfo=UTC))
+        stuck = self.deleted(OTHER)
+        fine = self.deleted(EXAMPLE)
+        (self.library / RECORD).unlink()
+        real = trash_record.entry_from_trash
+
+        def build(entry: str, *args: Any) -> Any:
+            if entry == stuck:
+                raise OverflowError("date value out of range")
+            return real(entry, *args)
+
+        now[0] += timedelta(days=8)
+        with mock.patch.object(trash_record, "entry_from_trash", build):
+            self.app.trash.purge_pass()
+            self.app.trash.purge_pass()
+        self.assertEqual(self.entries(), [stuck])
+        self.assertEqual(self.recorded(), [fine])
+        self.assertEqual(len([ln for ln in self.logs if "record" in ln]), 1)  # said once
+
+    def test_a_deletion_whose_record_step_fails_unexpectedly_still_finishes(self) -> None:
+        with mock.patch.object(trash_record, "encode", side_effect=ValueError("odd")):
+            reply = self.apply(OTHER)
+        self.assertEqual(reply.status, 200, reply.body)
+        self.assertTrue(any("record" in w for w in reply.json["warnings"]))
+        self.assertNotIn(OTHER.id, self.catalog_ids("psx"))
+
+    def test_a_deletion_dated_9999_is_recorded_with_the_last_day_there_is(self) -> None:
+        entry = self.deleted(OTHER)
+        path = self.root / "trash" / entry / "manifest.json"
+        doc = json.loads(path.read_text())
+        doc.update(deleted="9999-12-31T23:59:59Z", purge_after="2026-01-01T00:00:00Z")
+        path.write_text(json.dumps(doc))
+        (self.library / RECORD).unlink()
+        self.app.trash.purge_pass()
+        self.assertEqual(self.entries(), [])
+        self.assertEqual(self.item(entry)["expires"], "9999-12-31T23:59:59Z")
+
+    # ------------------------------------------------------------- staleness
+
+    def test_a_path_filed_again_leaves_the_record_at_the_next_pass(self) -> None:
+        entry = self.deleted(OTHER)
+        self.put(OTHER.primary)
+        self.assertEqual([f["path"] for f in self.item(entry)["files"]], [OTHER.primary])
+        self.app.trash.purge_pass()
+        self.assertEqual(self.item(entry)["files"], [])
+        self.assertIn(("wz-library", RECORD), self.scans()[2:])
+
+    def test_the_record_is_looked_after_while_it_is_there_and_the_file_goes_when_empty(
+        self,
+    ) -> None:
+        now = self.clock(datetime(2026, 11, 16, 10, 0, tzinfo=UTC))
+        entry = self.deleted(OTHER)
+        self.assertEqual(self.purge(entry).status, 200)
+        self.assertEqual(self.entries(), [])
+        self.assertTrue(self.app.trash.has_work())  # an idle hub still expires the record
+        now[0] += timedelta(days=181)
+        self.app.trash.purge_pass()
+        self.assertIsNone(self.record())
+        self.assertFalse(self.app.trash.has_work())
+
+    def test_a_pass_with_no_record_and_nothing_to_add_looks_at_no_path(self) -> None:
+        with mock.patch.object(trash_store, "paths_at", side_effect=AssertionError("looked")):
+            self.app.trash.purge_pass()
+        self.deleted(OTHER)  # a record exists now
+        self.assertTrue(self.app.trash.has_work())
+
+    def test_a_restore_drops_what_an_older_entry_listed_for_the_same_path(self) -> None:
+        now = self.clock(datetime(2026, 11, 16, 10, 0, tzinfo=UTC))
+        first = self.deleted(OTHER)
+        self.assertEqual(self.purge(first).status, 200)
+        now[0] += timedelta(minutes=1)  # another second, so another entry name
+        write_catalog(self.root, [*games(), ("mame", PACMAN), ("mame", PUCKMAN)])
+        self.put(OTHER.primary)  # filed again
+        second = self.deleted(OTHER)
+        self.assertEqual(
+            [f["path"] for f in self.item(first)["files"]], [OTHER.primary]
+        )  # nothing compacted it: the path was gone again
+        self.assertEqual(self.restore(second).status, 200)
+        self.assertTrue((self.library / OTHER.primary).exists())
+        self.assertEqual(self.item(first)["files"], [])
+        self.assertEqual(self.recorded(), [first])
+
+    # ------------------------------------------------------------- a record that cannot be read
+
+    def test_an_unreadable_record_is_shown_in_the_trash_listing_and_logged_once(self) -> None:
+        self.assertEqual(self.trash_list()["problems"], [])
+        self.deleted(OTHER)
+        (self.library / RECORD).write_text('{"format": 2}')
+        listing = self.trash_list()
+        (problem,) = listing["problems"]
+        self.assertIn(RECORD, problem)
+        self.assertIn("move", problem)
+        for _ in range(3):
+            self.app.trash.purge_pass()
+        self.assertEqual(len([ln for ln in self.logs if RECORD in ln]), 1)
+        (self.library / RECORD).unlink()
+        self.assertEqual(self.trash_list()["problems"], [])
+
+    def test_the_record_is_not_a_device_whitelist(self) -> None:
+        self.deleted(OTHER)
+        names = [d["name"] for d in self.get("/api/v1/devices").json]
+        self.assertEqual(sorted(names), ["deck", "machine"])
+        walked = [e.path for e in prune.walk(str(self.library), set(), ".stfolder")]
+        self.assertNotIn(RECORD, walked)
+        self.assertIn(RECORD, os.listdir(self.library))
 
 
 class GamelistEditTests(TrashCase):
@@ -1496,6 +1861,8 @@ class CleanupTests(TrashCase):
     def test_the_task_is_idle_with_nothing_to_do_and_a_failed_pass_does_not_stop_it(self) -> None:
         self.purge(self.entry)
         (self.root / "catalog" / "cleanups.json").unlink()
+        self.assertTrue(self.app.trash.has_work())  # the record is still looked after
+        (self.library / "patterns-_deleted.stignore").unlink()
         self.assertFalse(self.app.trash.has_work())
         self.app.trash.cleanup_pass()
         self.entry = self.deleted(OTHER)
