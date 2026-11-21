@@ -95,11 +95,21 @@ def put(rel, data):
     target.write_bytes(data)
 
 
+def where(path):  # a media file is named after the staged path below -i, subfolders kept
+    return os.path.splitext(os.path.relpath(path, opt("-i")))[0]
+
+
+def lost(path):  # canned "cue": Skyscraper's gamelist drops a game alone in a folder one level down
+    rel = os.path.dirname(os.path.relpath(path, opt("-i")))
+    return bool(canned.get("cue")) and rel not in ("", ".") and "/" not in rel and \
+        len(os.listdir(os.path.join(opt("-i"), rel))) == 1
+
+
 if art == "artwork-esde.xml":
     lines = ["<?xml version='1.0' encoding='UTF-8'?>", "<gameList>"]
     for path in cached:
         name = stem(path)
-        lines += [
+        lines += [] if lost(path) else [
             "<game>",
             "<path>%s</path>" % path,
             "<name>%s</name>" % canned.get("names", {{}}).get(name, name),
@@ -112,16 +122,16 @@ if art == "artwork-esde.xml":
                           ("marquees", "png"), ("backcovers", "png"), ("videos", "mp4")):
             if kind in canned.get("kinds", ["covers", "screenshots", "miximages", "marquees",
                                             "backcovers", "videos"]):
-                put("%s/%s.%s" % (kind, name, ext), ("main:%s:%s" % (kind, name)).encode())
+                put("%s/%s.%s" % (kind, where(path), ext), ("main:%s:%s" % (kind, name)).encode())
         if canned.get("symlink_video"):
-            (out / "videos" / (name + ".mp4")).unlink()
-            os.symlink("/nonexistent", out / "videos" / (name + ".mp4"))
+            (out / "videos" / (where(path) + ".mp4")).unlink()
+            os.symlink("/nonexistent", out / "videos" / (where(path) + ".mp4"))
     lines.append("</gameList>")
     gl.mkdir(parents=True, exist_ok=True)
     (gl / "gamelist.xml").write_text("\n".join(lines) + "\n")
 else:
     for path in cached:
-        put("covers/%s.png" % stem(path), ("box:%s" % stem(path)).encode())
+        put("covers/%s.png" % where(path), ("box:%s" % stem(path)).encode())
 """
 
 

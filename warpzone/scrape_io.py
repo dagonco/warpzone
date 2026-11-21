@@ -235,9 +235,9 @@ def skyscraper_version(program: str) -> str | None:
 def stage(
     library: Path, input_dir: Path, games: Sequence[Game]
 ) -> tuple[dict[str, Game], list[scrape.Dropped]]:
-    """Link each game into `input_dir` at its `gamelist` path to the file on the share (see
-    development/design/scrape.md, "Flow", step "Stage"). Returns the map from staged name to
-    game and the games that could not be staged, each with the reason."""
+    """Link each game into `input_dir` at its staged name (`scrape.staged_name`) to the file on
+    the share (see development/design/scrape.md, "Flow", step "Stage"). Returns the map from
+    staged name to game and the games that could not be staged, each with the reason."""
     staged: dict[str, Game] = {}
     dropped: list[scrape.Dropped] = []
     for game in games:
@@ -249,16 +249,21 @@ def stage(
             dropped.append(scrape.Dropped(game.gamelist, "has a path warpzone will not stage"))
             continue
         target = library.joinpath(*parts)
-        if part is not None and part.type == catalog.DIR and name.lower().endswith(".m3u"):
+        as_file = part is not None and part.type == catalog.DIR and name.lower().endswith(".m3u")
+        if as_file:
             target = target / parts[-1]
         if not target.exists():
             dropped.append(scrape.Dropped(name, "is not on the share any more; skipped"))
             continue
-        link = input_dir / name
+        staged_as = name if as_file else scrape.staged_name(name, parts)
+        if staged_as in staged:
+            dropped.append(scrape.Dropped(name, "would be staged under another game's name"))
+            continue
+        link = input_dir / staged_as
         link.parent.mkdir(parents=True, exist_ok=True)
         link.unlink(missing_ok=True)
         link.symlink_to(target)
-        staged[name] = game
+        staged[staged_as] = game
     return staged, dropped
 
 

@@ -781,6 +781,131 @@ class FrontendSystemsTest(HubCase):
         self.assertEqual(out[-1], "scrape: ps4: 1 added")
 
 
+class MoreSystemsTest(HubCase):
+    """Systems that are scraped like any cartridge or set: the platform Skyscraper is given, the
+    link it reads and the entry and media the hub gets."""
+
+    GAMES = (
+        ("c64", "Example Quest (World).d64", "c64"),
+        ("pokemini", "Example Pocket (World).zip", "pokemini"),
+        ("arcade", "examplearc.zip", "mame"),  # a MAME set, named by its set name
+        ("mame", "examplearc.zip", "mame"),
+        ("fbneo", "examplearc.zip", "mame"),
+        ("famicom", "Example Famicom (Japan).zip", "nes"),
+        ("megadrivejp", "Example Mega (Japan).zip", "megadrive"),
+    )
+
+    def test_each_system_is_selected_and_scraped_with_its_platform(self):
+        for system, name, platform in self.GAMES:
+            with self.subTest(system=system):
+                stem = name.rsplit(".", 1)[0]
+                self.hub.add_game(name, system)
+                self.hub.canned({"known": [stem]})
+                before = len(self.hub.calls())
+                code, out, _ = self.hub.run(systems=(system,), dry_run=True)
+                self.assertEqual((code, out[0]), (0, f"scrape: {system}: would scrape 1 game"))
+                code, out, _ = self.hub.run(systems=(system,))
+                self.assertEqual(code, 0, out)
+                self.assertEqual(out[-1], f"scrape: {system}: 1 added")
+                gather, *_ = (c for c in self.hub.calls()[before:] if "-s" in c)
+                self.assertEqual(gather[gather.index("-p") + 1], platform)
+                self.assertEqual(
+                    self.hub.gathers()[-1]["targets"],
+                    {name: os.path.realpath(self.hub.root / "library" / "roms" / system / name)},
+                )
+                entries = artwork.parse_gamelist(self.hub.gamelist(system).read_text())
+                self.assertEqual([e.path for e in entries], [f"./{name}"])
+                self.assertTrue(self.hub.media("covers", stem, "png", system).is_file())
+
+    def test_an_arcade_set_is_scraped_as_a_mame_set(self):
+        self.hub.add_game("examplearc.zip", "arcade")
+        self.hub.canned({"known": ["examplearc"]})
+        _, out, _ = self.hub.run(systems=("arcade",))
+        self.assertEqual(out[-1], "scrape: arcade: 1 added")
+        platforms = {c[c.index("-p") + 1] for c in self.hub.calls() if "-p" in c}
+        self.assertEqual(platforms, {"mame"})
+
+    def test_model2_is_read_below_its_roms_folder(self):
+        path = "roms/model2/roms/examplem2.zip"
+        self.hub.add_catalog_game(
+            game("model2", path, "examplem2", gamelist="./roms/examplem2.zip"), path
+        )
+        self.hub.canned({"known": ["examplem2"]})
+        code, out, _ = self.hub.run(systems=("model2",))
+        self.assertEqual((code, out[-1]), (0, "scrape: model2: 1 added"))
+        self.assertEqual(
+            self.hub.gathers()[-1]["targets"],
+            {"examplem2.zip": os.path.realpath(self.hub.root / "library" / path)},
+        )
+        self.assertTrue(self.hub.media("covers", "examplem2", "png", "model2").is_file())
+
+
+class OneFolderDeepTest(HubCase):
+    """A game alone in a folder one level below the system folder, on a platform whose Skyscraper
+    formats include `*.cue` (the stand-in drops its gamelist entry when asked, like Skyscraper)."""
+
+    def library(self, *names):
+        for name in names:
+            path = f"roms/psx/{name}"
+            title = os.path.splitext(os.path.basename(name))[0]
+            self.hub.add_catalog_game(game("psx", path, title, gamelist=f"./{name}"), path)
+        self.hub.canned(
+            {"cue": True, "known": [os.path.splitext(os.path.basename(n))[0] for n in names]}
+        )
+
+    def test_a_game_in_its_own_folder_gets_its_entry_and_media(self):
+        self.library("Flat.cue", "Nested/Nested.cue")
+        code, out, _ = self.hub.run(systems=("psx",))
+        self.assertEqual((code, out[-1]), (0, "scrape: psx: 2 added"), out)
+        entries = artwork.parse_gamelist(self.hub.gamelist("psx").read_text())
+        self.assertEqual(sorted(e.path for e in entries), ["./Flat.cue", "./Nested/Nested.cue"])
+        for stem in ("Flat", "Nested/Nested"):
+            self.assertTrue(self.hub.media("covers", stem, "png", "psx").is_file(), stem)
+
+    def test_the_staged_name_ends_like_the_real_path(self):
+        """Skyscraper finds a staged file again by the end of its real path."""
+        self.library("Nested/Nested.cue")
+        library = self.hub.root / "library"
+        into = self.hub.base / "input"
+        into.mkdir()
+        raw = game("psx", "roms/psx/Nested/Nested.cue", "Nested", gamelist="./Nested/Nested.cue")
+        staged, dropped = scrape_io.stage(library, into, [raw])
+        self.assertEqual((list(staged), dropped), (["psx/Nested/Nested.cue"], []))
+        link = into / "psx" / "Nested" / "Nested.cue"
+        self.assertTrue(os.path.realpath(link).endswith("/Nested/Nested.cue"))
+        self.assertEqual(os.path.realpath(link), os.path.realpath(library / raw.primary))
+
+    def test_other_games_are_staged_as_before(self):
+        library = self.hub.root / "library"
+        paths = {
+            "Flat.cue": "roms/psx/Flat.cue",
+            "Deep/Series/Deep.cue": "roms/psx/Deep/Series/Deep.cue",
+        }
+        games = []
+        for name, path in paths.items():
+            (library / path).parent.mkdir(parents=True, exist_ok=True)
+            (library / path).write_bytes(b"x")
+            games.append(game("psx", path, "t", gamelist=f"./{name}"))
+        into = self.hub.base / "input"
+        into.mkdir()
+        staged, dropped = scrape_io.stage(library, into, games)
+        self.assertEqual((sorted(staged), dropped), (sorted(paths), []))
+
+    def test_a_staged_name_that_is_taken_is_not_reused(self):
+        library = self.hub.root / "library"
+        for path in ("roms/psx/Nested/Nested.cue", "roms/psx/psx/Nested/Nested.cue"):
+            (library / path).parent.mkdir(parents=True, exist_ok=True)
+            (library / path).write_bytes(b"x")
+        one = game("psx", "roms/psx/Nested/Nested.cue", "a", gamelist="./Nested/Nested.cue")
+        two = game("psx", "roms/psx/psx/Nested/Nested.cue", "b", gamelist="./psx/Nested/Nested.cue")
+        into = self.hub.base / "input"
+        into.mkdir()
+        staged, dropped = scrape_io.stage(library, into, [one, two])
+        self.assertEqual(list(staged), ["psx/Nested/Nested.cue"])
+        self.assertIs(staged["psx/Nested/Nested.cue"], one)
+        self.assertEqual(len(dropped), 1)
+
+
 class CommandTest(HubCase):
     def config(self, extra: str = "") -> str:
         path = self.hub.base / "config.toml"
@@ -811,9 +936,9 @@ class CommandTest(HubCase):
         self.assertTrue(self.hub.media("covers", "Kirby Super Star (USA)").is_file())
 
     def test_an_unknown_system_is_a_usage_error(self):
-        code, _, err = self.scrape("--system", "amiga")
+        code, _, err = self.scrape("--system", "windows")
         self.assertEqual(code, 2)
-        self.assertIn("amiga", err)
+        self.assertIn("windows", err)
 
     def test_a_configured_path_that_does_not_exist_is_a_config_error(self):
         config = self.hub.base / "config.toml"

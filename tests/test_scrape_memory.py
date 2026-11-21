@@ -243,8 +243,8 @@ class SystemsAndDryRunTest(unittest.TestCase):
     def test_a_system_that_is_not_scraped_is_refused(self):
         self.assertEqual(scrape.choose_systems(["ps4", "wiiu"]), ["ps4", "wiiu"])
         with self.assertRaises(scrape.UsageError) as caught:
-            scrape.choose_systems(["amiga"])
-        self.assertIn("not a system", str(caught.exception))
+            scrape.choose_systems(["windows"])
+        self.assertEqual(str(caught.exception), "--system windows: not a system warpzone scrapes")
 
     def test_dry_run_lists_the_games_by_reason(self):
         a = game("snes", "roms/snes/A.zip", "A")

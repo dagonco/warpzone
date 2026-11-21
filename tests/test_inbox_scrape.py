@@ -35,7 +35,7 @@ class CandidateTests(unittest.TestCase):
             unit("nes", "B.zip"),
             unit("nes", "C.zip", "already"),
             unit("psx", "D.m3u"),
-            unit("amiga", "E", folder="roms/amiga"),
+            unit("windows", "E", folder="roms/windows"),
             unit("switch", "U.nsp", folder="extras/switch/updates"),
         ]
         self.assertEqual(
