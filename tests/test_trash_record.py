@@ -317,5 +317,30 @@ class RobustnessTests(unittest.TestCase):
         self.assertEqual(trash_record.expiry(NOW), NOW + timedelta(days=180))
 
 
+class UnpaddedYearDatetime(datetime):
+    """A datetime that formats `%Y` as glibc does for a year below 1000 (no zero padding, so
+    `datetime(1, 1, 1)` is `1-01-01`), as Python 3.11 on Linux does."""
+
+    def strftime(self, format: str) -> str:
+        return super().strftime(format.replace("%Y", str(self.year)))
+
+
+class YearTests(unittest.TestCase):
+    def test_the_times_are_the_same_whatever_the_platform_pads_a_small_year_with(self) -> None:
+        for year, text in ((1, "0001"), (999, "0999"), (1000, "1000"), (9999, "9999")):
+            for cls in (datetime, UnpaddedYearDatetime):
+                when = cls(year, 1, 2, 3, 4, 5, tzinfo=UTC)
+                self.assertEqual(trash_record.when_text(when), f"{text}-01-02T03:04:05Z", cls)
+                self.assertEqual(trash_record.parse_when(f"{text}-01-02T03:04:05Z"), when)
+
+    def test_a_record_of_a_year_one_deletion_reads_back(self) -> None:
+        when = UnpaddedYearDatetime(1, 1, 1, tzinfo=UTC)
+        item = trash_record.entry_from_trash(ENTRY, when, [DeletedFile("a/b", 1, 2)])
+        self.assertEqual(
+            (item.deleted, item.expires), ("0001-01-01T00:00:00Z", "0001-06-30T00:00:00Z")
+        )
+        self.assertEqual(trash_record.parse(trash_record.encode([item])), [item])
+
+
 if __name__ == "__main__":
     unittest.main()

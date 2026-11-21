@@ -71,7 +71,10 @@ class PartLike(Protocol):
 
 
 def when_text(when: datetime) -> str:
-    return when.astimezone(UTC).strftime(TIME)
+    """`when` in `TIME` form. Written out, not with `strftime`: its `%Y` leaves a year below 1000
+    unpadded on some platforms and Python versions, which the reader refuses."""
+    w = when.astimezone(UTC)
+    return f"{w.year:04d}-{w.month:02d}-{w.day:02d}T{w.hour:02d}:{w.minute:02d}:{w.second:02d}Z"
 
 
 def parse_when(text: object) -> datetime | None:
