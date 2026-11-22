@@ -453,9 +453,13 @@ replaces those three fields, and only those, from the cache.
   away. No other field is read or written: play data, `altemulator`, `releasedate`, `developer`,
   `publisher`, `players`, `rating`, `hidden`, `favorite` and the image paths stay byte for byte
   (`scrape.refresh_fields`, `scrape.plan_refresh`). A name the user wrote is replaced like any
-  other, which is why the dry run lists every name change. The one name that never replaces another
-  is the game's file name or its stem, which Skyscraper falls back to when it has no title (the test
-  of "The name of an existing entry"): the entry keeps its current name.
+  other, which is why the dry run lists every name change. Two names never replace another, and
+  the entry keeps its current name: the game's file name or its stem, which Skyscraper falls back
+  to when it has no title (the test of "The name of an existing entry"); and a name with the same
+  letters and digits in the same order as the current one, compared case-folded and without spaces
+  or punctuation (`Sample Quest : Dark Version` against `Sample Quest - Dark Version` or
+  `Sample Quest Of The Gb` against `Sample Quest of the GB`), since such a change carries no other
+  language and is often a worse spelling. An accent is a difference, so `Camara` becomes `Cámara`.
 - **Comparison.** Both sides are parsed values (`artwork.parse_gamelist` on the hub's file and on
   Skyscraper's, each stripped), after the removal of the characters XML 1.0 cannot hold that
   [Merge](#merge) applies, so `&quot;` or `&#39;` in the file against a plain quote in
