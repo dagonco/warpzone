@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ## [Unreleased]
 
+## [0.4.0rc7] - 2026-11-22
+
+The seventh candidate makes a game deleted from the hub leave a console that had it turned off, scrapes every system Skyscraper knows, fills in the text of games that only had art, and can move a library scraped in another language to the configured one.
+
+**Upgrading from 0.4.0rc6:** rebuild the hub image (see [The hub container](https://dagonco.github.io/warpzone/setup/hub-container/)); consoles on the `rc` channel update themselves. To get the names and descriptions of games scraped before `scrape_region` and `scrape_language` were set in your language, run `warpzone scrape --refresh-text --dry-run` on the hub, read the list of name changes, and run it again without `--dry-run`.
+
 ### Added
 
 - `warpzone scrape --refresh-text` replaces the name, description and genre of the entries the hub gamelists already have with the ones in Skyscraper's cache, for the games scraped before `scrape_region` and `scrape_language` were set, which never got the text of the configured language because `scrape` does not change a field an entry has. It asks ScreenScraper for nothing, copies no media and changes no other field; a game the cache lacks, a field it has empty and an entry marked `<nomultiscrape>` stay as they are, and no entry is added. It changes only `<game>` entries, never replaces a name with the game's file name, leaves an entry whose text cannot be replaced in place (a value in a CDATA section, a tag with attributes) as it is and counts it in the report. It keeps a backup of every gamelist it changes, writes nothing when there is nothing to change, takes `--system` and `--dry-run` (which reports exactly what a real run would do), and lists every name change as old name and new name, because a name you corrected by hand is replaced too, unless the new one differs only in capital letters, spaces or punctuation: run `--dry-run` first. It cannot be combined with `--unattended` or `--retry-not-found`. See [Moving existing entries to your language](https://dagonco.github.io/warpzone/setup/scrape/#moving-existing-entries-to-your-language).
@@ -435,7 +441,8 @@ First public release. warpzone keeps one game library on a home server and deliv
 - `warpzone doctor` checks the tools, config, Syncthing, DATs and hub folder of a machine and prints the fix for each problem.
 - `warpzone status`, `check` and `render-ignores` to inspect folder state, validate the config and preview a device's ignore lines. `provision` supports `--dry-run`.
 
-[Unreleased]: https://github.com/dagonco/warpzone/compare/v0.4.0rc6...HEAD
+[Unreleased]: https://github.com/dagonco/warpzone/compare/v0.4.0rc7...HEAD
+[0.4.0rc7]: https://github.com/dagonco/warpzone/compare/v0.4.0rc6...v0.4.0rc7
 [0.4.0rc6]: https://github.com/dagonco/warpzone/compare/v0.4.0rc5...v0.4.0rc6
 [0.4.0rc5]: https://github.com/dagonco/warpzone/compare/v0.4.0rc4...v0.4.0rc5
 [0.4.0rc4]: https://github.com/dagonco/warpzone/compare/v0.4.0rc3...v0.4.0rc4
