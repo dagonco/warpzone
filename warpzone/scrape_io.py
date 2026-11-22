@@ -14,6 +14,7 @@ import os
 import shutil
 import stat
 import subprocess
+import tempfile
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
@@ -793,35 +794,38 @@ def _scrape_system(run: Run, system: str) -> scrape.Selection | None:
 
 def write_refresh(
     run: Run, system: str, wanted: Sequence[artwork.Entry]
-) -> tuple[tuple[scrape.TextChange, ...], str | None]:
+) -> tuple[tuple[scrape.TextChange, ...], int, str | None]:
     """Set the `REFRESH_FIELDS` of the hub gamelist's entries from `wanted`, re-reading the file
     when it changed under the write and writing nothing (and keeping no backup) when no entry
-    differs (see development/design/scrape.md, "Refreshing the text"). Returns the changes made
-    and the reason when they were not."""
+    differs (see development/design/scrape.md, "Refreshing the text"). With `--dry-run` it makes
+    the same changes in memory and writes nothing. Returns the changes made, how many entries it
+    left as they are because their text cannot be edited in place, and the reason when the
+    changes were not made."""
     path = gamelist_path(run.opts.root, system)
     for _ in range(WRITE_TRIES):
         try:
             hub = read_hub_gamelist(path)
-            text, changes = scrape.refresh_entries(hub.text, hub.entries, wanted)
-            if not changes:
-                return (), None
+            text, changes, left = scrape.refresh_entries(hub.text, hub.entries, wanted)
+            if not changes or run.opts.dry_run:
+                return changes, len(left), None
             _backup(run, system, hub, path)
             written = safefile.atomic_write(path, text.encode("utf-8"), expect=hub.stamp)
         except (HubError, gamelist.GamelistError) as exc:
-            return (), str(exc)
+            return (), 0, str(exc)
         except OSError as exc:
-            return (), f"cannot write {path.name}: {exc.strerror or exc}"
+            return (), 0, f"cannot write {path.name}: {exc.strerror or exc}"
         if written:
-            return changes, None
-    return (), f"{path.name} changed {WRITE_TRIES} times while it was written"
+            return changes, len(left), None
+    return (), 0, f"{path.name} changed {WRITE_TRIES} times while it was written"
 
 
 def _refresh_batch(
     run: Run, sr: SystemRun, number: int, names: Sequence[str]
-) -> tuple[tuple[scrape.TextChange, ...], int, tuple[scrape.Dropped, ...]] | None:
+) -> tuple[tuple[scrape.TextChange, ...], int, int, tuple[scrape.Dropped, ...]] | None:
     """Generate one batch from the cache (the main pass; no request) and set the entries' text
-    from it, or only work out the changes in a dry run. Returns the changes, how many of the
-    games Skyscraper has an entry for and the warnings; None when the batch failed."""
+    from it, or in a dry run work out the same changes without writing. Returns the changes, how
+    many were left as they are (not editable), how many of the games Skyscraper has an entry for
+    and the warnings; None when the batch failed."""
     opts = run.opts
     gen = sr.folder / f"out-{number}"
     batch_file = sr.folder / f"batch-{number}.txt"
@@ -848,15 +852,11 @@ def _refresh_batch(
             str(sr.input),
             read_skyscraper_gamelist(gl_dir),
         )
-        if opts.dry_run:
-            hub = read_hub_gamelist(gamelist_path(opts.root, sr.system))
-            changes = scrape.refresh_changes(hub.entries, wanted)
-        else:
-            changes, error = write_refresh(run, sr.system, wanted)
-            if error:
-                run.fail(scrape.gamelist_message(sr.system, error), sr.system)
-                return None
-        return changes, len(wanted), tuple(dropped)
+        changes, left, error = write_refresh(run, sr.system, wanted)
+        if error:
+            run.fail(scrape.gamelist_message(sr.system, error), sr.system)
+            return None
+        return changes, left, len(wanted), tuple(dropped)
     except HubError as exc:
         run.fail(scrape.gamelist_message(sr.system, str(exc)), sr.system)
     except (artwork.ArtworkError, OSError) as exc:
@@ -884,19 +884,23 @@ def _refresh_system(run: Run, system: str) -> tuple[scrape.TextChange, ...] | No
     candidates = scrape.refresh_candidates(games, hub.entries)
     changes: list[scrape.TextChange] = []
     dropped: list[scrape.Dropped] = []
-    checked = found = 0
+    checked = found = left_out = 0
     if candidates:
-        sr = SystemRun(
-            system,
-            scrape.PLATFORMS[system],
-            opts.scratch / system,
-            opts.scratch / f"{system}.log",
-            {},
-        )
-        shutil.rmtree(sr.folder, ignore_errors=True)
+        platform = scrape.PLATFORMS[system]
+        if opts.dry_run:  # no lock: a folder and a log of its own, which no locked run uses
+            opts.scratch.mkdir(parents=True, exist_ok=True, mode=0o700)
+            folder = Path(tempfile.mkdtemp(prefix=f"{system}.dry-", dir=opts.scratch))
+            fd, name = tempfile.mkstemp(prefix=f"{system}.dry-", suffix=".log", dir=opts.scratch)
+            os.close(fd)
+            sr = SystemRun(system, platform, folder, Path(name), {})
+        else:
+            sr = SystemRun(
+                system, platform, opts.scratch / system, opts.scratch / f"{system}.log", {}
+            )
+            shutil.rmtree(sr.folder, ignore_errors=True)
         try:
             _open_log(sr.log)
-            sr.input.mkdir(parents=True, mode=0o700)
+            sr.input.mkdir(parents=True, exist_ok=True, mode=0o700)
             sr.staged, unstaged = stage(opts.root / "library", sr.input, candidates)
             dropped += unstaged
             checked = len(sr.staged)
@@ -904,16 +908,20 @@ def _refresh_system(run: Run, system: str) -> tuple[scrape.TextChange, ...] | No
                 got = _refresh_batch(run, sr, number, names)
                 if got is not None:
                     changes += got[0]
-                    found += got[1]
-                    dropped += got[2]
+                    left_out += got[1]
+                    found += got[2]
+                    dropped += got[3]
         finally:  # also on Ctrl-C: nothing staged or temporary stays behind
             shutil.rmtree(sr.folder, ignore_errors=True)
+            if opts.dry_run and system not in run.failed_systems:
+                sr.log.unlink(missing_ok=True)  # a failed dry run keeps its log, which names it
     run.rep.out(
         scrape.render_refresh(
             system,
             changes,
             checked=checked,
             not_in_cache=checked - found,
+            left_out=left_out,
             dropped=dropped,
             dry_run=opts.dry_run,
         )

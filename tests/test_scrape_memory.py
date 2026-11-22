@@ -277,7 +277,7 @@ class SystemsAndDryRunTest(unittest.TestCase):
     def test_recent_gamelist_warning_of_a_refresh_names_that_command(self):
         text = scrape.recent_message("snes", 3, refresh=True)
         self.assertIn("run `warpzone scrape --refresh-text` again", text)
-        self.assertIn("the refreshed text", text)
+        self.assertIn("would drop the refreshed text. If it does not stick, quit ES-DE", text)
 
 
 if __name__ == "__main__":

@@ -2,6 +2,7 @@
 text edit of the gamelist and the report lines. No filesystem, no Skyscraper."""
 
 import unittest
+from typing import Any, ClassVar
 
 from library_support import game
 from test_scrape import ROOT, SKY_FIELDS, entry, staged_of
@@ -24,7 +25,19 @@ WANTED = {"name": "Quest de Muestra", "desc": "Un texto en espanol", "genre": "R
 
 
 def refresh(text, *wanted):
-    return scrape.refresh_entries(text, artwork.parse_gamelist(text), list(wanted))
+    new, applied, _ = scrape.refresh_entries(text, artwork.parse_gamelist(text), list(wanted))
+    return new, applied
+
+
+def left_out(text, *wanted):
+    return scrape.refresh_entries(text, artwork.parse_gamelist(text), list(wanted))[2]
+
+
+def one_game(body, path="./A.zip"):
+    return (
+        f'<?xml version="1.0"?>\n<gameList>\n<game>\n  <path>{path}</path>\n{body}</game>\n'
+        "</gameList>\n"
+    )
 
 
 class FieldsTest(unittest.TestCase):
@@ -67,7 +80,37 @@ class FieldsTest(unittest.TestCase):
         self.assertEqual(scrape.refresh_fields(have, WANTED), ())
 
 
+class NameTest(unittest.TestCase):
+    def test_a_name_that_is_only_the_file_name_or_its_stem_never_replaces_the_name(self):
+        have = entry("./Sample Quest (USA).zip", name="Sample Quest", desc="old")
+        for bad in ("Sample Quest (USA).zip", "Sample Quest (USA)"):
+            with self.subTest(bad=bad):
+                changes = scrape.refresh_fields(have, {"name": bad, "desc": "new"})
+                self.assertEqual([c.key for c in changes], ["desc"])
+
+    def test_a_real_title_replaces_it(self):
+        have = entry("./Sample Quest (USA).zip", name="Sample Quest (USA)")
+        (change,) = scrape.refresh_fields(have, {"name": "Quest de Muestra"})
+        self.assertEqual(change.new, "Quest de Muestra")
+
+
 class CandidatesTest(unittest.TestCase):
+    def test_a_folder_entry_is_not_a_candidate_and_never_changes(self):
+        g = game("snes", "roms/snes/Dir.m3u", "Dir")
+        folder = entry("./Dir.m3u", "folder", name="Dir")
+        self.assertEqual(scrape.refresh_candidates([g], [folder]), [])
+        self.assertEqual(scrape.refresh_changes([folder], [entry("./Dir.m3u", name="New")]), ())
+
+    def test_a_game_after_a_folder_with_the_same_path_is_the_one_edited(self):
+        text = (
+            '<?xml version="1.0"?>\n<gameList>\n<folder>\n  <path>./A.zip</path>\n'
+            "  <name>Folder</name>\n</folder>\n<game>\n  <path>./A.zip</path>\n"
+            "  <name>Game</name>\n</game>\n</gameList>\n"
+        )
+        new, changes = refresh(text, entry("./A.zip", name="Title"))
+        self.assertEqual(len(changes), 1)
+        self.assertEqual(new, text.replace("<name>Game</name>", "<name>Title</name>"))
+
     def test_only_games_with_an_entry_that_is_not_marked(self):
         a, b, c = (game("snes", f"roms/snes/{n}.zip", n) for n in "ABC")
         entries = [entry("./A.zip"), entry("./C.zip", nomultiscrape="true")]
@@ -183,13 +226,61 @@ class EditTest(unittest.TestCase):
         new, changes = refresh(text, entry("./A.zip", desc="New"))
         self.assertEqual((new, changes), (text, ()))
 
-    def test_a_folder_entry_is_edited_too(self):
+    def test_a_folder_entry_is_never_edited(self):
         text = (
             '<?xml version="1.0"?>\n<gameList>\n<folder>\n  <path>./Dir</path>\n'
             "  <name>Dir</name>\n</folder>\n</gameList>\n"
         )
         new, changes = refresh(text, entry("./Dir", name="Carpeta"))
-        self.assertEqual((len(changes), "<name>Carpeta</name>" in new), (1, True))
+        self.assertEqual((new, changes), (text, ()))
+
+
+class NotEditableTest(unittest.TestCase):
+    CASES: ClassVar[dict[str, Any]] = {
+        "cdata name": ("  <name><![CDATA[Old]]></name>\n", {"name": "New"}),
+        "attributes": ('  <desc lang="es">Old</desc>\n', {"desc": "New"}),
+        "empty cdata": ("  <desc><![CDATA[]]></desc>\n", {"desc": "New"}),
+    }
+
+    def test_each_is_left_as_it_is_and_counted(self):
+        for label, (body, fields) in self.CASES.items():
+            with self.subTest(label):
+                text = one_game(body)
+                new, changes = refresh(text, entry("./A.zip", **fields))
+                self.assertEqual((new, changes), (text, ()))
+                self.assertEqual(len(left_out(text, entry("./A.zip", **fields))), 1)
+
+    def test_a_path_the_text_spells_another_way_is_left_out(self):
+        for path in ("./a&#38;b.zip", "./Hacks\\X.zip"):
+            with self.subTest(path=path):
+                text = one_game("  <name>Old</name>\n", path)
+                wanted = entry("./a&b.zip" if "&" in path else "./Hacks/X.zip", name="New")
+                self.assertEqual(refresh(text, wanted), (text, ()))
+                self.assertEqual(len(left_out(text, wanted)), 1)
+
+    def test_an_empty_tag_that_can_be_replaced_in_place_is(self):
+        for body in ("  <desc></desc>\n", "  <desc/>\n", "  <desc></desc>\n  <desc>Old</desc>\n"):
+            with self.subTest(body=body):
+                new, changes = refresh(one_game(body), entry("./A.zip", desc="New"))
+                self.assertEqual(len(changes), 1)
+                self.assertEqual(new.count("<desc"), body.count("<desc"))
+                self.assertEqual(artwork.parse_gamelist(new)[0].fields["desc"], "New")
+
+    def test_an_entry_left_out_does_not_stop_the_others(self):
+        text = one_game('  <desc lang="es">Old</desc>\n').replace(
+            "</gameList>",
+            "<game>\n  <path>./B.zip</path>\n  <name>B</name>\n</game>\n</gameList>",
+        )
+        new, applied, left = scrape.refresh_entries(
+            text,
+            artwork.parse_gamelist(text),
+            [entry("./A.zip", desc="New"), entry("./B.zip", name="Bee")],
+        )
+        self.assertEqual(
+            ([c.path for c in applied], [c.path for c in left]), (["B.zip"], ["A.zip"])
+        )
+        self.assertIn("<name>Bee</name>", new)
+        self.assertIn('<desc lang="es">Old</desc>', new)
 
 
 class RenderTest(unittest.TestCase):
@@ -227,6 +318,18 @@ class RenderTest(unittest.TestCase):
     def test_nothing_to_change(self):
         text = scrape.render_refresh("snes", (), checked=3, not_in_cache=0, dry_run=False)
         self.assertEqual(text, "scrape: snes: the text of 3 entries is up to date")
+
+    def test_the_entries_left_out_are_counted(self):
+        text = scrape.render_refresh(
+            "snes", self.changes(), checked=40, not_in_cache=0, left_out=2, dry_run=False
+        )
+        self.assertTrue(text.splitlines()[0].endswith("; 2 left as they are (not editable)"))
+        none = scrape.render_refresh(
+            "snes", (), checked=3, not_in_cache=0, left_out=1, dry_run=True
+        )
+        self.assertEqual(
+            none, "scrape: snes: no text changed in 3 entries; 1 left as they are (not editable)"
+        )
 
     def test_warnings_are_listed(self):
         dropped = [scrape.Dropped("./Z.zip", "entry is not a staged game; dropped")]

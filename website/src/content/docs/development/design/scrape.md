@@ -418,7 +418,8 @@ The I/O layer (`scrape_io.py`) applies the plan:
   `<root>/tools/logs/gamelist-backups/<system>-gamelist-<YYYYMMDD-HHMMSS>.xml`, as for the inbox's
   gamelist edits (outside every synced folder, so it reaches no console). `scrape` is a
   convergent command (see [Writing commands](/warpzone/development/design/configuration/#writing-commands)):
-  it writes by default, takes `--dry-run`, only adds (a field with a value is never changed), and
+  it writes by default, takes `--dry-run`, only adds (a field with a value is never changed, except
+  by the explicit [`--refresh-text`](#refreshing-the-text)), and
   a second run with nothing new changes nothing.
 - **ES-DE keeps its gamelist in memory.** A console with ES-DE open writes back the gamelist it
   read at start, without the new entries. As in `inbox`, a gamelist written in the last 10 minutes
@@ -441,10 +442,10 @@ replaces those three fields, and only those, from the cache.
   `--region` or `--lang`, which are gather options) in batches of 100, and reads that pass's
   gamelist only. The media that pass writes goes to the temporary folder and is deleted with the
   batch; nothing is copied to the hub. The 3D box pass does not run.
-- **Which entries.** The games of the catalog that the hub gamelist has an entry for, an entry not
-  marked `<nomultiscrape>` (the user's opt-out holds here too). A game with no entry is never
-  added by this option, and an entry no catalog game matches is not looked at
-  (`scrape.refresh_candidates`).
+- **Which entries.** The games of the catalog that the hub gamelist has a `<game>` entry for, an
+  entry not marked `<nomultiscrape>` (the user's opt-out holds here too). A `<folder>` entry is
+  never changed, even when its path is a catalog game's. A game with no entry is never added by
+  this option, and an entry no catalog game matches is not looked at (`scrape.refresh_candidates`).
 - **What is replaced.** `scrape.REFRESH_FIELDS`: `name`, `desc` and `genre`. For each one that
   Skyscraper returns with a value that differs from the entry's, the entry's value is replaced
   (or the tag is added when the entry had none). A game the cache does not have, and a field
@@ -452,24 +453,34 @@ replaces those three fields, and only those, from the cache.
   away. No other field is read or written: play data, `altemulator`, `releasedate`, `developer`,
   `publisher`, `players`, `rating`, `hidden`, `favorite` and the image paths stay byte for byte
   (`scrape.refresh_fields`, `scrape.plan_refresh`). A name the user wrote is replaced like any
-  other, which is why the dry run lists every name change.
+  other, which is why the dry run lists every name change. The one name that never replaces another
+  is the game's file name or its stem, which Skyscraper falls back to when it has no title (the test
+  of "The name of an existing entry"): the entry keeps its current name.
 - **Comparison.** Both sides are parsed values (`artwork.parse_gamelist` on the hub's file and on
   Skyscraper's, each stripped), after the removal of the characters XML 1.0 cannot hold that
   [Merge](#merge) applies, so `&quot;` or `&#39;` in the file against a plain quote in
   Skyscraper's text is not a difference, and a second run finds nothing to change.
 - **The edit** is the text edit of [Merge](#merge): `gamelist.set_child` on the entry's block, so
   indentation, line endings, comments, every other tag and the `<alternativeEmulator>` block stay,
-  and the result must be well-formed (`scrape.refresh_entries`). An edit that would not read back
-  with the new values (a value in a CDATA section, an element with attributes) is left out and the
-  entry stays as it is; it is not counted. The re-check, backup and rename of the merge apply: the
+  and the result must be well-formed (`scrape.refresh_entries`). A change is left out, and its
+  entry stays as it is, when the edit would not be a plain replacement that reads back with the new
+  values: a value in a CDATA section, an element with attributes, an empty tag the parser reads as
+  no value that would get a second tag, or an entry whose `<path>` the text spells another way
+  (`&#38;`, a backslash) than the parsed one. These are counted per system and shown as `N left as
+  they are (not editable)`, in a dry run and a real run alike: both compute their changes through
+  `refresh_entries`, so the counts and the `renamed` lines are the same. The re-check, backup and rename of the merge apply: the
   file is read with its stamp, read again before the rename and the change planned again from the
   new content up to three times, and the backup of `<root>/tools/logs/gamelist-backups/` is made
   before the run's first change to a gamelist. A gamelist with nothing to change is not rewritten
   and gets no backup. The ES-DE warning of [Flow](#flow) is printed with this command's own name.
 - **A convergent command.** It writes by default, keeps the backup and takes the inbox lock like
-  `scrape`. `--dry-run` runs the same generate pass (Skyscraper from its cache, into the temporary
-  folder; it is the only way to know the new text) and writes nothing to the hub, keeps no backup
-  and takes no lock; its report is the one of a real run with "would refresh".
+  `scrape`. `--dry-run` runs the same generate pass (Skyscraper from its cache; it is the only way
+  to know the new text) and makes the same changes in memory, writes nothing to the hub, keeps no
+  backup and takes no lock; its report is the one of a real run with "would refresh". Because it
+  holds no lock, it never uses the folder or the log a locked run uses (`<scratch>/<system>` and
+  `<system>.log`): it stages and generates in `<scratch>/<system>.dry-<random>` and logs to
+  `<system>.dry-<random>.log`, so two dry runs do not collide. The folder is removed when it ends;
+  the log too, unless a batch failed, so the failure line can name it.
 - **Options.** `--system` limits it. It is refused with `--unattended` (an attended, deliberate
   operation, and the nightly run reports only news) and with `--retry-not-found` (it queries
   nothing), both as usage errors (exit 2). Without it, `scrape`, the scrape of `inbox --apply` and
@@ -490,7 +501,8 @@ scrape: would refresh the text of 20 entries in 2 systems (name 15, desc 20, gen
 ```
 
   "Of 40 entries" counts the entries it looked at and staged; "not in the cache" are those
-  Skyscraper generated nothing for. Every entry whose name changes has a `renamed` line, with the
+  Skyscraper generated nothing for; "left as they are" are the changes of the bullet above that
+  could not be made (shown when there are any). Every entry whose name changes has a `renamed` line, with the
   old and the new name in quotes (`(no name)` when the entry had none). The other fields are
   counted, not listed. The exit codes are those of `scrape`: `1` when a batch failed or a gamelist
   could not be read or written.

@@ -4,6 +4,7 @@ network and no real Skyscraper."""
 
 import os
 import time
+from typing import Any, ClassVar
 from unittest import mock
 
 from scrape_support import CHRONO, HOMEBREW, KIRBY, HubCase
@@ -177,7 +178,12 @@ class RefreshRunTest(RefreshCase):
             "</path>\n\t\t<name>Other</name>\n\t</game>\n</gameList>\n",
             "nes",
         )
-        self.hub.canned({"known": [KIRBY_STEM, "Other Quest (USA)"]})
+        self.hub.canned(
+            {
+                "known": [KIRBY_STEM, "Other Quest (USA)"],
+                "names": {KIRBY_STEM: NAME, "Other Quest (USA)": "Otra Mision"},
+            }
+        )
         _, out, _ = self.hub.run(refresh_text=True, systems=("snes", "nes"))
         self.assertEqual(
             out[-1], "scrape: refreshed the text of 2 entries in 2 systems (name 2, desc 2)"
@@ -238,6 +244,96 @@ class RefreshDryRunTest(RefreshCase):
         _, dry, _ = self.hub.run(refresh_text=True, dry_run=True)
         _, real, _ = self.hub.run(refresh_text=True)
         self.assertEqual([x.replace("would refresh", "refreshed") for x in dry], real)
+
+
+class RefreshParityTest(RefreshCase):
+    """A dry run reports what a real run does, entries it cannot edit included."""
+
+    CASES: ClassVar[dict[str, Any]] = {
+        "plain": "\t\t<name>Old</name>\n",
+        "cdata name": "\t\t<name><![CDATA[Old]]></name>\n",
+        "attributes": '\t\t<name>Old</name>\n\t\t<desc lang="es">Old text</desc>\n',
+        "empty cdata": "\t\t<name>Old</name>\n\t\t<desc><![CDATA[]]></desc>\n",
+    }
+
+    def gamelist_with(self, body):
+        return (
+            f'<?xml version="1.0"?>\n<gameList>\n\t<game>\n\t\t<path>./{KIRBY}</path>\n'
+            f"{body}\t</game>\n</gameList>\n"
+        )
+
+    def test_the_same_changes_and_the_same_count_in_both_modes(self):
+        for label, body in self.CASES.items():
+            with self.subTest(label):
+                text = self.gamelist_with(body)
+                self.hub.write_gamelist(text)
+                _, dry, _ = self.hub.run(refresh_text=True, dry_run=True)
+                _, real, _ = self.hub.run(refresh_text=True)
+                self.assertEqual([x.replace("would refresh", "refreshed") for x in dry], real)
+                if label == "plain":
+                    self.assertIn(f'  renamed    {KIRBY}: "Old" -> "{NAME}"', real)
+                    self.assertNotIn("left as they are", real[0])
+                else:
+                    self.assertTrue(real[0].endswith("; 1 left as they are (not editable)"), real)
+                    self.assertFalse(any("renamed" in line for line in real))
+                    self.assertEqual(self.hub.gamelist().read_text(), text)
+                    self.assertEqual(self.backups(), [])
+                for backup in self.backups():
+                    backup.unlink()
+
+
+class RefreshEntryKindsTest(RefreshCase):
+    def test_a_folder_entry_is_never_changed(self):
+        text = GAMELIST.replace(f"<game>\n\t\t<path>./{KIRBY}", f"<folder>\n\t\t<path>./{KIRBY}", 1)
+        text = text.replace(
+            "<altemulator>Core</altemulator>\n\t</game>",
+            "<altemulator>Core</altemulator>\n\t</folder>",
+            1,
+        )
+        self.hub.write_gamelist(text)
+        self.hub.run(refresh_text=True)
+        self.assertEqual(self.hub.gamelist().read_text(), text)
+
+    def test_a_name_that_is_the_file_name_never_replaces_a_title(self):
+        self.hub.canned({"known": [KIRBY_STEM], "names": {KIRBY_STEM: KIRBY_STEM}})
+        self.hub.run(refresh_text=True)
+        entry = self.entries()[f"./{KIRBY}"]
+        self.assertEqual(entry["name"], "Kirby Super Star")
+        self.assertEqual(entry["desc"], "About Kirby Super Star (USA) & more")
+
+
+class RefreshScratchTest(RefreshCase):
+    def test_a_dry_run_leaves_the_folder_and_log_a_locked_run_uses_alone(self):
+        scratch = self.hub.work / "scrape"
+        (scratch / "snes" / "input").mkdir(parents=True)
+        (scratch / "snes" / "input" / "staged").write_text("another run's link")
+        (scratch / "snes.log").write_text("another run's log")
+        self.hub.run(refresh_text=True, dry_run=True)
+        self.assertEqual((scratch / "snes" / "input" / "staged").read_text(), "another run's link")
+        self.assertEqual((scratch / "snes.log").read_text(), "another run's log")
+        self.assertEqual(sorted(p.name for p in scratch.iterdir()), ["snes", "snes.log"])
+
+    def test_a_failed_dry_run_keeps_its_own_log_and_names_it(self):
+        self.hub.canned({"hang": True})
+        code, out, _ = self.hub.run(refresh_text=True, dry_run=True, timeout=1.0)
+        self.assertEqual(code, 1)
+        (log,) = (self.hub.work / "scrape").iterdir()
+        self.assertTrue(log.name.startswith("snes.dry-") and log.suffix == ".log")
+        self.assertIn(f"Skyscraper failed on snes (see {log})", out)
+
+    def test_two_dry_runs_use_different_folders(self):
+        seen = []
+        real = scrape_io.stage
+
+        def look(library, input_dir, games):
+            seen.append(input_dir)
+            return real(library, input_dir, games)
+
+        with mock.patch.object(scrape_io, "stage", look):
+            self.hub.run(refresh_text=True, dry_run=True)
+            self.hub.run(refresh_text=True, dry_run=True)
+        self.assertEqual(len(set(seen)), 2)
+        self.assertEqual(list((self.hub.work / "scrape").iterdir()), [])
 
 
 class RefreshFailureTest(RefreshCase):
