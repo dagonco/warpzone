@@ -104,6 +104,8 @@ _SUBTITLE = re.compile(r"\s[-\u2013\u2014]\s|:(?:\s|$)")
 _TRAILING_THE = re.compile(r"(?:,\s*|\s+)the\s*$")
 _APOSTROPHES = re.compile("['\u2019\u2018\u02bc`]")
 _NAME_EXT = re.compile(r"\.[A-Za-z0-9]{1,8}$")
+# The double suffixes `inbox` gives a decrypted PS3 image and an Xbox image.
+_MARKED_SUFFIXES = (".dec.iso", ".xiso.iso")
 
 
 def _strip_groups(text: str) -> str:
@@ -148,9 +150,20 @@ def _suffix(name: str) -> str:
 
 
 def _stem(name: str) -> str:
-    """The display title of a file name: its extension (up to eight characters, no spaces)
-    is dropped, so `Mr. Driller` keeps its dot."""
+    """A file name without its extension (up to eight characters, no spaces), so
+    `Mr. Driller` keeps its dot."""
     return _NAME_EXT.sub("", name)
+
+
+def _title(name: str) -> str:
+    """The display title of a file name: its stem, without the format marker of a
+    `.dec.iso` or `.xiso.iso` image. See development/design/library-ui.md, "The catalog index"."""
+    stem = _stem(name)
+    lowered = name.lower()
+    for marked in _MARKED_SUFFIXES:
+        if lowered.endswith(marked):
+            return stem[: len(name) - len(marked)]
+    return stem
 
 
 def unlistable(path: str) -> bool:
@@ -287,11 +300,13 @@ def _default_games(tree: _Tree, system: str, listing: Listing, roots: Sequence[s
             claimed.update(parts)
             name = posixpath.basename(sidecar.path)
             games.append(
-                _build(tree, _stem(name), sidecar.path, parts, _gamelist_path(system, sidecar.path))
+                _build(
+                    tree, _title(name), sidecar.path, parts, _gamelist_path(system, sidecar.path)
+                )
             )
         for node in files:
             if node.path not in claimed:
-                single(node, _stem(posixpath.basename(node.path)))
+                single(node, _title(posixpath.basename(node.path)))
         for node in tree.kids(folder, DIR):
             name = posixpath.basename(node.path)
             lower = name.lower()
@@ -334,12 +349,12 @@ def _ps4_games(tree: _Tree, system: str, listing: Listing) -> list[Game]:
         dlc = f"roms/ps4/dlc/{cusa}"
         if dlc in tree.nodes and tree.nodes[dlc].kind == DIR:
             parts.append(dlc)
-        title = _stem(posixpath.basename(linked[0])) if linked else cusa
+        title = _title(posixpath.basename(linked[0])) if linked else cusa
         gamelist = _gamelist_path(system, linked[0] if linked else node.path)
         games.append(_build(tree, title, node.path, [*parts, *linked], gamelist))
     for node in tree.kids("roms/ps4", FILE):  # a .pkg filed without orbis-pkg-util
         if _suffix(node.path) == ".pkg":
-            title = _stem(posixpath.basename(node.path))
+            title = _title(posixpath.basename(node.path))
             games.append(
                 _build(tree, title, node.path, [node.path], _gamelist_path(system, node.path))
             )
@@ -360,7 +375,7 @@ def _vita_games(tree: _Tree, system: str, listing: Listing) -> list[Game]:
             parts.append(licence)
         linked = launchers.get(title_id, [])
         parts.extend(linked)
-        title = _stem(posixpath.basename(linked[0])) if linked else title_id
+        title = _title(posixpath.basename(linked[0])) if linked else title_id
         gamelist = _gamelist_path(system, linked[0] if linked else node.path)
         games.append(_build(tree, title, node.path, parts, gamelist))
     return games
@@ -397,7 +412,7 @@ def _switch_games(tree: _Tree, system: str, listing: Listing) -> list[Game]:
         parts = [node.path]
         if base:
             parts.extend(folder for _, folder, bases in extras if base in bases)
-        title = _stem(posixpath.basename(node.path))
+        title = _title(posixpath.basename(node.path))
         games.append(_build(tree, title, node.path, parts, _gamelist_path(system, node.path)))
     return games
 
