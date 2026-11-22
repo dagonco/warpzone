@@ -133,7 +133,9 @@ several, and a game is on for a console only when every part is.
   `size`, `mtime` (whole seconds) and `sha1`; a `dir` part has the total `size`, the count of
   `files` and the newest `mtime`, and no hash (a PS4 game folder holds thousands of files and tens
   of GiB, and nothing reads a hash of it).
-- `title`: the display title before any scrape (below); `key`: its [title key](#title-key).
+- `title`: the display title before any scrape (below): the name of the file or launcher without
+  its extension, and without the `.dec` or `.xiso` marker that comes before `.iso` in a decrypted
+  PS3 image or an Xbox image; `key`: its [title key](#title-key).
 - `gamelist`: the path the ES-DE gamelist of the system uses for this game, which is how its
   metadata and media are found.
 - `size`: the sum of the parts. `added`: the date `inbox` filed it, or the date a scan first saw

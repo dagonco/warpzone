@@ -152,6 +152,24 @@ class DefaultDerivationTests(unittest.TestCase):
         games = catalog.derive("gba", listing({"roms/gba/Mr. Tester": 1}))
         self.assertEqual(games[0].title, "Mr. Tester")
 
+    def test_a_title_drops_the_format_marker_before_the_extension(self) -> None:
+        cases = {
+            "roms/ps3/Sample Quest (Europe) (En,Es).dec.iso": "Sample Quest (Europe) (En,Es)",
+            "roms/xbox/Sample Racer (Europe).xiso.iso": "Sample Racer (Europe)",
+            "roms/xbox/Sample Racer (USA).xiso": "Sample Racer (USA)",
+        }
+        for path, title in cases.items():
+            system = path.split("/")[1]
+            with self.subTest(path=path):
+                game = catalog.derive(system, listing({path: 1}))[0]
+                self.assertEqual(game.title, title)
+                self.assertNotIn("dec", game.key.split())
+                self.assertNotIn("xiso", game.key.split())
+
+    def test_a_title_keeps_a_word_that_only_looks_like_a_format_marker(self) -> None:
+        games = catalog.derive("psx", listing({"roms/psx/Sample Art.dec.chd": 1}))
+        self.assertEqual(games[0].title, "Sample Art.dec")
+
     def test_an_m3u_folder_is_one_game_with_one_dir_part(self) -> None:
         games = catalog.derive(
             "psx",
