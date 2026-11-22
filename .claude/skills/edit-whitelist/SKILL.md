@@ -56,7 +56,7 @@ Show the report and wait for the user's OK, then `warpzone prune --apply`. Never
 
 A console that lists `library` also prunes by itself every hour ([Automatic pruning](../../../website/src/content/docs/setup/whitelists.md#automatic-pruning)), so a removal is done within about an hour of the edit. When its guard holds a removal back (the run exits `1`), the removal waits for the manual `prune --apply` above; do not run `--unattended` by hand to get around that.
 
-If the line was removed first and the hub copy was deleted afterwards, the console copy stays and prune keeps it too (it deletes only files the hub still has). Tell the user; deleting it on the console by hand needs their explicit OK per path.
+If the line was removed first and the game was then deleted with the library UI, prune removes the console copy because the hub's record of deleted games lists it ([Files the hub deleted on purpose](../../../website/src/content/docs/development/design/prune.md#files-the-hub-deleted-on-purpose)); it shows as `N file(s) the hub deleted on purpose` in the report. If the hub copy was deleted by hand, or before the hub kept the record, the console copy stays and prune keeps it (it is not in the record). Tell the user; deleting it on the console by hand needs their explicit OK per path.
 
 ## Never
 

@@ -657,10 +657,12 @@ game's parts from the catalog):
   normalization, so every game of it is on, including games added later.
 - **System off.** The roots are removed and so are all the includes and excludes below them.
 - **Lines of a deleted game** (`whitelist.drop_lines`, only for
-  [the cleanup](#whitelist-cleanup)). The includes and excludes recorded for the game when it
-  was deleted are removed where they are still in the model; nothing is added, since the paths
-  no longer exist on the hub. `set_game` is not used: turning a game off adds an exclude under
-  a system that is on, which would leave a line for a path that is gone.
+  [the cleanup](#whitelist-cleanup)). The includes recorded for the game when it was deleted
+  are removed where they are still in the model; nothing is added, since the paths no longer
+  exist on the hub. An exclude is never removed: it keeps the path ignored on a console that had
+  the game turned off, which is what lets prune remove that copy (see "Removing the lines" in
+  [Whitelist cleanup](#whitelist-cleanup)). `set_game` is not used: turning a game off adds an
+  exclude under a system that is on, which would leave a line for a path that is gone.
 
 After a change, `whitelist.effect` (pure) evaluates every part of every catalog game with the old
 and the new model and lists the games that turned on and off. The change is applied only when
@@ -848,7 +850,7 @@ deletion makes Syncthing ignore the path there, so the deletion never reaches it
 itself does not help: it deletes only files the hub still has. That is why the hub keeps
 [a record of the games it deleted](#the-record-of-deleted-games), which every console receives, so
 that prune can remove such a copy; the rule prune applies to the record is in
-[Pruning](/warpzone/development/design/prune/).
+[Files the hub deleted on purpose](/warpzone/development/design/prune/#files-the-hub-deleted-on-purpose).
 
 ### What a deletion removes
 
@@ -954,7 +956,7 @@ and acts only when confirmed. The confirmation in the page plays the role of `--
    answer lists every file and folder with its size (a folder is walked for its total and count,
    no link followed), the parts absent on disk, the media files of every kind folder with their
    sizes, whether a
-   gamelist entry is removed, the whitelist lines of each device (as text, `!/path` or `/path`),
+   gamelist entry is removed, the whitelist lines of each device that will be removed (the includes, as text, `!/path`),
    the saves the hub keeps, whether the hub lock is held (`busy`), the purge date, and `expect`:
    `sha256:<hex>` of the canonical JSON (sorted keys, no spaces) of `files`, `media`, `gamelist`
    and `whitelists`.
@@ -1131,8 +1133,9 @@ A console that had a game turned off (its whitelist line already removed, the fi
 waiting for prune) never receives the deletion, and the hub no longer has the game, so prune
 alone would keep the copy for ever. The hub therefore keeps a record of what it deliberately
 deleted and delivers it to the consoles, so that prune can tell such a copy from any other file.
-How prune uses it is in [Pruning](/warpzone/development/design/prune/); the hub only keeps the
-file.
+How prune uses it is in
+[Files the hub deleted on purpose](/warpzone/development/design/prune/#files-the-hub-deleted-on-purpose);
+the hub only keeps the file.
 
 The record is `library/patterns-_deleted.stignore`, in the root of the library folder next to the
 whitelists. The name is chosen so that nothing has to change anywhere else: `patterns-common.stignore`
@@ -1225,13 +1228,15 @@ deletion:
 }
 ```
 
-- **What is recorded.** For each device that lists `library`, the includes and excludes of its
-  managed whitelist that are equal to or below one of the game's parts (`paths`). A device whose
-  whitelist has none (it does not have the game, or has the whole system, whose root line stays)
-  is not listed, and a game no whitelist names gets no entry. The file is UTF-8 JSON with sorted
-  keys, written with the guarded atomic write under the write lock; a missing file is an empty
-  list, and a file that cannot be read stops new deletions (`read-failed`) and the cleanup (logged
-  once).
+- **What is recorded.** For each device that lists `library`, the includes of its managed
+  whitelist that are equal to or below one of the game's parts (`paths`). Excludes are not
+  recorded (see "Removing the lines"). A device whose whitelist has no include for the game (it
+  does not have the game, has the whole system, whose root line stays, or has the game turned off
+  by an exclude) is not listed, and a game no whitelist names gets no entry. A cleanup an older
+  version recorded with excludes is read as before and its excludes are left as they are. The
+  file is UTF-8 JSON with sorted keys, written with the guarded atomic write under the write
+  lock; a missing file is an empty list, and a file that cannot be read stops new deletions
+  (`read-failed`) and the cleanup (logged once).
 - **When the hub has recorded the deletion.** `recorded` is `null` until the hub's Syncthing has
   the deletion in its index: the cleanup asks `GET /rest/db/file?folder=wz-library&file=<path>`
   for each of `paths` and sets `recorded` to the time of that check once every answer has its
@@ -1267,6 +1272,15 @@ deletion:
   stay (logged). A file changed in between is read again on the next pass. A whitelist that became
   `needs-migration` keeps its lines until it is migrated. The device leaves the entry once
   written, and an entry with no device left leaves the file.
+
+  **Only includes are removed, never an exclude.** A game turned off under a system that is on
+  holds an exclude, and the console still has its copy, ignored. An exclude for a path the hub no
+  longer has does nothing on the hub, and it keeps the path ignored on the console, where prune
+  removes the copy by [the record of deleted games](/warpzone/development/design/prune/#files-the-hub-deleted-on-purpose).
+  Removed with the includes, it would make the path wanted again: the copy would be a local
+  addition of a receive-only folder, which prune treats as wanted and keeps for ever. The excludes
+  of deleted games stay in the whitelist, and a game filed again at that path stays off for that
+  console until someone turns it on in the page, which removes the exclude.
 - **Devices that leave.** A device no longer in the config, or that no longer lists `library`, is
   dropped from every entry without a write.
 - **Cadence.** A background thread of `serve` runs at start and then every 60 seconds

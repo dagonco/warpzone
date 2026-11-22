@@ -46,7 +46,7 @@ A console runs warpzone from a git clone and keeps itself on a release that work
 
 ## How do I remove a game?
 
-Removing a line from a whitelist does not delete the console's copy. To delete a game everywhere: delete it from the hub, wait until every console shows `need 0` in `warpzone status`, then remove the whitelist line. To only free space on one console, remove the line and run `warpzone prune` (add `--apply` once the report looks right). Details in [Troubleshooting](/warpzone/troubleshooting/#a-game-removed-from-a-whitelist-is-still-on-the-console) and [Whitelists and pruning](/warpzone/setup/whitelists/).
+Removing a line from a whitelist does not delete the console's copy. To delete a game everywhere: delete it from the hub, wait until every console shows `need 0` in `warpzone status`, then remove the whitelist line. If you removed the line first, deleting the game with the library UI still clears the console at its next `prune`; a game deleted from the hub by hand does not. To only free space on one console, remove the line and run `warpzone prune` (add `--apply` once the report looks right). Details in [Troubleshooting](/warpzone/troubleshooting/#a-game-removed-from-a-whitelist-is-still-on-the-console) and [Whitelists and pruning](/warpzone/setup/whitelists/).
 
 ## Where is every command and option?
 

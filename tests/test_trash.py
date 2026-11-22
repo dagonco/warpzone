@@ -218,9 +218,10 @@ class PlanTests(unittest.TestCase):
             Facts(parts=found("ps4", PS4)),
         )
         self.assertEqual(p.whitelists["deck"], Lines((PS4.primary,), ()))
-        self.assertEqual(p.whitelists["machine"], Lines((), (PS4.primary,)))
         self.assertEqual(p.whitelists["deck"].texts(), ["!/roms/ps4/games/CUSA00000"])
-        self.assertEqual(p.whitelists["machine"].texts(), ["/roms/ps4/games/CUSA00000"])
+        # an exclude is never recorded: the cleanup leaves it, so the console keeps the path
+        # ignored and prune can remove its copy (see "Whitelist cleanup" in library-ui.md)
+        self.assertEqual(list(p.whitelists), ["deck"])
         answer = trash.plan_response(p, saves={}, busy=None, purge_after="x")
         self.assertEqual(answer["whitelists"]["deck"], ["!/roms/ps4/games/CUSA00000"])
 
@@ -833,18 +834,26 @@ class CleanupTests(unittest.TestCase):
         self.assertIsNone(trash.without_device(after, "machine"))
 
     def test_the_lines_come_out_of_the_model_and_nothing_is_added(self) -> None:
-        model = wl.Model(frozenset({"psx"}), frozenset(), frozenset({GAME.primary}))
-        c = cleanup(devices={"deck": Lines((), (GAME.primary,))})
+        model = wl.Model(frozenset({"gba"}), frozenset({GAME.primary}))
+        c = cleanup(devices={"deck": Lines((GAME.primary,), ())})
         after = trash.cleaned_model(model, c, "deck")
-        self.assertEqual(after, wl.Model(frozenset({"psx"})))
+        self.assertEqual(after, wl.Model(frozenset({"gba"})))
         lib = library([("psx", OTHER)])
         self.assertTrue(trash.effect_holds(model, after, lib))
         # a drop that would turn another game on or off is not made
-        other_off = wl.Model(frozenset({"psx"}), frozenset(), frozenset({OTHER.primary}))
-        stray = cleanup(devices={"deck": Lines((), (OTHER.primary,))})
+        other_on = wl.Model(frozenset({"gba"}), frozenset({OTHER.primary}))
+        stray = cleanup(devices={"deck": Lines((OTHER.primary,), ())})
         self.assertFalse(
-            trash.effect_holds(other_off, trash.cleaned_model(other_off, stray, "deck"), lib)
+            trash.effect_holds(other_on, trash.cleaned_model(other_on, stray, "deck"), lib)
         )
+
+    def test_an_exclude_is_never_removed(self) -> None:
+        # The path stays ignored on the console (the system is on, the game is excluded), so
+        # prune can remove the copy from the record. Lines recorded by an older version
+        # that hold an exclude are left too.
+        model = wl.Model(frozenset({"psx"}), frozenset(), frozenset({GAME.primary}))
+        c = cleanup(devices={"deck": Lines((), (GAME.primary,))})
+        self.assertEqual(trash.cleaned_model(model, c, "deck"), model)
 
     def test_the_cleanup_of_a_plan(self) -> None:
         c = trash.new_cleanup(made_plan(), ENTRY, NOW)
