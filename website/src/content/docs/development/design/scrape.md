@@ -54,7 +54,9 @@ closes that gap on the machine that files the game, in the layout ES-DE and the 
   entry only gets what it lacks: the media files, and the text fields (`desc`, `genre` and the
   others of [Merge](#merge)) that it has no value for, which is what completes an entry ES-DE or
   the play state created bare. ES-DE's `<nomultiscrape>` is respected. No media file is ever
-  overwritten.
+  overwritten. The one exception is explicit: `warpzone scrape --refresh-text` replaces the name,
+  description and genre of existing entries with what Skyscraper's cache holds, and nothing else
+  (see [Refreshing the text](#refreshing-the-text)).
 
 ## Scope and non-goals
 
@@ -65,7 +67,9 @@ media folders.
 Not in scope:
 
 - Changing or "improving" an existing scrape. A wrong match is fixed by the user (by editing the
-  entry on a console, or by deleting the entry and its media and running `warpzone scrape`).
+  entry on a console, or by deleting the entry and its media and running `warpzone scrape`). The
+  only change warpzone makes to the text of an existing entry, and only when asked, is
+  [`--refresh-text`](#refreshing-the-text).
 - Manuals and fanart. ScreenScraper has them and Skyscraper can fetch them, but the hub has no
   kind for them and neither the UI nor the consoles' frontends show them; they are not fetched.
 - Title screens and physical media scans (`titlescreens`, `physicalmedia`). Skyscraper's
@@ -133,7 +137,9 @@ Skyscraper 3.21.1 (`docs/CLIHELP.md`, `docs/CONFIGINI.md`, `docs/REGIONS.md`,
   one value picked, so the generate passes have nothing to choose. A game already in the cache
   keeps what it has until it is purged from it (`onlymissing` skips it), and warpzone itself never
   overwrites a medium or an entry's text on the hub, so a change of region or language reaches the
-  games scraped from then on (see "Only adds" above and the setup guide).
+  games scraped from then on (see "Only adds" above and the setup guide). The text of the entries
+  already on the hub is moved to what the cache holds by `--refresh-text`, which asks ScreenScraper
+  for nothing (see [Refreshing the text](#refreshing-the-text)).
 - The defaults are `eu us ss uk wor jp au ame de cus cn kr asi br sp fr gr it no dk nz nl pl ru se
   tw ca` and `en de fr es`. `regionFromFilename` (default `inline`) adds the region named in the
   file name, such as `(Europe)`, at its place in that list.
@@ -348,7 +354,8 @@ indentation and newline style the writer copies from the file. Its rules:
   warning. The entry written to the hub has the game's `gamelist` path (the frontend's, for the systems of
   [Systems and platforms](#systems-and-platforms)), never Skyscraper's.
 - **Existing entries.** A `<game>` or `<folder>` of the hub gamelist whose `<path>` is the game's
-  (`./` or not) is existing, and a field it has a value for is never changed. It gets the media
+  (`./` or not) is existing, and a field it has a value for is never changed (the explicit
+  [`--refresh-text`](#refreshing-the-text) is a separate run, not part of this merge). It gets the media
   it lacks and, from Skyscraper's entry for the game, the fields of the "New entries" rule that
   it lacks or holds empty (`scrape.fill_fields`). It never gets a play statistic (`playcount`,
   `playtime`, `lastplayed`), `altemulator`, `hidden`, `favorite` or any other tag outside that
@@ -356,7 +363,9 @@ indentation and newline style the writer copies from the file. Its rules:
 - **The name of an existing entry** is replaced only when it is the game's file name or the stem
   of it (what ES-DE shows, and the play state leaves out entirely, until someone gives the game a
   title): `Game.zip` or `Game`, compared with the base name of the entry's `<path>`, case
-  sensitive. Any other name is a title and is kept. An entry with no `<name>` gets one.
+  sensitive. Any other name is a title and is kept. An entry with no `<name>` gets one. The one
+  way a title is replaced is `--refresh-text`, which does it for every entry whose name differs
+  from the cache's (see [Refreshing the text](#refreshing-the-text)).
 - **Bare entries.** An entry with none of `desc`, `rating`, `releasedate`, `developer`,
   `publisher`, `genre` and `players` (whatever else it holds: play statistics,
   `altemulator`, a name) is bare (`scrape.is_bare`). `select` picks a bare entry even when it has
@@ -409,7 +418,8 @@ The I/O layer (`scrape_io.py`) applies the plan:
   `<root>/tools/logs/gamelist-backups/<system>-gamelist-<YYYYMMDD-HHMMSS>.xml`, as for the inbox's
   gamelist edits (outside every synced folder, so it reaches no console). `scrape` is a
   convergent command (see [Writing commands](/warpzone/development/design/configuration/#writing-commands)):
-  it writes by default, takes `--dry-run`, only adds (a field with a value is never changed), and
+  it writes by default, takes `--dry-run`, only adds (a field with a value is never changed, except
+  by the explicit [`--refresh-text`](#refreshing-the-text)), and
   a second run with nothing new changes nothing.
 - **ES-DE keeps its gamelist in memory.** A console with ES-DE open writes back the gamelist it
   read at start, without the new entries. As in `inbox`, a gamelist written in the last 10 minutes
@@ -417,6 +427,92 @@ The I/O layer (`scrape_io.py`) applies the plan:
   `warpzone scrape` again if the entries do not stick. A later run adds them again from the cache,
   with no request; the media are already there (and a filled field a console dropped is filled
   again, since the entry lacks it again).
+
+## Refreshing the text
+
+`warpzone scrape --refresh-text` is the explicit exception to the merge rules above. The games
+scraped before `[inbox] scrape_region` and `scrape_language` were set have their name, description
+and genre in the default language, and the merge never replaces a field an entry has, so they
+never get the text of the configured language even when Skyscraper's cache holds it. The option
+replaces those three fields, and only those, from the cache.
+
+- **No request.** It runs no gather, so ScreenScraper is never asked for anything and the cache is
+  not changed. Per system it stages the games the way [Flow](#flow) does and runs the main
+  generate pass of step 4 (`-f esde -a artwork-esde.xml` with the same flags, no `-s`, and no
+  `--region` or `--lang`, which are gather options) in batches of 100, and reads that pass's
+  gamelist only. The media that pass writes goes to the temporary folder and is deleted with the
+  batch; nothing is copied to the hub. The 3D box pass does not run.
+- **Which entries.** The games of the catalog that the hub gamelist has a `<game>` entry for, an
+  entry not marked `<nomultiscrape>` (the user's opt-out holds here too). A `<folder>` entry is
+  never changed, even when its path is a catalog game's. A game with no entry is never added by
+  this option, and an entry no catalog game matches is not looked at (`scrape.refresh_candidates`).
+- **What is replaced.** `scrape.REFRESH_FIELDS`: `name`, `desc` and `genre`. For each one that
+  Skyscraper returns with a value that differs from the entry's, the entry's value is replaced
+  (or the tag is added when the entry had none). A game the cache does not have, and a field
+  Skyscraper returns empty, are left exactly as they are, so a field never becomes empty or goes
+  away. No other field is read or written: play data, `altemulator`, `releasedate`, `developer`,
+  `publisher`, `players`, `rating`, `hidden`, `favorite` and the image paths stay byte for byte
+  (`scrape.refresh_fields`, `scrape.plan_refresh`). A name the user wrote is replaced like any
+  other, which is why the dry run lists every name change. The one name that never replaces another
+  is the game's file name or its stem, which Skyscraper falls back to when it has no title (the test
+  of "The name of an existing entry"): the entry keeps its current name.
+- **Comparison.** Both sides are parsed values (`artwork.parse_gamelist` on the hub's file and on
+  Skyscraper's, each stripped), after the removal of the characters XML 1.0 cannot hold that
+  [Merge](#merge) applies, so `&quot;` or `&#39;` in the file against a plain quote in
+  Skyscraper's text is not a difference, and a second run finds nothing to change.
+- **The edit** is the text edit of [Merge](#merge): `gamelist.set_child` on the entry's block, so
+  indentation, line endings, comments, every other tag and the `<alternativeEmulator>` block stay,
+  and the result must be well-formed (`scrape.refresh_entries`). A change is left out, and its
+  entry stays as it is, when the edit would not be a plain replacement that reads back with the new
+  values: a value in a CDATA section, an element with attributes, an empty tag the parser reads as
+  no value that would get a second tag, or an entry whose `<path>` the text spells another way
+  (`&#38;`, a backslash) than the parsed one. These are counted per system and shown as `N left as
+  they are (not editable)`, in a dry run and a real run alike: both compute their changes through
+  `refresh_entries`, so the counts and the `renamed` lines are the same. The re-check, backup and rename of the merge apply: the
+  file is read with its stamp, read again before the rename and the change planned again from the
+  new content up to three times, and the backup of `<root>/tools/logs/gamelist-backups/` is made
+  before the run's first change to a gamelist. A gamelist with nothing to change is not rewritten
+  and gets no backup. The ES-DE warning of [Flow](#flow) is printed with this command's own name.
+- **A convergent command.** It writes by default, keeps the backup and takes the inbox lock like
+  `scrape`. `--dry-run` runs the same generate pass (Skyscraper from its cache; it is the only way
+  to know the new text) and makes the same changes in memory, writes nothing to the hub, keeps no
+  backup and takes no lock; its report is the one of a real run with "would refresh". Because it
+  holds no lock, it never uses the folder or the log a locked run uses (`<scratch>/<system>` and
+  `<system>.log`): it stages and generates in `<scratch>/<system>.dry-<random>` and logs to
+  `<system>.dry-<random>.log`, so two dry runs do not collide. The folder is removed when it ends;
+  the log too, unless a batch failed, so the failure line can name it.
+- **Options.** `--system` limits it. It is refused with `--unattended` (an attended, deliberate
+  operation, and the nightly run reports only news) and with `--retry-not-found` (it queries
+  nothing), both as usage errors (exit 2). Without it, `scrape`, the scrape of `inbox --apply` and
+  `scrape --unattended` run as before.
+- **Memory.** Both memories of [The cache](#the-cache) are left as they are. The not-found one
+  records what ScreenScraper answered to a request, and this option makes none. The incomplete one
+  records what a merge left missing; a refresh that gives a bare entry text leaves a record that
+  still says `bare`, which is harmless: the record is only read by the nightly run's skip, it is
+  rewritten the next time the game is processed, and a game that lacks media is skipped as before.
+- **Report.** warpzone's own lines, per system, then a totals line when more than one system was
+  reached:
+
+```
+scrape: snes: would refresh the text of 12 of 40 entries (name 9, desc 12, genre 7); 3 not in the cache
+  renamed    Sample Quest (USA).zip: "Sample Quest" -> "Quest de Muestra"
+  ...
+scrape: would refresh the text of 20 entries in 2 systems (name 15, desc 20, genre 11)
+```
+
+  "Of 40 entries" counts the entries it looked at and staged; "not in the cache" are those
+  Skyscraper generated nothing for; "left as they are" are the changes of the bullet above that
+  could not be made (shown when there are any). Every entry whose name changes has a `renamed` line, with the
+  old and the new name in quotes (`(no name)` when the entry had none). The other fields are
+  counted, not listed. The exit codes are those of `scrape`: `1` when a batch failed or a gamelist
+  could not be read or written.
+
+What this rests on in Skyscraper, none of it checked here with a real binary: that the generate
+pass without `-s` reads only the cache and asks for nothing (the pass of step 4 already does, and
+its gamelist is the only text `plan_merge` uses); that it writes a gamelist entry only for a game
+the cache holds (as `plan_merge` already relies on for "not found"); and that the text in the cache
+is the one picked when the game was gathered, so the option brings an entry to the language the
+cache holds and cannot fetch a text the cache lacks (see [Language and region](#language-and-region)).
 
 ## Media kinds
 
@@ -644,7 +740,7 @@ How it is done (`inbox_scrape.py`, called from `inbox._run` right after `_update
 
 ## `warpzone scrape`
 
-`warpzone scrape [--root PATH] [--system NAME ...] [--retry-not-found] [--dry-run] [--force-lock]` scrapes the games of the library
+`warpzone scrape [--root PATH] [--system NAME ...] [--retry-not-found] [--refresh-text] [--dry-run] [--force-lock]` scrapes the games of the library
 that have no gamelist entry, lack media or have a bare entry, for every system in the platform table, or only the
 ones named with `--system` (a name not in the table is a usage error, exit 2). It reads `[inbox]` only, like `inbox`, and needs
 the catalog: a system without a catalog file is skipped with the hint to run `warpzone catalog`.
@@ -656,7 +752,8 @@ A planned `--unattended` option runs it once a night from a scheduled task, with
 games and minutes, a lock wait and exit codes that report only news; it is specified in
 [Unattended scrape](/warpzone/development/design/scrape-unattended/#the-command).
 
-`--dry-run` runs no Skyscraper (no request, no change to the cache), writes nothing and takes no
+`--refresh-text` makes it a different run, which replaces the text of existing entries from the
+cache: see [Refreshing the text](#refreshing-the-text). Without it, `--dry-run` runs no Skyscraper (no request, no change to the cache), writes nothing and takes no
 lock. It prints,
 per system, the games it would scrape, split into "no entry", "missing media" with the kinds and
 "bare entry" (a game can be on two lines), and the totals, which is how a user sizes a first run
@@ -768,6 +865,13 @@ Unit tests, with no network and no Skyscraper:
 - The writer with a temporary hub: a gamelist changed between read and rename is merged again; a
   media file that appears before the rename is kept and the copy dropped; the backup is made once
   per run; `--dry-run` writes nothing.
+- `--refresh-text`: `refresh_fields` replaces the three fields, keeps one the cache gives empty,
+  never touches another field or a `<nomultiscrape>` entry and sees no difference in an escape;
+  `refresh_entries` keeps the file's indentation, line endings, comments and every other tag, adds
+  a missing tag, leaves out an edit that would not read back, and a second pass changes nothing;
+  `render_refresh` lists every name change. The writer tests use the stand-in tool: a dry run
+  writes nothing to the hub, a backup is made only when the file changes, `--system` limits the
+  run, no gather runs, and a run without the option is unchanged.
 - One flow test runs `inbox --apply` and `scrape` with a stand-in `Skyscraper` script that writes a
   canned gamelist (with absolute paths) and media into the `-g` and `-o` it is given, and one that
   prints the quota line, and checks the hub's gamelist, media, report and exit code.

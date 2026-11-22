@@ -272,6 +272,12 @@ class SystemsAndDryRunTest(unittest.TestCase):
         text = scrape.recent_message("snes", 3)
         self.assertIn("3 min ago", text)
         self.assertIn("warpzone scrape", text)
+        self.assertNotIn("--refresh-text", text)
+
+    def test_recent_gamelist_warning_of_a_refresh_names_that_command(self):
+        text = scrape.recent_message("snes", 3, refresh=True)
+        self.assertIn("run `warpzone scrape --refresh-text` again", text)
+        self.assertIn("would drop the refreshed text. If it does not stick, quit ES-DE", text)
 
 
 if __name__ == "__main__":

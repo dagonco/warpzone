@@ -350,13 +350,16 @@ def _has_media(media: Collection[str], kind: str, stem: str) -> bool:
     return any(f"{kind}/{stem}.{ext}" in media for ext in KIND_EXTENSIONS[kind])
 
 
-def _entries_by_path(entries: Sequence[artwork.Entry]) -> dict[str, artwork.Entry]:
-    """The `<game>` and `<folder>` entries by their path below the system folder (`./` removed);
-    the first one wins and a path that is not a plain relative path is left out."""
+def _entries_by_path(
+    entries: Sequence[artwork.Entry], tags: Collection[str] = ("game", "folder")
+) -> dict[str, artwork.Entry]:
+    """The entries of the kinds in `tags` (`<game>` and `<folder>`) by their path below the
+    system folder (`./` removed); the first one wins and a path that is not a plain relative path
+    is left out."""
     by_path: dict[str, artwork.Entry] = {}
     for item in entries:
         rel = artwork.relative(item.path)
-        if rel is not None and item.tag in ("game", "folder"):
+        if rel is not None and item.tag in tags:
             by_path.setdefault(rel, item)
     return by_path
 
@@ -766,6 +769,28 @@ def _staged_name(path: str, root: str) -> str | None:
     return artwork.relative(p)
 
 
+def _sources(
+    staged: Mapping[str, Game],
+    staged_root: str,
+    skyscraper_entries: Sequence[artwork.Entry],
+    dropped: list[Dropped],
+) -> dict[str, artwork.Entry]:
+    """Skyscraper's entries by staged name (the first one of a name wins); an entry outside the
+    staged folder or for a game that is not staged is added to `dropped`."""
+    source: dict[str, artwork.Entry] = {}
+    for item in skyscraper_entries:
+        if item.tag not in ("game", "folder"):
+            continue
+        name = _staged_name(item.path, staged_root)
+        if name is None:
+            dropped.append(Dropped(item.path, "entry path is outside the staged folder; dropped"))
+        elif name not in staged:
+            dropped.append(Dropped(item.path, "entry is not a staged game; dropped"))
+        else:
+            source.setdefault(name, item)
+    return source
+
+
 def _new_entry(game: Game, source: artwork.Entry | None) -> artwork.Entry | None:
     if source is None:
         return None
@@ -851,17 +876,7 @@ def plan_merge(
       `<folder>/<name>.<ext>` with `/`, with their type.
     """
     dropped: list[Dropped] = []
-    source: dict[str, artwork.Entry] = {}
-    for item in skyscraper_entries:
-        if item.tag not in ("game", "folder"):
-            continue
-        name = _staged_name(item.path, staged_root)
-        if name is None:
-            dropped.append(Dropped(item.path, "entry path is outside the staged folder; dropped"))
-        elif name not in staged:
-            dropped.append(Dropped(item.path, "entry is not a staged game; dropped"))
-        else:
-            source.setdefault(name, item)
+    source = _sources(staged, staged_root, skyscraper_entries, dropped)
     hub = _entries_by_path(hub_entries)
     claimed: set[str] = set()
     games: list[GameMerge] = []
@@ -970,6 +985,230 @@ def add_entries(text: str, entries: Sequence[artwork.Entry]) -> str:
     if gamelist.well_formed(text) and not gamelist.well_formed(new):
         raise gamelist.GamelistError("the edited gamelist would not be well-formed XML")
     return new
+
+
+# ------------------------------------------------------------------ refreshing the text
+
+# The fields `--refresh-text` replaces with what Skyscraper's cache holds.
+REFRESH_FIELDS: tuple[str, ...] = ("name", "desc", "genre")
+
+
+@dataclass(frozen=True)
+class FieldChange:
+    """One field of an entry going from `old` ("" when it had none) to `new`."""
+
+    key: str
+    old: str
+    new: str
+
+
+@dataclass(frozen=True)
+class TextChange:
+    """The text fields of the entry at `path` (below the system folder) that a refresh changes."""
+
+    path: str
+    fields: tuple[FieldChange, ...]
+
+    @property
+    def keys(self) -> tuple[str, ...]:
+        return tuple(f.key for f in self.fields)
+
+    @property
+    def rename(self) -> FieldChange | None:
+        return next((f for f in self.fields if f.key == "name"), None)
+
+
+def refresh_candidates(games: Sequence[Game], entries: Sequence[artwork.Entry]) -> list[Game]:
+    """The games whose text a refresh looks at: those the hub gamelist has a `<game>` entry for
+    that is not marked `<nomultiscrape>` (a `<folder>` entry is never changed). A game with no
+    entry is never added by a refresh. See development/design/scrape.md, "Refreshing the text"."""
+    by_path = _entries_by_path(entries, ("game",))
+    found: list[Game] = []
+    for game in games:
+        entry = by_path.get(artwork.relative(game.gamelist) or "")
+        if entry is not None and entry.fields.get(NO_MULTISCRAPE, "").lower() != "true":
+            found.append(game)
+    return found
+
+
+def refresh_fields(entry: artwork.Entry, wanted: Mapping[str, str]) -> tuple[FieldChange, ...]:
+    """What a refresh changes in `entry`: each of `REFRESH_FIELDS` for which `wanted` has a value
+    that differs from the entry's. An empty value is skipped, so a field never becomes empty or
+    goes away, a name that is only the game's file name or its stem never replaces the entry's,
+    and an entry marked `<nomultiscrape>` changes nothing. Both sides are parsed values, so an
+    escape in the file (`&quot;`, `&#39;`) is not a difference."""
+    if entry.fields.get(NO_MULTISCRAPE, "").lower() == "true":
+        return ()
+    found: list[FieldChange] = []
+    for key in REFRESH_FIELDS:
+        value = _clean(wanted.get(key, "")).strip()
+        have = entry.fields.get(key, "")
+        if not value or value == have or (key == "name" and _placeholder_name(entry, value)):
+            continue
+        found.append(FieldChange(key, have, value))
+    return tuple(found)
+
+
+def plan_refresh(
+    staged: Mapping[str, Game], staged_root: str, skyscraper_entries: Sequence[artwork.Entry]
+) -> tuple[list[artwork.Entry], list[Dropped]]:
+    """The values a refresh may take from Skyscraper's gamelist for one batch of staged games:
+    one entry per game Skyscraper has an entry for, at the game's `gamelist` path, holding only
+    the `REFRESH_FIELDS` it has a value for, and the entries it dropped with the reason.
+    Skyscraper's paths are matched as in `plan_merge`."""
+    dropped: list[Dropped] = []
+    source = _sources(staged, staged_root, skyscraper_entries, dropped)
+    wanted: list[artwork.Entry] = []
+    for name, game in staged.items():
+        item = source.get(name)
+        if item is None:
+            continue
+        fields = {
+            key: value
+            for key in REFRESH_FIELDS
+            if (value := _clean(item.fields.get(key, "")).strip())
+        }
+        wanted.append(artwork.Entry("game", game.gamelist, fields))
+    return wanted, dropped
+
+
+def refresh_changes(
+    current: Sequence[artwork.Entry], wanted: Sequence[artwork.Entry]
+) -> tuple[TextChange, ...]:
+    """The changes a refresh makes to a gamelist whose entries are `current`, for the `wanted`
+    values (`plan_refresh`), in the order of `wanted`. Only `<game>` entries change. Pure:
+    nothing is edited."""
+    existing = _entries_by_path(current, ("game",))
+    changes: list[TextChange] = []
+    seen: set[str] = set()
+    for item in wanted:
+        rel = artwork.relative(item.path)
+        have = existing.get(rel or "")
+        if rel is None or have is None or rel in seen:
+            continue
+        fields = refresh_fields(have, item.fields)
+        if fields:
+            changes.append(TextChange(rel, fields))
+            seen.add(rel)
+    return tuple(changes)
+
+
+def _holds(block: str, fields: Sequence[FieldChange]) -> bool:
+    """Whether the edited entry `block` reads back with the new value of every field."""
+    try:
+        (entry,) = artwork.parse_gamelist(f"<gameList>{block}</gameList>")
+    except (ValueError, artwork.ArtworkError):
+        return False
+    return all(entry.fields.get(f.key) == f.new for f in fields)
+
+
+def _tags(block: str, key: str) -> int:
+    """How many `<key>` elements (empty or not) `block` has."""
+    return len(re.findall(rf"<{key}(?=[\s/>])", block))
+
+
+def refresh_entries(
+    text: str, current: Sequence[artwork.Entry], wanted: Sequence[artwork.Entry]
+) -> tuple[str, tuple[TextChange, ...], tuple[TextChange, ...]]:
+    """`text` (a gamelist, whose entries are `current`) with the `REFRESH_FIELDS` of the `<game>`
+    entries in `wanted` set, the changes made and the changes left out. A missing tag is added as
+    the entry's last child. A change is left out, and its entry stays as it is, when the entry's
+    block cannot be found in the text or its edit would not be a plain replacement that reads back
+    with the new values: a value in a CDATA section, an element with attributes or an empty one
+    the parser reads as no value would get a second tag. Everything else stays byte for byte.
+    `GamelistError` when the result would not be well-formed XML."""
+    blocks: dict[str, re.Match[str]] = {}
+    for match in gamelist.entry_blocks(text):
+        if match.group(1) == "game":
+            blocks.setdefault(gamelist.entry_path(match.group(0)), match)
+    eol = gamelist.eol_of(text)
+    edits: list[tuple[int, int, str]] = []
+    applied: list[TextChange] = []
+    left: list[TextChange] = []
+    for change in refresh_changes(current, wanted):
+        found = blocks.get(change.path)
+        if found is None:
+            left.append(change)
+            continue
+        block = found.group(0)
+        for item in change.fields:
+            block = gamelist.set_child(block, item.key, item.new, eol)
+        plain = all(
+            _tags(block, f.key) == max(1, _tags(found.group(0), f.key)) for f in change.fields
+        )
+        if plain and _holds(block, change.fields):
+            edits.append((found.start(), found.end(), block))
+            applied.append(change)
+        else:
+            left.append(change)
+    new = text
+    for start, end, block in sorted(edits, reverse=True):
+        new = new[:start] + block + new[end:]
+    if edits and gamelist.well_formed(text) and not gamelist.well_formed(new):
+        raise gamelist.GamelistError("the edited gamelist would not be well-formed XML")
+    return new, tuple(applied), tuple(left)
+
+
+def refresh_counts(changes: Iterable[TextChange]) -> dict[str, int]:
+    """How many entries change in each of `REFRESH_FIELDS`, for the fields that change in any."""
+    counts = {key: 0 for key in REFRESH_FIELDS}
+    for change in changes:
+        for key in change.keys:
+            counts[key] += 1
+    return {key: n for key, n in counts.items() if n}
+
+
+def _counts_text(changes: Sequence[TextChange]) -> str:
+    return ", ".join(f"{key} {n}" for key, n in refresh_counts(changes).items())
+
+
+def render_refresh(
+    system: str,
+    changes: Sequence[TextChange],
+    *,
+    checked: int,
+    not_in_cache: int,
+    left_out: int = 0,
+    dropped: Sequence[Dropped] = (),
+    dry_run: bool,
+) -> str:
+    """The lines `scrape --refresh-text` prints for a system (no trailing newline): how many of
+    the `checked` entries change and in which fields, every name change as old and new name, and
+    the warnings. `not_in_cache` entries had nothing from Skyscraper and stay as they are, and so
+    do the `left_out` ones whose text cannot be edited in place. See
+    development/design/scrape.md, "Refreshing the text"."""
+    noun = "entry" if checked == 1 else "entries"
+    if changes:
+        verb = "would refresh" if dry_run else "refreshed"
+        head = (
+            f"scrape: {system}: {verb} the text of {len(changes)} of {checked} {noun} "
+            f"({_counts_text(changes)})"
+        )
+    elif left_out:
+        head = f"scrape: {system}: no text changed in {checked} {noun}"
+    else:
+        head = f"scrape: {system}: the text of {checked} {noun} is up to date"
+    lines = [
+        head
+        + (f"; {not_in_cache} not in the cache" if not_in_cache else "")
+        + (f"; {left_out} left as they are (not editable)" if left_out else "")
+    ]
+    for change in changes:
+        if change.rename is not None:
+            old = change.rename.old or "(no name)"
+            lines.append(f'  {"renamed":<9}  {change.path}: "{old}" -> "{change.rename.new}"')
+    lines += [f"  {'warning':<9}  {d.what}: {d.reason}" for d in dropped]
+    return "\n".join(lines)
+
+
+def render_refresh_totals(changes: Sequence[TextChange], systems: int, *, dry_run: bool) -> str:
+    """The last line of `scrape --refresh-text`: the totals over the systems it reached."""
+    if not changes:
+        return "scrape: no text to refresh"
+    verb = "would refresh" if dry_run else "refreshed"
+    noun = "entry" if len(changes) == 1 else "entries"
+    where = f"{systems} {'system' if systems == 1 else 'systems'}"
+    return f"scrape: {verb} the text of {len(changes)} {noun} in {where} ({_counts_text(changes)})"
 
 
 # ------------------------------------------------------------------ report
@@ -1439,12 +1678,21 @@ def has_user_creds(lines: Iterable[str]) -> bool:
 # ------------------------------------------------------------------ the ES-DE warning
 
 
-def recent_message(system: str, minutes: int) -> str:
+def recent_message(system: str, minutes: int, *, refresh: bool = False) -> str:
     """The warning for a hub gamelist written a few minutes ago: a console with ES-DE open
-    keeps its own copy in memory and writes it back without the new entries."""
-    return (
+    keeps its own copy in memory and writes it back without what the run wrote (`refresh`: the
+    refreshed text)."""
+    head = (
         f"{system}: the gamelist was modified {minutes} min ago. ES-DE on a console keeps its "
-        "gamelist in memory and writes it back when a game is launched, which would drop the "
-        "new entries. If they do not stick, quit ES-DE on every console and run "
+        "gamelist in memory and writes it back when a game is launched, which would drop "
+    )
+    if refresh:
+        return (
+            f"{head}the refreshed text. If it does not stick, quit ES-DE on every console and "
+            "run `warpzone scrape --refresh-text` again (it takes the text from the cache, "
+            "with no request)"
+        )
+    return (
+        f"{head}the new entries. If they do not stick, quit ES-DE on every console and run "
         "`warpzone scrape` again (it adds them from the cache, with no request)"
     )

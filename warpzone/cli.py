@@ -314,7 +314,8 @@ def _build_parser() -> argparse.ArgumentParser:
         "scrape",
         parents=[common],
         help="fill the hub's gamelists and media for the games that lack them, with Skyscraper "
-        "(ScreenScraper); only adds, never changes an entry or a file",
+        "(ScreenScraper); only adds, never changes an entry or a file, except with "
+        "--refresh-text",
     )
     scr.add_argument(
         "--root",
@@ -337,7 +338,15 @@ def _build_parser() -> argparse.ArgumentParser:
     scr.add_argument(
         "--dry-run",
         action="store_true",
-        help="list the games it would scrape per system and write nothing (runs no Skyscraper)",
+        help="list the games it would scrape per system and write nothing (runs no Skyscraper; "
+        "with --refresh-text it runs Skyscraper from its cache to list the changes)",
+    )
+    scr.add_argument(
+        "--refresh-text",
+        action="store_true",
+        help="replace the name, description and genre of the existing entries with the ones in "
+        "Skyscraper's cache (no request, no media, no other field); a name you corrected by "
+        "hand is replaced too, so try --dry-run first",
     )
     scr.add_argument(
         "--force-lock",
@@ -837,17 +846,20 @@ def _inbox(args: argparse.Namespace, rep: Reporter) -> int:
 
 
 def _check_nightly_flags(args: argparse.Namespace) -> None:
-    """The usage errors of `scrape`'s nightly flags, before anything is read."""
+    """The usage errors of `scrape`'s nightly and refresh flags, before anything is read."""
     if args.unattended:
         for flag, given in (
             ("--dry-run", args.dry_run),
             ("--force-lock", args.force_lock),
             ("--retry-not-found", args.retry_not_found),
+            ("--refresh-text", args.refresh_text),
         ):
             if given:
                 raise UsageError(f"scrape --unattended cannot be used with {flag}")
     elif args.max_games is not None or args.max_minutes is not None or args.notify_url is not None:
         raise UsageError("--max-games, --max-minutes and --notify-url need --unattended")
+    if args.refresh_text and args.retry_not_found:
+        raise UsageError("scrape --refresh-text cannot be used with --retry-not-found")
 
 
 def _scrape(args: argparse.Namespace, rep: Reporter) -> int:
@@ -899,6 +911,7 @@ def _scrape(args: argparse.Namespace, rep: Reporter) -> int:
         dry_run=args.dry_run,
         retry_not_found=args.retry_not_found,
         force_lock=args.force_lock,
+        refresh_text=args.refresh_text,
         region=settings.scrape_region,
         language=settings.scrape_language,
     )
