@@ -88,6 +88,25 @@ class NameTest(unittest.TestCase):
                 changes = scrape.refresh_fields(have, {"name": bad, "desc": "new"})
                 self.assertEqual([c.key for c in changes], ["desc"])
 
+    def test_a_name_that_differs_only_in_case_spaces_or_punctuation_is_kept(self):
+        cases = (
+            ("Sample Quest : Dark Version", "Sample Quest - Dark Version"),
+            ("Sample Quest of the GB", "Sample Quest Of The Gb"),
+            ("SampleQuest II", "Sample Quest II"),
+        )
+        for old, new in cases:
+            with self.subTest(old=old):
+                have = entry("./Sample Quest (USA).zip", name=old, desc="old")
+                changes = scrape.refresh_fields(have, {"name": new, "desc": "new"})
+                self.assertEqual([c.key for c in changes], ["desc"])
+
+    def test_a_name_that_gains_an_accent_or_another_word_replaces_it(self):
+        for old, new in (("Sample Camara", "Sample Cámara"), ("Sample Quest 2", "Sample Quest II")):
+            with self.subTest(old=old):
+                have = entry("./Sample Quest (USA).zip", name=old)
+                (change,) = scrape.refresh_fields(have, {"name": new})
+                self.assertEqual(change.new, new)
+
     def test_a_real_title_replaces_it(self):
         have = entry("./Sample Quest (USA).zip", name="Sample Quest (USA)")
         (change,) = scrape.refresh_fields(have, {"name": "Quest de Muestra"})

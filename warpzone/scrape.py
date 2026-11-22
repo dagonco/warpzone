@@ -1031,19 +1031,29 @@ def refresh_candidates(games: Sequence[Game], entries: Sequence[artwork.Entry]) 
     return found
 
 
+def _same_letters(have: str, value: str) -> bool:
+    """Whether two names have the same letters and digits in the same order, whatever their
+    case, spaces and punctuation. An accent is a difference."""
+    letters = [[c for c in name.casefold() if c.isalnum()] for name in (have, value)]
+    return bool(letters[0]) and letters[0] == letters[1]
+
+
 def refresh_fields(entry: artwork.Entry, wanted: Mapping[str, str]) -> tuple[FieldChange, ...]:
     """What a refresh changes in `entry`: each of `REFRESH_FIELDS` for which `wanted` has a value
     that differs from the entry's. An empty value is skipped, so a field never becomes empty or
-    goes away, a name that is only the game's file name or its stem never replaces the entry's,
-    and an entry marked `<nomultiscrape>` changes nothing. Both sides are parsed values, so an
-    escape in the file (`&quot;`, `&#39;`) is not a difference."""
+    goes away; a name that is only the game's file name or its stem, or that differs from the
+    entry's only in case, spaces or punctuation, never replaces it; and an entry marked
+    `<nomultiscrape>` changes nothing. Both sides are parsed values, so an escape in the file
+    (`&quot;`, `&#39;`) is not a difference."""
     if entry.fields.get(NO_MULTISCRAPE, "").lower() == "true":
         return ()
     found: list[FieldChange] = []
     for key in REFRESH_FIELDS:
         value = _clean(wanted.get(key, "")).strip()
         have = entry.fields.get(key, "")
-        if not value or value == have or (key == "name" and _placeholder_name(entry, value)):
+        if not value or value == have:
+            continue
+        if key == "name" and (_placeholder_name(entry, value) or _same_letters(have, value)):
             continue
         found.append(FieldChange(key, have, value))
     return tuple(found)
