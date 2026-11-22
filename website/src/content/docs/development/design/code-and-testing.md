@@ -66,7 +66,7 @@ warpzone/
   provision_scripts.py  the ES-DE startup scripts, turning ES-DE's event scripts on, the Options menu entries
   provision_timers.py  the artwork, play state, unattended prune and ES-DE settings systemd user timers
   provision_updater.py  the autonomous update: settings file, live updater script, its timer
-  prune.py           leftover detection (pure `classify`), the unattended guard (pure `guard`) and the state file of its refusal, delete
+  prune.py           leftover detection (pure `classify`, with the files the hub deleted on purpose from the record), the unattended guard (pure `guard`) and the state file of its refusal, delete
   notify.py          the webhook POST `prune` and `inbox` share: JSON body, the URL never echoed, `NotifyError`
   bios.py            BIOS manifest, local overrides, pure `judge_*`, disk checks
   whitelist.py       managed whitelists: escape, parse, render, normalize, changes, matcher,
@@ -226,7 +226,10 @@ build the image; the `image` job of the weekly and manual runs does (see "CI" be
   device reaches the hub. It then removes a system from the whitelist and checks
   that `prune` reports the leftovers, that `--max-gib 0` blocks the delete, and
   that `--apply` removes only the leftovers (a device-only file and every
-  whitelisted file stay). The same run covers the BIOS side: a plain BIOS file
+  whitelisted file stay). Another case turns a game off on the device, deletes it from the hub through the
+  UI's code path and checks that `prune --apply` removes the device's copy through the record of
+  deleted games, while a file removed from the hub by hand and a recorded path whose time or
+  content differs stay. The same run covers the BIOS side: a plain BIOS file
   arrives through the library, `bios/cemu/keys.txt` reaches the Cemu folder only
   through its placement (a second file in the same hub folder does not, and the
   library does not create `bios/cemu`), and a symlink at `bios/ryujinx/keys` is left
@@ -258,7 +261,10 @@ build the image; the `image` job of the weekly and manual runs does (see "CI" be
   second run, frontend or RetroArch running, no `/proc`, dry-run) and the doctor lines.
 - `prune` unit tests with the fake Syncthing: the pure decision (`classify`),
   every refusal (bootstrap ignores, wrong type, missing marker, size cap),
-  protected names, nested folders, symlinks, re-check before delete, webhook.
+  protected names, nested folders, symlinks, re-check before delete, webhook. The files the hub
+  deleted on purpose (`test_prune_trashed.py`): the pure `classify` and `sha1_ok`, the record read
+  from disk (not in sync, unparsable, expired, a link), the re-checks and the hashing right before
+  a delete, and the guards.
 - Cloudflare Access sign-in (`test_access_jwt.py`, `test_access_keys.py`, `AccessSignInTests` in
   `test_serve.py`): tokens signed in the test with a fixed throwaway RSA key (`access_support.py`),
   no network. The pure checks (signature, `alg`, `kid`, `exp`, `nbf`, `aud`, `iss`, e-mail, malformed

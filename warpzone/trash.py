@@ -445,7 +445,10 @@ def plan_delete(
     whitelists = {}
     for device in devices:
         model = views[device.name].model
-        lines = Lines(*wl.lines_below(model, [p.path for p in game.parts])) if model else Lines()
+        # Only the includes: an exclude keeps the path ignored on the console, which is what
+        # lets prune remove the copy (see "Whitelist cleanup" in development/design/library-ui.md).
+        includes = wl.lines_below(model, [p.path for p in game.parts])[0] if model else ()
+        lines = Lines(includes)
         if lines:
             whitelists[device.name] = lines
     return DeletePlan(
@@ -1169,8 +1172,7 @@ def effect_holds(old: wl.Model, new: wl.Model, lib: Library) -> bool:
 
 
 def cleaned_model(model: wl.Model, c: Cleanup, device: str) -> wl.Model:
-    lines = c.devices[device]
-    return wl.drop_lines(model, lines.include, lines.exclude)
+    return wl.drop_lines(model, c.devices[device].include, ())
 
 
 def is_managed(view: DeviceView) -> bool:

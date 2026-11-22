@@ -47,30 +47,60 @@ Syncthing v2.1.7 with two real instances (hub send-only, device receive-only):
 
 ## Safety rules
 
-A file is deleted only if all of these hold, re-checked right before each
-delete:
+A file is deleted only if rules 1, 2, 3 and 6 hold and either rules 4a and 5 or rule 4b holds.
+Rules 3 to 6 are checked again for each file, right before it is deleted. Rules 1 and 2 are
+checked once per run, before the rescan, and for rule 4b also before each delete, because
+comparing a large file can take minutes: the first failure stops the deletes of rule 4b in that
+folder and the run reports it. Rule 4a keeps its single check per run.
 
 1. The folder is a warpzone whitelisted folder, receive-only, not paused, at the
    path the config says, and its marker directory (`.stfolder`) exists (an
    unmounted SD card must not look like an empty library).
 2. The folder's ignores are the final `#include patterns-<device>.stignore`
    (the bootstrap ignores, `*`, would mark the whole library as ignored), they
-   load without error, and the whitelist files are in sync with the hub.
+   load without error, and the whitelist files are in sync with the hub (Syncthing
+   reports their local and global versions equal, `provision_folders.in_sync`).
 3. Syncthing flags it `local.ignored` after the full scan.
-4. The hub has it: `global` is not deleted, ignored or invalid, and has the same
-   kind (file or symlink).
-5. For regular files, the size equals the hub's and the modification time is
+4. The hub's state allows it, in one of two ways:
+   - **4a. The hub has it.** `global` is not deleted, ignored or invalid, and has the
+     same kind (file or symlink).
+   - **4b. The hub deleted it on purpose.** `global` is deleted and is neither ignored nor
+     invalid, and all of these hold (see
+     [Files the hub deleted on purpose](#files-the-hub-deleted-on-purpose)):
+     - the folder is `wz-library` and the file is a regular file, never a symlink and never a
+       directory;
+     - the console's `patterns-_deleted.stignore` is in sync with the hub, read after the full
+       scan: Syncthing reports that file's local and global versions equal (the same notion as
+       the whitelist files in rule 2, and `global` is not deleted, ignored or invalid either),
+       and its size on disk equals its local record and its modification time is within 2 s of
+       the local record's `modified`;
+     - the record parses, and an entry that has not expired lists the same path with the same
+       size and a modification time within 2 s of the file's (FAT stores 2 s steps);
+     - when that entry has a `sha1`, the file's SHA-1 equals it. A path can be in several
+       entries; it is authorised when any one of them matches the file, so one with no `sha1`
+       that matches the size and time is enough.
+
+     A run that may delete (`--apply`) compares the files that need a SHA-1 while it inspects the
+     folder, before the guards and the size cap are computed; a copy whose content differs, or
+     that cannot be read, is kept and listed with its reason, and is not a failure. Right before
+     each delete the rest is checked again: the record file is still the version that was read
+     (the same Syncthing local version, the same size and modification time on disk), `global`
+     is still deleted, the file is still a regular file with no link on the way to it, and its
+     device, inode, size and modification time are those it had when it was compared (a file
+     that changed since is kept, not compared again).
+5. Under 4a, for regular files, the size equals the hub's and the modification time is
    within 2 s of the hub's (FAT stores 2 s steps). A file edited on the device
-   after it was synced is reported, not deleted.
+   after it was synced is reported, not deleted. Under 4b the hub has no copy to compare
+   with, so the record's size and modification time (rule 4b) take its place.
 6. It is not `.stfolder`, `.stignore`, `.stversions` or `patterns-*.stignore` at
    the folder root, nor a Syncthing temp file, and it lives in a directory
-   whose real path is inside the folder root. Symlinks are unlinked, never
-   followed. The subtree of any other Syncthing folder nested in the root (the
+   whose real path is inside the folder root (for rule 4b, with no link in the path at all).
+   Symlinks are unlinked, never followed. The subtree of any other Syncthing folder nested in the root (the
    save folders under `~/Emulation`) is skipped.
 
-Files that are ignored but fail 4 or 5 are listed as kept, with the reason; the expected
-ones are only counted (see [Files the console generates](#files-the-console-generates)). After
-deleting, directories that held deleted files, that Syncthing flags ignored, and
+Files that are ignored but fail 4a and 4b, or 5, are listed as kept, with the reason; the
+expected ones are only counted (see [Files the console generates](#files-the-console-generates)).
+After deleting, directories that held deleted files, that Syncthing flags ignored, and
 that are now empty are removed (`rmdir`, so a non-empty one is never touched). A full scan does
 not always flag a directory that just became ignored (seen on Linux), so each candidate is
 scanned on its own (`POST /rest/db/scan?folder=...&sub=...`) before its record is trusted.
@@ -82,15 +112,17 @@ The default is report only. `--apply` deletes. A run that would delete more than
 [Unattended runs](#unattended-runs)).
 
 Output is a per-folder summary (leftover files and bytes, grouped by the first
-two path levels; `--list` prints every file), the unusual files kept and why, one line with
-the count of files the console generates by itself, and the count of files Syncthing does not
-know. Exit codes are those of the other
+two path levels; `--list` prints every file), one line `<folder>: N file(s) the hub deleted on
+purpose, <size>` when there are such files (they are listed with the leftovers), the unusual
+files kept and why, one line with the count of files the console generates by itself, and the
+count of files Syncthing does not know. Exit codes are those of the other
 commands: `0` ok (a report with leftovers is still `0`), `1` for a runtime
 error, a folder that was skipped as unsafe, a refused cap or files that could not
 be deleted, `2` for usage or config errors.
 
 `--notify-url URL` (http or https), with or without `--unattended`, POSTs one
-JSON object per folder that has leftovers: `{"device", "folder", "files", "bytes", "applied"}`. When applied,
+JSON object per folder that has leftovers or files the hub deleted on purpose:
+`{"device", "folder", "files", "bytes", "applied"}`, counting both. When applied,
 `files` and `bytes` are what was actually deleted. It is meant for a Home
 Assistant webhook. The URL may embed a secret, so it is never printed, and a
 failed notification is a warning, not a failure of the run. No API key or path
@@ -122,6 +154,68 @@ EmuDeck generate themselves`, in the normal and in the unattended output. The `k
 file(s) the hub cannot restore` line then counts only the other files. The `--notify-url`
 payload is unchanged.
 
+## Files the hub deleted on purpose
+
+A game turned off for a console (its whitelist line removed or an exclude added, so its files are
+ignored there and wait for prune) and then deleted from the hub in the
+[library UI](/warpzone/development/design/library-ui/#deleting-a-game) never receives the
+deletion, because the path is ignored on the console, and rule 4a cannot hold: the hub has no
+copy, so the file would be kept as "the hub does not have it" for ever. Rule 4b closes that gap
+with the hub's own
+[record of deleted games](/warpzone/development/design/library-ui/#the-record-of-deleted-games),
+`patterns-_deleted.stignore` in the root of the library folder, which Syncthing delivers to
+every console like the whitelists.
+
+How the console uses it (`prune.read_record`, the only I/O that reads it, for `wz-library` only
+and after the full scan):
+
+- No file is the same as an empty record. A file that is not in sync with the hub, whose size on
+  disk is not what Syncthing recorded, that is a link, that changes while it is read or that
+  `trash_record.parse` does not accept (it returns `None`, never raises) authorises nothing.
+- `trash_record.index` is applied with the current time, so an entry past its `expires` (180 days
+  after the deletion) authorises nothing, even though it may still be in the file.
+- The record alone never proves that the hub no longer has a file: it can briefly list a path that
+  exists again, and the record and the hub's file index reach the console in no guaranteed order.
+  So the console checks the hub's own state for that path, Syncthing's `global` record, which must
+  be deleted. Until both have arrived the file is kept, as before, and the next run decides.
+- `prune.classify` (pure) decides 4b without hashing and without I/O, from the `db/file` answer,
+  the file on disk and the record's files for that path (`prune.record_matches`: same size,
+  modification time within 2 s). `prune.sha1_ok` (pure) compares a record file's `sha1`, when it
+  has one, with a digest.
+- Hashing is in chunks of 1 MiB and only for a copy whose matching entries all have a `sha1` (a
+  matching entry with none authorises it without hashing). A report-only run never hashes, so it
+  lists such a copy as deletable and says on the line that the content is not compared yet; the
+  run with `--apply` compares it during the inspection (`prune.inspect_folder`), so a copy that
+  differs, or cannot be read, is already kept when the guard and `--max-gib` are computed. A run
+  that a guard or the cap then refuses has therefore hashed these files. A file whose size or
+  modification time changes while it is hashed is kept. At the delete, `apply_folder` does not
+  hash again: it compares the file's identity with the one it had when it was compared, and then
+  checks `record_unchanged`, `global` and the folder (rules 1 and 2) once more before the unlink.
+- A copy that differs would be hashed again by every run of the timer. The run therefore leaves
+  `~/.local/state/warpzone/prune-compared.json` (next to `prune-guard.json`, mode 0600, replaced
+  atomically): for each such copy the SHA-256 of its path (no file name), its device, inode,
+  size and modification time, and the SHA-1s it was compared with. While those are unchanged the
+  run skips the hash. A missing or unreadable file only means hashing again, a failed write is a
+  warning, and an `--apply` run that settles without such a copy removes the file.
+
+What is deleted and what is not:
+
+- A file removed from the hub by hand, with `rm` or in the hub's file manager, is never enough:
+  the hub's own deletion record says only that the hub lacks the file, which a wrong path, a
+  failed mount or a mistake looks the same as. Only the library UI writes the record, so a copy
+  with no entry in it stays and is reported as before.
+- A copy whose size or modification time differs from the entry's, or whose content differs from
+  its `sha1`, was edited on the console or is another file at the same path. It stays, listed as
+  kept (`its content differs from the deleted game`, or `cannot be read to compare with the
+  deleted game` when it cannot be opened).
+- A symlink or a directory at a recorded path stays.
+- A copy whose entry expired, or whose trash entry was purged before the hub ran a version that
+  writes the record, is not in the record and needs a manual delete.
+- The other whitelisted folders (`wz-songs`) never use the record.
+
+The unattended runs apply 4b too. These files count as leftovers for the half-of-device guard and
+for `--max-gib`; see [Unattended runs](#unattended-runs).
+
 ## Unattended runs
 
 A game turned off in the [library UI](/warpzone/development/design/library-ui/) must leave
@@ -129,11 +223,12 @@ the console without anyone running a command there, so each console that lists `
 `prune <device> --apply --unattended` from a timer. This is the one exception to the rule that a
 destructive command acts only when a person runs it with `--apply` (see
 [Writing commands](/warpzone/development/design/configuration/#writing-commands)). Every safety
-rule above still holds, file by file, with the re-check right before each delete. What changes:
+rule above still holds, with the re-checks described there. What changes:
 
 - **No size cap.** `--max-gib` does not apply: one PS4 game is larger than the 50 GiB default.
   `--unattended` requires `--apply` and refuses `--max-gib` and `--force` (usage error).
-- **The half-of-device guard.** For each folder, the bytes the run would delete are compared
+- **The half-of-device guard.** For each folder, the bytes the run would delete (the leftovers
+  and the files the hub deleted on purpose) are compared
   with the bytes of the regular files the walk found in that folder (what the device holds there,
   nested Syncthing folders excluded). When any folder would lose more than half
   (`2 * delete > held`), the run deletes nothing in any folder, prints why and exits 1.

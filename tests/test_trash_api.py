@@ -1738,16 +1738,50 @@ class CleanupTests(TrashCase):
         # nothing is added: the whitelists are exactly what they would be without the game
         self.assertEqual(self.deck_lines(), wl.Model(frozenset({"gba"})))
 
-    def test_an_exclusion_under_a_system_that_is_on_is_removed_too(self) -> None:
+    def test_an_exclusion_under_a_system_that_is_on_stays(self) -> None:
+        # The system is on and the game is excluded: the path stays ignored on the console, which
+        # is what lets prune remove its copy from the record of deleted games.
         self.write_whitelist("machine", managed(["psx"], excludes=[OTHER.primary]))
+        before = (self.library / "patterns-machine.stignore").read_bytes()
         other = self.deleted(OTHER)
         self.assertNotEqual(other, self.entry)
         self.fake.file_info[("wz-library", OTHER.primary)] = DELETED
         self.fake.connections[MACHINE_ID] = {"connected": True}
         self.fake.completion[("wz-library", MACHINE_ID)] = DONE
-        self.assertEqual(self.app.trash.cleanup_pass(), ["machine"])
+        self.assertEqual(self.app.trash.cleanup_pass(), [])
+        self.assertEqual((self.library / "patterns-machine.stignore").read_bytes(), before)
         model = wl.parse((self.library / "patterns-machine.stignore").read_text())
-        self.assertEqual(model, wl.Model(frozenset({"psx"})))
+        self.assertEqual(
+            model, wl.Model(frozenset({"psx"}), frozenset(), frozenset({OTHER.primary}))
+        )
+        self.assertNotIn("machine", [p["device"] for p in self.trash_list()["pending"]])
+
+    def test_an_exclusion_a_cleanup_recorded_before_is_left_too(self) -> None:
+        # A cleanup an older version recorded: its exclude is not removed either.
+        self.write_whitelist("machine", managed(["psx"], excludes=[OTHER.primary]))
+        other = self.deleted(OTHER)
+        self.fake.file_info[("wz-library", OTHER.primary)] = DELETED
+        self.fake.connections[MACHINE_ID] = {"connected": True}
+        self.fake.completion[("wz-library", MACHINE_ID)] = DONE
+        path = self.root / "catalog" / "cleanups.json"
+        doc = json.loads(path.read_text()) if path.exists() else {"format": 1, "cleanups": []}
+        doc["cleanups"].append(
+            {
+                "entry": other,
+                "id": OTHER.id,
+                "system": "psx",
+                "title": "Other",
+                "deleted": "2026-11-16T10:15:00Z",
+                "recorded": None,
+                "paths": [OTHER.primary],
+                "devices": {"machine": {"include": [], "exclude": [OTHER.primary]}},
+            }
+        )
+        path.write_text(json.dumps(doc))
+        before = (self.library / "patterns-machine.stignore").read_bytes()
+        self.assertEqual(self.app.trash.cleanup_pass(), [])
+        self.assertEqual((self.library / "patterns-machine.stignore").read_bytes(), before)
+        self.assertEqual([c["entry"] for c in self.cleanups() if "machine" in c["devices"]], [])
 
     def test_the_lines_of_a_whitelist_that_needs_migration_stay(self) -> None:
         self.fake.file_info[("wz-library", EXAMPLE.primary)] = DELETED

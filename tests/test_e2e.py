@@ -3,6 +3,8 @@
 Skipped unless WARPZONE_E2E_SYNCTHING points at a Syncthing binary.
 """
 
+import hashlib
+import json
 import os
 import shutil
 import socket
@@ -17,10 +19,12 @@ from collections.abc import Callable
 from pathlib import Path
 
 from support import API_KEY
+from warpzone import serve, trash_record
 from warpzone import whitelist as wl
 from warpzone.config import load_config
 from warpzone.model import hub_specs
 from warpzone.profiles import available_profiles, load_profile
+from warpzone.provision_folders import in_sync
 from warpzone.syncthing import Client
 
 REPO = Path(__file__).resolve().parent.parent
@@ -188,6 +192,9 @@ class EndToEndTests(unittest.TestCase):
 
     def test_partial_system_reaches_full_sync(self) -> None:
         self.run_logged(self.partial_system_scenario)
+
+    def test_a_game_turned_off_and_then_deleted_from_the_hub_leaves_the_console(self) -> None:
+        self.run_logged(self.deleted_game_scenario)
 
     def test_save_folder_moved_while_connected(self) -> None:
         self.run_logged(lambda: self.move_scenario(hub_has_files=False))
@@ -888,6 +895,172 @@ folders = ["settings"]
         # Nothing left to do, and the hub still has its files.
         self.assertIn("0 leftover file(s)", self.wz("prune", "--apply", *args))
         self.assertTrue((library / "roms/n64/other.z64").exists())
+
+    def deleted_game_scenario(self) -> None:
+        """A game turned off on a console and then deleted from the hub with the library UI's code
+        path leaves the console at its next prune, through the hub's record of deleted games.
+
+        The console holds seven games. The whitelist then turns five of them off (include lines
+        removed, an exclude line added), so their files stay there, ignored. The hub deletes four
+        through the trash of `serve`, which writes the record and sends it to the console, and
+        removes a fifth by hand, with no record. On the console, one recorded copy is touched (its
+        time differs) and another has other content of the same size and time (its SHA-1
+        differs). Only the two untouched copies may go; the other three stay."""
+        self.hub.start()
+        self.deck.start()
+        hub_id, deck_id = self.hub.client().my_id(), self.deck.client().my_id()
+        root = self.base / "hub-root"
+        library = root / "library"
+        shutil.copy(
+            REPO / "templates" / "patterns-common.stignore", library_file(library, "common")
+        )
+        off = "roms/gba/Turned Off (USA).gba"
+        by_hand = "roms/gba/By Hand (USA).gba"
+        edited = "roms/gba/Edited (USA).gba"
+        swapped = "roms/gba/Swapped (USA).gba"
+        kept_on = "roms/gba/Kept On (USA).gba"
+        excluded = "roms/nes/Excluded (USA).nes"
+        wanted = "roms/nes/Wanted (USA).nes"
+        contents = {
+            off: "turned off",
+            by_hand: "by hand",
+            edited: "edited",
+            swapped: "swapped",
+            kept_on: "kept on",
+            excluded: "excluded",
+            wanted: "wanted",
+        }
+        for name, text in contents.items():
+            self.write(library / name, text)
+        whitelist = library_file(library, "deck")
+        gba = [off, by_hand, edited, swapped, kept_on]
+        whitelist.write_text(wl.render(wl.Model(frozenset({"nes"}), frozenset(gba))))
+
+        config = self.base / "config.toml"
+        self.home = self.base / "home"
+        emulation = self.home / "Emulation"
+        emulation.mkdir(parents=True)
+        config.write_text(
+            f"""
+[hub]
+name = "nas"
+device_id = "{hub_id}"
+root = "{root}"
+api_url = "{self.hub.url}"
+api_key = "{self.hub.api_key}"
+addresses = ["{self.hub.address}"]
+
+[devices.deck]
+device_id = "{deck_id}"
+profile = "steamos-emudeck"
+folders = ["library"]
+addresses = ["{self.deck.address}"]
+rescan_seconds = 10
+"""
+        )
+        cfg = ["--config", str(config)]
+        device_args = [*cfg, "--syncthing-config", str(self.deck.config_xml), "--timeout", "150"]
+        # The catalog holds the SHA-1 of each file, which the record copies.
+        self.wz("catalog", *cfg, "--root", str(root))
+        self.wz("provision", "hub", *cfg)
+        wait_for(lambda: self.wz_ok("check", *cfg), "hub to scan its whitelists", 120)
+        self.wz("provision", "device", "deck", *device_args)
+        for name in contents:
+            wait_for(lambda n=name: (emulation / n).exists(), f"{name} on the device")
+        wait_for(lambda: self.settled(self.deck, "wz-library"), "device library to settle")
+        # Syncthing applies a changed whitelist only on a full scan: let the rescan be the trigger.
+        self.deck.client().patch_folder("wz-library", {"fsWatcherEnabled": False})
+        deck, hub = self.deck.client(), self.hub.client()
+
+        # The whitelist turns five games off: four include lines go and an exclude line is added.
+        off_model = wl.Model(frozenset({"nes"}), frozenset({kept_on}), frozenset({excluded}))
+        whitelist.write_text(wl.render(off_model))
+
+        def local_of(name: str) -> dict[str, object]:
+            return (deck.db_file("wz-library", name) or {}).get("local") or {}
+
+        def global_of(name: str) -> dict[str, object]:
+            return (deck.db_file("wz-library", name) or {}).get("global") or {}
+
+        gone = [off, by_hand, edited, swapped, excluded]
+        for name in gone:
+            wait_for(lambda n=name: bool(local_of(n).get("ignored")), f"{name} ignored", 90)
+        self.assertFalse(local_of(kept_on).get("ignored"))
+
+        # On the console, one copy is touched (its time differs by more than 2 s) and another has
+        # other content of the same size and time.
+        touched = emulation / edited
+        stat = touched.stat()
+        os.utime(touched, (stat.st_atime, stat.st_mtime + 30))
+        swapped_copy = emulation / swapped
+        stat = swapped_copy.stat()
+        swapped_copy.write_text("swappeD")
+        self.assertEqual(len("swappeD"), len(contents[swapped]))
+        os.utime(swapped_copy, (stat.st_atime, stat.st_mtime))
+
+        # The hub removes one game by hand and four through the code path of the library UI.
+        (library / by_hand).unlink()
+        hub.scan("wz-library", sub=by_hand)
+        ids: dict[str, str] = {}
+        for system in ("gba", "nes"):
+            doc = json.loads((root / "catalog" / "systems" / f"{system}.json").read_text())
+            ids.update({game["primary"]: game_id for game_id, game in doc["games"].items()})
+        app = serve.App(
+            load_config(config),
+            "e2e-token",
+            root=root,
+            files=serve.HubFiles(root, interval=0, media_seconds=0),
+            client_factory=self.hub.client,
+            login_delay=0,
+            log=self.output.append,
+        )
+        for name in (off, edited, swapped, excluded):
+            app.trash.delete(ids[name], app.trash.dry_run(ids[name])["expect"])
+            self.assertFalse((library / name).exists())
+        record = library / trash_record.FILE
+        entries = trash_record.parse(record.read_bytes())
+        assert entries is not None
+        listed = {f.path: f for e in entries for f in e.files}
+        self.assertEqual(sorted(listed), sorted([off, edited, swapped, excluded]))
+        self.assertEqual(listed[off].sha1, hashlib.sha1(contents[off].encode()).hexdigest())
+        # The cleanup of the whitelists leaves the exclude: the game stays off on the console.
+        app.trash.cleanup_pass()
+        self.assertIn(excluded, wl.parse(whitelist.read_text()).excludes)
+
+        # The record and the hub's deletions reach the console, in no fixed order.
+        for name in gone:
+            wait_for(
+                lambda n=name: bool(global_of(n).get("deleted")), f"the deletion of {name}", 90
+            )
+        wait_for(
+            lambda: (
+                in_sync(deck.db_file("wz-library", trash_record.FILE))
+                and (emulation / trash_record.FILE).read_bytes() == record.read_bytes()
+            ),
+            "the record to reach the device",
+        )
+
+        args = [*cfg, "--syncthing-config", str(self.deck.config_xml)]
+        out = self.wz("prune", "deck", *args)
+        # The report hashes nothing, so the swapped copy is counted too.
+        self.assertIn("wz-library: 3 file(s) the hub deleted on purpose", out)
+        self.assertIn(f"{by_hand} (the hub does not have it)", out)
+        self.assertIn(f"{edited} (the hub does not have it)", out)
+        for name in gone:
+            self.assertTrue((emulation / name).exists(), name)  # report only
+
+        # An apply compares the copies with the record's SHA-1s before it deletes anything: the
+        # swapped copy is kept, listed with its reason, and the run is not a failure.
+        out = self.wz("prune", "--apply", *args)
+        self.assertIn(f"{swapped} (its content differs from the deleted game)", out)
+        self.assertFalse((emulation / off).exists())
+        self.assertFalse((emulation / excluded).exists())
+        for name in (by_hand, edited, swapped):
+            self.assertTrue((emulation / name).exists(), name)
+        self.assertEqual(swapped_copy.read_text(), "swappeD")
+        self.assertEqual((emulation / kept_on).read_text(), contents[kept_on])
+        self.assertEqual((emulation / wanted).read_text(), contents[wanted])
+        self.assertTrue((emulation / trash_record.FILE).is_file())
 
     def wz_ok(self, *args: str) -> bool:
         env = {**os.environ, "HOME": str(self.home), "PYTHONPATH": str(REPO)}
