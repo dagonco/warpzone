@@ -89,6 +89,7 @@ class Options:
     dry_run: bool = False
     retry_not_found: bool = False
     force_lock: bool = False
+    refresh_text: bool = False  # replace the name, desc and genre of the entries from the cache
     only: frozenset[str] | None = None  # `inbox`: scrape only the games under these primary paths
     as_warning: bool = False  # `inbox`: a failure is a warning of its report, not a plain line
     wave: int | None = None  # the nightly run: the tier of this pass, so each pass has its log
@@ -339,7 +340,8 @@ def _backup(run: Run, system: str, hub: HubGamelist, path: Path) -> None:
     run.backed_up.add(path)
     now = run.opts.now()
     if hub.mtime is not None and inbox_mame.recently_written(hub.mtime, now):
-        run.rep.warn(scrape.recent_message(system, max(0, int((now - hub.mtime) // 60))))
+        minutes = max(0, int((now - hub.mtime) // 60))
+        run.rep.warn(scrape.recent_message(system, minutes, refresh=run.opts.refresh_text))
 
 
 def _rel_paths(entries: Sequence[artwork.Entry]) -> set[str]:
@@ -683,11 +685,10 @@ def _missing_message(system: str, missing: Sequence[str]) -> str:
     )
 
 
-def _scrape_system(run: Run, system: str) -> scrape.Selection | None:
-    """One system. Returns what was selected (for the dry run), None when it was skipped."""
+def _library_games(run: Run, system: str) -> list[Game] | None:
+    """The catalog games of a system the run looks at, as the frontend names them; None when the
+    system is skipped (no catalog, or one that cannot be read), after saying why."""
     opts, rep = run.opts, run.rep
-    if run.stopped is not None and run.stopped is not scrape.Stop.QUOTA:
-        return None
     try:
         doc, _ = catalog_store.read_state(catalog_store.system_path(opts.root, system))
     except OSError as exc:
@@ -709,7 +710,17 @@ def _scrape_system(run: Run, system: str) -> scrape.Selection | None:
         if missing:
             run.fail(_missing_message(system, missing), system)
         games = [g for g in games if scrape.is_placed(g, opts.only)]
-    games = sorted(scrape.frontend_games(system, games), key=lambda g: g.gamelist)
+    return sorted(scrape.frontend_games(system, games), key=lambda g: g.gamelist)
+
+
+def _scrape_system(run: Run, system: str) -> scrape.Selection | None:
+    """One system. Returns what was selected (for the dry run), None when it was skipped."""
+    opts, rep = run.opts, run.rep
+    if run.stopped is not None and run.stopped is not scrape.Stop.QUOTA:
+        return None
+    games = _library_games(run, system)
+    if games is None:
+        return None
     try:
         hub = read_hub_gamelist(gamelist_path(opts.root, system))
     except HubError as exc:
@@ -778,6 +789,152 @@ def _scrape_system(run: Run, system: str) -> scrape.Selection | None:
     rep.out(scrape.render_report(report))
     run.summaries.append(scrape.summarize_system(report, skipped_incomplete))
     return selection
+
+
+def write_refresh(
+    run: Run, system: str, wanted: Sequence[artwork.Entry]
+) -> tuple[tuple[scrape.TextChange, ...], str | None]:
+    """Set the `REFRESH_FIELDS` of the hub gamelist's entries from `wanted`, re-reading the file
+    when it changed under the write and writing nothing (and keeping no backup) when no entry
+    differs (see development/design/scrape.md, "Refreshing the text"). Returns the changes made
+    and the reason when they were not."""
+    path = gamelist_path(run.opts.root, system)
+    for _ in range(WRITE_TRIES):
+        try:
+            hub = read_hub_gamelist(path)
+            text, changes = scrape.refresh_entries(hub.text, hub.entries, wanted)
+            if not changes:
+                return (), None
+            _backup(run, system, hub, path)
+            written = safefile.atomic_write(path, text.encode("utf-8"), expect=hub.stamp)
+        except (HubError, gamelist.GamelistError) as exc:
+            return (), str(exc)
+        except OSError as exc:
+            return (), f"cannot write {path.name}: {exc.strerror or exc}"
+        if written:
+            return changes, None
+    return (), f"{path.name} changed {WRITE_TRIES} times while it was written"
+
+
+def _refresh_batch(
+    run: Run, sr: SystemRun, number: int, names: Sequence[str]
+) -> tuple[tuple[scrape.TextChange, ...], int, tuple[scrape.Dropped, ...]] | None:
+    """Generate one batch from the cache (the main pass; no request) and set the entries' text
+    from it, or only work out the changes in a dry run. Returns the changes, how many of the
+    games Skyscraper has an entry for and the warnings; None when the batch failed."""
+    opts = run.opts
+    gen = sr.folder / f"out-{number}"
+    batch_file = sr.folder / f"batch-{number}.txt"
+    try:
+        batch_file.write_text("".join(f"{sr.input / n}\n" for n in names), encoding="utf-8")
+        gl_dir, media_dir = gen / "gamelist", gen / "media"
+        gl_dir.mkdir(parents=True)
+        media_dir.mkdir(parents=True)
+        args = scrape.skyscraper_args(
+            scrape.MAIN,
+            sr.platform,
+            input_dir=sr.input,
+            batch=batch_file,
+            gamelist_dir=gl_dir,
+            media_dir=media_dir,
+            artwork_file=opts.artwork_dir / scrape.ARTWORK_ESDE,
+        )
+        ok, _ = _call(run, sr, f"refresh {number}", args)
+        if not ok:
+            run.fail(scrape.failed_message(sr.system, str(sr.log)), sr.system)
+            return None
+        wanted, dropped = scrape.plan_refresh(
+            {name: sr.staged[name] for name in names},
+            str(sr.input),
+            read_skyscraper_gamelist(gl_dir),
+        )
+        if opts.dry_run:
+            hub = read_hub_gamelist(gamelist_path(opts.root, sr.system))
+            changes = scrape.refresh_changes(hub.entries, wanted)
+        else:
+            changes, error = write_refresh(run, sr.system, wanted)
+            if error:
+                run.fail(scrape.gamelist_message(sr.system, error), sr.system)
+                return None
+        return changes, len(wanted), tuple(dropped)
+    except HubError as exc:
+        run.fail(scrape.gamelist_message(sr.system, str(exc)), sr.system)
+    except (artwork.ArtworkError, OSError) as exc:
+        reason = exc.strerror if isinstance(exc, OSError) and exc.strerror else exc
+        run.fail(scrape.failed_message(sr.system, str(sr.log)) + f": {reason}", sr.system)
+    finally:
+        shutil.rmtree(gen, ignore_errors=True)
+        batch_file.unlink(missing_ok=True)
+    return None
+
+
+def _refresh_system(run: Run, system: str) -> tuple[scrape.TextChange, ...] | None:
+    """`--refresh-text` for one system: the entries the hub gamelist has for the library's games
+    get their name, description and genre from Skyscraper's cache. Returns the changes, None when
+    the system was skipped."""
+    opts = run.opts
+    games = _library_games(run, system)
+    if games is None:
+        return None
+    try:
+        hub = read_hub_gamelist(gamelist_path(opts.root, system))
+    except HubError as exc:
+        run.fail(scrape.gamelist_message(system, str(exc)), system)
+        return None
+    candidates = scrape.refresh_candidates(games, hub.entries)
+    changes: list[scrape.TextChange] = []
+    dropped: list[scrape.Dropped] = []
+    checked = found = 0
+    if candidates:
+        sr = SystemRun(
+            system,
+            scrape.PLATFORMS[system],
+            opts.scratch / system,
+            opts.scratch / f"{system}.log",
+            {},
+        )
+        shutil.rmtree(sr.folder, ignore_errors=True)
+        try:
+            _open_log(sr.log)
+            sr.input.mkdir(parents=True, mode=0o700)
+            sr.staged, unstaged = stage(opts.root / "library", sr.input, candidates)
+            dropped += unstaged
+            checked = len(sr.staged)
+            for number, names in enumerate(_chunks(list(sr.staged), scrape.BATCH_SIZE), 1):
+                got = _refresh_batch(run, sr, number, names)
+                if got is not None:
+                    changes += got[0]
+                    found += got[1]
+                    dropped += got[2]
+        finally:  # also on Ctrl-C: nothing staged or temporary stays behind
+            shutil.rmtree(sr.folder, ignore_errors=True)
+    run.rep.out(
+        scrape.render_refresh(
+            system,
+            changes,
+            checked=checked,
+            not_in_cache=checked - found,
+            dropped=dropped,
+            dry_run=opts.dry_run,
+        )
+    )
+    return tuple(changes)
+
+
+def _run_refresh(opts: Options, rep: Reporter) -> scrape.Summary:
+    """`scrape --refresh-text`: every system of `opts.systems`, then the totals. It makes no
+    request and leaves both memories as they are."""
+    run = Run(opts, rep, None, False, {})
+    changes: list[scrape.TextChange] = []
+    reached = 0
+    for system in opts.systems:
+        got = _refresh_system(run, system)
+        if got is not None:
+            changes += got
+            reached += 1
+    if reached > 1:
+        rep.out(scrape.render_refresh_totals(changes, reached, dry_run=opts.dry_run))
+    return scrape.Summary(failed_systems=tuple(run.failed_systems), failed=run.failed)
 
 
 def run_scrape(opts: Options, rep: Reporter) -> int:
@@ -884,6 +1041,8 @@ def _run(
     skip_incomplete: Callable[[scrape.Pick], bool] | None = None,
     batches: int = 0,
 ) -> scrape.Summary:
+    if opts.refresh_text:
+        return _run_refresh(opts, rep)
     memory, incomplete = read_memory(opts)
     version = None if opts.dry_run else skyscraper_version(opts.skyscraper)
     run = Run(

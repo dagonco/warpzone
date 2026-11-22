@@ -74,7 +74,7 @@ That is Spanish first, then European and English, which is what most of a Europe
 
 Things to know:
 
-- **Games already scraped keep what they have.** The setting reaches the games scraped from now on. warpzone never overwrites a medium or a field of an entry it already wrote (it only fills in what is empty), and Skyscraper keeps what it fetched in its cache. To redo a game, delete its media files and its `<game>` entry from the hub's gamelist, purge the cache of that system (`Skyscraper -p <platform> --cache purge:m=screenscraper`, which cannot be undone; the hub image's `config.ini` and cache are on its `/skyscraper` volume), and run `warpzone scrape --system <system>`.
+- **Games already scraped keep what they have.** The setting reaches the games scraped from now on. warpzone never overwrites a medium or a field of an entry it already wrote (it only fills in what is empty), and Skyscraper keeps what it fetched in its cache. To move the name, description and genre of entries already on the hub to the text the cache holds, see [Moving existing entries to your language](#moving-existing-entries-to-your-language). To redo a game completely, delete its media files and its `<game>` entry from the hub's gamelist, purge the cache of that system (`Skyscraper -p <platform> --cache purge:m=screenscraper`, which cannot be undone; the hub image's `config.ini` and cache are on its `/skyscraper` volume), and run `warpzone scrape --system <system>`.
 - **Only one code each.** Skyscraper's command line takes one region and one language, and puts it first in its order. For a longer order of your own, such as `regionPrios="sp,eu,wor,uk,us"`, use Skyscraper's `config.ini` in its `[main]` section (or one named after a platform, such as `[snes]`), as below; the two combine, and `scrape_region` goes first in whatever list `config.ini` holds.
 - **The file name's region.** With `scrape_region` set, a region in the file name such as `(USA)` no longer goes first; `--region` replaces it. If you want each game's own region to win, leave `scrape_region` unset and put `regionFromFilename="first"` in `config.ini`. In a test, "Kirby Super Star (USA)" got the European title "Kirby's Fun Pak" with the defaults.
 
@@ -175,6 +175,21 @@ Exit code `0` when every selected game was handled (a game ScreenScraper does no
 To fix a wrong match, edit the entry on a console, or delete the entry and its media files and run `warpzone scrape` again. To get media ScreenScraper added later for a game that was already scraped, purge that game from Skyscraper's cache (`Skyscraper -p <platform> --cache purge:...`) and run `warpzone scrape`.
 
 If ES-DE is open on a console, it keeps its gamelist in memory and may write it back without the new entries. When a gamelist was written in the last 10 minutes warpzone warns about it: quit ES-DE on every console and run `warpzone scrape` again if the entries do not stick (the media are already there, and the entries come back from the cache with no request).
+
+## Moving existing entries to your language
+
+Entries scraped before you set `scrape_language` keep their name, description and genre in the old language, because `warpzone scrape` never changes a field an entry has. If Skyscraper's cache already holds the text in your language (it does for the games gathered after you set it), `--refresh-text` copies it into the entries:
+
+```bash
+warpzone scrape --refresh-text --dry-run --system snes   # list what would change
+warpzone scrape --refresh-text --system snes             # do it
+```
+
+It asks ScreenScraper for nothing, so it needs no account and spends no daily request; it only runs Skyscraper on its cache. It replaces the `name`, `desc` and `genre` of the entries and touches nothing else: no media file, and no other field (favorites, play counts, ratings, release dates and the rest stay as they are). A game the cache does not have, a field the cache has empty and an entry marked `<nomultiscrape>` stay as they are, and a game with no entry is not added. Running it twice changes nothing the second time, and a gamelist with nothing to change is not rewritten. Like `scrape`, it keeps a backup of every gamelist it changes in `tools/logs/gamelist-backups/` on the hub.
+
+**A name you corrected by hand is replaced too.** The option cannot tell a title ScreenScraper gave from one you wrote, so run `--dry-run` first: it prints every name change as `"old name" -> "new name"`, and counts the other fields. If a name you want to keep shows up, edit it again afterwards, or mark the entry `<nomultiscrape>true</nomultiscrape>` before the run. A game whose text in the cache is still in the old language is rewritten with that same text, so nothing changes for it; to bring it over, purge it from the cache and scrape it again as described above.
+
+If ES-DE is open on a console it may write its copy of the gamelist back over the change; quit ES-DE on every console and run the command again if the new text does not stick. `--refresh-text` cannot be used with `--unattended` or `--retry-not-found`.
 
 ## Filling art every night
 

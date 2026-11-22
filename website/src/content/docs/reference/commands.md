@@ -21,7 +21,7 @@ warpzone --version                # prints "warpzone X.Y.Z" and exits 0
 |---|---|
 | `check`, `status`, `render-ignores`, `bios`, `doctor`, `health`, `settings audit` | No. Read only. |
 | `prune`, `inbox` | Report only. They delete or move files only with `--apply`. |
-| `scrape` | Yes, by default: it only adds gamelist entries, missing entry fields and media to the hub, and accepts `--dry-run` to list what it would scrape and change nothing. |
+| `scrape` | Yes, by default: it only adds gamelist entries, missing entry fields and media to the hub (with `--refresh-text` it also replaces the name, description and genre of existing entries, from Skyscraper's cache), and accepts `--dry-run` to list what it would scrape or change and change nothing. |
 | `provision hub`, `provision device`, `frontend refresh`, `play-state sync`, `links sync`, `saves convert`, `settings apply`, `settings capture`, `catalog`, `whitelist migrate`, `whitelist restore` | Yes, and each accepts `--dry-run` to show what it would do and change nothing. |
 | `serve` | Only on request: it rewrites a device's `patterns-<device>.stignore` (with a backup of the old file), and writes `catalog/` when it runs `catalog`. It has no `--dry-run`; every change request can set `dry_run` instead. Deleting a game is report-first like `prune`: the page shows the plan and the move to `trash/` happens only on your confirmation. |
 | `self-update` | Yes: it runs one tick of the updater, which can switch the checkout to a newer release. It has no `--dry-run`. |
@@ -318,7 +318,7 @@ warpzone inbox --apply --unattended
 ## `warpzone scrape`
 
 ```
-warpzone scrape [--config PATH] [--root PATH] [--system NAME ...] [--retry-not-found] [--dry-run] [--force-lock]
+warpzone scrape [--config PATH] [--root PATH] [--system NAME ...] [--retry-not-found] [--refresh-text] [--dry-run] [--force-lock]
                [--unattended [--max-games N] [--max-minutes N] [--notify-url URL]]
 ```
 
@@ -330,9 +330,10 @@ Fills in the hub's ES-DE gamelists and media (`frontend/es-de/gamelists/<system>
 | `--root PATH` | `[inbox] root` | The hub root as mounted on this machine, holding `inbox/` and `library/`. |
 | `--system NAME ...` | every scraped system | Scrape only these systems (ES-DE's folder names; the list is in [Scraped systems](/warpzone/setup/scrape/#scraped-systems)). A name that is not a scraped system is a usage error. |
 | `--retry-not-found` | off | Also try the games ScreenScraper did not know in the last 30 days. They are remembered in `$XDG_CACHE_HOME/warpzone/scrape-not-found.json` on this machine, with the file's size, and tried again after 30 days or when the file changes size. |
-| `--dry-run` | off | Run no Skyscraper and write nothing: list, per system, the games it would scrape ("no entry" and "missing media" with the kinds) and the totals. |
+| `--refresh-text` | off | Replace the `name`, `desc` (description) and `genre` of the entries the hub gamelist already has with the ones in Skyscraper's cache, for the games of the catalog. It asks ScreenScraper for nothing, copies no media and changes no other field; a game not in the cache, an empty value and an entry marked `<nomultiscrape>` are left as they are, and no entry is added. A name you corrected by hand is replaced too. It keeps a backup of every gamelist it changes, writes nothing when there is nothing to change, and prints every name change as old name and new name (see below). Not with `--unattended` or `--retry-not-found`: each is a usage error. |
+| `--dry-run` | off | Run no Skyscraper and write nothing: list, per system, the games it would scrape ("no entry" and "missing media" with the kinds) and the totals. With `--refresh-text` it runs Skyscraper from its cache, into a temporary folder, to list what would change; it writes nothing to the hub and takes no lock. |
 | `--force-lock` | off | Take over a stale `inbox/.warpzone.lock`: one whose heartbeat has been silent for 10 minutes, or held by a process that is gone from this machine; a lock of an older warpzone, which has no heartbeat, is stale after 12 hours or by that process rule. A live lock is never taken. |
-| `--unattended` | off | Run as the nightly scheduled task does (see below). Not with `--dry-run`, `--force-lock` or `--retry-not-found`: each is a usage error, checked before anything is read. |
+| `--unattended` | off | Run as the nightly scheduled task does (see below). Not with `--dry-run`, `--force-lock`, `--retry-not-found` or `--refresh-text`: each is a usage error, checked before anything is read. |
 | `--max-games N` | 500 | With `--unattended`: the most games one night scrapes. |
 | `--max-minutes N` | 180 | With `--unattended`: the time budget of a night, in minutes. |
 | `--notify-url URL` | none | With `--unattended`: POST a JSON summary (`source`, `mode`, `run`, the counts, `left`, `problem`) to this `http://` or `https://` URL when the night has news. The URL is never printed or recorded. |
@@ -344,9 +345,18 @@ Exit `0` when every selected game was handled (scraped, filled or not found: a g
 
 **`--unattended`** is what a scheduled task runs once a night (see [Unattended scrape](/warpzone/development/design/scrape-unattended/)). It picks the games a night is worth (new games first, then games missing a core kind, then not-found games whose 30 days have passed, then games missing only extra kinds), up to `--max-games`; it exits at once, taking no lock and starting no Skyscraper, when there is nothing to do. Otherwise it takes the inbox lock with the task `scrape`, waiting up to 30 minutes for a busy one (a lock silent for 10 minutes is taken over), lowers its CPU priority, and stops before a batch that would end after `--max-minutes`. It skips the games the [incomplete memory](/warpzone/development/design/scrape-unattended/#the-incomplete-memory) covers, which an attended `scrape` does not. It keeps `catalog/scrape/state.json` and a record per run in `catalog/scrape/runs/` (the newest 50) on the hub, and exits non-zero only for news, so a scheduler's "abnormal end" mail arrives once per problem: `0` when there is none (nothing to do, the budget spent, the quota reached, a first busy night, a problem already reported), `1` for runtime news (a trouble that lasted its number of nights, or a new runtime error), `2` for a new configuration error (no Skyscraper, `WARPZONE_SKYSCRAPER_DIR` not a folder, the scratch folder on memory, the hub layout, a lock of an older warpzone) or a usage error. `warpzone doctor` shows the state as its `Nightly scrape` line. The scheduled task is described in [Filling art every night](/warpzone/setup/scrape/#filling-art-every-night).
 
+**`--refresh-text`** moves the text of entries that are already on the hub to what Skyscraper's cache holds, for example after setting `[inbox] scrape_language` (see [Moving existing entries to your language](/warpzone/setup/scrape/#moving-existing-entries-to-your-language)). It is the only way `scrape` changes a field an entry has. A report looks like this, with `would refresh` replaced by `refreshed` on a real run:
+
+```
+scrape: snes: would refresh the text of 12 of 40 entries (name 9, desc 12, genre 7); 3 not in the cache
+  renamed    Sample Quest (USA).zip: "Sample Quest" -> "Quest de Muestra"
+scrape: would refresh the text of 20 entries in 2 systems (name 15, desc 20, genre 11)
+```
+
 ```bash
 warpzone scrape --dry-run
 warpzone scrape --system snes gba
+warpzone scrape --refresh-text --dry-run --system snes
 ```
 
 ## `warpzone catalog`
