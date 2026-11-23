@@ -575,9 +575,14 @@ _SOFT_STOPS: tuple[tuple[Stop, str], ...] = (
     (Stop.BUSY, "too busy to handle requests from unregistered and inactive users"),
     (Stop.NETWORK, "Retrying request with timeout of"),
 )
-_FOUND = re.compile(r"^-{4} Game '.*' found! :\) -{4}$")
+# Skyscraper starts a game's line with its progress, `#3/100 (T2) ` and `Pass 1 ` while it
+# searches; the same game can be reported on more than one line.
+_PROGRESS = r"^(?:#\d+/\d+ \(T\d+\) (?:Pass \d+ )?)?"
+_FOUND = re.compile(_PROGRESS + r"-{4} Game '(?P<name>.*)' found! :\) -{4}$")
 _NOT_FOUND = re.compile(
-    r"^-{4} Game '(?P<name>.*)' (?:not found|match \('.*', score: \d+, threshold: \d+\) too low)"
+    _PROGRESS
+    + r"-{4} Game '(?P<name>.*)' "
+    + r"(?:not found|match \('.*', score: \d+, threshold: \d+\) too low)"
 )
 
 
@@ -590,23 +595,24 @@ def classify_output(text: str) -> Outcome:
     stop: Stop | None = next((s for s, needle in _HARD_STOPS if needle in joined), None)
     names: list[str] = []
     retried: list[str] = []
-    answered = 0
+    answered: set[str] = set()
     retrying = False
     for line in lines:
         if any(needle in line for _, needle in _SOFT_STOPS):
             retrying = True
         elif m := _NOT_FOUND.match(line):
-            names.append(m["name"])
-            if retrying:
-                retried.append(m["name"])
-            answered += 1
+            if m["name"] not in names:
+                names.append(m["name"])
+                if retrying:
+                    retried.append(m["name"])
+            answered.add(m["name"])
             retrying = False
-        elif _FOUND.match(line):
-            answered += 1
+        elif m := _FOUND.match(line):
+            answered.add(m["name"])
             retrying = False
     if stop is None and not answered:
         stop = next((s for s, needle in _SOFT_STOPS if needle in joined), None)
-    return Outcome(stop, tuple(names), tuple(retried), answered)
+    return Outcome(stop, tuple(names), tuple(retried), len(answered))
 
 
 # ------------------------------------------------------------------ merge

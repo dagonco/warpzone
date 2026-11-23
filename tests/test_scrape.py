@@ -621,6 +621,26 @@ class ClassifyTest(unittest.TestCase):
             ("Example Homebrew (World)", "Odd Name (USA)", "Kirby's Fun Pak (USA)"),
         )
 
+    def test_lines_with_the_progress_prefix_of_a_real_run(self):
+        text = (
+            "#1/3 (T1) Pass 1 ---- Game 'Example Homebrew (World)' not found :( ----\n\n"
+            "#1/3, (0/1)\n"
+            "#2/3 (T1) ---- Skipping game 'Other (World)' since 'onlymissing' flag has been set "
+            "----\n"
+            "#3/3 (T4) Pass 1 ---- Game 'Chrono Trigger (USA)' found! :) ----\n"
+            "#1/3 (T1) ---- Game 'Example Homebrew (World)' not found :( ----\n"
+        )
+        out = scrape.classify_output(text)
+        self.assertIsNone(out.stop)
+        self.assertEqual(out.not_found, ("Example Homebrew (World)",))
+        self.assertEqual(out.answered, 2)
+
+    def test_a_retry_among_prefixed_answers_is_not_a_stop(self):
+        text = RETRY + "#1/2 (T1) Pass 1 ---- Game 'Chrono Trigger (USA)' found! :) ----\n"
+        out = scrape.classify_output(text)
+        self.assertIsNone(out.stop)
+        self.assertEqual(out.answered, 1)
+
     def test_works_without_colour_codes_and_with_carriage_returns(self):
         plain = re.sub(r"\033\[[0-9;]*m", "", QUOTA)
         self.assertEqual(scrape.classify_output(plain).stop, scrape.Stop.QUOTA)

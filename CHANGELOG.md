@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ## [Unreleased]
 
+### Fixed
+
+- `warpzone scrape` now remembers the games ScreenScraper does not know. Skyscraper 3.21.1 starts each game's line with its progress (`#3/100 (T2) Pass 1`), which warpzone did not expect, so no game was ever recorded as not found and the nightly `warpzone scrape --unattended` asked for the same unknown games every night instead of once in 30 days. For the same reason a run in which ScreenScraper answered could be stopped as a network failure when a single request had been retried. The first run after this fix asks for those games once more and records them.
+
 ## [0.4.0rc7] - 2026-11-22
 
 The seventh candidate makes a game deleted from the hub leave a console that had it turned off, scrapes every system Skyscraper knows, fills in the text of games that only had art, and can move a library scraped in another language to the configured one.
