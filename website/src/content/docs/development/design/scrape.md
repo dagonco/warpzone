@@ -641,7 +641,10 @@ memory above. An attended scrape ignores both and tries the bare entry again, as
 missing a video.
 
 A game is recorded only when Skyscraper itself said "not found" for it (a game it never got to,
-after the quota, says nothing) and that answer did not come after a retry line. If ScreenScraper
+after the quota, says nothing) and that answer did not come after a retry line. Skyscraper starts
+a game's line with its progress (`#3/100 (T2) Pass 1 ---- Game '...' not found :( ----`) and can
+report the same game on a second line, so `classify_output` accepts that prefix and counts a game
+once. If ScreenScraper
 is down, Skyscraper retries each request and then reports every game as not found, which
 `classify_output` does not see as `NETWORK`; since the output is in order with one thread, the
 lines between the previous answer and a game's belong to it, and a game answered after "Retrying

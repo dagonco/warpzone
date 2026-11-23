@@ -78,9 +78,9 @@ if "-s" in args:  # the gather
         if canned.get("down"):
             print("\033[1;33mRetrying request with timeout of 60s...\033[0m\n")
         if stem(path) in known:
-            print("\033[1;34m---- Game '%s' found! :) ----\033[0m" % stem(path))
+            print("#1/1 (T1) Pass 1 ---- Game '%s' found! :) ----" % stem(path))
         else:
-            print("\033[1;33m---- Game '%s' not found :( ----\033[0m\n" % stem(path))
+            print("#1/1 (T1) Pass 1 ---- Game '%s' not found :( ----\n" % stem(path))
     sys.exit(canned.get("gather_exit", 0))
 
 cached = [p for p in staged if stem(p) in set(canned.get("cached", canned.get("known", [])))]
