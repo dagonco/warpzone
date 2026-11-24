@@ -212,13 +212,21 @@ class ReadAnswerTests(unittest.TestCase):
         )
 
     def test_search_groups_by_key(self) -> None:
-        found = search_response(LIB, CFG, self.views, "metal gear")
+        found = search_response(LIB, CFG, self.views, "metal gear", lambda s: {})
         self.assertEqual(found["query"], "metal gear")
         (group,) = found["groups"]
         self.assertEqual(group["key"], "metal gear solid")
         self.assertEqual([g["system"] for g in group["games"]], ["gbc", "psx"])
         self.assertEqual(group["games"][0]["devices"], {"deck": "off", "machine": "off"})
-        self.assertEqual(search_response(LIB, CFG, self.views, "  ")["groups"], [])
+        self.assertEqual(search_response(LIB, CFG, self.views, "  ", lambda s: {})["groups"], [])
+
+    def test_search_finds_a_game_by_its_gamelist_name(self) -> None:
+        tiny = by_title("gba", "Tiny")
+        entry = artwork.Entry("game", tiny.gamelist, {"name": "Golden Sun"})
+        meta = {"gba": {tiny.gamelist: entry}}
+        found = search_response(LIB, CFG, self.views, "golden sun", lambda s: meta.get(s, {}))
+        (group,) = found["groups"]
+        self.assertEqual((group["key"], [g["id"] for g in group["games"]]), ("tiny", [tiny.id]))
 
     def test_the_ra_state_comes_from_the_cached_list(self) -> None:
         hash_ = "a" * 32

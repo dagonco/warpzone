@@ -824,6 +824,20 @@ class SearchTests(unittest.TestCase):
     def test_at_most_limit_groups(self) -> None:
         self.assertEqual(len(catalog.search("metal", self.games(), limit=2)), 2)
 
+    def test_the_gamelist_name_matches_too_and_the_group_keeps_the_title_key(self) -> None:
+        (sf2,) = catalog.derive("mame", listing({"roms/mame/sf2.zip": 1}))
+        (kart,) = catalog.derive("wii", listing({"roms/wii/MarioKartWii [RMCE01].rvz": 1}))
+        games = [*self.games(), ("mame", sf2), ("wii", kart)]
+        names = {sf2.id: "Street Fighter II : The World Warrior", kart.id: "Mario Kart Wii"}
+        self.assertEqual(catalog.search("mario kart", games), [])
+        self.assertEqual(
+            [g.key for g in catalog.search("mario kart", games, names=names)], ["mariokartwii"]
+        )
+        self.assertEqual(
+            [g.key for g in catalog.search("street fighter", games, names=names)], ["sf2"]
+        )
+        self.assertEqual([g.key for g in catalog.search("sf2", games, names=names)], ["sf2"])
+
 
 class RaTargetTests(unittest.TestCase):
     def targets(self, system: str, files: dict[str, int | str]):  # type: ignore[no-untyped-def]

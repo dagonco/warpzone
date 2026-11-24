@@ -992,7 +992,8 @@
     const groups = new Map();
     for (const { game, system } of allGames()) {
       if (!game._key) game._key = titleKey(game.title || game.name || '');
-      const kw = game._key.split(' ');
+      if (!game._words) game._words = game._key.split(' ').concat(normalizeWords(game.name || '').split(' '));
+      const kw = game._words;
       if (!words.every((w) => kw.some((k) => k.startsWith(w)))) continue;
       if (!groups.has(game._key)) groups.set(game._key, { key: game._key, title: game.title, games: [] });
       groups.get(game._key).games.push({ id: game.id, system, title: game.title, devices: game.devices, cover: game.cover });
