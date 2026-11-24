@@ -972,16 +972,27 @@ class Group:
     games: tuple[tuple[str, Game], ...]  # (system, game)
 
 
-def search(query: str, games: Iterable[tuple[str, Game]], *, limit: int = 100) -> list[Group]:
-    """Games whose title key has, for each word of the query, a word that starts with it,
-    grouped by key and ranked (`GET /api/v1/search` in development/design/library-ui.md)."""
+def search(
+    query: str,
+    games: Iterable[tuple[str, Game]],
+    *,
+    names: Mapping[str, str] | None = None,
+    limit: int = 100,
+) -> list[Group]:
+    """Games whose title key or name (`names`, by game id) has, for each word of the query, a
+    word that starts with it, grouped by key and ranked (`GET /api/v1/search` in
+    development/design/library-ui.md)."""
     wanted = _normalize(query, strip_groups=False)
     words = wanted.split()
     if not words:
         return []
+    names = names or {}
     groups: dict[str, list[tuple[str, Game]]] = {}
     for system, game in games:
         have = game.key.split()
+        name = names.get(game.id)
+        if name:
+            have += _normalize(name, strip_groups=False).split()
         if all(any(h.startswith(w) for h in have) for w in words):
             groups.setdefault(game.key, []).append((system, game))
 

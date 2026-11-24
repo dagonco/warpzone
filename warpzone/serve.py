@@ -453,10 +453,11 @@ class HubFiles:
 
     def extras(self, system: str) -> library_api.SystemExtras:
         return library_api.SystemExtras(
-            self._gamelist(system), self._media_index(system), self._switch_unclaimed(system)
+            self.gamelist(system), self._media_index(system), self._switch_unclaimed(system)
         )
 
-    def _gamelist(self, system: str) -> Mapping[str, artwork.Entry]:
+    def gamelist(self, system: str) -> Mapping[str, artwork.Entry]:
+        """The system's gamelist entries by `<path>`; empty when it is missing or unreadable."""
         path = self.root / "frontend" / "es-de" / "gamelists" / system / "gamelist.xml"
         with self._lock:
             held = self._meta.get(system)
@@ -1151,7 +1152,10 @@ class App:
                     raise ApiError("bad-request", "the `q` parameter is missing")
                 lib = self.files.library()
                 return json_response(
-                    200, library_api.search_response(lib, cfg, self.files.views(cfg), query)
+                    200,
+                    library_api.search_response(
+                        lib, cfg, self.files.views(cfg), query, self.files.gamelist
+                    ),
                 )
             case ["ra", "summary"]:
                 return json_response(

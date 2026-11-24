@@ -645,10 +645,26 @@ def ra_summary_response(lib: Library, cfg: Config) -> dict[str, Any]:
 
 
 def search_response(
-    lib: Library, cfg: Config, views: Mapping[str, DeviceView], query: str
+    lib: Library,
+    cfg: Config,
+    views: Mapping[str, DeviceView],
+    query: str,
+    gamelist: Callable[[str], Mapping[str, artwork.Entry]],
 ) -> dict[str, Any]:
+    """`GET /api/v1/search`; `gamelist` gives a system's gamelist entries by `<path>`, whose
+    names are searched too."""
+    names: dict[str, str] = {}
+    for system, games in lib.systems.items():
+        extras = SystemExtras(meta=gamelist(system))
+        if not extras.meta:
+            continue
+        for game in games.values():
+            entry = game_entry(game, extras)
+            name = entry.fields.get("name") if entry else None
+            if name:
+                names[game.id] = name
     pairs = ((s, g) for s, games in lib.systems.items() for g in games.values())
-    groups = catalog.search(query, pairs, limit=SEARCH_LIMIT)
+    groups = catalog.search(query, pairs, names=names, limit=SEARCH_LIMIT)
     return {
         "query": query,
         "groups": [
