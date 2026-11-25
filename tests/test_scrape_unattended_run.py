@@ -6,11 +6,12 @@ import os
 import shutil
 import time
 import unittest
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from unittest import mock
 
+from library_support import game
 from notify_support import Receiver
 from scrape_support import CHRONO, HOMEBREW, KIRBY, TODAY, HubCase
 from test_cli import run as run_cli
@@ -904,3 +905,34 @@ class CommandTest(NightCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class NotFoundAcrossNightsTest(NightCase):
+    """The not-found memory a night writes is what the next night plans with, as the real tool's
+    output is read (every game line carries its progress)."""
+
+    def test_the_games_a_night_did_not_find_are_not_asked_for_on_the_next_ones(self) -> None:
+        self.games(KIRBY, CHRONO)  # Chrono is found but has no video: incomplete, not unknown
+        hack = game("nes", "roms/nes/Hacks/Hack.zip", "Hack", 3, gamelist="./Hacks/Hack.zip")
+        self.hub.add_catalog_game(hack, hack.primary)
+        self.hub.canned({"known": [KNOWN3[1]], "kinds": NO_VIDEOS})
+        systems = ("nes", "snes")
+        day = {"today": TODAY}
+        today = lambda: day["today"]  # noqa: E731
+        self.assertEqual(self.night(systems=systems, today=today), 0, self.out + self.err)
+        asked = [set(g["targets"]) for g in self.hub.gathers()]
+        self.assertEqual(asked, [{"Hack.zip"}, {KIRBY, CHRONO}])
+        for days in (1, 2):
+            self.next_day()
+            day["today"] = TODAY + timedelta(days=days)
+            self.games(
+                f"New {days}.zip"
+            )  # a new game in the system keeps the night from being empty
+            self.hub.canned({"known": [KNOWN3[1], f"New {days}"], "kinds": NO_VIDEOS})
+            self.assertEqual(self.night(systems=systems, today=today), 0, self.out + self.err)
+            asked = [set(g["targets"]) for g in self.hub.gathers()]
+            self.assertEqual(asked[2:][-1], {f"New {days}.zip"}, asked)
+            self.assertEqual(len(asked), 2 + days, asked)
+            counts = self.records()[-1]["systems"]
+            self.assertEqual(counts["snes"]["skipped_not_found"], 1)
+            self.assertEqual(counts["nes"]["skipped_not_found"], 1)

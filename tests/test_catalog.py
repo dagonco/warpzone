@@ -108,6 +108,18 @@ class SystemRootsTests(unittest.TestCase):
         )
         self.assertEqual([g.primary for g in games], ["roms/wiiu/roms/Example (Europe).wua"])
 
+    def test_the_roms_txt_a_setup_leaves_in_a_system_folder_is_not_a_game(self) -> None:
+        games = catalog.derive(
+            "model2",
+            listing(
+                {
+                    "roms/model2/roms/Example Racer.zip": 100,
+                    "roms/model2/roms/roms.txt": 40,
+                }
+            ),
+        )
+        self.assertEqual([g.primary for g in games], ["roms/model2/roms/Example Racer.zip"])
+
 
 PLAYLIST = "# playlist\nSample (Disc 1).chd\nSample (Disc 2).chd\nGone.chd\n"
 
