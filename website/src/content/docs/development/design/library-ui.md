@@ -164,7 +164,8 @@ several, and a game is on for a console only when every part is.
 which are small) and returns the games. The rules, by system:
 
 - **Default.** Each entry of `roms/<system>/` is a game, except hidden names, the junk names of
-  `patterns-common.stignore`, `*.part` files, and EmuDeck's `systeminfo.txt`, `metadata.txt` and `readme.txt`.
+  `patterns-common.stignore`, `*.part` files, and the `systeminfo.txt`, `metadata.txt`, `readme.txt` and
+  `roms.txt` that EmuDeck and emulator setups leave in a system folder.
   A directory whose name ends in `.m3u` (the multi-disc layout `inbox` writes) is one game with
   one part, the folder; so is a `.ps3` directory in `ps3`. Any other directory is walked, and
   each entry in it follows the same rule. In a folder, a `.cue`, `.gdi` or `.m3u` file claims the

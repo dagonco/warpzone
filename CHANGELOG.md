@@ -9,6 +9,7 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 ### Fixed
 
 - `warpzone scrape` now remembers the games ScreenScraper does not know. Skyscraper 3.21.1 starts each game's line with its progress (`#3/100 (T2) Pass 1`), which warpzone did not expect, so no game was ever recorded as not found and the nightly `warpzone scrape --unattended` asked for the same unknown games every night instead of once in 30 days. For the same reason a run in which ScreenScraper answered could be stopped as a network failure when a single request had been retried. The first run after this fix asks for those games once more and records them.
+- The library UI no longer lists the `roms.txt` that an emulator setup leaves in a system folder (for example `roms/model2/roms/roms.txt`) as a game, and `warpzone scrape` no longer asks ScreenScraper for it. The catalog of the system is corrected the next time it is rebuilt (`warpzone catalog`, or by `warpzone serve` every 6 hours).
 - The search of the library UI now also finds a game by the name the page shows, its scraped gamelist name, and not only by its file name. A MAME set such as `sf2.zip` is found by "street fighter", and a game whose file name has no spaces, such as `MarioKartWii [RMCE01].rvz`, by "mario kart". Results are still grouped by the file name's title key.
 
 ## [0.4.0rc7] - 2026-11-22
