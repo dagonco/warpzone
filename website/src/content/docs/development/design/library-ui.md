@@ -164,7 +164,8 @@ several, and a game is on for a console only when every part is.
 which are small) and returns the games. The rules, by system:
 
 - **Default.** Each entry of `roms/<system>/` is a game, except hidden names, the junk names of
-  `patterns-common.stignore`, `*.part` files, and EmuDeck's `systeminfo.txt`, `metadata.txt` and `readme.txt`.
+  `patterns-common.stignore`, `*.part` files, and the `systeminfo.txt`, `metadata.txt`, `readme.txt` and
+  `roms.txt` that EmuDeck and emulator setups leave in a system folder.
   A directory whose name ends in `.m3u` (the multi-disc layout `inbox` writes) is one game with
   one part, the folder; so is a `.ps3` directory in `ps3`. Any other directory is walked, and
   each entry in it follows the same rule. In a folder, a `.cue`, `.gdi` or `.m3u` file claims the
@@ -1797,9 +1798,12 @@ max-age=86400`, under the same authentication as the rest, or `404 not-found` fo
 not a badge name, another variant or an image not downloaded.
 
 `GET /api/v1/search?q=metal+gear`: the query goes through the same normalization as a title
-(without step 1); a game matches when each word of the query is a prefix of a word of its key.
-Groups are ranked by key equal to the query, then key starting with it, then the rest, and then
-by key; at most 100 groups:
+(without step 1); a game matches when each word of the query is a prefix of a word of its key or
+of its gamelist `<name>`, normalized the same way. The name finds a game whose file name the
+words of its title do not show, such as a MAME set (`sf2`, *Street Fighter II*) or a name written
+without spaces (`MarioKartWii`); grouping and ranking still use the key alone. Groups are ranked
+by key equal to the query, then key starting with it, then the rest, and then by key; at most 100
+groups:
 
 ```json
 {"query": "metal gear", "groups": [
