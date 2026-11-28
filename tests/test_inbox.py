@@ -29,6 +29,7 @@ from warpzone.inbox import (
     resolve_refs,
     run_inbox,
     scan,
+    scan_downloading,
     scan_unverified,
     select_purge,
     unverified_match,
@@ -191,6 +192,39 @@ class PureTests(unittest.TestCase):
             self.assertTrue(skip_name(name), name)
         self.assertFalse(skip_name("Game (USA).zip"))
         self.assertFalse(skip_name("_not_hidden_by_this_rule"))  # `_*` folders are handled by scan
+
+    def test_names_that_mark_a_download_in_progress(self) -> None:
+        downloading = inbox_core.downloading_names
+        names = [
+            "Unconfirmed 554392.crdownload",
+            "Game.zip.PART",
+            "Game.zip.download",
+            "Game.zip.OpDownload",
+            "Game.zip.!qB",
+            "Other (USA).zip",
+            "Other (USA).zip.aria2",
+            "Game.z64.ARIA2",
+            "game.z64",
+            "Done (USA).zip",
+            "Done.part1.rar",
+            "partial.nes",
+        ]
+        self.assertEqual(
+            downloading(names),
+            {
+                "Unconfirmed 554392.crdownload",
+                "Game.zip.PART",
+                "Game.zip.download",
+                "Game.zip.OpDownload",
+                "Game.zip.!qB",
+                "Other (USA).zip",
+                "Other (USA).zip.aria2",
+                "Game.z64.ARIA2",
+                "game.z64",
+            },
+        )
+        self.assertEqual(downloading(["a.aria2"]), {"a.aria2"})
+        self.assertEqual(downloading([]), frozenset())
 
     def test_unsafe_members(self) -> None:
         for name in ("/etc/passwd", "\\win", "C:\\x", "../x", "a/../../x", "a\\..\\x", "a\0b"):
@@ -812,6 +846,33 @@ class LayoutTests(Base):
             [p.name for p in scan(self.inbox)], ["@eaDir2", "_file.zip", "folder", "game.zip"]
         )
 
+    def test_scan_leaves_out_downloads_in_progress_and_names_them(self) -> None:
+        self.drop("game.zip", b"1")
+        self.drop("Got.zip.crdownload", b"1")
+        self.drop("Safari.zip.download", {"Info.plist": b"1"})
+        self.drop("Big.iso", b"1")
+        self.drop("Big.iso.aria2", b"1")
+        self.drop("torrent", {"deep/a.bin.!qB": b"1", "b.bin": b"1"})
+        self.drop("clean", {"deep/a.bin": b"1"})
+        (self.inbox / "_unverified" / "nes").mkdir(parents=True)
+        self.drop("_unverified/nes/Home.part", b"1")
+        self.drop("_unverified/nes/home.nes", b"1")
+        self.assertEqual([p.name for p in scan(self.inbox)], ["clean", "game.zip"])
+        self.assertEqual(
+            [(p.name, s) for p, s in scan_unverified(self.inbox)], [("home.nes", "nes")]
+        )
+        self.assertEqual(
+            scan_downloading(self.inbox),
+            [
+                "Big.iso",
+                "Big.iso.aria2",
+                "Got.zip.crdownload",
+                "Safari.zip.download",
+                "torrent",
+                "_unverified/nes/Home.part",
+            ],
+        )
+
     def test_wrong_root_is_an_error(self) -> None:
         with self.assertRaises(InboxError):
             run_inbox(Options(self.tmp, self.dats, Tools()), Reporter(self.lines.append))
@@ -1096,6 +1157,22 @@ class CartridgeTests(Base):
         self.assertIn("still being copied", self.out)
         self.assertEqual([p.name for p in self.inbox.iterdir()], ["fresh.nes"])
         self.assertEqual(self.library(), [])
+
+    def test_a_download_in_progress_is_left_in_the_inbox_however_old_it_looks(self) -> None:
+        self.drop("Unconfirmed 554392.crdownload", b"half a zip")
+        self.drop("fine.nes", NES_ROM)
+        self.assertEqual(self.go(), 0, self.out)
+        self.assertIn("downloading: Unconfirmed 554392.crdownload", self.out)
+        self.assertEqual(self.review(), [])
+        self.assertEqual(self.library(), ["nes/Adventure (USA).zip"])
+        self.assertTrue((self.inbox / "Unconfirmed 554392.crdownload").exists())
+
+    def test_a_folder_holding_a_download_in_progress_is_left_in_the_inbox(self) -> None:
+        self.drop("Pack", {"Adventure.nes": NES_ROM, "sub/Other.nes.part": b"half"})
+        self.assertEqual(self.go(), 0, self.out)
+        self.assertIn("downloading: Pack", self.out)
+        self.assertEqual(self.library(), [])
+        self.assertTrue((self.inbox / "Pack").is_dir())
 
     def test_symbolic_links_are_not_followed(self) -> None:
         outside = self.tmp / "outside.nes"

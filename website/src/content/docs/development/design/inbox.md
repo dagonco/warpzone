@@ -33,6 +33,8 @@ The contract:
   [Roms no DAT knows](#roms-no-dat-knows)). An item modified in the last 30 seconds is left
   alone, since it may still be copying (an unattended run does not apply this rule: it judges
   the same across runs, see [Unattended inbox](/warpzone/development/design/inbox-unattended/#readiness)).
+  A download in progress is never an item, however long ago it changed (see
+  [Downloads in progress](#downloads-in-progress)).
 - **The hub root.** Every run, attended or not, needs `inbox/`, `library/.stfolder` and
   `library/roms` under the root, so an unmounted share is never taken for an empty library.
 - **Report only by default.** Without `--apply` it unpacks into a local work folder,
@@ -268,11 +270,35 @@ The contract:
 - **Exit code.** `0` when every item is placed or already in the library; `1` when any
   item went to review; `2` for a usage or configuration error.
 
+### Downloads in progress
+
+A browser or download manager writes a file under a temporary name while it downloads, and a
+download that stalls (a dropped connection, a paused transfer) stops changing, so neither the
+30-second rule nor the unattended stable-size rule can tell it from a finished copy: it would be
+filed in `_revisar/` with "no DAT match" and the download would then fail. So the name decides,
+before any age or fingerprint. `inbox_core.downloading_names` (pure, over the names listed in one
+folder) marks:
+
+- a name ending in `.crdownload` (Chrome, Brave, Edge), `.part` (Firefox), `.download` (Safari;
+  a folder bundle), `.opdownload` (Opera) or `.!qB` (qBittorrent), whatever the case;
+- a `X.aria2` file (aria2's control file), and the `X` beside it.
+
+An item is a download in progress when its own name is marked, when a sibling `X.aria2` marks it,
+or when any file or folder under it is marked (a folder that holds a download is still
+downloading as a whole; links are not followed). Such a thing is not an item: `scan` and
+`scan_unverified` leave it out, so it is never identified, moved, sent to review or counted, and
+its original stays where it is. Each run (attended or unattended) names it in one line,
+`downloading: <name>: ...`, and it changes neither the exit code nor the run record. When the
+download ends and the browser renames the file, the final name is a new item, judged as any
+other. The files `warpzone` itself writes as `<name>.part` while it copies into the library are
+never in `inbox/`, so this rule never meets them.
+
 ## The run record
 
 `--apply` writes `catalog/inbox/runs/<id>.json` for every run that processed at least one item
-(an item left alone because it changed in the last 30 seconds does not count; a run with only
-those, an empty inbox and a report write nothing). The contract of the file, its id and the
+(an item left alone because it changed in the last 30 seconds does not count, nor does a
+[download in progress](#downloads-in-progress); a run with only those, an empty inbox and a
+report write nothing). The contract of the file, its id and the
 50 records kept is in
 [The run record and the library UI](/warpzone/development/design/inbox-unattended/#the-run-record-and-the-library-ui);
 this is what an attended run decides:
@@ -314,7 +340,7 @@ never printed (it may carry a token), a failure is a warning and never a failure
 the payload holds no API key and no path. The decision to send (`should_notify`) and the payload
 (`notify_payload`) are pure.
 
-The decisions (`skip_name`, `unsafe_member`, `unsafe_entry`, `select_purge`, `plan_units`,
+The decisions (`skip_name`, `downloading_names`, `unsafe_member`, `unsafe_entry`, `select_purge`, `plan_units`,
 `destination_verdict`, `whitelist_line`, `resolve_refs`, `unsupported_reason`,
 `unverified_reason`, `unverified_match`,
 `match_dat`, `group_discs`, `parse_dat`) are pure and unit-tested; conversions are
