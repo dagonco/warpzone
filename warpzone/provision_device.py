@@ -26,6 +26,7 @@ from warpzone.provision_emulators import (
     ensure_retroarch_pins,
     ensure_shadps4_dirs,
     ensure_shadps4_launch,
+    ensure_switch_content,
     ensure_systems_override,
     ensure_title_links,
 )
@@ -487,6 +488,7 @@ def provision_device(
             ensure_shadps4_dirs,
             ensure_shadps4_launch,
             ensure_cemu_paths,
+            ensure_switch_content,
             ensure_title_links,
         ):
             ensure(name, profile, home, rep, dry_run=local.dry_run, probes=probes, state_root=root)

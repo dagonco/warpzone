@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ## [Unreleased]
 
+### Added
+
+- On SteamOS with EmuDeck, `warpzone provision device` makes Eden and Ryujinx load the updates and DLC that `warpzone inbox` files in the library's `extras/switch` folder, without installing them. It adds `~/Emulation/extras/switch` to Eden's list of external content folders (`Paths\external_content_dirs` in `~/.config/eden/qt-config.ini`) and to Ryujinx's `autoload_dirs` (in `~/.config/Ryujinx/Config.json`), a new `[switch_content.eden]` and `[switch_content.ryujinx]` in the profile. Both emulators scan the subfolders, so `updates/<Title>` and `dlc/<Title>` need nothing more. Only the new entry is added: every other entry and every other byte of the file stays, the old file is backed up first, nothing is written while the emulator runs, and a file that does not exist is never created (start the emulator once, then provision again). The console still has to receive the files, so whitelist `!/extras/switch/updates` and `!/extras/switch/dlc`. Ryujinx only loads `.nsp` files, for a game already in its list. `warpzone doctor` reports `Eden update and DLC folder` and `Ryujinx update and DLC folder`. See [Switch updates and DLC](https://dagonco.github.io/warpzone/guides/emudeck/#switch-updates-and-dlc).
+
 ### Fixed
 
 - `warpzone scrape` now remembers the games ScreenScraper does not know. Skyscraper 3.21.1 starts each game's line with its progress (`#3/100 (T2) Pass 1`), which warpzone did not expect, so no game was ever recorded as not found and the nightly `warpzone scrape --unattended` asked for the same unknown games every night instead of once in 30 days. For the same reason a run in which ScreenScraper answered could be stopped as a network failure when a single request had been retried. The first run after this fix asks for those games once more and records them.

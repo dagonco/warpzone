@@ -200,7 +200,7 @@ A profile describes where things live on one kind of device: its folders, saves,
 
 | Profile | For |
 |---|---|
-| `steamos-emudeck` | SteamOS with EmuDeck (Steam Deck, Steam Machine). Uses `paths`, `library`, `saves`, `bios`, `settings`, `play_state`, `shadps4`, `cemu` and `links`. |
+| `steamos-emudeck` | SteamOS with EmuDeck (Steam Deck, Steam Machine). Uses `paths`, `library`, `saves`, `bios`, `settings`, `play_state`, `shadps4`, `cemu`, `switch_content` and `links`. |
 | `darkos` | dArkOS, with ROMs on an exFAT card; checked on an Anbernic RG351MP. Uses `ignore_perms`, `paths`, `es_systems`, `retroarch`, `saves`, `artwork` and `library`. |
 
 The file name (without `.toml`) must equal the profile's `name`. Paths use `~`, expanded on the device. A profile fails to load when any table breaks the rules below; the shipped ones are checked by the test suite.
@@ -352,6 +352,18 @@ Sets Cemu's MLC path and adds a game path in its `settings.xml`.
 | `game_path` | string | none (required) | Added to `GamePaths` (as `mlc`); existing entries are kept. |
 
 `{library}` is the only placeholder, needs `paths.library`, and is allowed only in `mlc` and `game_path`. A leading `~/` is expanded, so `settings.xml` gets absolute paths.
+
+### `[switch_content.<emulator>]`
+
+Adds the library's Switch update and DLC folder to the list an emulator loads them from. `<emulator>` is `eden` (the `[UI]` array `Paths\external_content_dirs` of `qt-config.ini`) or `ryujinx` (`autoload_dirs` of `Config.json`).
+
+| Key | Type | Default | Rules |
+|---|---|---|---|
+| `config` | string | none (required) | The emulator's settings file, an absolute path or one starting with `~/`; edited only if it exists. |
+| `process` | array of strings | none (required) | The emulator's process names; the file is edited only while none runs. |
+| `folder` | string | none (required) | The folder added (an absolute path, or starting with `~/` or `{library}/`); existing entries are kept. |
+
+`{library}` is the only placeholder, needs `paths.library`, and is allowed only in `folder`. A leading `~/` is expanded, so the files get absolute paths.
 
 ### `[links.<key>]`
 
