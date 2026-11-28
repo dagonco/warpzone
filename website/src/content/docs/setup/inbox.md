@@ -249,6 +249,7 @@ Titles come from a local clone of titledb (`git clone --depth 1 https://github.c
 - Without `nsz` or the keys file, an `.nsp` falls back to the `[TitleID][vN]` in its file name and the report says so. A `.nsz` cannot be read and goes to review. A title titledb does not know, or an `.nsp` holding several titles, goes to review.
 - A file is never overwritten. The check is by TitleID and version wherever the library has it: the same bytes are "already in the library", different bytes go to review.
 - Games print their whitelist line (`!/roms/switch/...`). Updates and DLC are usually whitelisted by folder (`!/extras/switch/updates`, `!/extras/switch/dlc`), so the report says that once instead of one line per file.
+- On a console whose profile declares `[switch_content.*]` (`steamos-emudeck`), `warpzone provision device` adds `library/extras/switch` to Eden's external content folders and to Ryujinx's autoload folders, so both load the updates and DLC from there without installing them. See [Switch updates and DLC](/warpzone/guides/emudeck/#switch-updates-and-dlc).
 
 ## 3DS games
 

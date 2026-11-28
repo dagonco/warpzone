@@ -15,11 +15,11 @@ refused with the list of the ones that are. Paths use `~` and are expanded on th
 
 Besides `name` and `description`, a profile has the top-level flag `ignore_perms` and these
 tables: `[paths]`, `[library]`, `[saves.*]`, `[bios.*]`, `[settings.*]`, `[es_systems]`,
-`[retroarch]`, `[artwork]`, `[play_state]`, `[shadps4]`, `[cemu]`, `[links.*]`, `[options_menu]` and
-`[updater]` (`profiles.parse_profile` refuses any other key). The shipped files are the reference; this is
+`[retroarch]`, `[artwork]`, `[play_state]`, `[shadps4]`, `[cemu]`, `[switch_content.*]`, `[links.*]`,
+`[options_menu]` and `[updater]` (`profiles.parse_profile` refuses any other key). The shipped files are the reference; this is
 the shape of the first four, and the others are described where their feature is
 ([Frontend and RetroArch overrides](#frontend-and-retroarch-overrides),
-[shadPS4 install directories](#shadps4-install-directories), [Cemu paths](#cemu-paths), [Options menu](#options-menu), [Title links](/warpzone/development/design/title-links/),
+[shadPS4 install directories](#shadps4-install-directories), [Cemu paths](#cemu-paths), [Switch update and DLC folders](#switch-update-and-dlc-folders), [Options menu](#options-menu), [Title links](/warpzone/development/design/title-links/),
 [Frontend artwork](/warpzone/development/design/frontend-artwork/), [Play state](/warpzone/development/design/play-state/) and, for `[settings.*]`,
 [Emulator settings](/warpzone/development/design/emulator-settings/#profile-entries)):
 
@@ -418,6 +418,63 @@ to `library`, after the shadPS4 steps. The profile `steamos-emudeck` declares
   `mlc`'s `usr/save` first, since `provision` alone would keep `mlc_path`.
 - **Why not the settings layer.** It has no XML format, and both values follow each console's
   own library path, so they are declared in the profile like the shadPS4 list.
+
+## Switch update and DLC folders
+
+Eden and Ryujinx load a title's updates and DLC from a folder of their own list, without
+installing them, and both scan that folder's subfolders. `warpzone inbox` files them in
+`library/extras/switch/updates/<Title>/` and `library/extras/switch/dlc/<Title>/`
+([Switch games](/warpzone/development/design/inbox/#switch-games)), so one folder, `extras/switch`, covers both. A
+profile with `[switch_content.<emulator>]` (`config`, `process`, `folder`; `folder` may use
+`{library}`) has `provision device` add that folder to the emulator's list, for a device that
+subscribes to `library`, after the Cemu step. The emulators are `eden` and `ryujinx`; any other
+name is a profile error. The profile `steamos-emudeck` declares `{library}/extras/switch` for
+both.
+
+- **Eden.** The list is the Qt array `Paths\external_content_dirs` of the `[UI]` section of
+  `qt-config.ini`: lines `Paths\external_content_dirs\<n>\path=<dir>` (1-based) and
+  `Paths\external_content_dirs\size=<N>`. Eden reads the entries from 1 to `size` and ignores
+  the rest (`QtConfig::ReadPathValues`, `src/qt_common/config/qt_config.cpp`), and its
+  `ExternalContentProvider::ScanDirectory` (`src/core/file_sys/registered_cache.cpp`) recurses
+  into subfolders and loads `.nsp`, `.xci`, `.xcz` and the block-compressed `.nsz`; the patch manager picks the
+  highest enabled update version. A console that never used the setting has only the line
+  `Paths\external_content_dirs\size=0`.
+- **Ryujinx.** The list is `autoload_dirs` of `Config.json` (an array of strings; the fork
+  Ryubing). Ryubing's `ApplicationLibrary.AutoLoadDownloadableContents` and
+  `AutoLoadTitleUpdates` (`src/Ryujinx/Systems/AppLibrary/ApplicationLibrary.cs`) enumerate each
+  directory with `RecurseSubdirectories = true`, keep the `.nsp` files and use only those that
+  belong to a game the library already lists. So a Ryujinx console loads updates and DLC kept as
+  `.nsp`, which is the form `inbox` stores them in, and not `.nsz` or `.xci`. Ryujinx rescans the list each time
+  its game list is reloaded.
+- **Edit.** The folder is added only if it is missing (trailing slashes do not count) and the
+  other entries stay. Both edits are made as text, so every other byte is kept, and the result is
+  read back: it must list the old entries plus the folder, and for Eden every other line must be
+  the same; otherwise the file is left alone with a warning (`switchcontent.apply` is pure).
+  For Eden the new entry takes the number after `size` (an entry beyond `size` is ignored by
+  Eden, so one at that number is replaced), goes above the `size` line and `size` is raised; when
+  there is no array yet both lines are added at the end of `[UI]`. For Ryujinx the string is
+  appended to `autoload_dirs` in the layout the list has (an empty list becomes one entry on its
+  own line). A path Qt would quote or escape (a comma, a quote, a backslash, a semicolon,
+  leading or trailing blanks, anything beyond ASCII letters, digits and `_ . / + -`, or a space
+  inside) is not written to Eden's file and the run says to add it by hand. A file that is not
+  valid, has no `[UI]` section (Eden) or no `autoload_dirs` list (Ryujinx), repeats a key the
+  edit needs, or holds something other than strings in the list is left alone with a warning.
+- **No file.** A missing file is never created: each emulator writes its own on its first
+  start. The run warns to start the emulator once, close it, and run `provision` again.
+- **Safety.** As for shadPS4 and Cemu: each file is written only while none of its `process`
+  runs (a missing `/proc` is a warning), the old file is backed up first to the settings state
+  folder (`backups/eden`, `backups/ryujinx`) and the atomic write is refused if the file changed
+  meanwhile. A second run changes nothing; `--dry-run` prints what it would add. The two
+  emulators are independent: one that is running or whose file is unreadable does not stop the
+  other.
+- **Doctor.** `doctor` reports `Eden update and DLC folder` and `Ryujinx update and DLC folder`:
+  a warning when the file is missing, does not read, or does not list the folder, with the
+  command to run.
+- **Why not the settings layer.** `settings apply` layers scalar keys. Eden's array is a
+  nested value (`[UI]Paths\external_content_dirs*` is declared noise in `[settings.eden]`, so
+  `capture` never proposes it and the layer never fights this edit), Ryujinx's list is an array
+  that the `json` handler does not write, and the value follows each console's own library
+  path, so it is declared in the profile like the shadPS4 and Cemu paths.
 
 ## Options menu
 

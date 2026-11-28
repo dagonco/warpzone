@@ -244,6 +244,22 @@ mlc = "{library}/roms/wiiu/mlc01"
 default_mlc = "~/.local/share/Cemu/mlc01"
 game_path = "{library}/roms/wiiu/roms"
 
+# Eden and Ryujinx load the updates and DLC they find, below a folder of their own list,
+# without installing them. `warpzone inbox` files them in `library/extras/switch/updates` and
+# `dlc`, and `provision device` adds `extras/switch` (both scan its subfolders) to Eden's
+# `[UI]` array `Paths\external_content_dirs` and to Ryujinx's `autoload_dirs`, keeping the
+# entries already there. Each file is edited only if it exists, and only while its emulator is
+# closed. The value follows each console's own library path, so it is declared here and not
+# layered (Eden's array stays noise in `[settings.eden]`).
+[switch_content.eden]
+config = "~/.config/eden/qt-config.ini"
+process = ["eden", "Eden.AppImage"]
+folder = "{library}/extras/switch"
+[switch_content.ryujinx]
+config = "~/.config/Ryujinx/Config.json"
+process = ["Ryujinx"]
+folder = "{library}/extras/switch"
+
 # EmuDeck's shadps4.sh starts `Shadps4-qt.AppImage -d -g <eboot>`, and that Qt launcher can
 # crash with those arguments while the emulator itself runs the same game fine. EmuDeck
 # rewrites its script, so it is not edited. `provision device` writes `script` instead (it

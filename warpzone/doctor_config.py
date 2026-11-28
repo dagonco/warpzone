@@ -133,6 +133,7 @@ def load_config_state(path: Path) -> ConfigState:
                     or profile.retroarch
                     or profile.shadps4
                     or profile.cemu
+                    or profile.switch_content
                     or profile.links
                     or art
                 ):

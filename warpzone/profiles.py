@@ -10,6 +10,7 @@ from importlib import resources
 from pathlib import Path
 from typing import Any, TypeGuard
 
+from warpzone import switchcontent
 from warpzone.config import FOLDER_GROUPS
 from warpzone.errors import UsageError
 from warpzone.safefile import TMP_SUFFIX
@@ -172,6 +173,23 @@ class CemuPaths:
 
 
 @dataclass(frozen=True)
+class SwitchContent:
+    """A Switch emulator's list of folders with updates and DLC, which `provision device` extends.
+
+    `config` is the emulator's file, `folder` the one added to it (it may contain `{library}`).
+    `process` names the emulator: the file is edited only while none of them runs. See
+    development/design/profiles.md, "Switch update and DLC folders".
+    """
+
+    config: str
+    process: tuple[str, ...]
+    folder: str
+
+    def wants(self, library: str) -> str:
+        return self.folder.replace("{library}", library)
+
+
+@dataclass(frozen=True)
 class ShadPS4Launch:
     """A launch script that starts shadPS4's emulator directly, and the rule that runs it.
 
@@ -320,6 +338,7 @@ class Profile:
     updater_install: str = "auto"
     cemu: CemuPaths | None = None
     save_convert: dict[str, SaveConvert] = field(default_factory=dict)
+    switch_content: dict[str, SwitchContent] = field(default_factory=dict)
 
     def converts_saves(self, folders: Collection[str]) -> bool:
         """Whether a device with these folder groups reconciles an emulator's saves."""
@@ -355,6 +374,7 @@ def parse_profile(data: dict[str, Any], source: str) -> Profile:
         "play_state",
         "shadps4",
         "cemu",
+        "switch_content",
         "links",
         "options_menu",
         "updater",
@@ -447,6 +467,7 @@ def parse_profile(data: dict[str, Any], source: str) -> Profile:
     play_state = _parse_play_state(data.get("play_state"), paths, artwork, err)
     shadps4 = _parse_shadps4(data.get("shadps4"), "library" in paths, err)
     cemu = _parse_cemu(data.get("cemu"), "library" in paths, err)
+    switch_content = _parse_switch_content(data.get("switch_content"), "library" in paths, err)
     links = _parse_links(data.get("links"), "library" in paths, err)
     options_menu = _parse_options_menu(data.get("options_menu"), err)
     updater_install = _parse_updater(data.get("updater"), err)
@@ -473,6 +494,7 @@ def parse_profile(data: dict[str, Any], source: str) -> Profile:
         updater_install,
         cemu,
         save_convert,
+        switch_content,
     )
 
 
@@ -888,6 +910,59 @@ def _parse_cemu(raw: Any, has_library: bool, err: Callable[[str], None]) -> Cemu
     return CemuPaths(
         raw["settings"], tuple(raw["process"]), raw["mlc"], raw["default_mlc"], raw["game_path"]
     )
+
+
+_SWITCH_KEYS = {"config", "process", "folder"}
+
+
+def _parse_switch_content(
+    raw: Any, has_library: bool, err: Callable[[str], None]
+) -> dict[str, SwitchContent]:
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        err("`switch_content` must be a table")
+        return {}
+    rules: dict[str, SwitchContent] = {}
+    for emulator, table in raw.items():
+        where = f"switch_content.{emulator}"
+        if emulator not in switchcontent.EMULATORS:
+            err(f"{where}: unknown emulator (known: {', '.join(switchcontent.EMULATORS)})")
+            continue
+        if not isinstance(table, dict):
+            err(f"`{where}` must be a table")
+            continue
+        extras = sorted(set(table) - _SWITCH_KEYS)
+        for extra in extras:
+            err(f"{where}.{extra}: unknown key")
+        problems = len(extras)
+        if not _names(table.get("process")):
+            err(f"{where}.process: required, a non-empty list of non-empty strings")
+            problems += 1
+        for key in ("config", "folder"):
+            value = table.get(key)
+            library_ok = key == "folder"
+            starts = ("/", "~/", "{library}/") if library_ok else ("/", "~/")
+            bare = (
+                value.replace("{library}", "") if isinstance(value, str) and library_ok else value
+            )
+            if (
+                not isinstance(value, str)
+                or not isinstance(bare, str)
+                or any(c in bare for c in '{}"\n')
+                or not value.startswith(starts)
+            ):
+                hint = "; {library} is the only placeholder" if library_ok else ""
+                err(f"{where}.{key}: required, an absolute path or one starting with ~/{hint}")
+                problems += 1
+            elif "{library}" in value and not has_library:
+                err(f"{where}.{key}: {value!r} uses {{library}} but there is no paths.library")
+                problems += 1
+        if not problems:
+            rules[emulator] = SwitchContent(
+                table["config"], tuple(table["process"]), table["folder"]
+            )
+    return rules
 
 
 _LINK_KEYS = {"source", "target", "process", "match", "require", "noun", "create_target"}

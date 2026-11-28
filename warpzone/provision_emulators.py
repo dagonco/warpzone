@@ -1,6 +1,7 @@
 """Device edits for the frontend and the emulators.
 
-ES-DE's system list, RetroArch, shadPS4, Cemu and the title links.
+ES-DE's system list, RetroArch, shadPS4, Cemu, the Switch emulators' update and DLC folders and
+the title links.
 """
 
 from __future__ import annotations
@@ -11,7 +12,17 @@ from collections.abc import Sequence
 from functools import partial
 from pathlib import Path
 
-from warpzone import cemu, esde, frontend, procs, safefile, settings_state, shadps4, titlelinks
+from warpzone import (
+    cemu,
+    esde,
+    frontend,
+    procs,
+    safefile,
+    settings_state,
+    shadps4,
+    switchcontent,
+    titlelinks,
+)
 from warpzone.paths import expand_home
 from warpzone.probes import REAL_PROBES, DeviceProbes
 from warpzone.profiles import Profile
@@ -420,6 +431,80 @@ def ensure_cemu_paths(
         rep.warn(f"{path} changed while it was being edited, so it was left alone: {again}")
         return
     rep.out(f"cemu: set {shown} in {path} (old file backed up)")
+
+
+def _content_apply(emulator: str, text: str, folder: str) -> bytes:
+    return switchcontent.apply(emulator, text, folder).encode("utf-8")
+
+
+def ensure_switch_content(
+    name: str,
+    profile: Profile,
+    home: Path,
+    rep: Reporter,
+    *,
+    dry_run: bool,
+    probes: DeviceProbes = REAL_PROBES,
+    state_root: Path,
+) -> None:
+    """Add the library's Switch update and DLC folder to each emulator's list of such folders.
+
+    Only an existing file is edited, only while its emulator is closed, and only by one added
+    entry; every other byte is kept. The old file is backed up before the edit and a second run
+    changes nothing. See development/design/profiles.md, "Switch update and DLC folders".
+    """
+    if "library" not in profile.paths:
+        return
+    library = expand_home(profile.paths["library"], home).rstrip("/")
+    again = f"run `warpzone provision device {name}` again"
+    for emulator, rule in profile.switch_content.items():
+        label = switchcontent.LABELS[emulator]
+        folder = expand_home(rule.wants(library), home)
+        path = Path(expand_home(rule.config, home))
+        try:
+            text = path.read_bytes().decode("utf-8")
+        except FileNotFoundError:
+            rep.warn(
+                f"no {label} settings file found ({path}), so the library's Switch content "
+                f"folder was not added: start {label} once and close it, then {again}"
+            )
+            continue
+        except (OSError, UnicodeDecodeError) as exc:
+            rep.warn(f"cannot read {path} ({exc}), so it was left alone")
+            continue
+        try:
+            absent = switchcontent.missing(emulator, text, folder)
+        except switchcontent.ContentConfigError as exc:
+            rep.warn(f"{path} was left alone: {exc}")
+            continue
+        if not absent:
+            rep.out(f"{emulator}: {path} already lists the update and DLC folder")
+            continue
+        what = f"{label}'s settings file"
+        if busy(rule.process, label, what, again, rep, probes):
+            continue
+        if dry_run:
+            rep.out(f"{emulator}: dry-run: would add the update and DLC folder {folder} to {path}")
+            continue
+        try:
+            outcome = safefile.guarded_edit(
+                path,
+                partial(_content_apply, emulator, text, folder),
+                expect=safefile.stamp(path),
+                busy=partial(busy, rule.process, label, what, again, rep, probes),
+                backup=partial(settings_state.backup, path, emulator, path.name, root=state_root),
+            )
+        except switchcontent.ContentConfigError as exc:
+            rep.warn(f"{path} was left alone: {exc}")
+            continue
+        if outcome is safefile.Edit.BUSY:
+            continue
+        if outcome is safefile.Edit.CHANGED:
+            rep.warn(f"{path} changed while it was being edited, so it was left alone: {again}")
+            continue
+        rep.out(
+            f"{emulator}: added the update and DLC folder {folder} to {path} (old file backed up)"
+        )
 
 
 def cemu_saves_elsewhere(current: cemu.Paths, default: str, mlc: str, home: Path) -> Path | None:

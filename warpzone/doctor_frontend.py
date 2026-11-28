@@ -1,6 +1,7 @@
 """The doctor checks of a device's frontend: ES-DE and RetroArch, the emulators, artwork, links.
 
-The system list override, RetroArch's paths, shadPS4, Cemu, title links, frontend artwork and
+The system list override, RetroArch's paths, shadPS4, Cemu, the Switch emulators' update and DLC
+folders, title links, frontend artwork and
 the save-conversion line. The judges are pure. See development/design/doctor.md ("Frontend")
 and development/design/save-conversion.md.
 """
@@ -20,6 +21,7 @@ from warpzone import (
     saveconvert_device,
     settings_state,
     shadps4,
+    switchcontent,
     timers,
     titlelinks,
 )
@@ -313,6 +315,37 @@ def judge_cemu_paths(
     return WARN, f"{path}: {'; '.join(parts)}", again
 
 
+def judge_switch_content(
+    *,
+    device: str,
+    emulator: str,
+    path: str,
+    text: str | None,
+    folder: str,
+) -> tuple[str, str, str]:
+    """Verdict on a Switch emulator's list of update and DLC folders (None: no such file)."""
+    label = switchcontent.LABELS[emulator]
+    again = f"run `warpzone provision device {device}` with {label} closed"
+    if text is None:
+        return (
+            WARN,
+            f"no {label} settings file found ({path})",
+            f"start {label} once and close it, then {again}",
+        )
+    try:
+        absent = switchcontent.missing(emulator, text, folder)
+    except switchcontent.ContentConfigError as exc:
+        return WARN, f"{path}: {exc}", f"add {folder} by hand in {label}'s settings"
+    if absent:
+        return (
+            WARN,
+            f"{path} does not list {folder}, so {label} does not load the library's updates "
+            "and DLC",
+            again,
+        )
+    return OK, f"{path} lists {folder}", ""
+
+
 def judge_shadps4_launch(
     *,
     device: str,
@@ -524,6 +557,18 @@ def check_frontend(ctx: Context) -> list[Result]:
             held=_cemu_held(p, text, default_mlc, mlc),
         )
         results.append(Result("Cemu paths", G_FRONTEND, *verdict))
+    for emulator, entry in profile.switch_content.items():
+        config = Path(expand_home(entry.config, p.home))
+        verdict = judge_switch_content(
+            device=device.name,
+            emulator=emulator,
+            path=str(config),
+            text=p.read_text(config) if p.is_file(config) else None,
+            folder=expand_home(entry.wants(library), p.home),
+        )
+        results.append(
+            Result(f"{switchcontent.LABELS[emulator]} update and DLC folder", G_FRONTEND, *verdict)
+        )
     if profile.links:
         results += _check_links(ctx, device)
     return results
