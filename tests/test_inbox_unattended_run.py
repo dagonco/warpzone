@@ -25,6 +25,7 @@ from warpzone.inbox_unattended import (
     LockSeen,
     State,
     render_state,
+    stamp,
     with_checked,
     with_error,
 )
@@ -122,6 +123,37 @@ class TickTests(Ticks, Base):
         self.assertEqual(record["counts"]["placed"], 2)
         self.assertEqual(self.tick(20), 0)  # nothing left: silent
         self.assertEqual(self.out, "")
+
+    def test_a_download_in_progress_is_never_processed_held_or_remembered(self) -> None:
+        self.drop("Unconfirmed 554392.crdownload", b"half a zip")
+        self.drop("adventure.nes", NES_ROM)
+        self.assertEqual(self.tick(0), 0, self.out)
+        self.assertEqual(sorted(self.state()["items"]), ["adventure.nes"])
+        self.assertIn("downloading: Unconfirmed 554392.crdownload", self.out)
+        self.assertEqual(self.tick(60), 0, self.out)  # stable for an hour: still no item
+        self.assertEqual(self.library(), ["nes/Adventure (USA).zip"])
+        self.assertEqual(self.review(), [])
+        self.assertTrue((self.inbox / "Unconfirmed 554392.crdownload").exists())
+        self.assertEqual(self.state()["items"], {})
+        (record,) = self.records()
+        self.assertEqual(record["counts"]["waiting"], 0)
+
+    def test_an_inbox_with_only_downloads_is_an_empty_run(self) -> None:
+        self.drop("a.zip.crdownload", b"x")
+        self.drop("b", {"c.bin.!qB": b"x"})
+        self.assertEqual(self.tick(0), 0)
+        self.assertEqual(self.out, "")
+        self.assertEqual(self.tick(90), 0)
+        self.assertEqual(self.state()["items"], {})
+        self.assertEqual(self.review(), [])
+
+    def test_a_finished_download_is_a_new_item(self) -> None:
+        part = self.drop("adventure.nes.crdownload", NES_ROM)
+        self.assertEqual(self.tick(30), 0)
+        part.rename(self.inbox / "adventure.nes")
+        self.assertEqual(self.tick(45), 0)
+        (entry,) = self.state()["items"].values()
+        self.assertEqual(entry["first"], stamp(datetime.fromtimestamp(minutes(45), UTC)))
 
     def test_the_cpu_priority_is_lowered_and_stale_work_folders_are_removed(self) -> None:
         old = self.tmp / "work" / "warpzone-inbox-killed"

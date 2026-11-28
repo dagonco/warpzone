@@ -70,6 +70,7 @@ from warpzone.inbox_core import (
     copy_verified,
     crc_of,
     destination_verdict,
+    downloading_names,
     free_space_check,
     next_free,
     printable,
@@ -940,20 +941,53 @@ def _is_archive(item: Path) -> bool:
 # ------------------------------------------------------------------ inbox folder
 
 
-def scan_unverified(inbox: Path) -> list[tuple[Path, str]]:
-    """The items of `inbox/_unverified/<system>/`, with the folder's system name: the files
-    and folders inside each system folder. Anything else in `_unverified/` is no item."""
+def _has_download(folder: Path) -> bool:
+    """Whether a download in progress is anywhere under `folder` (links are not followed)."""
+    return any(downloading_names([*dirs, *files]) for _, dirs, files in os.walk(folder))
+
+
+def _partition(paths: Sequence[Path]) -> tuple[list[Path], list[Path]]:
+    """Split the candidate items listed in one folder into the ones to process and the ones
+    that are a download in progress, by their own name, the `.aria2` file beside them, or a
+    name anywhere inside them."""
+    marked = downloading_names([p.name for p in paths])
+    ready: list[Path] = []
+    busy: list[Path] = []
+    for p in paths:
+        is_busy = p.name in marked or (p.is_dir() and _has_download(p))
+        (busy if is_busy else ready).append(p)
+    return ready, busy
+
+
+def _unverified_candidates(inbox: Path) -> list[tuple[list[Path], str]]:
+    """The files and folders inside each `_unverified/<system>/` folder, listed per system."""
     root = inbox / UNVERIFIED_DIR
     if not root.is_dir() or root.is_symlink():
         return []
-    items: list[tuple[Path, str]] = []
+    found: list[tuple[list[Path], str]] = []
     for folder in sorted(root.iterdir(), key=lambda q: q.name):
         if skip_name(folder.name) or folder.is_symlink() or not folder.is_dir():
             continue
-        for p in sorted(folder.iterdir(), key=lambda q: q.name):
-            if not skip_name(p.name) and not p.is_symlink():
-                items.append((p, folder.name))
-    return items
+        found.append(
+            (
+                [
+                    p
+                    for p in sorted(folder.iterdir(), key=lambda q: q.name)
+                    if not skip_name(p.name) and not p.is_symlink()
+                ],
+                folder.name,
+            )
+        )
+    return found
+
+
+def scan_unverified(inbox: Path) -> list[tuple[Path, str]]:
+    """The items of `inbox/_unverified/<system>/`, with the folder's system name: the files
+    and folders inside each system folder, except downloads in progress. Anything else in
+    `_unverified/` is no item."""
+    return [
+        (p, system) for found, system in _unverified_candidates(inbox) for p in _partition(found)[0]
+    ]
 
 
 def _stray_unverified(inbox: Path) -> list[str]:
@@ -968,7 +1002,7 @@ def _stray_unverified(inbox: Path) -> list[str]:
     ]
 
 
-def scan(inbox: Path) -> list[Path]:
+def _root_candidates(inbox: Path) -> list[Path]:
     items: list[Path] = []
     for p in sorted(inbox.iterdir(), key=lambda q: q.name):
         if skip_name(p.name) or (p.is_dir() and p.name.startswith("_")):
@@ -977,6 +1011,20 @@ def scan(inbox: Path) -> list[Path]:
             continue
         items.append(p)
     return items
+
+
+def scan(inbox: Path) -> list[Path]:
+    """The items at the root of `inbox/`, except downloads in progress."""
+    return _partition(_root_candidates(inbox))[0]
+
+
+def scan_downloading(inbox: Path) -> list[str]:
+    """The names, as the report shows them, of what is left out of `scan` and
+    `scan_unverified` because it is a download in progress."""
+    names = [p.name for p in _partition(_root_candidates(inbox))[1]]
+    for found, system in _unverified_candidates(inbox):
+        names += [f"{UNVERIFIED_DIR}/{system}/{p.name}" for p in _partition(found)[1]]
+    return names
 
 
 def _unique(folder: Path, name: str) -> Path:
@@ -1091,6 +1139,11 @@ def announce(
         rep.out(f"RA: hashes only (set {ra.KEY_ENV} to look them up)")
 
 
+def report_downloading(rep: Reporter, names: Sequence[str]) -> None:
+    for name in names:
+        rep.out(f"downloading: {name}: a download in progress, left in the inbox untouched")
+
+
 LOCK_LOST_REASON = "the inbox lock is no longer this run's"
 LOCK_TAKEN_OVER = (
     "another run took the inbox lock over (this run was silent for more than 10 minutes, for "
@@ -1113,6 +1166,7 @@ def _run(
     started = datetime.fromtimestamp(opts.now(), UTC)
     mode = "apply" if opts.apply else "report only"
     announce(opts, rep, inbox, library, mode, len(items))
+    report_downloading(rep, scan_downloading(inbox))
 
     if opts.work_dir:
         opts.work_dir.mkdir(parents=True, exist_ok=True)

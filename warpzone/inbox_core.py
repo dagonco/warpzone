@@ -6,7 +6,7 @@
 import this module and never `inbox.py`, so the imports between the inbox modules form no
 cycle. This module imports no other inbox module.
 
-The pure decisions here (`skip_name`, `unsafe_member`, `whitelist_line`,
+The pure decisions here (`skip_name`, `downloading_names`, `unsafe_member`, `whitelist_line`,
 `unsupported_reason`, `unverified_reason`, `destination_verdict`, `vita3k_executable`,
 `timeout_reason`) have no I/O; the rest touches the disk or runs a tool. See
 development/design/inbox.md.
@@ -23,7 +23,7 @@ import sys
 import time
 import zipfile
 import zlib
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
@@ -46,6 +46,10 @@ SIDECAR_EXTENSIONS = frozenset(
         *(".jpg", ".jpeg", ".png", ".pdf", ".ini", ".db", ".diz", ".lnk", ".xml"),
     }
 )
+# A name that marks a browser or download manager's file in progress (lowercase, matched
+# case-insensitively); `.aria2` is the control file of aria2, which marks its companion too.
+DOWNLOAD_SUFFIXES = (".crdownload", ".part", ".download", ".opdownload", ".!qb")
+ARIA2_SUFFIX = ".aria2"
 JUNK_NAMES = frozenset({".DS_Store", "Thumbs.db", "desktop.ini", "@eaDir", "#recycle", "__MACOSX"})
 UNSUPPORTED_EXTENSIONS = {
     ".vpk": "Vita",
@@ -86,6 +90,22 @@ class ToolTimeout(ItemFailure):
 def skip_name(name: str) -> bool:
     """Hidden files, OS junk and thumbnails are never part of an item."""
     return name.startswith(".") or name in JUNK_NAMES
+
+
+def downloading_names(names: Collection[str]) -> frozenset[str]:
+    """Which of the names listed together in one folder mark a download in progress: the ones
+    ending in a browser's or download manager's suffix, and, for a `X.aria2` control file, both
+    it and the `X` it belongs to. See development/design/inbox.md, "Downloads in progress"."""
+    found: set[str] = set()
+    controlled: set[str] = set()
+    for name in names:
+        lower = name.lower()
+        if lower.endswith(DOWNLOAD_SUFFIXES):
+            found.add(name)
+        elif lower.endswith(ARIA2_SUFFIX):
+            found.add(name)
+            controlled.add(lower[: -len(ARIA2_SUFFIX)])
+    return frozenset(found | {n for n in names if n.lower() in controlled})
 
 
 def unsafe_member(name: str) -> str | None:

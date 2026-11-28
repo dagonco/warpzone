@@ -256,6 +256,23 @@ sets the source's old time at the end, from making an item look ready or never r
 30-second rule of an attended run (`SETTLE_SECONDS`) is not applied in an unattended run: the
 fingerprint replaces it.
 
+### Downloads in progress
+
+A download that stalls stops changing and would pass the rule above after five minutes, then go to
+`_revisar/` as "no DAT match" while the browser is still waiting. So an item whose name marks a
+download in progress, or that holds one anywhere inside, is never an item of an unattended run
+either: the rule and its names are in
+[Downloads in progress](/warpzone/development/design/inbox/#downloads-in-progress), and the
+listing (`inbox.scan`, `inbox.scan_unverified`) leaves such things out before any judging. Because
+they are not items, they are never fingerprinted, never held and never counted as waiting, and
+they leave no entry in the state: an entry that existed for the name (an item that later gained a
+`.part` file inside) is dropped like that of any item no longer in the listing, and doctor's and
+the UI's "waiting more than two hours" never sees them. A stalled download is therefore not a
+warning; it is only named, in a line `downloading: <name>: ...`, on the runs that have something
+else to do. An inbox with nothing but downloads in progress is an empty run (no lines, no tool,
+heartbeat only). The file the browser finishes (renamed to its final name) is a new item with its
+own `first`, and is processed after the usual five minutes.
+
 ### Partial copies
 
 A copy that stops and does not resume (a laptop that slept, a dropped network) leaves an item that
@@ -777,6 +794,11 @@ Unit tests, pure parts first, with no Docker, no scheduler and no real tools:
 - `decide`: a new item, a changed one, a stable one before and after 300 seconds, a held item with
   the same and with another fingerprint, an entry with one and with two attempts, a name that is
   gone; a clock that goes back does not make an item ready; `first` survives a change.
+- `inbox_core.downloading_names` (pure, shared with the attended run): each suffix in any case,
+  `.aria2` marking itself and its companion, a final name, `Done.part1.rar` and `partial.nes` not
+  marked. Over a temporary inbox: `scan` leaves a download out (a file, a folder holding one, an
+  `.aria2` companion, one in `_unverified/<system>/`), `scan_downloading` names it, and a tick
+  leaves no entry in the state for it and sends nothing to `_revisar/`.
 - `loose_sheets`: a loose cue and the tracks it names, a gdi, a cue naming a file that is not
   there, a loose `.bin` alone, a cue inside a folder (not loose).
 - `inbox_lock`: a lock with `beat` whose mtime moved is live, one unchanged for 10 minutes across

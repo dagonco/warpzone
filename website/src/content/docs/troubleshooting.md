@@ -112,7 +112,7 @@ If you remove the line first and then delete the game with the library UI, the n
 
 ### The inbox says nothing to do, or skips an item
 
-**Cause.** Items modified in the last 30 seconds are left alone because they may still be copying. Folders that start with `_`, hidden files, `@eaDir` and `.DS_Store` are never items.
+**Cause.** Items modified in the last 30 seconds are left alone because they may still be copying, and a download in progress (a `.crdownload`, `.part`, `.download`, `.opdownload`, `.!qB` or `.aria2` file, or a folder holding one) is never an item, however long it has been still: the run prints `downloading: <name>`. Folders that start with `_`, hidden files, `@eaDir` and `.DS_Store` are never items.
 
 **Fix.** Wait and run it again.
 

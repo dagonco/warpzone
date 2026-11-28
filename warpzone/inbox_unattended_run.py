@@ -206,6 +206,7 @@ class _Run:
         if not items:
             return self.empty()
         self.keys = frozenset(item.key for item in items)
+        inbox.report_downloading(self.rep, inbox.scan_downloading(self.inbox))
         return self.tick(items)
 
     def list_items(self) -> list[Item]:
